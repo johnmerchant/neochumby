@@ -75,10 +75,10 @@ pub fn put_bytes(w: &mut [u16], mut at: usize, mut src: &[u8]) {
         at += 1;
         src = rest;
     }
-    let pairs = src.chunks_exact(2);
-    let odd = pairs.remainder().first().copied();
+    let (pairs, rest) = src.as_chunks::<2>();
+    let odd = rest.first().copied();
     for (d, p) in w[at / 2..].iter_mut().zip(pairs) {
-        *d = u16::from_le_bytes([p[0], p[1]]);
+        *d = u16::from_le_bytes(*p);
     }
     if let Some(b) = odd {
         let i = (at + src.len()) / 2;
