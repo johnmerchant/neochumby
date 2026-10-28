@@ -296,3 +296,29 @@ are three ways, from quickest to most faithful:
 
 If you couldn't test something (no Chumby, or a path no emulator covers
 yet), say which and why. A reviewer may run it on a Chumby for you.
+
+### Scenarios run everywhere
+
+The automated scenarios (`dev/emulate-smoke`, `dev/emulate-classic`, and
+any you add) use only `dev/emulate`'s verbs, `start`, `log`/`wait log`,
+`shot`, `tap`, `button` and `stop`, so the same scenario runs on user
+mode, on the emulator (`--machine chumby-classic`) and on a real Chumby
+(`--device NAME`, through `neochumbyd`; remote input needs that Chumby set
+`dev=on`). Write them so they pass on all three:
+
+1. **Assert on log lines** the session and apps print on purpose
+   (`opening home`, `escape: ending …`), not on timing or on the order of
+   unrelated lines. If a scenario needs to see something happen, print a
+   line for it.
+2. **Compare screenshots by regions of our own screens**, masking what
+   changes (the clock, time-dependent pictures). Never compare against, or
+   commit, the stock software's screens.
+3. **Wait with timeouts the backend scales**: user mode is fast, a real
+   Chumby and the emulator in real time are not.
+4. **What a backend can't do is skipped there, not failed**, with the
+   reason: remote input can't reach an app that holds the top button
+   itself (`button = true`), and there's no stick on the emulator until
+   it models USB.
+5. **Physical steps** (pull the power, plug in a stick) are prompts the
+   runner shows and waits on, checked from the log afterwards; they run
+   only with `--device` and someone there.
