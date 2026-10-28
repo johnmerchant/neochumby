@@ -1,6 +1,10 @@
-//! Signals to other processes, by pid or by process group.
+//! Signals to other processes, by pid or by process group, and the
+//! descriptors a child is given.
 
 use std::io;
+use std::os::fd::RawFd;
+use std::os::unix::process::CommandExt;
+use std::process::Command;
 
 /// A signal [`kill`] and [`kill_group`] can send.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -45,6 +49,25 @@ fn send(target: libc::pid_t, sig: Signal) -> io::Result<()> {
     // SAFETY: kill(2) takes plain integers and touches no memory of ours;
     // `target` is a single process or a single group, never 0 or -1.
     if unsafe { libc::kill(target, sig.raw()) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+/// Passes the descriptors `fds` on to the program `cmd` runs, though they
+/// are close-on-exec here: in the child, between fork and exec, each is
+/// marked not close-on-exec. Starting the program fails if one isn't open.
+pub fn pass_fds(cmd: &mut Command, fds: Vec<RawFd>) {
+    // SAFETY: the closure runs in the forked child, where only
+    // async-signal-safe calls are allowed: it calls fcntl(2), which is,
+    // reads a Vec allocated before the fork, and allocates nothing.
+    unsafe {
+        cmd.pre_exec(move || {
+            for &fd in &fds {
+                if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
 }
 
 #[cfg(test)]
