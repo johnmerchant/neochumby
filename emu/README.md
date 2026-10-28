@@ -43,14 +43,62 @@ writes the screen every emulated second. `--realtime` holds emulated time
 to the wall clock; without it an idle Chumby runs ahead.
 
 `--control 127.0.0.1:5810` takes commands over TCP, one per line, each
-answered `ok` once done: `down X Y`, `up`, `tap X Y` (screen pixels),
-`shot FILE` and `console TEXT` (typed on the serial console, then Enter):
+answered `ok` once done: `down X Y`, `up`, `tap X Y [MS]` (screen
+pixels; held MS emulated milliseconds, default 100), `shot FILE` (PNG, or
+PPM if FILE ends in `.ppm`) and `console TEXT` (typed on the serial
+console, then Enter):
 
     printf 'console uname -a\nshot /tmp/screen.png\n' | nc 127.0.0.1 5810
 
 `boot` with no options lists the rest, including diagnostics
 (`--history`, `--trace-at`; `CHUMBY_LOG_IO=all` or address ranges such as
 `10017000-10017fff`, and `CHUMBY_LOG_CP=1`).
+
+## Tests
+
+`tests/scenarios.rs` boots the emulated Chumby and checks, end to end:
+
+| Scenario | What it checks |
+| --- | --- |
+| `stock_boot` | The stock firmware boots to its console shell, its Flash player runs and its UI is on the screen |
+| `session_home` | The boot hook runs neochumby from a tree and the session shows neochumby-home |
+| `app_and_escape` | Home opens an app (`tests/probe`, which shows a known screen and logs its touches), a tap reaches it, and holding the top-left corner ends it and brings home back |
+| `chumby_mode` | CHUMBY MODE ends neochumby and the stock boot carries on to its UI |
+
+They need your own images, named by environment variables; without them
+each scenario is skipped, not failed:
+
+| Variable | What |
+| --- | --- |
+| `NEOCHUMBY_EMU_KERNEL` | A zImage, as above |
+| `NEOCHUMBY_EMU_NAND` | A NAND image from your own flash backup (`mknand`, above) |
+| `NEOCHUMBY_EMU_PSP` | A factory-like settings directory (above) |
+| `NEOCHUMBY_EMU_TREE` | A tree (`tools/tree`), for the neochumby scenarios; `tests/run` builds one with the probe app |
+
+    tests/run                       # builds a tree, then runs every scenario
+    tests/run chumby_mode           # one of them
+    cargo test --release --test scenarios    # with NEOCHUMBY_EMU_TREE set
+
+Each scenario boots its own copy of the NAND image, with its settings and
+Cache partitions rewritten (`patchnand`): the settings get `disable_intro`
+(the first-boot tour waits for a tap) and, with a tree,
+`rfs1/userhook2` from `tests/userhook2`. The emulated Chumby has no USB
+storage yet, so the tree goes in the Cache partition (24 MiB, JFFS2,
+`mkjffs2`) laid out as `tools/stick` lays out a stick; the test hook mounts
+it at `/mnt/usb` and runs the stick's own `userhook2`, and copies its log
+to the console, which is how the scenarios follow the session. Screens are
+checked by the colours of regions, never against stored pictures.
+
+Everything a scenario did stays in `target/tmp/emutest/NAME` (or
+`NEOCHUMBY_EMU_WORK`): its console log, screen dumps and images. A slow
+host can stretch every wait with `NEOCHUMBY_EMU_TIMEOUT_SCALE=2`.
+
+The harness drives the emulator through a small interface
+(`tests/harness/backend.rs`): boot from a kernel and a NAND image, the
+serial console as a byte stream both ways, press, release and tap, a
+screen dump as PPM, and stop. chumby-emu is the backend now;
+`NEOCHUMBY_EMU_BACKEND=qemu` selects the QEMU one, to be written for the
+i.MX21 machine (`tests/harness/qemu.rs` says how).
 
 ## What is modelled
 
@@ -63,7 +111,7 @@ answered `ok` once done: `down X Y`, `up`, `tap X Y` (screen pixels),
 | Clocks (CRM) | Registers, PLLs locked at the bootloader's settings |
 | NAND controller and chip | Complete: reads, programs, erases, written back to the image |
 | LCD controller | Background plane and graphic window, composed for screenshots |
-| CSPI and TSC2100 | Conversions and PINTDAV (GPIO PE19) work and the driver scans touches, but it does not yet report them as input events; audio registers only |
+| CSPI and TSC2100 | Touches: conversions and PINTDAV (GPIO PE19), reported by the driver on `/dev/input/event0`; audio registers only |
 | USB host | Control registers and an empty root hub only |
 | GPIO, PWM | Complete enough for the drivers |
 | DMA, SSI audio, keypad, watchdog | Not yet: registers read back as written |

@@ -25,8 +25,10 @@ echo "emutest: stick mounted"
 tail -f "$LOG" &
 tail=$!
 sh /mnt/usb/userhook2
-echo "emutest: hook returned: $?"
-# Lets tail copy the last lines before it goes.
-sleep 1
+status=$?
+# tail looks at the log once a second: lets it copy the last lines, so
+# that what follows comes after them on the console.
+sleep 2
 kill "$tail"
+echo "emutest: hook returned: $status"
 exit 0

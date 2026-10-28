@@ -105,7 +105,6 @@ pub struct Chumby {
     /// matched, so each step looks only at what came after the last.
     mark: usize,
     work: PathBuf,
-    shots: usize,
     commands: usize,
 }
 
@@ -118,7 +117,6 @@ impl Chumby {
             console: Console::new(b.console_out, b.console_in, log),
             mark: 0,
             work: work.to_path_buf(),
-            shots: 0,
             commands: 0,
         })
     }
@@ -127,6 +125,12 @@ impl Chumby {
     pub fn expect(&mut self, pat: &str, timeout: Duration) -> Result<()> {
         self.mark = self.console.wait_for(pat, self.mark, timeout)?;
         Ok(())
+    }
+
+    /// Whether `pat` has appeared on the console since the last thing
+    /// waited for.
+    pub fn seen(&self, pat: &str) -> bool {
+        self.console.wait_for(pat, self.mark, Duration::ZERO).is_ok()
     }
 
     /// Activates the stock console shell (BusyBox's askfirst, once the
@@ -172,10 +176,9 @@ impl Chumby {
         self.machine.release()
     }
 
-    /// The screen now, also kept in the work directory.
+    /// The screen now, also kept in the work directory (the latest only).
     pub fn screen(&mut self) -> Result<Screen> {
-        self.shots += 1;
-        let path = self.work.join(format!("screen-{:03}.ppm", self.shots));
+        let path = self.work.join("screen.ppm");
         self.machine.screendump(&path)?;
         Screen::read(&path)
     }

@@ -116,6 +116,13 @@ fn app_and_escape(c: &mut Chumby) -> Result<()> {
     c.hold(8, 8, Duration::from_secs(4))?;
     c.expect("neochumby: escape: ending", secs(120))?;
     c.wait_screen("home-again", secs(300), home)?;
+    // And stays: the new home screen opened while the corner was still
+    // held, and the release must not be taken for a tap anywhere.
+    std::thread::sleep(Duration::from_secs(5));
+    if c.seen("neochumby exited") {
+        return Err("the session ended after the corner hold".into());
+    }
+    c.wait_screen("home-stays", secs(10), home)?;
     Ok(())
 }
 
