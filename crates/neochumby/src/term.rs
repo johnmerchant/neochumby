@@ -1,14 +1,15 @@
 //! A terminal on the screen, for programs written for one: a
-//! pseudo-terminal (neochumby_sys::pty) whose output is drawn in a 5x8
-//! font, [`COLS`] by [`ROWS`] (64 by 30). It understands what programs that
-//! print in colour and move the cursor use (xterm's colours, cursor
+//! pseudo-terminal (neochumby_sys::pty) whose output is drawn on [`Fb`] in
+//! embedded-graphics' 5x8 font, [`COLS`] by [`ROWS`] (64 by 30), with box
+//! drawing and block characters drawn to fit. It understands what programs
+//! that print in colour and move the cursor use (xterm's colours, cursor
 //! movement, erasing, scrolling regions), not mouse reporting, the
 //! alternate screen or anything typed: there is no keyboard.
 //!
 //! The program stays in the app's process group, without a controlling
 //! terminal of its own, so the escape hatch ends it with the app.
 
-mod font;
+mod boxes;
 mod grid;
 
 use std::io::{self, Read, Write};
@@ -59,7 +60,7 @@ pub fn run(mut cmd: Command) -> io::Result<ExitStatus> {
             grid.cursor_shown = false;
         }
         if !open || drawn.elapsed() >= FRAME {
-            grid.draw(fb.pixels());
+            let Ok(()) = grid.draw(&mut fb);
             drawn = Instant::now();
         }
         if !open {

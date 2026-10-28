@@ -1,8 +1,16 @@
 //! The terminal's characters and what the program's escape sequences do to
 //! them (vte parses them), and drawing them: no device of its own, so it
-//! draws into any 320x240 RGB565 buffer.
+//! draws on any embedded-graphics DrawTarget of 320x240 (the screen, Fb).
 
-use super::font::GLYPHS;
+use embedded_graphics::mono_font::MonoTextStyleBuilder;
+use embedded_graphics::mono_font::iso_8859_1::FONT_5X8;
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::pixelcolor::raw::RawU16;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::Rectangle;
+use embedded_graphics::text::{Baseline, Text};
+
+use super::boxes;
 use crate::fb::{self, rgb};
 
 pub const CELL_W: usize = 5;
@@ -117,8 +125,10 @@ impl Grid {
         }
     }
 
-    /// Draws what changed since the last call into `px`, 320x240 RGB565.
-    pub fn draw(&mut self, px: &mut [u16]) {
+    /// Draws what changed since the last call on `target`, 320x240: the
+    /// characters in embedded-graphics' 5x8 (misc-fixed, Latin-1), the box
+    /// and block characters as [`boxes`] draws them.
+    pub fn draw<D: DrawTarget<Color = Rgb565>>(&mut self, target: &mut D) -> Result<(), D::Error> {
         let cursor = self.cursor_shown.then_some(self.y * COLS + self.x);
         if self.drawn_cursor != cursor {
             for i in [self.drawn_cursor, cursor].into_iter().flatten() {
@@ -134,19 +144,28 @@ impl Grid {
             if Some(i) == cursor {
                 std::mem::swap(&mut c.fg, &mut c.bg);
             }
-            let glyph = match GLYPHS.binary_search_by_key(&c.ch, |g| g.0) {
-                Ok(g) => &GLYPHS[g].1,
-                Err(_) => &GLYPHS[GLYPHS.len() - 1].1,
-            };
-            let (cx, cy) = (i % COLS * CELL_W, i / COLS * CELL_H);
-            for (r, &bits) in glyph.iter().enumerate() {
-                let bits = if c.underline && r == CELL_H - 1 { 0xf8 } else { bits };
-                let line = &mut px[(cy + r) * fb::W + cx..][..CELL_W];
-                for (col, p) in line.iter_mut().enumerate() {
-                    *p = if bits & (0x80 >> col) != 0 { c.fg } else { c.bg };
+            let at = Point::new((i % COLS * CELL_W) as i32, (i / COLS * CELL_H) as i32);
+            let (fg, bg) = (Rgb565::from(RawU16::new(c.fg)), Rgb565::from(RawU16::new(c.bg)));
+            if let Some(mut g) = boxes::glyph(c.ch) {
+                if c.underline {
+                    g[CELL_H - 1] = 0xf8;
+                }
+                let cell = Rectangle::new(at, Size::new(CELL_W as u32, CELL_H as u32));
+                let bit = |p: usize| g[p / CELL_W] & (0x80 >> (p % CELL_W)) != 0;
+                target.fill_contiguous(&cell, (0..CELL_W * CELL_H).map(|p| if bit(p) { fg } else { bg }))?;
+            } else {
+                let style = MonoTextStyleBuilder::new().font(&FONT_5X8).text_color(fg).background_color(bg).build();
+                let mut utf8 = [0u8; 4];
+                Text::with_baseline(c.ch.encode_utf8(&mut utf8), at, style, Baseline::Top).draw(target)?;
+                // The font's own underline falls below the cell: the cell's
+                // last row, as the box characters have it.
+                if c.underline {
+                    let row = Rectangle::new(at + Point::new(0, CELL_H as i32 - 1), Size::new(CELL_W as u32, 1));
+                    target.fill_solid(&row, fg)?;
                 }
             }
         }
+        Ok(())
     }
 
     fn colour(c: Colour, default: u16, bright: bool) -> u16 {
