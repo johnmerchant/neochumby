@@ -82,7 +82,7 @@ An app can use any of these keys:
   neochumbyd (`neochumbyd set NAME start=<app>`, kept in
   `/psp/neochumby.settings`), else in `/psp/neochumby.conf`, or else it's
   `home` (neochumby-home). Only an app with `start = true` may be the start
-  app; the session refuses any other and logs why. `neochumbyd pairing`
+  app; the session refuses any other, logs why, and uses `home`. `neochumbyd pairing`
   names the start apps in the tree, and suggests one to a Chumby whose
   `start` isn't set; `neochumbyd set NAME start=<app>` warns about a name
   that isn't one. **Holding the top-left

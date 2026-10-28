@@ -38,6 +38,15 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
 }
 
+/// Whether any process is left in the group `pgid` (kill(2) with signal
+/// 0, which sends nothing). False for an id [`kill_group`] would refuse.
+pub fn group_alive(pgid: u32) -> bool {
+    let Ok(p) = positive(pgid) else { return false };
+    // SAFETY: as in `send`; signal 0 only checks that the group exists and
+    // may be signalled.
+    unsafe { libc::kill(-p, 0) == 0 }
+}
+
 fn positive(id: u32) -> io::Result<libc::pid_t> {
     match libc::pid_t::try_from(id) {
         Ok(p) if p > 0 => Ok(p),
@@ -79,6 +88,7 @@ mod tests {
         for id in [0, u32::MAX, 1 << 31] {
             assert_eq!(kill(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
             assert_eq!(kill_group(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+            assert!(!group_alive(id));
         }
     }
 }

@@ -131,21 +131,18 @@ fn session() {
     // played yet.
     let boot_volume = audio::volume();
 
-    // The server's `start` is a name, trusted only as far as the tree goes
-    // (start.rs). Otherwise the local choice, then neochumby-home.
+    // The server's `start`, else the local one: a name, trusted only as far
+    // as the tree goes (start.rs).
     let settings = settings::load();
     let local = conf::get(conf::CONF, "start");
-    let mut choices = Vec::new();
-    if let Some(s) = settings::get(&settings, "start") {
-        choices.push(("the server's settings", s));
-    }
-    if let Some(s) = local.as_deref() {
-        choices.push((conf::CONF, s));
-    }
+    let choice = match settings::get(&settings, "start") {
+        Some(s) => Some(("the server's settings", s)),
+        None => local.as_deref().map(|s| (conf::CONF, s)),
+    };
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
-    match start::choose(&all, &choices) {
+    match start::choose(&all, choice) {
         None => eprintln!("neochumby: no start app (not even {})", start::HOME),
         Some(first) => {
             let chumby = Chumby { escape, boot_volume };

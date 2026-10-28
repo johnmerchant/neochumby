@@ -59,6 +59,9 @@ pub struct Timing {
     pub service_backoff: Backoff,
     /// Between SIGTERM and SIGKILL, when the session stops the services.
     pub service_patience: Duration,
+    /// The least time between opening one app and the next, so two apps
+    /// that open each other and exit at once can't spin.
+    pub min_gap: Duration,
 }
 
 impl Default for Timing {
@@ -70,6 +73,7 @@ impl Default for Timing {
             retry: Duration::from_secs(1),
             service_backoff: Backoff::new(Duration::from_secs(1), Duration::from_secs(60)),
             service_patience: Duration::from_secs(5),
+            min_gap: Duration::from_millis(500),
         }
     }
 }
@@ -77,6 +81,9 @@ impl Default for Timing {
 /// Five failures of the start app within this long: it can't start.
 const FAILURES: usize = 5;
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
+/// How many lines an app may write that the session doesn't know before
+/// they stop being logged.
+const LOGGED_UNKNOWN: u32 = 3;
 
 /// What the session does next.
 #[derive(Clone, Copy, Debug)]
@@ -93,6 +100,8 @@ struct Front<'a> {
     pipe: Pipe,
     /// What it asked for, and when it first asked.
     asked: Option<(Next<'a>, Instant)>,
+    /// Lines it wrote that the session doesn't know.
+    unknown: u32,
 }
 
 pub struct Session<'a, D: Device> {
@@ -106,6 +115,7 @@ pub struct Session<'a, D: Device> {
     /// Since the escape hatch: services' requests are refused until an app
     /// is opened by hand.
     suppressed: bool,
+    last_open: Option<Instant>,
 }
 
 /// Whether the service of the app `from` may replace `front` in front;
@@ -125,13 +135,27 @@ pub fn may_interrupt(from: &str, start: &str, front: &App, suppressed: bool) -> 
 impl<'a, D: Device> Session<'a, D> {
     pub fn new(apps: &'a [App], root: &'a Path, start: &'a App, device: D, timing: Timing) -> Session<'a, D> {
         let services = Services::new(apps, root, timing.service_backoff);
-        Session { apps, root, start, device, timing, failures: Vec::new(), services, suppressed: false }
+        Session {
+            apps,
+            root,
+            start,
+            device,
+            timing,
+            failures: Vec::new(),
+            last_open: None,
+            services,
+            suppressed: false,
+        }
     }
 
     /// Runs apps, and the services, until CHUMBY MODE.
     pub fn run(mut self) {
         let mut next = Next::Open(self.start, None);
         while let Next::Open(app, reason) = next {
+            if let Some(gap) = self.last_open.and_then(|t| self.timing.min_gap.checked_sub(t.elapsed())) {
+                neochumby::sleep_ms(gap.as_millis() as u32);
+            }
+            self.last_open = Some(Instant::now());
             next = match self.open(app, reason) {
                 Ok(front) => self.watch(front),
                 Err(e) => {
@@ -154,7 +178,7 @@ impl<'a, D: Device> Session<'a, D> {
         eprintln!("neochumby: opening {}{}", app.name, reason.map(|r| format!(" ({r})")).unwrap_or_default());
         let (child, pipe) = child::spawn(cmd, &[])?;
         self.services.front(&app.name);
-        Ok(Front { app, child, pipe, asked: None })
+        Ok(Front { app, child, pipe, asked: None, unknown: 0 })
     }
 
     /// Watches the app in front until it has gone; what to do next.
@@ -188,7 +212,11 @@ impl<'a, D: Device> Session<'a, D> {
                     }
                     _ => continue,
                 },
-                Ok(Some(s)) => Ok(s),
+                Ok(Some(s)) => {
+                    // Anything it started goes with it.
+                    child::end(&mut f.child, self.timing.patience);
+                    Ok(s)
+                }
                 Err(e) => {
                     child::end(&mut f.child, self.timing.patience);
                     Err(e)
@@ -217,7 +245,13 @@ impl<'a, D: Device> Session<'a, D> {
                     }
                 },
                 None => {
-                    eprintln!("neochumby: {}: ignoring {line:?}", f.app.name);
+                    f.unknown += 1;
+                    if f.unknown <= LOGGED_UNKNOWN {
+                        eprintln!("neochumby: {}: ignoring {line:?}", f.app.name);
+                    }
+                    if f.unknown == LOGGED_UNKNOWN {
+                        eprintln!("neochumby: {}: not logging more lines it doesn't know", f.app.name);
+                    }
                     continue;
                 }
             };
@@ -343,6 +377,7 @@ mod tests {
             retry: Duration::from_millis(10),
             service_backoff: Backoff::new(Duration::from_millis(50), Duration::from_millis(200)),
             service_patience: Duration::from_secs(1),
+            min_gap: Duration::from_millis(20),
         }
     }
 
@@ -397,12 +432,16 @@ mod tests {
     }
 
     fn run_on(root: &Path, choices: &[(&str, &str)], fake: Fake) {
-        let all = apps::all(root);
-        let start = start::choose(&all, choices).expect("a start app");
-        Session::new(&all, root, start, fake, timing()).run();
+        run_timed(root, choices, fake, timing());
     }
 
-    /// Waits for `pid` to be gone.
+    fn run_timed(root: &Path, choices: &[(&str, &str)], fake: Fake, timing: Timing) {
+        let all = apps::all(root);
+        let start = start::choose(&all, choices.first().copied()).expect("a start app");
+        Session::new(&all, root, start, fake, timing).run();
+    }
+
+    /// Waits for the process whose pid is in `pid_file` to be gone.
     fn gone(pid_file: &Path) {
         let pid = std::fs::read_to_string(pid_file).unwrap();
         let deadline = Instant::now() + Duration::from_secs(3);
@@ -420,6 +459,45 @@ mod tests {
             "while read -r line <&\"$NEOCHUMBY_SESSION\"; do\n  echo \"svc-heard $line\" >> \"$log\"\n  \
              case \"$line\" in\n{cases}\n  esac\ndone"
         )
+    }
+
+    #[test]
+    fn what_an_app_started_goes_when_it_exits() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let pid = "\"$NEOCHUMBY_ROOT/pid\"";
+        let root = tree(
+            "group",
+            &[
+                ("home", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open game'"),
+                // A helper left behind as it exits.
+                ("game", "", &format!("sleep 30 &\necho $! > {pid}.new\nmv {pid}.new {pid}")),
+            ],
+        );
+        run(&root, &[], Arc::default());
+        assert_eq!(log(&root), ["home", "game", "home"]);
+        gone(&root.join("pid"));
+    }
+
+    #[test]
+    fn apps_opening_each_other_cant_spin() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let stop = "\"$NEOCHUMBY_ROOT/stop\"";
+        let root = tree(
+            "spin",
+            &[
+                ("home", "start=true\n", &format!("[ -f {stop} ] && {{ ask chumby-mode; exit 0; }}\nask 'open game'")),
+                ("game", "", "exit 0"),
+            ],
+        );
+        let stop_file = root.join("stop");
+        std::thread::spawn(move || {
+            neochumby::sleep_ms(1000);
+            std::fs::write(stop_file, "").unwrap();
+        });
+        run_timed(&root, &[], Fake::default(), Timing { min_gap: Duration::from_millis(200), ..timing() });
+        // About one open every 200 ms for a second.
+        let games = log(&root).iter().filter(|l| *l == "game").count();
+        assert!((1..=4).contains(&games), "{games} games");
     }
 
     #[test]
