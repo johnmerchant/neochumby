@@ -49,6 +49,18 @@ backend=$(emu backend)
 slow=$(emu scale)
 [ -x "$tree/neochumby-sync" ] || fail "$tree has no neochumby-sync (a tree with delivery=sync)"
 
+# The tree synced: TREE's session, receiver and hook, and the home screen.
+# That's all a round needs, and it keeps the stick small however many apps
+# CI builds.
+slim() {
+  rm -rf "$2"
+  mkdir -p "$2/apps"
+  for f in "$1"/*; do
+    [ -f "$f" ] && cp -p "$f" "$2/"
+  done
+  cp -Rp "$1/apps/home" "$2/apps/"
+}
+
 # A big file, so that the second round takes long enough to cut.
 grow() {
   head -c $((24 << 20)) /dev/urandom > "$1/apps/home/powercut.bin"
@@ -61,8 +73,7 @@ fi
 
 if [ "$backend" = device ]; then
   work=$out/tree
-  rm -rf "$work"
-  cp -R "$tree" "$work"
+  slim "$tree" "$work"
   grow "$work"
   step "a round with a new file on $(emu backend)"
   emu start "$work"
@@ -79,8 +90,8 @@ fi
 # User mode, everything on this PC.
 work=$out/tree
 ndstate=$out/nd
-rm -rf "$work" "$ndstate" "$out/psp0"
-cp -R "$tree" "$work"
+rm -rf "$ndstate" "$out/psp0"
+slim "$tree" "$work"
 mkdir -p "$out/psp0"
 api=127.0.0.1:17340
 "$neochumbyd" serve --state "$ndstate" --tree "$work" --api "$api" --nfs 127.0.0.1:12049 > "$out/neochumbyd.log" 2>&1 &
@@ -95,7 +106,9 @@ stopped() {
 }
 
 step "pair through neochumby-home"
-emu mkstick --force --size 256 "$out/stick.img"
+# Both sets, the big file and room to spare.
+size=$(du -sm "$work" | cut -f1)
+emu mkstick --force --size $((size * 2 + 24 + 64)) "$out/stick.img"
 emu start --psp "$out/psp0" --stick "$out/stick.img" --server "$api" "$work"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
