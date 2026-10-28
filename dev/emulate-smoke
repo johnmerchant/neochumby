@@ -13,12 +13,22 @@
 # Screenshots, the session's log and the sensors output go in OUT.
 #
 #   sudo dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
+#
+# The same scenario runs on each of dev/emulate's backends, picked by the
+# environment: NEOCHUMBY_EMU_MACHINE=chumby-classic (the whole emulated
+# Chumby, your own firmware) or NEOCHUMBY_EMU_DEVICE=NAME (a real Chumby,
+# paired and set dev=on), without sudo for either. Steps only user mode can
+# do (selftest, sensors, the top button, the FAT stick) are skipped there;
+# the waits scale with `dev/emulate scale`; a backend that can't do a step
+# at all (no firmware, no remote tap yet) makes it exit 77, skipped.
 set -eu
 tree=${1:?usage: dev/emulate-smoke TREE OUT}
 out=${2:?usage: dev/emulate-smoke TREE OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$out"
 state=$out/state
+machine=$(emu backend)
+slow=$(emu scale)
 emu() { "$dev/emulate" --state "$state" "$@"; }
 step() { echo "== $*"; }
 fail() {
@@ -34,10 +44,10 @@ opened_home() {
   i=0
   until [ "$(count 'neochumby: opening home')" -ge "$1" ]; do
     i=$((i + 1))
-    [ "$i" -lt 300 ] || fail "$2"
+    [ "$i" -lt $((300 * slow)) ] || fail "$2"
     sleep 0.1
   done
-  emu wait screen 30 || fail "$2"
+  emu wait screen $((30 * slow)) || fail "$2"
 }
 
 # Where to tap: neochumby-home's layout, rows of apps from y=44, 36 high
@@ -54,18 +64,22 @@ done
 [ -n "$found" ] && [ "$row" -lt 4 ] || fail "the tree needs doom among its first four listed apps"
 doom_y=$((44 + row * 40 + 18))
 
-step "boot"
-emu start "$tree"
+step "boot ($machine)"
+if emu start "$tree"; then :; else
+  code=$?
+  [ "$code" = 77 ] && exit 77
+  fail "dev/emulate start failed ($code)"
+fi
 opened_home 1 "the home screen didn't open"
 emu shot "$out/1-home.png"
 
 step "tap DOOM"
 emu tap 160 "$doom_y"
-# Without game data Doom exits at once; with it, it draws its bars.
+emu wait log 'neochumby: opening doom' $((10 * slow)) || fail "the session didn't open DOOM"
+# Without game data Doom exits at once, saying so; with it, it runs.
 i=0
-until emu log | grep -q 'neochumby-doom: no IWAD found' || [ "$(emu pixel 160 2)" = "#180000" ]; do
+until emu log | grep -q 'neochumby-doom: no IWAD found' || [ "$i" -ge $((30 * slow)) ]; do
   i=$((i + 1))
-  [ "$i" -lt 300 ] || fail "DOOM didn't open"
   sleep 0.1
 done
 emu shot "$out/2-doom.png"
@@ -76,13 +90,15 @@ else
   echo "Doom is running"
 fi
 
-step "the devices"
-emu selftest || fail "dev/emulate selftest"
+if [ "$machine" = user ]; then
+  step "the devices"
+  emu selftest || fail "dev/emulate selftest"
+fi
 
 step "the corner hold (the escape hatch)"
 before=$(count 'neochumby: opening home')
 emu tap 5 5 --hold 3600
-emu wait log 'neochumby: escape: ending' 10 || fail "the corner hold didn't end the home screen"
+emu wait log 'neochumby: escape: ending' $((10 * slow)) || fail "the corner hold didn't end the home screen"
 opened_home $((before + 1)) "the home screen didn't come back after the escape"
 emu shot "$out/3-escaped.png"
 
@@ -98,6 +114,7 @@ else
   session_button=
 fi
 
+if [ "$machine" = user ]; then
 step "neochumby sensors: a touch, and the top button unless the session has it"
 emu button down
 (sleep 1 && emu tap 200 20 && emu button up) &
@@ -108,12 +125,21 @@ if [ -z "$session_button" ]; then
   grep -q 'squeeze=false' "$out/sensors.txt" || fail "sensors didn't see the button released"
 fi
 grep -q 'Down { x: 200, y: 20,' "$out/sensors.txt" || fail "sensors didn't see the touch at (200, 20)"
+fi
 
 step "CHUMBY MODE"
 emu tap 160 220
-emu wait exit 20 || fail "CHUMBY MODE didn't end the session"
+emu wait exit $((20 * slow)) || fail "CHUMBY MODE didn't end the session"
 [ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
 emu log > "$out/log.txt"
+if [ "$machine" != user ]; then
+  # The stock software carries on after CHUMBY MODE: the machine is stopped.
+  emu stop
+  echo "-- the console:"
+  cat "$out/log.txt"
+  echo "dev/emulate-smoke: all passed ($machine; selftest, sensors, the top button and the FAT stick skipped)"
+  exit 0
+fi
 
 step "boot from a stick"
 emu mkstick --force "$out/stick.img" "$tree"

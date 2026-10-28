@@ -34,6 +34,9 @@ jobs:
       - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros
       - run: cargo test -p neochumby-proto -p neochumby-sync --features neochumby-proto/noise
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
+      # dev/emulate's full-system machine, without firmware: its images
+      # against chumby-emu's, and its control path against a stub QEMU.
+      - run: python3 dev/test_emulate.py
 
   cross:
     name: Build for the Chumby and the server (${{ matrix.proto }})
