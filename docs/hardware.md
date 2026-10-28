@@ -23,6 +23,11 @@ or seen on a real device; where something wasn't investigated, it says so.
   them through `/dev/mem` (0x10021000) succeeds, but the first read is a bus
   error: the i.MX21's peripheral bridge restricts them to supervisor mode.
   Page flipping or vsync would need a kernel module.
+- **Never change the screen mode.** Switching to 8-bit with
+  `FBIOPUT_VSCREENINFO` and back left the LCD controller scanning out a
+  stretched, wrong-coloured picture until a reboot, though `/dev/fb0` held
+  the right pixels. `FBIOPUTCMAP` is also very slow (2.5-6 s), because the
+  driver logs every palette entry. Convert to RGB565 in software instead.
 - Measured copy rates (one process, everything else idle):
 
   | | |
@@ -41,7 +46,9 @@ or seen on a real device; where something wasn't investigated, it says so.
   Linux evdev accepts writes to it and delivers them to readers like a real
   touch, so taps can be scripted on the device (`dev/taps.py` does this).
   A tap can arrive with an echo shortly after the release: ignore
-  presses closer than ~350 ms if your UI treats taps as buttons.
+  presses closer than ~350 ms if your UI treats taps as buttons. The other
+  way round, a steady hold reports brief releases: ignore releases shorter
+  than ~400 ms when timing a hold (as the escape hatch does).
 - **`/dev/switch`** (the squeeze switch / top button): one byte, `01`
   pressed, `00` released. It is **level-triggered**: every non-blocking read
   returns the current state and never `EAGAIN`, so a `while read() == 1`
@@ -94,21 +101,33 @@ or seen on a real device; where something wasn't investigated, it says so.
 - Audio from the stock side: the `btplayd` daemon, driven with `btplay`
   (`playnow URL`, `stop`, `pause`, `resume`), plays plain-HTTP MP3 streams;
   ALSA's mixer control is `Master`.
+- **The speaker starts muted, and may be at volume 0.** `rcS` leaves
+  `/proc/sys/sense1/spkmute` at 1; the stock players unmute while they play,
+  so an app that plays sound must too. The master volume restored at boot
+  comes from `/psp/volume` (`chumby_set_volume`), which can be 0. Set both
+  while playing and restore them afterwards, as the AirPlay app does.
 
 ## BusyBox 1.6 and the userland
 
 - **`tar` rejects archives from macOS's bsdtar** ("corrupted octal value").
   Build strict ustar (Python's `tarfile` with `USTAR_FORMAT`).
 - There's no `printf`, `od` or `head -c`. Write files with a here-doc.
+- There's no `nohup` or `setsid` either. For a detached process,
+  `(trap "" HUP; exec prog) &` works.
 - Over SSH, `ps | grep` patterns that match a script's name also match your
   own `sh -c` command line if it mentions that name, so a `kill` built from
   them can end your own session. Put such logic in a script on the device.
 
 ## Toolchains
 
-- A static C program built with `zig cc` against zig's bundled libc calls
-  `__sync_*` atomics from the allocator, and ARMv5 has no instructions for
-  them, so linking fails or they're missing at run time. On this single-core
-  CPU, plain non-atomic versions are correct for a single-threaded program;
-  a threaded one needs the kernel's user helpers (`__kuser_cmpxchg`). Not
-  checked against neochumby's Rust toolchain, which may already cover it.
+- **`std::thread::sleep` panics on this kernel.** An interrupted
+  `nanosleep` (after a stop and continue, or a signal) fails with `EINVAL`
+  on restart, and Rust's sleep asserts it can only fail with `EINTR`. Use
+  `neochumby::sleep_ms`, a `poll()` with no file descriptors.
+- **Atomics:** with Rust's `armv5te-unknown-linux-musleabi`, atomics go
+  through compiler-builtins and the kernel's user helpers, so threads and
+  atomics work (the session, AirPlay and the protocol use them on the
+  device). C built with `zig cc` against zig's bundled libc is different:
+  its allocator calls `__sync_*` atomics that ARMv5 has no instructions for.
+  On this single-core CPU, plain non-atomic versions are correct for a
+  single-threaded program.
