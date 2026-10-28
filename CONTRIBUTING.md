@@ -10,7 +10,13 @@ changes easy to take.
   upstream commit and left unchanged, and linked from a Rust crate. Where
   an app needs it to do otherwise, its `build.rs` builds that file with a
   function renamed, so that the app's own takes its place, and says why
-  (`apps/quake/build.rs`).
+  (`apps/quake/build.rs`). A change that can't be made that way goes in a
+  fork, as a commit marked with a comment naming the app
+  (`// neochumby-quake: ...`), and the submodule is pinned to that commit:
+  no patch files applied at build time. `tools/tree` (and so `tools/stick`
+  and `tools/deploy`) checks out the submodules of the apps it builds, so a
+  clone without `--recurse-submodules` works there; `cargo` alone needs
+  `git submodule update --init` first.
 - **Comments say what the code does and why the rule is what it is**, not
   how it was debugged. One paragraph is usually enough.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL
@@ -83,7 +89,10 @@ button = true                        # optional: it gets the top button (games)
 (`neochumby-manifest`). An app with a `companion` must also say
 `neochumbyd = "required"` or `"optional"`: it is never inferred. A
 `files/` directory beside `Cargo.toml`, optional, is copied into the app's
-directory as it is (icons, configuration).
+directory as it is (icons, configuration). An app in its own repository
+may keep third-party source in submodules: `tools/tree` checks them out
+for a `git+` app (in `~/.cache/neochumby/app-sources`), and a crate
+published to crates.io carries their files in its package.
 
 Binaries named by `exec` and `service` are built for the Chumby
 (`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend

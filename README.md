@@ -43,9 +43,10 @@ binaries are static (musl), so they don't depend on its userland.
 
 Everything we write is MIT, except in `apps/doom` and `apps/quake`. Doom
 and Quake link GPL engines, so each of those crates, our Rust in it
-included, is GPL and lives in its own directory with its upstream licence
-(`apps/quake/src/span.rs` is a port of the engine's span drawer, so it
-could be nothing else). Nothing links an app: each runs as a separate
+included, is GPL and lives in its own directory, with the engine's
+upstream licence in its submodule (`apps/quake/src/span.rs` is a port of
+the engine's span drawer, so it could be nothing else). `apps/fetch` links
+fastfetch, which is MIT as we are (its `LICENSE` is in its submodule). Nothing links an app: each runs as a separate
 program. The
 soft-float routines' runtime exception puts no conditions on the programs
 they're linked into.
@@ -116,7 +117,9 @@ supplies musl (`tools/zigcc`).
 
 Third-party source (Doom, Quake, fetch's fastfetch) is in git
 submodules, and fetch builds fastfetch with [CMake](https://cmake.org)
-3.21 or later.
+3.21 or later. `tools/tree`, `tools/stick` and `tools/deploy` check out
+the submodules of the apps they build; for `cargo` on its own, check them
+out first:
 
 ```sh
 git submodule update --init   # or clone with --recursive
