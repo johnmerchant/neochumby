@@ -254,9 +254,12 @@ its developer link: `NEOCHUMBY_EMU_DEVICE=NAME dev/emulate-smoke /tmp/tree
 /tmp/smoke`, with `NEOCHUMBY_EMU_HOST=HOST` when neochumbyd runs elsewhere
 (over ssh; its state in `NEOCHUMBYD_DIR`). `start` installs the tree there
 (`tools/deploy --tree`) and restarts the Chumby; `log` is its log from then
-on; `shot`, `tap` and `button` are neochumbyd's (a neochumbyd without remote
-tap or button skips those steps). Steps that need hands, like pulling the
-power, are `dev/emulate prompt` lines, shown only with `--device`.
+on; `shot`, `tap` and `button` are neochumbyd's (`neochumbyd tap` and
+`button`; an older neochumbyd without them skips those steps). A remote
+press goes where a real one would, so it can't reach an app that reads the
+switch itself (`button = true`, Doom's FIRE): a scenario needing that skips
+on a device. Steps that need hands, like pulling the power, are
+`dev/emulate prompt` lines, shown only with `--device`.
 
 So that one scenario holds on every backend, it asserts on lines the
 session and apps log on purpose, compares only our own screens (with what

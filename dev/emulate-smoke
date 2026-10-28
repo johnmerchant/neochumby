@@ -103,12 +103,15 @@ opened_home $((before + 1)) "the home screen didn't come back after the escape"
 emu shot "$out/3-escaped.png"
 
 # A session that holds the top button itself (proposal 0002) keeps
-# /dev/switch open.
-if emu status | grep -q 'button_open: True'; then
+# /dev/switch open; a real Chumby's session always does. Home is in front
+# here: a remote press can't reach an app that reads the switch itself
+# (button = true, Doom's FIRE), so a step that needs that is skipped on a
+# device.
+if [ "$machine" = device ] || emu status | grep -q 'button_open: True'; then
   step "the top button, to the session"
   emu button press
-  emu wait log 'neochumby: the top button: ' 10 || fail "the session didn't act on the top button"
-  emu wait screen 30 || fail "the home screen didn't come back after the top button"
+  emu wait log 'neochumby: the top button: ' $((10 * slow)) || fail "the session didn't act on the top button"
+  emu wait screen $((30 * slow)) || fail "the home screen didn't come back after the top button"
   session_button=1
 else
   session_button=

@@ -266,7 +266,11 @@ FAKE_NEOCHUMBYD = textwrap.dedent(r'''
         with open(log, "a") as f:
             f.write(line + "\n")
     def usage():
-        print("usage: neochumbyd serve|...", file=sys.stderr)
+        # As neochumbyd's: an older one's lacks tap and button.
+        cmds = "serve|log NAME [-f]|restart NAME|shot NAME OUT.png"
+        if not os.environ.get("FAKE_WITHOUT_INPUT"):
+            cmds += "|tap NAME X Y [--hold MS]|button NAME press|release|tap"
+        print(f"usage: neochumbyd {cmds} [--state DIR]", file=sys.stderr)
         sys.exit(2)
     cmd, name = a[0], a[1] if len(a) > 1 else ""
     if name != "kitchen":
@@ -295,6 +299,12 @@ FAKE_NEOCHUMBYD = textwrap.dedent(r'''
         open(a[2], "wb").write(png)
     elif cmd in ("tap", "button"):
         if os.environ.get("FAKE_WITHOUT_INPUT"):
+            usage()
+        if os.environ.get("FAKE_DEV_OFF"):
+            print(f"neochumbyd: {name} takes no taps or button presses from here: its owner turns that on "
+                  f"with `neochumbyd set {name} dev=on` (and off with `dev=`)", file=sys.stderr)
+            sys.exit(1)
+        if cmd == "button" and a[2:] not in (["press"], ["release"], ["tap"]):
             usage()
         with open(os.path.join(state, "fake-input"), "a") as f:
             f.write(" ".join(a) + "\n")
@@ -359,10 +369,13 @@ class Device(unittest.TestCase):
         self.assertIn("kitchen, a Chumby", self.emu("status").stdout)
         self.assertEqual(self.emu("pixel", "5", "5").stdout.strip(), "#101021")
         self.assertEqual(self.emu("exec", "/bin/true").returncode, 77)
-        self.assertEqual(self.emu("button", "press").returncode, 0)
+        # dev/emulate's press, down and up are neochumbyd's tap, press and release.
+        for how in ("press", "down", "up"):
+            self.assertEqual(self.emu("button", how).returncode, 0)
         self.assertEqual(self.emu("tap", "160", "220", "--hold", "150").returncode, 0)
         with open(os.path.join(self.nd, "fake-input")) as f:
-            self.assertEqual(f.read(), "button kitchen press\ntap kitchen 160 220 --hold 150\n")
+            self.assertEqual(f.read(), "button kitchen tap\nbutton kitchen press\nbutton kitchen release\n"
+                                       "tap kitchen 160 220 --hold 150\n")
         self.assertEqual(self.emu("wait", "exit", "10").stdout.strip(), "exit 0")
 
     def test_without_remote_input(self):
@@ -372,6 +385,14 @@ class Device(unittest.TestCase):
         self.assertEqual(r.returncode, 77)
         self.assertIn("no `tap` yet", r.stdout)
         self.assertEqual(self.emu("button", "press", env=env).returncode, 77)
+
+    def test_input_refused(self):
+        """A Chumby not set dev=on: a failure, saying so, not a skip."""
+        self.assertEqual(self.emu("start", self.tree).returncode, 0)
+        r = self.emu("tap", "1", "1", env=dict(self.env, FAKE_DEV_OFF="1"))
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("neochumbyd set kitchen dev=on", r.stderr)
+        self.assertNotIn("(is kitchen set dev=on?)", r.stderr)
 
     def test_png(self):
         import zlib
