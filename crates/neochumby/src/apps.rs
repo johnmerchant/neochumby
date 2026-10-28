@@ -6,6 +6,9 @@
 //!   colour=dc281e              (its colour, hex RGB; optional)
 //!   service=neochumby-airplay  runs in the background while neochumby does
 //!   companion=...              its server half, which neochumbyd runs
+//!                              for each Chumby
+//!   daemon=...                 its once-per-server half, which neochumbyd
+//!                              runs at its start (not read here)
 //!   neochumbyd=required        needs a paired neochumbyd (or `optional`:
 //!                              uses one when there is one; absent: never)
 //!   home=neochumby-home        this app is the home screen

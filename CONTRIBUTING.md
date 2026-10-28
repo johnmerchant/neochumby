@@ -29,7 +29,9 @@ tools/tree /tmp/tree doom quake airplay   # a whole tree, with apps
 CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
-crates), and `cargo test -p neochumby-proto -p neochumbyd`.
+crates), and `cargo test -p neochumby-proto -p neochumbyd`. neochumbyd's tests include
+one end to end on loopback (`crates/neochumbyd/tests/daemon.rs`): a Chumby
+pairs, and a daemon approves it through the admin socket.
 
 ## Writing an app
 
@@ -53,6 +55,7 @@ exec = "neochumby-weather"
 colour = "4a90d9"                    # optional
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
+daemon = "neochumby-weather-web"     # optional: once per server
 neochumbyd = "optional"              # "required" | "optional" | absent
 ```
 
@@ -61,7 +64,8 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 is copied into the app's directory as it is (icons, configuration).
 
 Binaries named by `exec`, `service` and `home` are built for the Chumby
-(`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
+(`armv5te-unknown-linux-musleabi`), and a `companion` and a `daemon` for
+the server. An app may be only a daemon. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`) and
 crash reports (`debug`). The screen is 320x240 RGB565, so prerender what
@@ -89,6 +93,26 @@ the app:
   stdin closes.
 
 `apps/airplay` is a worked example of both halves.
+
+**Daemons.** A server half that runs once per server, not once per Chumby
+(a household web page), is named by `daemon`:
+- **Starting:** neochumbyd starts it when it starts. If it exits, it is
+  started again after 1 s, then 2, 4 and so on up to a minute.
+- **Stopping:** when neochumbyd stops, the daemon gets SIGTERM, and SIGKILL
+  five seconds later.
+- **Environment:** `NEOCHUMBY_STATE` (the app's own directory, shared with
+  its companions, and the working directory), `NEOCHUMBY_ADMIN` (the admin
+  socket) and `NEOCHUMBY_TREE` (the app tree, to read other apps'
+  manifests, e.g. which can be a home screen). Its stdout and stderr go to
+  neochumbyd's log.
+- **The admin socket:** lines of text. Send `paired`, `pending`,
+  `approve CODE TOKEN`, `refuse CODE`, `forget NAME` or
+  `set NAME KEY=VALUE`; the answer is lines of data, then `ok` or
+  `error MESSAGE`. `crates/neochumbyd/src/admin.rs` has the details.
+- **Approving needs the owner.** `approve` takes the owner's token
+  (`neochumbyd token`). A web page asks the person for it, and should
+  check it (`check TOKEN`) before it lets them change anything. Never
+  approve on a request from the network alone.
 
 ## Pull requests
 

@@ -5,7 +5,8 @@
 //!   NEOCHUMBY_CHUMBY   the Chumby's name, as it paired
 //!   NEOCHUMBY_STATE    a directory of the app's own, kept across runs
 //!                      (<state>/apps/<app>), which is also its working
-//!                      directory
+//!                      directory; the app's daemon, if it has one
+//!                      (daemon.rs), shares it
 //!
 //! added to neochumbyd's environment (anything an app needs from the host,
 //! such as a port range, comes through it), and relays frames
@@ -15,7 +16,7 @@
 //! killed if it has not within five seconds.
 
 use std::io;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
@@ -46,21 +47,26 @@ fn manifest(dir: &Path, key: &str) -> Option<String> {
     m.lines().filter_map(|l| l.split_once('=')).find(|(k, _)| k.trim() == key).map(|(_, v)| v.trim().to_string())
 }
 
+/// The binary `app`'s manifest names by `key` (`companion`, `daemon`):
+/// only a plain name, in the app's own directory.
+pub fn app_binary(tree: &Path, app: &str, key: &str) -> Option<PathBuf> {
+    let dir = tree.join("apps").join(app);
+    let exe = valid_name(app)
+        .then(|| manifest(&dir, key))
+        .flatten()
+        .filter(|f| !f.is_empty() && !f.contains('/') && f != "." && f != "..")?;
+    Some(dir.join(exe))
+}
+
 /// Runs `app`'s companion for `chumby` and relays between them until
 /// either goes.
 pub fn run(tree: &Path, state: &Path, chumby: &str, app: &str, mut s: Session) -> io::Result<()> {
-    let dir = tree.join("apps").join(app);
-    // Only a plain name in the app's own directory.
-    let exe = valid_name(app)
-        .then(|| manifest(&dir, "companion"))
-        .flatten()
-        .filter(|f| !f.is_empty() && !f.contains('/') && f != "." && f != "..");
-    let Some(exe) = exe else {
+    let Some(exe) = app_binary(tree, app, "companion") else {
         return s.send(&Msg::Closed);
     };
     let home = state.join("apps").join(app);
     std::fs::create_dir_all(&home)?;
-    let mut child = Command::new(dir.join(&exe))
+    let mut child = Command::new(exe)
         .current_dir(&home)
         .env("NEOCHUMBY_CHUMBY", chumby)
         .env("NEOCHUMBY_STATE", &home)

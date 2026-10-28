@@ -8,18 +8,26 @@
 //!                     sent to it on every connection (`Msg::Config`). Kept
 //!                     by name, so a Chumby paired again under its name
 //!                     keeps them
+//!   owner-token       the owner's token (0600), which a daemon such as the
+//!                     household web page must pass to approve a pairing
+//!                     (admin.rs)
+//!   admin.sock        the admin socket, while the daemon runs (admin.rs)
+//!   apps/<app>        each app's own directory, for its companions and its
+//!                     daemon
 //!
 //! The daemon writes pending/; `neochumbyd approve <code>` (whoever is in
-//! the daemon's group) turns one into paired/, which the daemon, waiting on
-//! the Chumby's connection, sees. Plain files: no socket between the two.
+//! the daemon's group), or a daemon through the admin socket, turns one
+//! into paired/, which the daemon, waiting on the Chumby's connection,
+//! sees. The command line and the admin socket share these functions.
 
-use std::io;
+use std::io::{self, Read};
 use std::net::SocketAddr;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 use neochumby_proto::{Identity, PublicKey, hex, unhex_key, valid_name};
 
+#[derive(Clone)]
 pub struct State {
     dir: PathBuf,
 }
@@ -61,6 +69,44 @@ impl State {
             }
             Err(e) => Err(e),
         }
+    }
+
+    /// The owner's token, made on first use: 16 random bytes as hex. The
+    /// owner reads it with `neochumbyd token` and gives it to the household
+    /// web page, which passes it on to approve a pairing.
+    pub fn owner_token(&self) -> io::Result<String> {
+        let path = self.dir.join("owner-token");
+        match std::fs::read_to_string(&path) {
+            Ok(s) => Ok(s.trim().to_string()),
+            Err(e) if e.kind() == io::ErrorKind::NotFound => {
+                let token = random_token()?;
+                let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
+                io::Write::write_all(&mut f, format!("{token}\n").as_bytes())?;
+                Ok(token)
+            }
+            Err(e) => Err(e),
+        }
+    }
+
+    /// Replaces the owner's token, for when it may have leaked. The old one
+    /// stops working at once: the token is read on every check.
+    pub fn new_owner_token(&self) -> io::Result<String> {
+        let path = self.dir.join("owner-token");
+        let tmp = path.with_extension("new");
+        let _ = std::fs::remove_file(&tmp);
+        let token = random_token()?;
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        io::Write::write_all(&mut f, format!("{token}\n").as_bytes())?;
+        std::fs::rename(tmp, path)?;
+        Ok(token)
+    }
+
+    /// Whether `token` is the owner's. Compared in constant time, so its
+    /// timing gives nothing away; with no token yet, nothing matches.
+    pub fn is_owner_token(&self, token: &str) -> bool {
+        let Ok(owner) = std::fs::read_to_string(self.dir.join("owner-token")) else { return false };
+        let (a, b) = (owner.trim().as_bytes(), token.as_bytes());
+        !a.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0, |d, (x, y)| d | (x ^ y)) == 0
     }
 
     /// The name `key` paired under, if it has.
@@ -190,6 +236,13 @@ impl State {
     }
 }
 
+/// 128 bits from the system, as hex.
+fn random_token() -> io::Result<String> {
+    let mut b = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
+    Ok(hex(&b))
+}
+
 /// A setting the Chumby will take: a short lower-case key, and a value of
 /// the characters its /psp files accept (neochumby::conf::valid_value).
 fn valid_setting(key: &str, value: &str) -> bool {
@@ -202,6 +255,7 @@ fn valid_setting(key: &str, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn settings() {
@@ -223,6 +277,28 @@ mod tests {
         assert!(st.set("kitchen", "start", "w x").is_err());
         assert!(st.set("kitchen", "start", "a\nb=c").is_err());
         assert!(st.config("../kitchen").is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn owner_token() {
+        let dir = std::env::temp_dir().join(format!("neochumbyd-token-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = State::open(dir.clone()).unwrap();
+        assert!(!st.is_owner_token(""), "no token yet");
+        let t = st.owner_token().unwrap();
+        assert_eq!(t.len(), 32);
+        assert_eq!(st.owner_token().unwrap(), t, "made once");
+        assert!(st.is_owner_token(&t));
+        assert!(!st.is_owner_token("") && !st.is_owner_token(&t[1..]) && !st.is_owner_token(&format!("{t}0")));
+        let mode = std::fs::metadata(dir.join("owner-token")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+
+        let new = st.new_owner_token().unwrap();
+        assert_ne!(new, t);
+        assert!(st.is_owner_token(&new) && !st.is_owner_token(&t));
+        let mode = std::fs::metadata(dir.join("owner-token")).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

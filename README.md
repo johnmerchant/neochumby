@@ -58,6 +58,7 @@ exec = "neochumby-quake"             # binaries, by name
 colour = "8c5a28"                    # optional
 service = "neochumby-airplay"        # runs in the background
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
+daemon = "neochumby-web"             # runs once per server, by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
 home = "neochumby-home"              # this app can be the home screen
 ```
@@ -70,6 +71,10 @@ An app can use any of these keys:
   neochumbyd runs it for each Chumby that asks, and relays frames between
   the two halves over the paired connection. neochumbyd knows no app by
   name.
+- **`daemon`:** a server half that runs once per server rather than once
+  per Chumby, such as a household web page. neochumbyd starts it when it
+  starts, starts it again if it exits, and stops it when neochumbyd stops.
+  It reaches neochumbyd through the admin socket (below).
 - **`home`:** the session (`neochumby`) runs the app named by `start=<app>`
   in this Chumby's settings from its neochumbyd (`neochumbyd set NAME
   start=<app>`, kept in `/psp/neochumby.settings`), else in
@@ -118,8 +123,8 @@ they are:
 | `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it prints the commit to pin) |
 | `crate:neochumby-x@1.0.0` | crates.io (unversioned, the newest) |
 
-Each app's binaries are built for the Chumby, and its companion for the
-server, with the toolchain above. Its manifest is made from its
+Each app's binaries are built for the Chumby, and its companion and daemon
+for the server, with the toolchain above. Its manifest is made from its
 `Cargo.toml`, and its `files/` directory, if it has one, is copied as it
 is. Game data is added from `DATA`, your own copies laid out the same way.
 The tree can come from a stick or from a server.
@@ -163,6 +168,15 @@ the mount hangs.
 The code comes from the connection itself, so it matches on both screens
 only if nothing sits between them. After pairing, each end checks the
 other's key on every connection.
+
+**The admin socket** lets an app's daemon, such as a household web page,
+do what the commands above do: list the Chumbys paired and asking, approve
+or refuse a request, forget a Chumby, and set its settings
+(`neochumbyd set`). It's `admin.sock` in the state directory, answering
+only neochumbyd's own user and root. Approving through it needs the
+**owner's token**, which `neochumbyd token` prints: give it to the web
+page when it asks. `neochumbyd token new` replaces it. The protocol is
+described in `crates/neochumbyd/src/admin.rs`.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its
 companion on neochumbyd runs an AirPlay receiver named after it ("Kitchen

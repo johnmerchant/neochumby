@@ -14,8 +14,9 @@ use std::process::ExitCode;
 
 use toml::Value;
 
-/// The keys an app may set, as apps.rs reads them on the Chumby.
-const KEYS: &[&str] = &["title", "exec", "colour", "service", "companion", "neochumbyd", "home", "shells"];
+/// The keys an app may set, as apps.rs reads them on the Chumby (and
+/// neochumbyd reads `companion` and `daemon`).
+const KEYS: &[&str] = &["title", "exec", "colour", "service", "companion", "daemon", "neochumbyd", "home", "shells"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {
@@ -97,6 +98,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(m, "title=QUAKE\nexec=neochumby-quake\ncolour=8c5a28\nshells=home wx\n");
+    }
+
+    #[test]
+    fn a_daemon_alone() {
+        let m =
+            manifest("[package]\nname = \"neochumby-web\"\n[package.metadata.neochumby]\ndaemon = \"neochumby-web\"\n");
+        assert_eq!(m.unwrap(), "daemon=neochumby-web\n");
     }
 
     #[test]

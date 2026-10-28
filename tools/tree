@@ -9,10 +9,10 @@
 #
 # An app is a crate named neochumby-<name>, whose Cargo.toml has a
 # [package.metadata.neochumby] table naming its binaries (exec, service and
-# home are built for the Chumby, companion for neochumbyd's host); the
-# tree's manifest is made from it (neochumby-manifest). A files/ directory
-# beside its Cargo.toml, if it has one, is copied as it is. An APP is one
-# of:
+# home are built for the Chumby, companion and daemon for neochumbyd's
+# host); the tree's manifest is made from it (neochumby-manifest). A files/
+# directory beside its Cargo.toml, if it has one, is copied as it is. An
+# APP is one of:
 #
 #   doom                          apps/doom in this repository
 #   ./path, /path                 a crate on this machine
@@ -135,16 +135,21 @@ for app in home "$@"; do
 
   dest=$out/apps/$name
   mkdir -p "$dest"
-  build --target $chumby_t -p "$crate"
+  # The Chumby's binaries, if it has any: an app may be only a daemon.
+  if [ -n "$(field "$manifest" exec)$(field "$manifest" service)$(field "$manifest" home)" ]; then
+    build --target $chumby_t -p "$crate"
+  fi
   for key in exec service home; do
     f=$(field "$manifest" "$key")
     [ -z "$f" ] || cp "$bin/$chumby_t/release/$f" "$dest/"
   done
-  c=$(field "$manifest" companion)
-  if [ -n "$c" ]; then
-    build --target $server_t -p "$crate" --bin "$c"
-    cp "$bin/$server_t/release/$c" "$dest/"
-  fi
+  for key in companion daemon; do
+    f=$(field "$manifest" "$key")
+    [ -z "$f" ] || {
+      build --target $server_t -p "$crate" --bin "$f"
+      cp "$bin/$server_t/release/$f" "$dest/"
+    }
+  done
   cp "$manifest" "$dest/manifest"
   [ ! -d "$src/files" ] || cp -R "$src/files/." "$dest/"
 done
