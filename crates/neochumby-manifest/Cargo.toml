@@ -1,0 +1,10 @@
+[package]
+name = "neochumby-manifest"
+description = "Turns an app crate's [package.metadata.neochumby] into the manifest a Chumby's tree holds"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+toml = "0.8"
