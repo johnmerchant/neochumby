@@ -43,10 +43,15 @@ qemu-user-static on older releases); dosfstools for `mkstick`.
                                   to overwrite one), with TREE as neochumby/
                                   if given (as tools/stick)
 
-On a Mac, every command runs as root in a Lima VM sharing this checkout
-(dev/lima.yaml), so no sudo: `brew install lima`, `dev/emulate vm start`
-once (`vm stop`, `vm delete`), then the commands above, from inside the
-checkout, with paths inside it.
+On a Mac, every command runs as root in Linux sharing this checkout, so no
+sudo: in a container (Apple's `container`, macOS 26 on; dev/Containerfile)
+if `container` is installed, else in a Lima VM (dev/lima.yaml).
+NEOCHUMBY_EMU_VM=container or lima picks one. `dev/emulate vm start` once
+per boot of the Mac (`vm stop`, `vm delete`), then the commands above, from
+inside the checkout, with paths inside it. `dev/emulate vm exec CMD ...`
+runs any other command there (dev/emulate-smoke does this itself).
+Apple's container kernel has no vfat: there, stick images (mkstick,
+start --stick IMG) need Lima.
 
 The emulator's directory is --state DIR, else $NEOCHUMBY_EMU, else
 /var/tmp/neochumby-emulate-UID for the user who ran sudo. sudo drops
@@ -734,6 +739,8 @@ def cmd_start(state, opts, tree):
     if opts["psp"]:
         shutil.rmtree(state.at("psp"))
         shutil.copytree(opts["psp"], state.at("psp"), symlinks=True)
+    # As on the Chumby, where pairing puts the boot hook (rfs1/userhook2).
+    os.makedirs(state.at("psp/rfs1"), mode=0o755, exist_ok=True)
     # A fresh, black screen, and the boot's speaker and backlight, each start.
     write(state, "fb0", "", size=FB_BYTES)
     for name, value in (("brightness", "65535"), ("dimlevel", "0"), ("spkmute", "1")):
@@ -1289,19 +1296,93 @@ def cmd_mkstick(img, size_mb, tree, force):
 
 USAGE = "usage: dev/emulate [--state DIR] COMMAND ... (dev/emulate --help)"
 
-# On a Mac: a Lima VM (dev/lima.yaml) runs every command, as root.
+# On a Mac: Linux runs every command, as root, with this checkout shared at
+# the same path. Either a container, with Apple's `container` (macOS 26 on;
+# each container is a small VM of its own), from dev/Containerfile; or a Lima
+# VM, from dev/lima.yaml. Both are named VM; the image too.
 VM = "neochumby-emulate"
+# qemu-arm, statically linked, for binfmt_misc with the F flag. On arm64
+# Linux, Debian and Ubuntu's qemu packages leave ARM out, as some arm64 CPUs
+# run it natively; a Mac's can't. binfmt_misc is the VM's, so it's
+# registered at each start (dev/lima.yaml has its own copy).
+QEMU_ARM = (r":qemu-arm:M::\x7f\x45\x4c\x46\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x28\x00"
+            r":\xff\xff\xff\xff\xff\xff\xff\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff"
+            r":/usr/libexec/qemu-binfmt/arm-binfmt-P:POCF")
+# And qemu-x86_64, so that an x86_64 neochumbyd (cargo neochumbyd) runs beside
+# the emulator on a Mac with Apple silicon, as Ubuntu's packages register it
+# in the Lima VM.
+QEMU_X86_64 = (r":qemu-x86_64:M::\x7f\x45\x4c\x46\x02\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x3e\x00"
+               r":\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff"
+               r":/usr/libexec/qemu-binfmt/x86_64-binfmt-P:POCF")
+REGISTER = ("b=/proc/sys/fs/binfmt_misc; mountpoint -q $b || mount -t binfmt_misc binfmt_misc $b; "
+            f"[ -e $b/qemu-arm ] || echo '{QEMU_ARM}' > $b/register; "
+            f"[ \"$(uname -m)\" = x86_64 ] || [ -e $b/qemu-x86_64 ] || echo '{QEMU_X86_64}' > $b/register")
+
+
+def mac_vm():
+    """Which Linux, and its tool: NEOCHUMBY_EMU_VM, else a container if
+    Apple's `container` is installed, else Lima."""
+    kind = os.environ.get("NEOCHUMBY_EMU_VM") or ("container" if shutil.which("container") else "lima")
+    tools = {"container": ("container", "Apple's container, macOS 26 on (github.com/apple/container)"),
+             "lima": ("limactl", "Lima (`brew install lima`)")}
+    if kind not in tools:
+        sys.exit("dev/emulate: NEOCHUMBY_EMU_VM is container or lima")
+    tool = shutil.which(tools[kind][0])
+    if not tool:
+        sys.exit(f"dev/emulate: on a Mac it runs in Linux: install {tools[kind][1]}, then `dev/emulate vm start`")
+    return kind, tool
+
+
+def container_state(tool):
+    r = subprocess.run([tool, "inspect", VM], capture_output=True, text=True)
+    if r.returncode:
+        return None
+    return json.loads(r.stdout)[0]["status"]["state"]
+
+
+def container_start(tool):
+    if subprocess.run([tool, "image", "inspect", VM], capture_output=True).returncode:
+        print(f"dev/emulate: making the image {VM}: Ubuntu 24.04 and qemu-user (a download of about "
+              "100 MB, once)", flush=True)
+        if subprocess.run([tool, "build", "-t", VM, "-f", os.path.join(REPO, "dev", "Containerfile"),
+                           os.path.join(REPO, "dev")]).returncode:
+            sys.exit(f"dev/emulate: building the image failed. If it couldn't resolve names, give the "
+                     f"container a DNS server: container build --dns IP -t {VM} -f dev/Containerfile dev")
+    now = container_state(tool)
+    if now is None:
+        # All capabilities: it mounts, makes namespaces and registers qemu.
+        # The container is the VM's only tenant.
+        r = subprocess.run([tool, "run", "-d", "--name", VM, "--cap-add", "ALL", "-v", f"{REPO}:{REPO}",
+                            VM, "sleep", "infinity"], stdout=subprocess.DEVNULL)
+    elif now != "running":
+        r = subprocess.run([tool, "start", VM], stdout=subprocess.DEVNULL)
+    else:
+        r = subprocess.CompletedProcess([], 0)
+    if r.returncode or subprocess.run([tool, "exec", VM, "sh", "-c", REGISTER]).returncode:
+        sys.exit(f"dev/emulate: starting the container {VM} failed")
+    print(f"dev/emulate: {VM} is running, with {REPO} shared", flush=True)
 
 
 def on_mac(argv):
-    lima = shutil.which("limactl")
-    if not lima:
-        sys.exit("dev/emulate: on a Mac it runs in a Linux VM, with Lima: `brew install lima`, then "
-                 "`dev/emulate vm start`")
-    if argv[:1] == ["vm"]:
+    kind, tool = mac_vm()
+    if argv[:1] == ["vm"] and argv[1:2] != ["exec"]:
         what = argv[1] if len(argv) > 1 else ""
+        if kind == "container":
+            if what == "start":
+                container_start(tool)
+                sys.exit(0)
+            if what in ("stop", "delete"):
+                if container_state(tool) is not None:
+                    subprocess.run([tool, "stop", VM], stdout=subprocess.DEVNULL)
+                    if what == "delete":
+                        subprocess.run([tool, "rm", VM], stdout=subprocess.DEVNULL)
+                if what == "delete":
+                    # The image stays, for the next vm start; `container image rm` frees it.
+                    print(f"dev/emulate: the container is gone; its image stays: container image rm {VM}")
+                sys.exit(0)
+            sys.exit("usage: dev/emulate vm start|stop|delete|exec CMD ...")
         if what == "start":
-            listed = subprocess.run([lima, "list", "--format", "{{.Name}}"], capture_output=True, text=True)
+            listed = subprocess.run([tool, "list", "--format", "{{.Name}}"], capture_output=True, text=True)
             if VM not in listed.stdout.split():
                 with open(os.path.join(REPO, "dev", "lima.yaml")) as f:
                     template = f.read().replace("REPO", REPO)
@@ -1310,20 +1391,29 @@ def on_mac(argv):
                     f.write(template)
                 print(f"dev/emulate: making the VM {VM}: Ubuntu 24.04 (a download of about 600 MB, once), "
                       f"with {REPO} shared", flush=True)
-                os.execv(lima, [lima, "start", "--tty=false", f"--name={VM}", spec])
-            os.execv(lima, [lima, "start", VM])
+                os.execv(tool, [tool, "start", "--tty=false", f"--name={VM}", spec])
+            os.execv(tool, [tool, "start", VM])
         if what in ("stop", "delete"):
-            os.execv(lima, [lima, what, VM])
-        sys.exit("usage: dev/emulate vm start|stop|delete")
-    listed = subprocess.run([lima, "list", "--format", "{{.Name}} {{.Status}}"], capture_output=True, text=True)
-    if f"{VM} Running" not in listed.stdout.splitlines():
-        sys.exit(f"dev/emulate: the VM {VM} isn't running: dev/emulate vm start")
+            os.execv(tool, [tool, what, VM])
+        sys.exit("usage: dev/emulate vm start|stop|delete|exec CMD ...")
+    if kind == "container":
+        running = container_state(tool) == "running"
+    else:
+        listed = subprocess.run([tool, "list", "--format", "{{.Name}} {{.Status}}"], capture_output=True, text=True)
+        running = f"{VM} Running" in listed.stdout.splitlines()
+    if not running:
+        sys.exit(f"dev/emulate: {VM} ({kind}) isn't running: dev/emulate vm start")
     here = os.getcwd()
     if not (here + "/").startswith(REPO + "/"):
-        sys.exit(f"dev/emulate: on a Mac, run it from inside {REPO}, which the VM shares; "
+        sys.exit(f"dev/emulate: on a Mac, run it from inside {REPO}, which Linux shares; "
                  "give it paths there too")
-    os.execv(lima, [lima, "shell", "--workdir", here, VM, "sudo", "python3", os.path.join(REPO, "dev", "emulate")]
-             + argv)
+    if argv[:2] == ["vm", "exec"]:
+        cmd = argv[2:] or sys.exit("usage: dev/emulate vm exec CMD ...")
+    else:
+        cmd = ["python3", os.path.join(REPO, "dev", "emulate")] + argv
+    if kind == "container":
+        os.execv(tool, [tool, "exec", "--workdir", here, VM] + cmd)
+    os.execv(tool, [tool, "shell", "--workdir", here, VM, "sudo"] + cmd)
 
 
 def main(argv):
@@ -1331,6 +1421,8 @@ def main(argv):
     # Mac; only user mode goes to the VM.
     given = argv[argv.index("--machine") + 1] if "--machine" in argv[:-1] else None
     native = (given or os.environ.get("NEOCHUMBY_EMU_MACHINE") or "user") != "user"
+    # So is a real Chumby (--device, from #36): neochumbyd and ssh, here.
+    native = native or "--device" in argv or bool(os.environ.get("NEOCHUMBY_EMU_DEVICE"))
     if sys.platform == "darwin" and not native and argv[:1] not in (["-h"], ["--help"], ["help"]):
         on_mac(argv)
     def flag(args, name, default=None):

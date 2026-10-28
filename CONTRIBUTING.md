@@ -66,9 +66,7 @@ request's tree with it (`dev/emulate-smoke`).
 
 It needs Linux, root, Python 3.9+, FUSE, util-linux's `mount` with loop
 devices, qemu-user's binfmt handler (static), and dosfstools for stick
-images. On a Mac, it runs itself in a Lima VM that shares the checkout:
-`brew install lima` and `dev/emulate vm start` once, then the same
-commands without sudo, from inside the checkout.
+images. On a Mac, it runs itself in Linux that shares the checkout (below).
 
 ```sh
 sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
@@ -102,6 +100,75 @@ The session runs as root, as on the Chumby, but without the capabilities
 that would let it out of the fake root or into the PC's settings: no
 mounts, chroot, modules, raw devices or network setup, and `/proc/sys` is
 read-only.
+
+### On a Mac
+
+`dev/emulate` needs Linux, so on a Mac it runs itself in Linux that shares
+this checkout at the same path. Every command, run from inside the checkout
+with paths inside it, goes there and runs as root there, so no sudo.
+
+One of:
+- **Apple's `container`** (macOS 26 or later, Apple silicon): install it
+  from github.com/apple/container and run `container system start`. It is
+  used if installed. Its kernel has no vfat, so stick images (`mkstick`,
+  `start --stick IMG`, the sync scenario) need Lima.
+- **Lima**: `brew install lima`. Set `NEOCHUMBY_EMU_VM=lima` to use it when
+  `container` is installed too.
+
+```sh
+tools/tree target/emu-tree doom
+dev/emulate vm start                 # once per boot; the first one builds the image or VM
+dev/emulate-smoke target/emu-tree target/emu-smoke    # the smoke scenario
+dev/emulate start target/emu-tree    # or by hand, as on Linux, without sudo
+dev/emulate shot home.png
+dev/emulate stop
+dev/emulate vm exec CMD ...          # anything else, as root, in that Linux
+```
+
+The emulator's directory stays inside that Linux (`/var/tmp`): a folder
+shared from the Mac can't hold its control socket, so don't give `--state` a
+path in the checkout.
+
+If the first `vm start` with `container` can't resolve names (apt-get exits
+100), build the image with a DNS server named, then start again:
+
+```sh
+container build --dns 1.1.1.1 -t neochumby-emulate -f dev/Containerfile dev
+dev/emulate vm start
+```
+
+To clean up: `dev/emulate vm stop` (it starts again with `vm start`), or
+`dev/emulate vm delete` to remove the container or VM. With `container`, the
+image stays (`container image rm neochumby-emulate`, about 100 MB). With
+Lima, its downloaded Ubuntu image stays in Lima's cache (`limactl prune`).
+
+### Testing the developer link in dev/emulate
+
+A neochumbyd beside the emulator pairs with it and drives it as it would a
+real Chumby (its name is `chumby`). The touchscreen and button are
+dev/emulate's fakes, so this tests the protocol and the session, not the
+Chumby's drivers. On Linux, run `$B` as root; on a Mac, put `dev/emulate vm
+exec` before each `$B`.
+
+```sh
+tools/tree target/emu-tree doom && cargo neochumbyd
+B=target/x86_64-unknown-linux-musl/release/neochumbyd
+N="--state /var/tmp/nd"
+$B serve $N --tree target/emu-tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049   # in another terminal
+dev/emulate start --server 127.0.0.1 target/emu-tree
+dev/emulate tap 80 220                 # PAIR
+$B pairing $N                          # the code on the screen
+$B approve CODE $N                     # the screen says PAIRED
+dev/emulate stop
+dev/emulate start --server 127.0.0.1 target/emu-tree   # neochumbyd: chumby connected
+$B set chumby dev=on $N
+$B tap chumby 160 62 $N                # DOOM: "home asks: open doom"
+$B tap chumby 5 5 --hold 3500 $N       # the corner hold: "escape", home again
+$B button chumby tap $N                # "the top button: told home"
+$B shot chumby nd.png $N && dev/emulate shot emu.png  # the same pixels
+$B set chumby dev= $N                  # tap and button refused again
+dev/emulate stop
+```
 
 ### Scenarios
 
