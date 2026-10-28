@@ -36,13 +36,13 @@
 //! guessing through the page.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::fd::AsRawFd;
 use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::Path;
 use std::time::Duration;
 
 use neochumby_proto::hex;
+use neochumby_sys::user::{self, Ids};
 
 use crate::state::State;
 
@@ -64,14 +64,6 @@ enum Access {
 
 const ACCESS: Access = Access::User;
 
-/// The user and group at the other end of a connection, as the kernel
-/// says.
-#[derive(Clone, Copy)]
-struct Peer {
-    uid: libc::uid_t,
-    gid: libc::gid_t,
-}
-
 impl Access {
     fn mode(self) -> u32 {
         match self {
@@ -80,9 +72,11 @@ impl Access {
         }
     }
 
-    fn allows(self, p: Peer) -> bool {
-        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
-        p.uid == 0 || p.uid == uid || (self == Access::Group && p.gid == gid)
+    /// Whether to answer `peer`, the user and group at the other end of a
+    /// connection, as the kernel says.
+    fn allows(self, peer: Ids) -> bool {
+        let me = user::effective();
+        peer.uid == 0 || peer.uid == me.uid || (self == Access::Group && peer.gid == me.gid)
     }
 }
 
@@ -105,7 +99,7 @@ pub fn listen(path: &Path) -> io::Result<UnixListener> {
 
 pub fn serve(listener: UnixListener, state: State) {
     for conn in listener.incoming().flatten() {
-        match peer(&conn) {
+        match user::peer(&conn) {
             Ok(p) if ACCESS.allows(p) => {
                 let state = state.clone();
                 std::thread::spawn(move || {
@@ -118,34 +112,6 @@ pub fn serve(listener: UnixListener, state: State) {
             Err(e) => eprintln!("neochumbyd: admin: {e}"),
         }
     }
-}
-
-#[cfg(any(target_os = "linux", target_os = "android"))]
-fn peer(s: &UnixStream) -> io::Result<Peer> {
-    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
-    let mut len = size_of::<libc::ucred>() as libc::socklen_t;
-    let r = unsafe {
-        libc::getsockopt(
-            s.as_raw_fd(),
-            libc::SOL_SOCKET,
-            libc::SO_PEERCRED,
-            (&mut cred as *mut libc::ucred).cast(),
-            &mut len,
-        )
-    };
-    if r != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(Peer { uid: cred.uid, gid: cred.gid })
-}
-
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn peer(s: &UnixStream) -> io::Result<Peer> {
-    let (mut uid, mut gid) = (0, 0);
-    if unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(Peer { uid, gid })
 }
 
 fn handle(state: &State, conn: UnixStream) -> io::Result<()> {
@@ -300,13 +266,13 @@ mod tests {
     /// Access::Group; nobody else.
     #[test]
     fn access() {
-        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        let Ids { uid, gid } = user::effective();
         let stranger = uid.wrapping_add(4242);
         for a in [Access::User, Access::Group] {
-            assert!(a.allows(Peer { uid: 0, gid: 4242 }));
-            assert!(a.allows(Peer { uid, gid: 4242 }));
-            assert!(!a.allows(Peer { uid: stranger, gid: gid.wrapping_add(1) }));
-            assert_eq!(a.allows(Peer { uid: stranger, gid }), a == Access::Group);
+            assert!(a.allows(Ids { uid: 0, gid: 4242 }));
+            assert!(a.allows(Ids { uid, gid: 4242 }));
+            assert!(!a.allows(Ids { uid: stranger, gid: gid.wrapping_add(1) }));
+            assert_eq!(a.allows(Ids { uid: stranger, gid }), a == Access::Group);
         }
         assert_eq!((Access::User.mode(), Access::Group.mode()), (0o600, 0o660));
     }
@@ -323,7 +289,7 @@ mod tests {
 
         // Our own user is let in, and may send several requests.
         let c = UnixStream::connect(&path).unwrap();
-        assert!(ACCESS.allows(peer(&c).unwrap()));
+        assert!(ACCESS.allows(user::peer(&c).unwrap()));
         let mut r = BufReader::new(c.try_clone().unwrap());
         let mut w = c;
         let mut line = String::new();

@@ -35,6 +35,7 @@
 pub mod net;
 pub mod process;
 pub mod time;
+pub mod user;
 
 #[cfg(target_os = "linux")]
 pub mod mm;

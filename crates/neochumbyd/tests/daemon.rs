@@ -15,6 +15,7 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
 use neochumby_proto::{Identity, Msg, Session};
+use neochumby_sys::process::{self, Signal};
 
 /// The setting that names the app a Chumby starts with. This test uses it
 /// only through this, so a rename is one line.
@@ -132,7 +133,7 @@ struct Daemon {
 
 impl Drop for Daemon {
     fn drop(&mut self) {
-        unsafe { libc::kill(self.child.id() as libc::pid_t, libc::SIGTERM) };
+        let _ = process::kill(self.child.id(), Signal::Term);
         let deadline = Instant::now() + Duration::from_secs(10);
         while matches!(self.child.try_wait(), Ok(None)) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
@@ -203,7 +204,7 @@ fn end_to_end() {
     assert!(out.starts_with("paired   kitchen  ") && out.trim_end().ends_with(&format!("{START}=wx")), "{out}");
 
     // The first run exited; neochumbyd started it again.
-    let pid: libc::pid_t = wait_for(20, "the daemon to start again", || {
+    let pid: u32 = wait_for(20, "the daemon to start again", || {
         std::fs::read_to_string(home.join("pid")).ok().and_then(|p| p.trim().parse().ok())
     });
     let mut admin = Admin::connect(&socket);
@@ -213,9 +214,9 @@ fn end_to_end() {
     drop(admin);
 
     // Stopping neochumbyd stops the daemon, and removes the socket.
-    unsafe { libc::kill(d.child.id() as libc::pid_t, libc::SIGTERM) };
+    process::kill(d.child.id(), Signal::Term).unwrap();
     let status = wait_for(20, "neochumbyd to stop", || d.child.try_wait().unwrap());
     assert!(status.success(), "{status}");
-    assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "the daemon is still running");
+    assert!(!process::exists(pid), "the daemon is still running");
     assert!(!socket.exists(), "the admin socket is still there");
 }

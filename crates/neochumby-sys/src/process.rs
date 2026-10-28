@@ -1,6 +1,8 @@
-//! Signals to other processes, by pid or by process group.
+//! Signals to other processes, by pid or by process group, and what a
+//! child is started with.
 
 use std::io;
+use std::process::Command;
 
 /// A signal [`kill`] and [`kill_group`] can send.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +36,39 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
 }
 
+/// Whether the process `pid` is there (not yet reaped), and ours to
+/// signal: kill(2) with no signal, which only checks.
+pub fn exists(pid: u32) -> bool {
+    let Ok(p) = positive(pid) else { return false };
+    // SAFETY: kill(2) takes plain integers and touches no memory of ours;
+    // signal 0 sends nothing, and `p` is a single process.
+    unsafe { libc::kill(p, 0) == 0 }
+}
+
+/// Has the kernel send the child `cmd` starts SIGTERM when the thread that
+/// started it exits, which for a thread that waits on it is when its parent
+/// dies, however that happens (prctl PR_SET_PDEATHSIG, Linux 2.1.57 on).
+/// Elsewhere it does nothing.
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+pub fn term_with_parent(cmd: &mut Command) {
+    #[cfg(target_os = "linux")]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: the closure runs in the child between fork and exec,
+        // where only async-signal-safe calls are allowed. prctl(2) is a
+        // plain system call; the closure allocates nothing, takes no lock
+        // and touches only an error built from errno.
+        unsafe {
+            cmd.pre_exec(|| {
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+}
+
 fn positive(id: u32) -> io::Result<libc::pid_t> {
     match libc::pid_t::try_from(id) {
         Ok(p) if p > 0 => Ok(p),
@@ -56,6 +91,19 @@ mod tests {
         for id in [0, u32::MAX, 1 << 31] {
             assert_eq!(kill(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
             assert_eq!(kill_group(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+            assert!(!exists(id));
         }
+    }
+
+    #[test]
+    fn exists_while_running() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        term_with_parent(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        assert!(exists(child.id()));
+        kill(child.id(), Signal::Term).unwrap();
+        child.wait().unwrap();
+        assert!(!exists(child.id()));
     }
 }

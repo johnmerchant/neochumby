@@ -28,6 +28,7 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use neochumby_proto::valid_name;
+use neochumby_sys::process::{self, Signal};
 
 use crate::companion::app_binary;
 
@@ -132,25 +133,19 @@ fn spawn(d: &Daemon) -> std::io::Result<Child> {
     // On Linux, the kernel sends it SIGTERM if neochumbyd dies without
     // stopping it (SIGKILL, a crash). The signal follows this thread, which
     // lives as long as the daemon.
-    #[cfg(target_os = "linux")]
-    unsafe {
-        cmd.pre_exec(|| {
-            if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM) != 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    process::term_with_parent(&mut cmd);
     cmd.spawn()
 }
 
-/// SIGTERM, then SIGKILL after five seconds.
+/// SIGTERM, then SIGKILL after five seconds, to the daemon's process
+/// group: the daemon and whatever it started.
 fn terminate(child: &mut Child) {
-    unsafe { libc::kill(child.id() as libc::pid_t, libc::SIGTERM) };
+    let _ = process::kill_group(child.id(), Signal::Term);
     let deadline = Instant::now() + Duration::from_secs(5);
     while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
+    let _ = process::kill_group(child.id(), Signal::Kill);
     let _ = child.kill();
     let _ = child.wait();
 }
@@ -195,9 +190,9 @@ mod tests {
             std::thread::sleep(Duration::from_millis(50));
         }
         std::thread::sleep(Duration::from_millis(100));
-        let pid: libc::pid_t = std::fs::read_to_string(home.join("pid")).unwrap().trim().parse().unwrap();
+        let pid: u32 = std::fs::read_to_string(home.join("pid")).unwrap().trim().parse().unwrap();
         d.stop();
-        assert_ne!(unsafe { libc::kill(pid, 0) }, 0, "still running");
+        assert!(!process::exists(pid), "still running");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

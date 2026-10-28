@@ -316,8 +316,9 @@ mod tests {
 
     /// The test runs as one user, so it checks what lets another member of
     /// the state directory's group read the token: mode 0640 and the
-    /// directory's group, whatever the umask, from a first `token` and from
-    /// `token new` alike. Where this user is in a second group, the
+    /// directory's group, from a first `token` and from `token new` alike.
+    /// The file is created 0600 and then given 0640, so a mode the umask
+    /// decided would show here as 0600. Where this user is in a second group, the
     /// directory is given that one, as a setgid directory of neochumbyd's
     /// group would be for an admin whose own group differs.
     #[test]
@@ -325,10 +326,8 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("neochumbyd-token-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let st = State::open(dir.clone()).unwrap();
-        let mut groups = vec![0 as libc::gid_t; 64];
-        let n = unsafe { libc::getgroups(groups.len() as libc::c_int, groups.as_mut_ptr()) };
-        let egid = unsafe { libc::getegid() };
-        if let Some(&other) = groups[..n.max(0) as usize].iter().find(|&&g| g != egid) {
+        let egid = neochumby_sys::user::effective().gid;
+        if let Some(other) = neochumby_sys::user::groups().unwrap().into_iter().find(|&g| g != egid) {
             std::os::unix::fs::chown(&dir, None, Some(other)).unwrap();
         }
         let group = std::fs::metadata(&dir).unwrap().gid();
@@ -338,9 +337,6 @@ mod tests {
             assert_eq!(m.permissions().mode() & 0o777, 0o640);
             assert_eq!(m.gid(), group, "the state directory's group");
         };
-        // An umask that would leave the group out.
-        let umask = unsafe { libc::umask(0o077) };
-
         assert!(!st.is_owner_token(""), "no token yet");
         let t = st.owner_token().unwrap();
         assert_eq!(t.len(), 32);
@@ -356,7 +352,6 @@ mod tests {
         assert_ne!(new, t);
         assert!(st.is_owner_token(&new) && !st.is_owner_token(&t));
         group_can_read();
-        unsafe { libc::umask(umask) };
         let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
         assert!(!left.iter().any(|f| f.to_string_lossy().ends_with(".new")), "{left:?}");
         std::fs::remove_dir_all(&dir).unwrap();

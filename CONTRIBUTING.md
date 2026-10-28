@@ -40,9 +40,9 @@ tools/tree /tmp/tree doom quake airplay   # a whole tree, with apps
 CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
-crates), and `cargo test -p neochumby-proto -p neochumbyd`. neochumbyd's tests include
-one end to end on loopback (`crates/neochumbyd/tests/daemon.rs`): a Chumby
-pairs, and a daemon approves it through the admin socket.
+crates), and `cargo test -p neochumby-proto -p neochumbyd`. neochumbyd's
+tests include one end to end on loopback (`crates/neochumbyd/tests/daemon.rs`):
+a Chumby pairs, and a daemon approves it through the admin socket.
 
 ## Writing an app
 
