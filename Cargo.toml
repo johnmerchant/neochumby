@@ -8,6 +8,7 @@ members = [
     "crates/neochumbyd",
     "apps/airplay",
     "apps/home",
+    "apps/wx",
     "apps/doom",
     "apps/quake",
 ]

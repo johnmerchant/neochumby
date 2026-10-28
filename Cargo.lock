@@ -356,6 +356,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-wx"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "neochumby",
+]
+
+[[package]]
 name = "neochumbyd"
 version = "0.1.0"
 dependencies = [

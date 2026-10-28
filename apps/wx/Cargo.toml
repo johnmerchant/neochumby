@@ -1,0 +1,19 @@
+[package]
+name = "neochumby-wx"
+description = "A home screen in the 2008 Chumby's style: pages and screens a feeder prerenders, shown with wipes, panes, tap zones and animation"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc.workspace = true
+
+# Only the Chumby's build uses the device library. On the host the binary
+# renders frames to files (`neochumby-wx render`), so the engine is checked
+# and tested without a framebuffer.
+[target.'cfg(target_arch = "arm")'.dependencies]
+neochumby.workspace = true
+
+[package.metadata.neochumby]
+home = "neochumby-wx"
