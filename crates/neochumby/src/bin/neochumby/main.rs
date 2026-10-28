@@ -8,7 +8,8 @@
 //! software.
 //!
 //! On a paired Chumby, its output also goes to its neochumbyd, which can
-//! ask it to restart, or for its screen (devlink.rs). A restart stops
+//! ask it to restart, or for its screen, and, once its owner allows it,
+//! tap its screen and press its top button (devlink.rs). A restart stops
 //! everything as CHUMBY MODE does, then runs the tree's `neochumby` in
 //! this process's place: the newest tree, deployed since boot.
 //!
@@ -164,6 +165,8 @@ struct Chumby {
     button_tried: Option<Instant>,
     /// Set by the developer link.
     restart: Option<Arc<AtomicBool>>,
+    /// The top button as neochumbyd holds it, through the developer link.
+    remote: Option<Arc<devlink::Remote>>,
 }
 
 impl run::Device for Chumby {
@@ -209,13 +212,25 @@ impl run::Device for Chumby {
             self.button_tried = Some(Instant::now());
         }
         let mut b = [0u8; 1];
-        match self.button.as_mut()?.read(&mut b) {
-            Ok(1) => Some(b[0] != 0),
+        let real = match self.button.as_mut().map(|f| f.read(&mut b)) {
+            Some(Ok(1)) => Some(b[0] != 0),
             _ => None,
-        }
+        };
+        // Read only while the app in front hasn't the button (run.rs), so
+        // a press from neochumbyd can reach it.
+        let remote = self.remote.as_ref().map(|r| {
+            r.handed_over.store(false, Ordering::SeqCst);
+            r.button.load(Ordering::SeqCst)
+        });
+        button::level(real, remote)
     }
 
+    /// Asked for only as an app with `button = true` opens (run.rs): from
+    /// then until the button is read again, neochumbyd can't press it.
     fn button_fd(&self) -> Option<RawFd> {
+        if let Some(r) = &self.remote {
+            r.handed_over.store(true, Ordering::SeqCst);
+        }
         self.button.as_ref().map(|f| f.as_raw_fd())
     }
 
@@ -269,6 +284,7 @@ fn session() {
                 button: open_button(false),
                 button_tried: Some(Instant::now()),
                 restart: link.as_ref().map(devlink::Link::restart_flag),
+                remote: link.as_ref().map(devlink::Link::remote),
             };
             // On either ending, the loop has closed the button, stopped the
             // services (neochumby-sync with them) and put the speaker back.

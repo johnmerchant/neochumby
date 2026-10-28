@@ -18,6 +18,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
+use neochumby_proto::dev::INPUT_KEY;
 use serde_json::{Value, json};
 
 use crate::dev;
@@ -107,7 +108,7 @@ fn tools() -> Value {
         },
         {
             "name": "set",
-            "description": "Sets one of a paired Chumby's settings, sent to it when it next connects: `start` (its start app; see chumbys for those in the tree) or `delivery` (`nfs` or `sync`). An empty value removes the setting",
+            "description": "Sets one of a paired Chumby's settings, sent to it when it next connects: `start` (its start app; see chumbys for those in the tree) or `delivery` (`nfs` or `sync`). An empty value removes the setting. Not `dev` (remote input), which is the owner's to turn on",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -240,6 +241,12 @@ impl Server {
     }
 
     fn set(&self, name: &str, key: &str, value: &str) -> Result<String, String> {
+        // Remote input is the Chumby's owner's to turn on, not a client's.
+        if key == INPUT_KEY {
+            return Err(format!(
+                "{key} is set by the Chumby's owner, with `neochumbyd set {name} {key}=on`, not from here"
+            ));
+        }
         self.state.set(name, key, value).map_err(|e| e.to_string())?;
         let mut out = match value {
             "" => format!("{name}: {key} removed"),
@@ -330,6 +337,10 @@ mod tests {
         assert_eq!(s.state.config("den"), [("delivery".to_string(), "sync".to_string())]);
         let r = call(&s, "set", json!({"name": "attic", "key": "delivery", "value": "sync"}));
         assert_eq!(r["isError"], true);
+        // Remote input stays the owner's to turn on.
+        let r = call(&s, "set", json!({"name": "den", "key": INPUT_KEY, "value": "on"}));
+        assert_eq!(r["isError"], true);
+        assert_eq!(s.state.config("den"), [("delivery".to_string(), "sync".to_string())]);
     }
 
     #[test]
