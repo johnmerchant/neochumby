@@ -103,6 +103,21 @@ and decides who gets each press:
 - **On `chumby-mode`, the session closes it,** so the stock software can open
   it.
 
+## The speaker
+
+The speaker is usually driven by a service (AirPlay, music), not the app in
+front, so there's no manifest key for it.
+
+- **The library holds the speaker handling:** a guard that opens
+  `/dev/dsp`, saves the volume, sets a level, unmutes, and restores all of
+  it when dropped.
+- **`/dev/dsp` can be opened by only one process at a time.** Whoever holds
+  it keeps it, and the others wait until it's free. If a process should
+  be able to take it over, the session can hand it over like the top
+  button, once there's a measured case for that.
+- **When a supervised service dies,** the session mutes the speaker and
+  restores the volume it had at boot, so a crash can't leave it on.
+
 This is deliberately not a resident shell. The always-on behaviour is split
 into small programs that each do one thing and can be replaced, restarted
 or reused on their own, and the UI is an ordinary app that talks to them.
