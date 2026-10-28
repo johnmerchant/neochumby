@@ -2,22 +2,17 @@
 
 use std::fs::OpenOptions;
 use std::io;
-use std::os::fd::AsRawFd;
 
 use font8x8::UnicodeFonts;
+use neochumby_sys::mm::DeviceMap;
 
 pub const W: usize = 320;
 pub const H: usize = 240;
 
+/// The screen, mapped. It is Send, so an app can keep it in a static Mutex.
 pub struct Fb {
-    px: *mut u16,
-    // Keeps the descriptor (and so the mapping's backing) open.
-    _file: std::fs::File,
+    map: DeviceMap,
 }
-
-// The mapping is the process's own and lives as long as the Fb; doom.rs keeps
-// it in a static Mutex, which needs Send.
-unsafe impl Send for Fb {}
 
 pub const fn rgb(r: u8, g: u8, b: u8) -> u16 {
     ((r as u16 >> 3) << 11) | ((g as u16 >> 2) << 5) | (b as u16 >> 3)
@@ -26,25 +21,11 @@ pub const fn rgb(r: u8, g: u8, b: u8) -> u16 {
 impl Fb {
     pub fn open() -> io::Result<Fb> {
         let file = OpenOptions::new().read(true).write(true).open("/dev/fb0")?;
-        let len = W * H * 2;
-        let px = unsafe {
-            libc::mmap(
-                std::ptr::null_mut(),
-                len,
-                libc::PROT_READ | libc::PROT_WRITE,
-                libc::MAP_SHARED,
-                file.as_raw_fd(),
-                0,
-            )
-        };
-        if px == libc::MAP_FAILED {
-            return Err(io::Error::last_os_error());
-        }
-        Ok(Fb { px: px.cast(), _file: file })
+        Ok(Fb { map: DeviceMap::new(file, W * H * 2)? })
     }
 
     pub fn pixels(&mut self) -> &mut [u16] {
-        unsafe { std::slice::from_raw_parts_mut(self.px, W * H) }
+        self.map.as_u16_mut()
     }
 
     pub fn clear(&mut self, c: u16) {
@@ -83,10 +64,10 @@ impl Fb {
     pub fn blit_indexed(&mut self, pal: &Palette, src: &[u8], width: usize, height: usize, stride: usize) {
         let height = height.min(H);
         let width = width.min(W) & !1;
-        let px = self.px.cast::<u32>();
+        let px = self.map.as_u32_mut();
         for y in 0..height {
             let line = &src[y * stride..y * stride + width];
-            let dst = unsafe { std::slice::from_raw_parts_mut(px.add(y * W / 2), width / 2) };
+            let dst = &mut px[y * W / 2..y * W / 2 + width / 2];
             for (d, p) in dst.iter_mut().zip(line.as_chunks::<2>().0) {
                 // Little-endian: the left pixel is the low half.
                 *d = pal.0[p[0] as usize] as u32 | (pal.0[p[1] as usize] as u32) << 16;
