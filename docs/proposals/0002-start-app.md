@@ -114,8 +114,9 @@ and decides who gets each press:
   writes to the front app's pipe, not only to services'). The write never
   waits; if it fails (the pipe is closed or full), the session ends the
   start app and opens it again with `NEOCHUMBY_REASON=button`, so a wedged
-  start app still recovers. An app that doesn't read its pipe, such as
-  `neochumby-home`, simply ignores the press.
+  start app still recovers. An app that doesn't read its pipe simply
+  ignores the press; `neochumby-home` goes back to its first page, leaving
+  pairing if that's showing.
 - **There's no hold gesture on the button,** since games hold it to fire.
   The corner hold is the way out of anything.
 - **On `chumby-mode`, the session closes it,** so the stock software can open
