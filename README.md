@@ -40,14 +40,21 @@ binaries are static (musl), so they don't depend on its userland.
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
 | `apps/htop` | neochumby-htop: [htop](https://github.com/htop-dev/htop) (3.5.3, a submodule) on the library's terminal, the touchscreen its mouse (F10, Quit, is past the 64th column: the corner hold leaves it) | GPL-2.0-or-later |
 | `apps/top` | neochumby-top: [procps-ng](https://gitlab.com/procps-ng/procps)' top (4.0.7, a submodule) on the library's terminal, until tapped | GPL-2.0-or-later |
+| `apps/cmatrix` | MATRIX: [cmatrix](https://github.com/abishekvashok/cmatrix) (v2.0, a submodule) on the library's terminal, until tapped | GPL-3.0-or-later |
+| `apps/clock` | CLOCK: [tty-clock](https://github.com/xorg62/tty-clock) (8868f3e, a submodule), until tapped | BSD-3-Clause |
+| `apps/bonsai` | BONSAI: [cbonsai](https://gitlab.com/jallbrit/cbonsai) (v1.4.2, a submodule) growing a tree, a new one every 20 seconds, until tapped | GPL-3.0-only |
+| `apps/pipes` | PIPES: [pipes-rs](https://github.com/dnorhoj/pipes-rs) (v0.1.1, a submodule), pipes.sh in Rust, until tapped | GPL-3.0-only |
+| `apps/aquarium` | AQUARIUM: [asciiquarium-rs](https://github.com/cablehead/asciiquarium-rs) (beef5b7, a submodule), asciiquarium in Rust, until tapped | GPL-2.0-or-later |
+| `apps/genact` | GENACT: [genact](https://github.com/svenstaro/genact) (1.6.0, from crates.io), looking busy, until tapped | MIT |
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
 
 Everything we write is MIT, except in `apps/doom`, `apps/quake`,
-`apps/htop` and `apps/top`. They link GPL programs (the games' engines,
-htop, procps' top), so each of those crates, our Rust in it included, is
+`apps/htop`, `apps/top`, `apps/cmatrix`, `apps/bonsai`, `apps/pipes` and
+`apps/aquarium`. They link GPL programs (the games' engines, htop, procps'
+top, cmatrix, cbonsai, pipes-rs, asciiquarium-rs), so each of those crates, our Rust in it included, is
 GPL and lives in its own directory, with the program's upstream licence
 in its submodule (`apps/quake/src/span.rs` is a port of
 the engine's span drawer, so it could be nothing else). `apps/fetch` links
@@ -156,6 +163,7 @@ apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manif
 apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
 apps/htop/                 neochumby-htop, manifest
 apps/top/                  neochumby-top, manifest
+apps/cmatrix/              neochumby-cmatrix, manifest (and so on for clock, bonsai, pipes, aquarium, genact)
 ```
 
 `tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes

@@ -20,7 +20,7 @@
 	path = apps/cmatrix/third_party/cmatrix
 	url = https://github.com/abishekvashok/cmatrix
 [submodule "apps/tty-clock/third_party/tty-clock"]
-	path = apps/tty-clock/third_party/tty-clock
+	path = apps/clock/third_party/tty-clock
 	url = https://github.com/xorg62/tty-clock
 [submodule "apps/bonsai/third_party/cbonsai"]
 	path = apps/bonsai/third_party/cbonsai

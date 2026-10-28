@@ -12,15 +12,19 @@ use std::process::Command;
 // pipes-rs's modules, where its `crate::` paths find them.
 #[path = "../third_party/pipes-rs/src/pipe.rs"]
 #[allow(clippy::all)]
+#[rustfmt::skip]
 mod pipe;
 #[path = "../third_party/pipes-rs/src/random.rs"]
 #[allow(clippy::all)]
+#[rustfmt::skip]
 mod random;
 #[path = "../third_party/pipes-rs/src/screen.rs"]
 #[allow(clippy::all)]
+#[rustfmt::skip]
 mod screen;
 #[path = "../third_party/pipes-rs/src/utils.rs"]
 #[allow(clippy::all)]
+#[rustfmt::skip]
 mod utils;
 
 // Its main.rs, whose own `mod` lines look in its directory. Its main is
@@ -28,6 +32,7 @@ mod utils;
 // twice, and the copies in here go unused.
 #[path = "../third_party/pipes-rs/src"]
 #[allow(dead_code, unused_imports, clippy::all)]
+#[rustfmt::skip]
 mod upstream {
     include!("../third_party/pipes-rs/src/main.rs");
 

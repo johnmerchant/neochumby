@@ -19,13 +19,11 @@ members = [
     "apps/genact",
     "apps/htop",
     "apps/cmatrix",
-    "apps/tty-clock",
+    "apps/clock",
     "apps/pipes",
     "apps/quake",
     "apps/top",
 ]
-# The apps' submodules are not members.
-exclude = ["apps/*/third_party"]
 
 [workspace.package]
 version = "0.1.0"
