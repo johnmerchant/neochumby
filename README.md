@@ -35,9 +35,12 @@ binaries are static (musl), so they don't depend on its userland.
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
 
-Everything we write is MIT. Doom and Quake link GPL engines, so each of
-those binaries is GPL and lives in its own directory with its upstream
-licence. Nothing links an app: each runs as a separate program. The
+Everything we write is MIT, except in `apps/doom` and `apps/quake`. Doom
+and Quake link GPL engines, so each of those crates, our Rust in it
+included, is GPL and lives in its own directory with its upstream licence
+(`apps/quake/src/span.rs` is a port of the engine's span drawer, so it
+could be nothing else). Nothing links an app: each runs as a separate
+program. The
 soft-float routines' runtime exception puts no conditions on the programs
 they're linked into.
 
