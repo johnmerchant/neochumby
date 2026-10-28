@@ -1,4 +1,5 @@
-//! neochumbyd: what a Chumby pairs with. Serves the app tree over NFS,
+//! neochumbyd: what a Chumby pairs with. Serves the app tree over NFS, or
+//! keeps a copy of it on the Chumby's stick (`delivery=sync`, sync.rs),
 //! pairs Chumbys, and runs the server half of their apps (companion.rs)
 //! over neochumby-proto. It knows no app by name: an app brings its own
 //! companion, in its directory of the tree.
@@ -12,12 +13,19 @@
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
 //!                                  sent to it when it next connects;
 //!                                  KEY= removes it. For `start`, it says
-//!                                  which apps in the tree may be named
+//!                                  which apps in the tree may be named;
+//!                                  `delivery=sync` keeps the tree on the
+//!                                  Chumby's stick
+//!   neochumbyd manifest            what a sync sends: the tree's files,
+//!                                  and any a Chumby could not take
 //!   neochumbyd log NAME [-f]       a paired Chumby's log, as its session
 //!                                  sent it; -f follows it (dev.rs)
 //!   neochumbyd restart NAME        its session ends its apps and starts
 //!                                  again from the tree
 //!   neochumbyd shot NAME OUT.png   its screen
+//!   neochumbyd mcp                 log, restart, shot, set and pairing's
+//!                                  list as an MCP server on stdio, for
+//!                                  Claude Code and the like (mcp.rs)
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -28,9 +36,11 @@
 mod api;
 mod companion;
 mod dev;
+mod mcp;
 mod nfs;
 mod png;
 mod state;
+mod sync;
 mod tree;
 
 use std::net::TcpListener;
@@ -60,7 +70,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|log NAME [-f]|restart NAME|shot NAME OUT.png [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
     );
     std::process::exit(2)
 }
@@ -141,6 +151,7 @@ fn main() {
                 println!("{}", tree::hint(&starts));
             }
         }
+        "manifest" => manifest(&a),
         "log" => {
             let name = paired(&state, &operand());
             let mut out = std::io::stdout().lock();
@@ -162,8 +173,31 @@ fn main() {
             dev::shot(&a.state, &name, out.as_ref(), LINK_WAIT).unwrap_or_else(|e| fail(e));
             println!("{out}");
         }
+        "mcp" => {
+            let server = mcp::Server { state, state_dir: a.state.clone(), tree: tree_dir, wait: LINK_WAIT };
+            mcp::run(&server, std::io::stdin().lock(), std::io::stdout().lock()).unwrap_or_else(|e| fail(e));
+        }
         _ => usage(),
     }
+}
+
+/// What a sync sends, as a set's manifest, then what is left out of it and
+/// the manifest's digest.
+fn manifest(a: &Args) {
+    let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
+    let hashes = neochumby_sync::serve::Hashes::default();
+    let tree = neochumby_sync::serve::scan(&tree, &hashes).unwrap_or_else(|e| fail(e));
+    let m = tree.manifest();
+    for e in &m {
+        print!("{}", neochumby_sync::manifest::line(e));
+    }
+    for l in &tree.left_out {
+        eprintln!("left out: {l}");
+    }
+    if let Err(e) = neochumby_sync::manifest::validate(&m, &neochumby_sync::LIMITS) {
+        eprintln!("a Chumby would refuse this tree: {e}");
+    }
+    eprintln!("digest {}", neochumby_proto::hex(&neochumby_sync::manifest::digest(&m)));
 }
 
 /// `name`, if a Chumby is paired under it.
@@ -193,6 +227,7 @@ fn serve(a: &Args, state: State) {
         nfs_port,
         tree: tree.clone(),
         state_dir: a.state.clone(),
+        hashes: neochumby_sync::serve::Hashes::default(),
         links: Default::default(),
     });
     std::thread::spawn(move || api::serve(listener, api));
