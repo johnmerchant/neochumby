@@ -1,0 +1,102 @@
+#!/bin/sh
+# dev/emulate's smoke test, which CI runs: boots a tree's session as a
+# Chumby would and drives it from outside, checking that
+#   - the home screen draws, and a tap on DOOM opens Doom (without game data
+#     it says so and exits, and the home screen comes back);
+#   - the fake devices behave (dev/emulate selftest);
+#   - neochumby sensors, run beside the session, sees a touch and the top
+#     button;
+#   - holding the top-left corner for three seconds restarts the home screen;
+#   - CHUMBY MODE ends the session cleanly;
+#   - the same tree boots from a FAT stick image.
+# Screenshots, the session's log and the sensors output go in OUT.
+#
+#   sudo dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
+set -eu
+tree=${1:?usage: dev/emulate-smoke TREE OUT}
+out=${2:?usage: dev/emulate-smoke TREE OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$out"
+state=$out/state
+emu() { "$dev/emulate" --state "$state" "$@"; }
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the session's log:"
+  emu log || true
+  emu stop || true
+  exit 1
+}
+
+# neochumby-home's layout: rows of apps from y=44, 36 high with 4 between,
+# in name order, those with a title and exec; CHUMBY MODE along the bottom.
+row=0
+found=
+for d in $(ls "$tree/apps"); do
+  m=$tree/apps/$d/manifest
+  grep -q '^title=' "$m" && grep -q '^exec=' "$m" || continue
+  [ "$d" = doom ] && found=1 && break
+  row=$((row + 1))
+done
+[ -n "$found" ] && [ "$row" -lt 4 ] || fail "the tree needs doom among its first four listed apps"
+doom_y=$((44 + row * 40 + 18))
+
+step "boot"
+emu start "$tree"
+emu wait screen 60 || fail "the home screen didn't draw"
+emu shot "$out/1-home.png"
+[ "$(emu pixel 2 2)" = "#101021" ] || fail "not neochumby-home's background at (2, 2): $(emu pixel 2 2)"
+
+step "tap DOOM"
+emu tap 160 "$doom_y"
+# Without game data Doom exits at once; with it, it draws its bars.
+i=0
+until emu log | grep -q 'neochumby-home: doom exited' || [ "$(emu pixel 160 2)" = "#180000" ]; do
+  i=$((i + 1))
+  [ "$i" -lt 300 ] || fail "DOOM didn't open"
+  sleep 0.1
+done
+emu shot "$out/2-doom.png"
+if emu log | grep -q 'neochumby-doom: no IWAD found'; then
+  echo "Doom opened, and exited without game data"
+  emu wait screen 30 || fail "the home screen didn't come back"
+else
+  echo "Doom is running"
+fi
+
+step "the devices"
+emu selftest || fail "dev/emulate selftest"
+
+step "the corner hold (the escape hatch)"
+emu tap 5 5 --hold 3600
+emu wait log 'neochumby: escape: ending' 10 || fail "the corner hold didn't end the home screen"
+emu wait screen 30 || fail "the home screen didn't come back after the escape"
+[ "$(emu pixel 2 2)" = "#101021" ] || fail "not the home screen after the escape"
+emu shot "$out/3-escaped.png"
+
+step "neochumby sensors: a touch and the top button"
+emu button down
+(sleep 1 && emu tap 200 20 && emu button up) &
+emu exec --for 2.5 /mnt/neochumby/neochumby sensors > "$out/sensors.txt" 2>&1 || fail "neochumby sensors: $(cat "$out/sensors.txt")"
+wait
+grep -q 'squeeze=true' "$out/sensors.txt" || fail "sensors didn't see the button held"
+grep -q 'squeeze=false' "$out/sensors.txt" || fail "sensors didn't see the button released"
+grep -q 'Down { x: 200, y: 20,' "$out/sensors.txt" || fail "sensors didn't see the touch at (200, 20)"
+
+step "CHUMBY MODE"
+emu tap 160 220
+emu wait exit 20 || fail "CHUMBY MODE didn't end the session"
+[ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
+emu log > "$out/log.txt"
+
+step "boot from a stick"
+emu mkstick "$out/stick.img" "$tree"
+emu start --stick "$out/stick.img"
+emu wait screen 60 || fail "the home screen didn't draw from the stick"
+[ "$(emu pixel 2 2)" = "#101021" ] || fail "not the home screen, from the stick"
+emu shot "$out/4-stick.png"
+emu tap 160 220
+emu wait exit 20 || fail "CHUMBY MODE didn't end the session from the stick"
+emu log > "$out/log-stick.txt"
+
+echo "dev/emulate-smoke: all passed"

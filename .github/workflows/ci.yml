@@ -69,3 +69,40 @@ jobs:
       - name: A tree, as tools/tree lays it out
         if: matrix.proto == 'tls'
         run: tools/tree "$RUNNER_TEMP/tree" doom quake airplay && find "$RUNNER_TEMP/tree" -type f | sort
+      # For the emulator job; a tar keeps the binaries executable.
+      - name: Keep the tree
+        if: matrix.proto == 'tls'
+        run: tar -C "$RUNNER_TEMP" -cf "$RUNNER_TEMP/tree.tar" tree
+      - uses: actions/upload-artifact@v4
+        if: matrix.proto == 'tls'
+        with:
+          name: tree
+          path: ${{ runner.temp }}/tree.tar
+          retention-days: 3
+
+  emulate:
+    name: Boot the tree under dev/emulate
+    needs: cross
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: tree
+          path: ${{ runner.temp }}
+      # qemu-user-static registers qemu-arm with binfmt_misc; dosfstools
+      # makes the stick image.
+      - run: sudo apt-get update -q && sudo apt-get install -yq --no-install-recommends qemu-user-static dosfstools
+      - run: tar -C "$RUNNER_TEMP" -xf "$RUNNER_TEMP/tree.tar"
+      - run: sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: emulate-smoke
+          path: |
+            ${{ runner.temp }}/smoke/*.png
+            ${{ runner.temp }}/smoke/*.txt
+            ${{ runner.temp }}/smoke/state/log
+            ${{ runner.temp }}/smoke/state/emulate.log
+          retention-days: 7

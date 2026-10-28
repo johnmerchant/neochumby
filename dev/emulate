@@ -1,0 +1,1031 @@
+#!/usr/bin/env python3
+"""Runs a neochumby tree on a Linux PC as if it were a Chumby Classic: the
+static ARM binaries, unchanged, under qemu-arm user mode, chrooted in a fake
+root with the Chumby's paths and fake devices. It tests the session and the
+apps end to end without a Chumby. CONTRIBUTING.md says what it can't catch.
+
+Linux only. It needs root (it mounts, and makes namespaces), /dev/fuse, and
+qemu-user-static's binfmt handler for ARM (Debian and Ubuntu:
+`apt install qemu-user-static`), with the F flag, as those register it.
+
+  sudo dev/emulate start [TREE]   boots TREE's session (a tools/tree OUT)
+         [--stick IMG|DIR]        a FAT image loop-mounted at /mnt/usb, or a
+                                  directory; with no TREE, the session is
+                                  the stick's neochumby/neochumby
+         [--server ADDR[:PORT]]   a neochumbyd, as the boot hook passes it on
+         [--psp DIR]              /psp starts as a copy of DIR
+         [--env KEY=VALUE]        more environment for the session
+  dev/emulate tap X Y [--hold MS] a touch at screen pixel (X, Y)
+  dev/emulate button down|up|press  the top button (/dev/switch)
+  dev/emulate shot OUT.png        the screen (dev/fb2png.py)
+  dev/emulate pixel X Y           one pixel, as #rrggbb
+  dev/emulate log [-f]            the session's output
+  dev/emulate wait screen|exit [SECS]   until the screen settles, or the
+  dev/emulate wait log REGEX [SECS]     session ends; or a log line matches
+  dev/emulate status
+  dev/emulate stop
+  sudo dev/emulate exec [--for SECS] CMD [ARG ...]   runs CMD in the fake
+                                  root (e.g. /mnt/neochumby/neochumby sensors)
+  sudo dev/emulate selftest       checks the fake devices from this side
+  sudo dev/emulate mkstick IMG [--size MB] [TREE]   a FAT image, with TREE
+                                  as neochumby/ if given (as tools/stick)
+
+--state DIR (or NEOCHUMBY_EMU) picks the emulator's directory; the default is
+target/emulate in this repository. Only `start`, `exec`, `selftest` and
+`mkstick` need root; the rest work as the user who ran sudo.
+
+The fake root, a tmpfs in a mount namespace of its own (so nothing is left
+mounted when it stops):
+
+  /mnt/neochumby      TREE, read-only, as a neochumbyd's NFS export
+  /mnt/usb            the stick, else an empty directory
+  /psp                STATE/psp, kept from run to run, like the flash
+  /tmp                a 32 MB tmpfs, as on the Chumby
+  /proc/sys/sense1    brightness and spkmute, in STATE/sense1
+  /dev/fb0            STATE/fb0, a 153,600-byte file; mmap(MAP_SHARED) of a
+                      file works as it does on the device
+  /dev/input/event0   the touchscreen: each open gets every event from then
+                      on, as evdev does; writes are delivered as touches
+  /dev/switch         the top button: each read returns its level, one byte;
+                      one open at a time ("Resource busy")
+  /dev/dsp            a sink, paced to the rate set by its OSS ioctls; one
+                      open at a time
+
+event0, switch and dsp are served over FUSE by this script: a FIFO can't be
+the touchscreen, because every reader (the session's corner watch and the
+app in front) must see every event, and a regular file can't be the button,
+whose level each read returns afresh.
+
+The session runs as on the Chumby: as root, in a UTS namespace whose host
+name is "chumby", with QEMU_CPU=arm926 so an instruction the ARM926 lacks
+faults here too. It shares the PC's network, so a neochumbyd on the PC can
+pair with it (--server 127.0.0.1). Its output goes to STATE/log.
+"""
+
+import ctypes
+import errno
+import heapq
+import json
+import os
+import re
+import select
+import shutil
+import signal
+import socket
+import struct
+import subprocess
+import sys
+import time
+
+REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+W, H = 320, 240
+FB_BYTES = W * H * 2
+# The stock calibration (/psp/ts_settings), the same fallback as
+# neochumby::input::Calibration.
+STOCK_CAL = (169, 3733, 4082, -4054, False)
+# The ELF header of a 32-bit little-endian ARM executable, as binfmt_misc
+# matches it.
+ARM_MAGIC = "7f454c4601010100000000000000000002002800"
+
+CLONE_NEWNS, CLONE_NEWUTS, CLONE_NEWPID = 0x00020000, 0x04000000, 0x20000000
+MS_RDONLY, MS_NOSUID, MS_NODEV, MS_NOEXEC = 1, 2, 4, 8
+MS_REMOUNT, MS_BIND, MS_REC, MS_PRIVATE = 32, 4096, 16384, 1 << 18
+
+libc = ctypes.CDLL(None, use_errno=True)
+libc.mount.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_char_p, ctypes.c_ulong, ctypes.c_char_p]
+
+
+def _check(r, what):
+    if r != 0:
+        e = ctypes.get_errno()
+        raise OSError(e, f"{what}: {os.strerror(e)}")
+
+
+def _b(s):
+    return s.encode() if isinstance(s, str) else s
+
+
+def mount(src, target, fstype=None, flags=0, data=None):
+    _check(libc.mount(_b(src), _b(target), _b(fstype), flags, _b(data)), f"mount {target}")
+
+
+def bind(src, target, ro=False):
+    """Binds a file or directory over `target`, which must exist."""
+    mount(src, target, None, MS_BIND)
+    if ro:
+        mount(None, target, None, MS_BIND | MS_REMOUNT | MS_RDONLY)
+
+
+def bind_file(src, target):
+    open(target, "a").close()
+    bind(src, target)
+
+
+def unshare(flags):
+    _check(libc.unshare(flags), "unshare")
+
+
+def setns(path, flag):
+    fd = os.open(path, os.O_RDONLY)
+    try:
+        _check(libc.setns(fd, flag), f"setns {path}")
+    finally:
+        os.close(fd)
+
+
+# The touchscreen's calibration, and the raw readings for a screen point.
+
+
+def calibration(psp):
+    try:
+        with open(os.path.join(psp, "ts_settings")) as f:
+            v = [int(x) for x in f.read().strip().split(",")]
+        if len(v) == 5 and v[1] and v[3]:
+            return (v[0], v[1], v[2], v[3], v[4] != 0)
+    except (OSError, ValueError):
+        pass
+    return STOCK_CAL
+
+
+def raw_point(cal, x, y):
+    """The raw (x, y) that neochumby::input maps to screen pixel (x, y): it
+    truncates toward zero, so each axis rounds away from its origin."""
+    x0, xspan, y0, yspan, swap = cal
+
+    def axis(v, origin, span, size):
+        sign = 1 if span > 0 else -1
+        return origin + sign * -(-v * abs(span) // size)
+
+    rx, ry = axis(x, x0, xspan, W), axis(y, y0, yspan, H)
+    return (ry, rx) if swap else (rx, ry)
+
+
+EV_SYN, EV_KEY, EV_ABS = 0, 1, 3
+ABS_X, ABS_Y, ABS_PRESSURE, BTN_TOUCH = 0, 1, 0x18, 0x14A
+
+
+def events(*evs):
+    """The 2.6.16 kernel's 32-bit input_event: timeval, type, code, value."""
+    t = time.time()
+    sec, usec = int(t) & 0xFFFFFFFF, int(t % 1 * 1e6)
+    return b"".join(struct.pack("<IIHHi", sec, usec, ty, code, v) for ty, code, v in evs)
+
+
+def touch_down(rx, ry):
+    return events((EV_ABS, ABS_X, rx), (EV_ABS, ABS_Y, ry), (EV_ABS, ABS_PRESSURE, 200), (EV_KEY, BTN_TOUCH, 1),
+                  (EV_SYN, 0, 0))
+
+
+def touch_up():
+    return events((EV_ABS, ABS_PRESSURE, 0), (EV_KEY, BTN_TOUCH, 0), (EV_SYN, 0, 0))
+
+
+# The fake devices, served over FUSE: the kernel's /dev/fuse protocol, the
+# few requests a file system of three files needs. Requests are answered
+# one at a time from a select() loop, so a read can be left waiting (a
+# blocking read of the touchscreen) and a write held back (the speaker's
+# pacing) without threads.
+
+FUSE_LOOKUP, FUSE_FORGET, FUSE_GETATTR, FUSE_SETATTR = 1, 2, 3, 4
+FUSE_OPEN, FUSE_READ, FUSE_WRITE, FUSE_STATFS, FUSE_RELEASE = 14, 15, 16, 17, 18
+FUSE_FSYNC, FUSE_FLUSH, FUSE_INIT, FUSE_OPENDIR, FUSE_READDIR = 20, 25, 26, 27, 28
+FUSE_RELEASEDIR, FUSE_ACCESS, FUSE_INTERRUPT, FUSE_DESTROY = 29, 34, 36, 38
+FUSE_IOCTL, FUSE_BATCH_FORGET = 39, 42
+FOPEN_DIRECT_IO, FOPEN_NONSEEKABLE = 1, 4
+FUSE_ATOMIC_O_TRUNC, FUSE_BIG_WRITES = 1 << 3, 1 << 5
+MAX_WRITE = 128 * 1024
+
+IN_HEADER = struct.Struct("<IIQQIIII")
+OUT_HEADER = struct.Struct("<IiQ")
+ATTR = struct.Struct("<QQQQQQIIIIIIIIII")
+RW_IN = struct.Struct("<QQIIQII")  # fuse_read_in and fuse_write_in
+IOCTL_IN = struct.Struct("<QIIQII")
+
+ROOT, EVENT0, SWITCH, DSP = 1, 2, 3, 4
+FILES = {b"event0": EVENT0, b"switch": SWITCH, b"dsp": DSP}
+# evdev's buffer on the Chumby's kernel: 64 events per open; older ones go.
+EVENT_QUEUE = 64 * 16
+# OSS requests (_IOWR('P', n, int)) and formats.
+SNDCTL_DSP_SPEED, SNDCTL_DSP_SETFMT, SNDCTL_DSP_CHANNELS = 0xC0045002, 0xC0045005, 0xC0045006
+AFMT_U8, AFMT_S16_LE = 0x08, 0x10
+# How far ahead of the sound a writer may get: the driver's buffer.
+DSP_AHEAD = 0.25
+
+
+class Handle:
+    def __init__(self, node, flags):
+        self.node = node
+        self.flags = flags
+        self.queue = bytearray()
+        # /dev/dsp: 8 kHz unsigned 8-bit mono until set, as OSS starts.
+        self.rate, self.channels, self.width = 8000, 1, 1
+        self.played_to = 0.0
+
+
+class Devices:
+    def __init__(self, fuse, state):
+        self.fuse = fuse
+        self.state = state
+        self.handles = {}
+        self.next_fh = 1
+        self.level = 0
+        # Blocking reads of the touchscreen waiting for a touch:
+        # unique -> (fh, size).
+        self.waiting = {}
+        # Writes to /dev/dsp held back until the sound catches up.
+        self.timers = []
+        self.dsp_bytes = 0
+
+    def reply(self, unique, data=b"", err=0):
+        try:
+            os.write(self.fuse, OUT_HEADER.pack(OUT_HEADER.size + len(data), -err, unique) + data)
+        except OSError as e:
+            # ENOENT: the request was interrupted and has gone.
+            if e.errno != errno.ENOENT:
+                raise
+
+    @staticmethod
+    def attr(node):
+        if node == ROOT:
+            mode, nlink = 0o040755, 2
+        else:
+            mode, nlink = 0o100666, 1
+        return ATTR.pack(node, 0, 0, 0, 0, 0, 0, 0, 0, mode, nlink, 0, 0, 0, 4096, 0)
+
+    def open_on(self, node):
+        return [h for h in self.handles.values() if h.node == node]
+
+    def touch(self, data):
+        """Gives every open of the touchscreen a copy of these events."""
+        for h in self.open_on(EVENT0):
+            h.queue += data
+            del h.queue[: max(0, len(h.queue) - EVENT_QUEUE)]
+        for unique, (fh, size) in list(self.waiting.items()):
+            if self.handles[fh].queue:
+                del self.waiting[unique]
+                self.read_events(unique, self.handles[fh], size)
+
+    def read_events(self, unique, h, size):
+        n = min(size, len(h.queue)) // 16 * 16
+        data = bytes(h.queue[:n])
+        del h.queue[:n]
+        self.reply(unique, data)
+
+    def handle(self, req):
+        length, op, unique, node, _, _, _, _ = IN_HEADER.unpack_from(req)
+        body = req[IN_HEADER.size:length]
+        if op in (FUSE_FORGET, FUSE_BATCH_FORGET):
+            return
+        if op == FUSE_INIT:
+            major, minor, readahead, _ = struct.unpack_from("<IIII", body)
+            out = struct.pack("<IIIIHHIIHHI", 7, min(minor, 31), readahead, FUSE_ATOMIC_O_TRUNC | FUSE_BIG_WRITES, 16,
+                              12, MAX_WRITE, 1, 0, 0, 0)
+            return self.reply(unique, out + bytes(28))
+        if op == FUSE_DESTROY:
+            raise SystemExit(0)
+        if op == FUSE_LOOKUP:
+            child = FILES.get(body.rstrip(b"\0"))
+            if node != ROOT or child is None:
+                return self.reply(unique, err=errno.ENOENT)
+            return self.reply(unique, struct.pack("<QQQQII", child, 0, 3600, 3600, 0, 0) + self.attr(child))
+        if op in (FUSE_GETATTR, FUSE_SETATTR):
+            return self.reply(unique, struct.pack("<QII", 3600, 0, 0) + self.attr(node))
+        if op == FUSE_OPEN:
+            (flags,) = struct.unpack_from("<I", body)
+            # The button and the speaker are one opener's at a time.
+            if node in (SWITCH, DSP) and self.open_on(node):
+                return self.reply(unique, err=errno.EBUSY)
+            fh = self.next_fh
+            self.next_fh += 1
+            self.handles[fh] = Handle(node, flags)
+            return self.reply(unique, struct.pack("<QII", fh, FOPEN_DIRECT_IO | FOPEN_NONSEEKABLE, 0))
+        if op == FUSE_READ:
+            fh, _, size, _, _, flags, _ = RW_IN.unpack_from(body)
+            h = self.handles.get(fh)
+            if h is None:
+                return self.reply(unique, err=errno.EBADF)
+            if h.node == SWITCH:
+                return self.reply(unique, bytes([self.level])[:size])
+            if h.node == DSP:
+                return self.reply(unique, err=errno.EINVAL)
+            if size < 16:
+                return self.reply(unique, err=errno.EINVAL)
+            if h.queue:
+                return self.read_events(unique, h, size)
+            if flags & os.O_NONBLOCK:
+                return self.reply(unique, err=errno.EAGAIN)
+            self.waiting[unique] = (fh, size)
+            return
+        if op == FUSE_WRITE:
+            fh, _, size, _, _, flags, _ = RW_IN.unpack_from(body)
+            data = body[RW_IN.size:RW_IN.size + size]
+            h = self.handles.get(fh)
+            if h is None:
+                return self.reply(unique, err=errno.EBADF)
+            done = struct.pack("<II", size, 0)
+            if h.node == EVENT0:
+                # As evdev: whole events, delivered to every reader.
+                self.touch(data[: len(data) // 16 * 16])
+            elif h.node == SWITCH:
+                # The emulator's own: 0 (or "0") releases, anything else holds.
+                if data:
+                    self.level = 0 if data[0] in (0, 0x30) else 1
+            elif h.node == DSP:
+                now = time.monotonic()
+                start = max(now, h.played_to)
+                ahead = start - now
+                if ahead > DSP_AHEAD and flags & os.O_NONBLOCK:
+                    return self.reply(unique, err=errno.EAGAIN)
+                h.played_to = start + size / (h.rate * h.channels * h.width)
+                self.dsp_bytes += size
+                if ahead > DSP_AHEAD:
+                    heapq.heappush(self.timers, (now + ahead - DSP_AHEAD, unique, done))
+                    return
+            return self.reply(unique, done)
+        if op == FUSE_IOCTL:
+            fh, _, cmd, _, in_size, out_size = IOCTL_IN.unpack_from(body)
+            h = self.handles.get(fh)
+            arg = body[IOCTL_IN.size:IOCTL_IN.size + in_size]
+            if h is None or h.node != DSP or len(arg) < 4 or out_size < 4:
+                return self.reply(unique, err=errno.ENOTTY)
+            (v,) = struct.unpack_from("<i", arg)
+            if cmd == SNDCTL_DSP_SPEED:
+                h.rate = max(4000, min(v, 48000))
+                v = h.rate
+            elif cmd == SNDCTL_DSP_CHANNELS:
+                h.channels = max(1, min(v, 2))
+                v = h.channels
+            elif cmd == SNDCTL_DSP_SETFMT:
+                if v not in (AFMT_U8, AFMT_S16_LE):
+                    v = AFMT_S16_LE
+                h.width = 1 if v == AFMT_U8 else 2
+            else:
+                return self.reply(unique, err=errno.ENOTTY)
+            out = struct.pack("<i", v) + bytes(out_size - 4)
+            return self.reply(unique, struct.pack("<iIII", 0, 0, 0, 0) + out)
+        if op == FUSE_RELEASE:
+            (fh,) = struct.unpack_from("<Q", body)
+            self.handles.pop(fh, None)
+            for u, (waiting_fh, _) in list(self.waiting.items()):
+                if waiting_fh == fh:
+                    del self.waiting[u]
+                    self.reply(u, err=errno.EBADF)
+            return self.reply(unique)
+        if op == FUSE_INTERRUPT:
+            (gone,) = struct.unpack_from("<Q", body)
+            if self.waiting.pop(gone, None) is not None:
+                self.reply(gone, err=errno.EINTR)
+            return
+        if op == FUSE_OPENDIR:
+            return self.reply(unique, struct.pack("<QII", 0, 0, 0))
+        if op == FUSE_READDIR:
+            _, offset, size, _, _, _, _ = RW_IN.unpack_from(body)
+            out = b""
+            entries = [(b".", ROOT, 4), (b"..", ROOT, 4)] + [(n, i, 8) for n, i in FILES.items()]
+            for i, (name, ino, kind) in enumerate(entries[offset:], offset + 1):
+                d = struct.pack("<QQII", ino, i, len(name), kind) + name
+                d += bytes(-len(d) % 8)
+                if len(out) + len(d) > size:
+                    break
+                out += d
+            return self.reply(unique, out)
+        if op in (FUSE_RELEASEDIR, FUSE_FLUSH, FUSE_FSYNC, FUSE_ACCESS):
+            return self.reply(unique)
+        if op == FUSE_STATFS:
+            return self.reply(unique, bytes(80))
+        return self.reply(unique, err=errno.ENOSYS)
+
+    def fire_timers(self):
+        now = time.monotonic()
+        while self.timers and self.timers[0][0] <= now:
+            _, unique, data = heapq.heappop(self.timers)
+            self.reply(unique, data)
+
+    def status(self):
+        dsp = self.open_on(DSP)
+        return {
+            "touch_readers": len(self.open_on(EVENT0)),
+            "button": "down" if self.level else "up",
+            "button_open": bool(self.open_on(SWITCH)),
+            "dsp_open": bool(dsp),
+            "dsp_format": [dsp[0].rate, dsp[0].channels, dsp[0].width * 8] if dsp else None,
+            "dsp_bytes": self.dsp_bytes,
+        }
+
+
+def serve(fuse, state):
+    """The FUSE server and the control socket, until the supervisor ends it."""
+    dev = Devices(fuse, state)
+    os.chdir(state)
+    ctl = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    if os.path.exists("ctl"):
+        os.unlink("ctl")
+    ctl.bind("ctl")
+    os.chmod("ctl", 0o600)
+    give_back("ctl")
+    ctl.listen(4)
+    while True:
+        timeout = max(0.0, dev.timers[0][0] - time.monotonic()) if dev.timers else None
+        ready, _, _ = select.select([fuse, ctl], [], [], timeout)
+        if fuse in ready:
+            try:
+                req = os.read(fuse, MAX_WRITE + 4096)
+            except OSError as e:
+                if e.errno in (errno.EINTR, errno.EAGAIN, errno.ENOENT):
+                    continue
+                if e.errno == errno.ENODEV:
+                    return
+                raise
+            dev.handle(req)
+        if ctl in ready:
+            conn, _ = ctl.accept()
+            with conn:
+                conn.settimeout(2)
+                try:
+                    words = conn.recv(256).decode().split()
+                    conn.sendall((command(dev, state, words) + "\n").encode())
+                except (OSError, ValueError, IndexError) as e:
+                    conn.sendall(f"error {e}\n".encode())
+        dev.fire_timers()
+
+
+def command(dev, state, words):
+    if words[0] == "touch":
+        x, y = int(words[1]), int(words[2])
+        dev.touch(touch_down(*raw_point(calibration(os.path.join(state, "psp")), x, y)))
+    elif words[0] == "release":
+        dev.touch(touch_up())
+    elif words[0] == "button":
+        dev.level = 1 if words[1] == "1" else 0
+    elif words[0] == "status":
+        return "ok " + json.dumps(dev.status())
+    elif words[0] == "stop":
+        pid = read(state, "init-pid")
+        if pid:
+            os.kill(int(pid), signal.SIGKILL)
+    else:
+        raise ValueError(f"unknown command {words[0]}")
+    return "ok"
+
+
+# Starting: the supervisor builds the fake root in a mount namespace, starts
+# the FUSE server, and runs the session under an init of its own (PID 1 of a
+# PID namespace), so that stopping it ends everything it started.
+
+
+def read(state, name):
+    try:
+        with open(os.path.join(state, name)) as f:
+            return f.read().strip()
+    except OSError:
+        return None
+
+
+def write(state, name, text):
+    with open(os.path.join(state, name), "w") as f:
+        f.write(text)
+    give_back(os.path.join(state, name))
+
+
+def give_back(path):
+    """Leaves a file to the user who ran sudo, so the controls work without it."""
+    uid, gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
+    if uid and gid and os.geteuid() == 0:
+        os.chown(path, int(uid), int(gid))
+
+
+def arm_handler():
+    """qemu's binfmt_misc entry for ARM: (interpreter, flags)."""
+    base = "/proc/sys/fs/binfmt_misc"
+    for name in sorted(os.listdir(base)) if os.path.isdir(base) else []:
+        try:
+            with open(os.path.join(base, name)) as f:
+                lines = f.read().split("\n")
+        except OSError:
+            continue
+        info = dict(l.split(" ", 1) for l in lines if " " in l)
+        if lines[0] == "enabled" and info.get("magic") == ARM_MAGIC:
+            return info.get("interpreter"), info.get("flags:", "")
+    return None, ""
+
+
+def need_root(what):
+    if sys.platform != "linux":
+        sys.exit("dev/emulate runs on Linux only (namespaces, FUSE and qemu-user); use a Linux VM, or CI")
+    if os.geteuid() != 0:
+        sys.exit(f"dev/emulate {what}: needs root (sudo): it mounts, and makes namespaces")
+
+
+def running(state):
+    pid = read(state, "pid")
+    if not pid:
+        return None
+    try:
+        os.kill(int(pid), 0)
+    except ProcessLookupError:
+        return None
+    except PermissionError:
+        pass
+    return int(pid)
+
+
+def cmd_start(state, opts, tree):
+    need_root("start")
+    interp, flags = arm_handler()
+    if not interp:
+        sys.exit("dev/emulate: no binfmt_misc handler for ARM: install qemu-user-static")
+    if not os.path.exists("/dev/fuse"):
+        sys.exit("dev/emulate: no /dev/fuse (modprobe fuse)")
+    if running(state):
+        sys.exit(f"dev/emulate: already running ({state}); dev/emulate stop first")
+    if tree and not os.path.isfile(os.path.join(tree, "neochumby")):
+        sys.exit(f"dev/emulate: {tree}: no neochumby there (make one with tools/tree)")
+    if not tree and not opts["stick"]:
+        sys.exit("dev/emulate start: give a TREE, or a --stick holding one")
+    os.makedirs(state, exist_ok=True)
+    give_back(state)
+    for d in ("root", "devices", "sense1", "psp"):
+        os.makedirs(os.path.join(state, d), exist_ok=True)
+    if opts["psp"]:
+        shutil.rmtree(os.path.join(state, "psp"))
+        shutil.copytree(opts["psp"], os.path.join(state, "psp"))
+    # A fresh, black screen and the boot's speaker and backlight each start.
+    write(state, "fb0", "")
+    os.truncate(os.path.join(state, "fb0"), FB_BYTES)
+    for name, value in (("brightness", "65535"), ("spkmute", "1")):
+        with open(os.path.join(state, "sense1", name), "w") as f:
+            f.write(value + "\n")
+    for name in ("exit", "ready", "failed", "init-pid", "log"):
+        try:
+            os.unlink(os.path.join(state, name))
+        except FileNotFoundError:
+            pass
+    write(state, "log", "")
+    write(state, "emulate.log", "")
+
+    pid = os.fork()
+    if pid == 0:
+        os.setsid()
+        out = os.open(os.path.join(state, "emulate.log"), os.O_WRONLY | os.O_APPEND)
+        null = os.open("/dev/null", os.O_RDONLY)
+        os.dup2(null, 0)
+        os.dup2(out, 1)
+        os.dup2(out, 2)
+        code = 1
+        try:
+            supervise(state, opts, tree, interp, "F" in flags)
+            code = 0
+        except BaseException as e:
+            print(f"dev/emulate: {e!r}", flush=True)
+            write(state, "failed", str(e))
+            for child in CHILDREN:
+                os.kill(child, signal.SIGKILL)
+        finally:
+            os._exit(code)
+    deadline = time.monotonic() + 30
+    while time.monotonic() < deadline:
+        if read(state, "ready") is not None:
+            print(f"dev/emulate: running ({state}); the session's output: dev/emulate log")
+            return
+        if read(state, "failed") is not None or os.waitpid(pid, os.WNOHANG)[0]:
+            break
+        time.sleep(0.1)
+    sys.exit(f"dev/emulate: failed to start:\n{read(state, 'emulate.log')}")
+
+
+# What the supervisor started, to end if it fails part way.
+CHILDREN = []
+
+
+def supervise(state, opts, tree, interp, fixed):
+    write(state, "pid", str(os.getpid()))
+    root = os.path.join(state, "root")
+    unshare(CLONE_NEWNS | CLONE_NEWUTS)
+    mount(None, "/", None, MS_REC | MS_PRIVATE)
+    socket.sethostname("chumby")
+    mount("tmpfs", root, "tmpfs", MS_NOSUID, "mode=755")
+    for d in ("dev/input", "mnt/neochumby", "mnt/usb", "psp", "tmp", "proc", "etc", "usr/bin", "bin"):
+        os.makedirs(os.path.join(root, d))
+
+    fuse = os.open("/dev/fuse", os.O_RDWR)
+    devices = os.path.join(state, "devices")
+    mount("neochumby-emulate", devices, "fuse", MS_NOSUID | MS_NODEV,
+          f"fd={fuse},rootmode=40000,user_id=0,group_id=0,allow_other")
+    server = os.fork()
+    if server == 0:
+        try:
+            serve(fuse, state)
+        finally:
+            os._exit(0)
+    CHILDREN.append(server)
+    os.close(fuse)
+    for name, path in (("event0", "dev/input/event0"), ("switch", "dev/switch"), ("dsp", "dev/dsp")):
+        bind_file(os.path.join(devices, name), os.path.join(root, path))
+    bind_file(os.path.join(state, "fb0"), os.path.join(root, "dev/fb0"))
+    for name in ("null", "zero", "random", "urandom"):
+        bind_file(f"/dev/{name}", os.path.join(root, "dev", name))
+
+    if tree:
+        bind(os.path.abspath(tree), os.path.join(root, "mnt/neochumby"), ro=True)
+    stick = opts["stick"]
+    if stick and os.path.isdir(stick):
+        bind(os.path.abspath(stick), os.path.join(root, "mnt/usb"))
+    elif stick:
+        r = subprocess.run(["mount", "-t", "vfat", "-o", "loop", stick, os.path.join(root, "mnt/usb")],
+                           capture_output=True, text=True)
+        if r.returncode:
+            raise OSError(f"can't loop-mount {stick}: {r.stderr.strip()} (give a directory as --stick instead)")
+    bind(os.path.join(state, "psp"), os.path.join(root, "psp"))
+    mount("tmpfs", os.path.join(root, "tmp"), "tmpfs", MS_NOSUID | MS_NODEV, "size=32m,mode=1777")
+    # Name lookups work as on the PC, for a neochumbyd given by name.
+    for name in ("resolv.conf", "hosts"):
+        if os.path.exists(f"/etc/{name}"):
+            shutil.copy(f"/etc/{name}", os.path.join(root, "etc", name))
+    # Without the F flag, the kernel looks for qemu inside the chroot.
+    if not fixed:
+        os.makedirs(os.path.join(root, os.path.dirname(interp).lstrip("/")), exist_ok=True)
+        bind_file(interp, os.path.join(root, interp.lstrip("/")))
+
+    run = opts["run"] or ("/mnt/neochumby/neochumby" if tree else "/mnt/usb/neochumby/neochumby")
+    server_addr, _, api_port = (opts["server"] or "").partition(":")
+    env = {
+        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+        "QEMU_CPU": "arm926",
+        # As the boot hook passes them on, empty when there's no neochumbyd.
+        "NEOCHUMBY_SERVER": server_addr,
+        "NEOCHUMBY_API_PORT": api_port,
+    }
+    env.update(opts["env"])
+
+    unshare(CLONE_NEWPID)
+    init = os.fork()
+    if init == 0:
+        try:
+            pid1(state, root, run, env)
+        finally:
+            os._exit(127)
+    CHILDREN.append(init)
+    write(state, "init-pid", str(init))
+    write(state, "ready", "")
+    _, status = os.waitpid(init, 0)
+    code = os.waitstatus_to_exitcode(status)
+    write(state, "exit", f"exit {code}" if code >= 0 else f"signal {-code}")
+    os.kill(server, signal.SIGTERM)
+    os.waitpid(server, 0)
+    os.unlink(os.path.join(state, "pid"))
+
+
+def pid1(state, root, run, env):
+    """PID 1 of the session's namespace: mounts /proc there, then runs the
+    session, reaping whatever is orphaned, until the session exits. Only os
+    calls after the chroot: nothing of Python's own is reachable there."""
+    proc = os.path.join(root, "proc")
+    mount("proc", proc, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC)
+    # /proc/sys/sense1 is the Chumby's own: a tmpfs over /proc/sys holds it,
+    # with the PC's kernel, vm, fs and net (qemu reads vm) bound back in.
+    mount("tmpfs", os.path.join(proc, "sys"), "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=755")
+    for d in ("kernel", "vm", "fs", "net"):
+        os.mkdir(os.path.join(proc, "sys", d))
+        bind(f"/proc/sys/{d}", os.path.join(proc, "sys", d))
+    os.mkdir(os.path.join(proc, "sys/sense1"))
+    bind(os.path.join(state, "sense1"), os.path.join(proc, "sys/sense1"))
+    log = os.open(os.path.join(state, "log"), os.O_WRONLY | os.O_APPEND)
+    null = os.open("/dev/null", os.O_RDWR)
+    os.chroot(root)
+    os.chdir("/")
+    session = os.fork()
+    if session == 0:
+        os.dup2(null, 0)
+        os.dup2(log, 1)
+        os.dup2(log, 2)
+        try:
+            os.execve(run, [run], env)
+        except OSError as e:
+            os.write(2, f"dev/emulate: {run}: {e.strerror}\n".encode())
+        os._exit(127)
+    while True:
+        pid, status = os.wait()
+        if pid == session:
+            code = os.waitstatus_to_exitcode(status)
+            os._exit(code if code >= 0 else 128 - code)
+
+
+# The controls.
+
+
+def ask(state, words):
+    if not running(state):
+        sys.exit("dev/emulate: not running")
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    here = os.getcwd()
+    # A relative path: a socket's path is limited to 107 bytes.
+    os.chdir(state)
+    try:
+        s.connect("ctl")
+    finally:
+        os.chdir(here)
+    with s:
+        s.sendall(" ".join(words).encode())
+        answer = s.makefile().readline().strip()
+    if not answer.startswith("ok"):
+        sys.exit(f"dev/emulate: {answer}")
+    return answer[3:]
+
+
+def cmd_tap(state, x, y, hold_ms):
+    if not (0 <= x < W and 0 <= y < H):
+        sys.exit(f"dev/emulate tap: ({x}, {y}) is off the {W}x{H} screen")
+    ask(state, ["touch", str(x), str(y)])
+    time.sleep(hold_ms / 1000)
+    ask(state, ["release"])
+
+
+def cmd_button(state, how):
+    if how == "press":
+        ask(state, ["button", "1"])
+        time.sleep(0.2)
+        ask(state, ["button", "0"])
+    elif how in ("down", "up"):
+        ask(state, ["button", "1" if how == "down" else "0"])
+    else:
+        sys.exit("dev/emulate button down|up|press")
+
+
+def screen(state):
+    with open(os.path.join(state, "fb0"), "rb") as f:
+        return f.read(FB_BYTES)
+
+
+def cmd_pixel(state, x, y):
+    (p,) = struct.unpack_from("<H", screen(state), (y * W + x) * 2)
+    r, g, b = (p >> 11) & 0x1F, (p >> 5) & 0x3F, p & 0x1F
+    # Widened as dev/fb2png.py does.
+    print("#%02x%02x%02x" % (r << 3 | r >> 2, g << 2 | g >> 4, b << 3 | b >> 2))
+
+
+def cmd_wait(state, what, arg, secs):
+    deadline = time.monotonic() + secs
+    last, since = None, time.monotonic()
+    while time.monotonic() < deadline:
+        if what == "exit" and read(state, "exit"):
+            print(read(state, "exit"))
+            return
+        if what == "log" and re.search(arg, read(state, "log") or "", re.M):
+            return
+        if what == "screen":
+            now = screen(state)
+            if now != last:
+                last, since = now, time.monotonic()
+            elif any(now) and time.monotonic() - since >= 0.5:
+                return
+        if what != "exit" and read(state, "exit"):
+            sys.exit(f"dev/emulate wait: the session ended ({read(state, 'exit')})")
+        time.sleep(0.1)
+    sys.exit(f"dev/emulate wait {what}: timed out after {secs:g} s")
+
+
+def cmd_log(state, follow):
+    path = os.path.join(state, "log")
+    with open(path, "rb") as f:
+        while True:
+            chunk = f.read()
+            if chunk:
+                sys.stdout.buffer.write(chunk)
+                sys.stdout.flush()
+            elif not follow or (not running(state) and read(state, "exit")):
+                return
+            else:
+                time.sleep(0.2)
+
+
+def cmd_status(state):
+    if running(state):
+        print("running")
+        for k, v in json.loads(ask(state, ["status"])).items():
+            print(f"  {k}: {v}")
+        for name in ("brightness", "spkmute"):
+            print(f"  {name}: {read(os.path.join(state, 'sense1'), name)}")
+    elif read(state, "exit"):
+        print(f"stopped: the session ended ({read(state, 'exit')})")
+    else:
+        print("not running")
+
+
+def cmd_stop(state):
+    pid = running(state)
+    if not pid:
+        return
+    ask(state, ["stop"])
+    deadline = time.monotonic() + 10
+    while running(state) and time.monotonic() < deadline:
+        time.sleep(0.1)
+
+
+def enter(state):
+    """Joins the running emulator's namespaces, as root, in the fake root."""
+    need_root("exec")
+    init = read(state, "init-pid")
+    if not running(state) or not init:
+        sys.exit("dev/emulate: not running")
+    for ns, flag in (("mnt", CLONE_NEWNS), ("uts", CLONE_NEWUTS), ("pid", CLONE_NEWPID)):
+        setns(f"/proc/{init}/ns/{ns}", flag)
+
+
+def cmd_exec(state, argv, secs):
+    enter(state)
+    os.chroot(os.path.join(state, "root"))
+    os.chdir("/")
+    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "QEMU_CPU": "arm926", "HOME": "/tmp"}
+    child = os.fork()
+    if child == 0:
+        try:
+            os.execve(argv[0], argv, env)
+        except OSError as e:
+            os.write(2, f"dev/emulate exec: {argv[0]}: {e.strerror}\n".encode())
+        os._exit(127)
+
+    def forward(sig, _):
+        os.kill(child, sig)
+
+    # Ended by --for: however it takes SIGTERM (ours exit 143), that's success.
+    ended = []
+
+    def time_up(*_):
+        ended.append(True)
+        os.kill(child, signal.SIGTERM)
+
+    signal.signal(signal.SIGINT, forward)
+    signal.signal(signal.SIGTERM, forward)
+    if secs:
+        signal.signal(signal.SIGALRM, time_up)
+        signal.setitimer(signal.ITIMER_REAL, secs)
+    _, status = os.waitpid(child, 0)
+    code = os.waitstatus_to_exitcode(status)
+    sys.exit(0 if ended else code if code >= 0 else 128 - code)
+
+
+def cmd_selftest(state):
+    """Checks the fake devices' semantics from this side of the emulator,
+    through the same files the session opens: the touchscreen's copies, the
+    button's level and exclusive open, and the speaker's ioctls and pacing.
+    It touches (200, 20), where neochumby-home has nothing."""
+    import fcntl
+
+    enter(state)
+    dev = os.path.join(state, "root", "dev")
+    fails = []
+
+    def check(ok, what):
+        print(("ok   " if ok else "FAIL ") + what)
+        if not ok:
+            fails.append(what)
+
+    a = os.open(f"{dev}/input/event0", os.O_RDONLY | os.O_NONBLOCK)
+    b = os.open(f"{dev}/input/event0", os.O_RDONLY | os.O_NONBLOCK)
+    try:
+        os.read(a, 512)
+        check(False, "event0: an empty read fails with EAGAIN")
+    except BlockingIOError:
+        check(True, "event0: an empty read fails with EAGAIN")
+    ask(state, ["touch", "200", "20"])
+    ask(state, ["release"])
+    ra, rb = os.read(a, 512), os.read(b, 512)
+    check(len(ra) == 8 * 16 and ra == rb, "event0: every reader gets every event")
+    _, _, ty, code, value = struct.unpack_from("<IIHHi", ra)
+    check((ty, code, value) == (EV_ABS, ABS_X, raw_point(calibration(os.path.join(state, "psp")), 200, 20)[0]),
+          "event0: the touch is at the calibrated raw position")
+    os.close(a)
+    os.close(b)
+
+    try:
+        s = os.open(f"{dev}/switch", os.O_RDONLY | os.O_NONBLOCK)
+    except OSError as e:
+        print(f"skip /dev/switch: {e.strerror} (the session has it)")
+        s = None
+    if s is not None:
+        try:
+            os.open(f"{dev}/switch", os.O_RDONLY | os.O_NONBLOCK)
+            check(False, "switch: a second open is refused (EBUSY)")
+        except OSError as e:
+            check(e.errno == errno.EBUSY, "switch: a second open is refused (EBUSY)")
+        ask(state, ["button", "1"])
+        check(os.read(s, 1) == b"\x01" and os.read(s, 1) == b"\x01", "switch: each read is the level, held")
+        ask(state, ["button", "0"])
+        check(os.read(s, 1) == b"\x00", "switch: released")
+        os.close(s)
+
+    try:
+        d = os.open(f"{dev}/dsp", os.O_WRONLY)
+    except OSError as e:
+        print(f"skip /dev/dsp: {e.strerror}")
+        d = None
+    if d is not None:
+        got = []
+        for req, v in ((SNDCTL_DSP_SETFMT, AFMT_S16_LE), (SNDCTL_DSP_CHANNELS, 2), (SNDCTL_DSP_SPEED, 22050)):
+            got.append(struct.unpack("<i", fcntl.ioctl(d, req, struct.pack("<i", v)))[0])
+        check(got == [AFMT_S16_LE, 2, 22050], "dsp: the OSS format ioctls")
+        start = time.monotonic()
+        for _ in range(10):
+            os.write(d, bytes(22050 * 4 // 10))
+        took = time.monotonic() - start
+        check(0.6 < took < 1.5, f"dsp: one second of sound takes about a second ({took:.2f} s)")
+        os.close(d)
+    if fails:
+        sys.exit(f"{len(fails)} failed")
+
+
+def cmd_mkstick(img, size_mb, tree):
+    need_root("mkstick")
+    mkfs = shutil.which("mkfs.vfat") or shutil.which("mkfs.fat")
+    if not mkfs:
+        sys.exit("dev/emulate mkstick: needs mkfs.vfat (dosfstools)")
+    with open(img, "wb") as f:
+        f.truncate(size_mb << 20)
+    subprocess.run([mkfs, "-n", "NEOCHUMBY", img], check=True, stdout=subprocess.DEVNULL)
+    give_back(img)
+    if not tree:
+        return
+    pid = os.fork()
+    if pid == 0:
+        code = 1
+        try:
+            unshare(CLONE_NEWNS)
+            mount(None, "/", None, MS_REC | MS_PRIVATE)
+            mnt = img + ".mnt"
+            os.makedirs(mnt, exist_ok=True)
+            subprocess.run(["mount", "-t", "vfat", "-o", "loop", img, mnt], check=True)
+            # As tools/stick lays it out: the tree, and the hook at the top.
+            subprocess.run(["cp", "-R", os.path.abspath(tree), os.path.join(mnt, "neochumby")], check=True)
+            shutil.copy(os.path.join(tree, "userhook2"), os.path.join(mnt, "userhook2"))
+            subprocess.run(["umount", mnt], check=True)
+            os.rmdir(mnt)
+            code = 0
+        finally:
+            os._exit(code)
+    _, status = os.waitpid(pid, 0)
+    if os.waitstatus_to_exitcode(status):
+        sys.exit("dev/emulate mkstick: copying the tree failed")
+
+
+def main(argv):
+    state = os.environ.get("NEOCHUMBY_EMU") or os.path.join(REPO, "target", "emulate")
+    if "--state" in argv:
+        i = argv.index("--state")
+        state = argv[i + 1]
+        argv = argv[:i] + argv[i + 2:]
+    state = os.path.abspath(state)
+    if not argv or argv[0] in ("-h", "--help", "help"):
+        print(__doc__)
+        return
+    cmd, args = argv[0], argv[1:]
+
+    def flag(name, default=None):
+        if name in args:
+            i = args.index(name)
+            v = args[i + 1]
+            del args[i:i + 2]
+            return v
+        return default
+
+    if cmd == "start":
+        opts = {"stick": flag("--stick"), "server": flag("--server"), "psp": flag("--psp"), "run": flag("--run")}
+        env = {}
+        while "--env" in args:
+            k, _, v = flag("--env").partition("=")
+            env[k] = v
+        opts["env"] = env
+        cmd_start(state, opts, args[0] if args else None)
+    elif cmd == "tap":
+        hold = int(flag("--hold", "100"))
+        cmd_tap(state, int(args[0]), int(args[1]), hold)
+    elif cmd == "button":
+        cmd_button(state, args[0] if args else "")
+    elif cmd == "shot":
+        subprocess.run([sys.executable, "-I", os.path.join(REPO, "dev", "fb2png.py"), os.path.join(state, "fb0"),
+                        args[0]], check=True)
+    elif cmd == "pixel":
+        cmd_pixel(state, int(args[0]), int(args[1]))
+    elif cmd == "log":
+        cmd_log(state, "-f" in args)
+    elif cmd == "wait":
+        what = args[0]
+        pattern = args.pop(1) if what == "log" else None
+        cmd_wait(state, what, pattern, float(args[1]) if len(args) > 1 else 30)
+    elif cmd == "status":
+        cmd_status(state)
+    elif cmd == "stop":
+        cmd_stop(state)
+    elif cmd == "exec":
+        secs = float(flag("--for", "0"))
+        cmd_exec(state, args, secs)
+    elif cmd == "selftest":
+        cmd_selftest(state)
+    elif cmd == "mkstick":
+        size = int(flag("--size", "64"))
+        cmd_mkstick(args[0], size, args[1] if len(args) > 1 else None)
+    else:
+        sys.exit(f"dev/emulate: unknown command {cmd} (dev/emulate --help)")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])
