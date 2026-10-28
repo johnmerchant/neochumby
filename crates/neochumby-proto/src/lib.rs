@@ -26,7 +26,8 @@
 //! A paired Chumby's session also keeps a connection of its own, the
 //! developer link ([`dev`]): it sends [`Msg::Dev`], streams its log as
 //! [`Msg::Log`], and answers [`Msg::Restart`] and [`Msg::Shot`], so that
-//! working on a Chumby needs no shell on it.
+//! working on a Chumby needs no shell on it; and, only on a Chumby its
+//! owner set `dev=on`, [`Msg::Tap`] and [`Msg::Button`].
 
 use std::fmt::Write as _;
 use std::io;
@@ -215,6 +216,12 @@ mod tests {
             Msg::Shot,
             Msg::Screen { width: 320, height: 240 },
             Msg::Screen { width: 0, height: 0 },
+            Msg::Tap { x: 0, y: 0, hold_ms: 0 },
+            Msg::Tap { x: 319, y: 239, hold_ms: dev::MAX_HOLD_MS },
+            Msg::Button { down: true },
+            Msg::Button { down: false },
+            Msg::Done { ok: true, why: String::new() },
+            Msg::Done { ok: false, why: "dev is off".into() },
         ] {
             assert_eq!(Msg::decode(&m.encode()).unwrap(), m);
         }
@@ -232,6 +239,19 @@ mod tests {
         // The dev tags, where #10's sync messages don't reach.
         assert_eq!(Msg::Dev.encode(), [32]);
         assert_eq!(Msg::Shot.encode(), [35]);
+        assert_eq!(Msg::Tap { x: 1, y: 2, hold_ms: 3 }.encode(), [37, 0, 1, 0, 2, 0, 3]);
+        assert_eq!(Msg::Button { down: true }.encode(), [38, 1]);
+        // Input: short, long, a hold past the limit, a bool that isn't one.
+        assert!(Msg::decode(&[37, 0, 1, 0, 2, 0]).is_err());
+        assert!(Msg::decode(&[37, 0, 1, 0, 2, 0, 3, 0]).is_err());
+        let over = (dev::MAX_HOLD_MS + 1).to_be_bytes();
+        assert!(Msg::decode(&[37, 0, 1, 0, 2, over[0], over[1]]).is_err());
+        assert!(Msg::decode(&[38]).is_err());
+        assert!(Msg::decode(&[38, 2]).is_err());
+        assert!(Msg::decode(&[38, 1, 0]).is_err());
+        assert!(Msg::decode(&[39, 1]).is_err());
+        assert!(Msg::decode(&[39, 7, 0, 0]).is_err());
+        assert!(Msg::decode(&[39, 0, 0, 2, b'x']).is_err());
     }
 
     #[test]
