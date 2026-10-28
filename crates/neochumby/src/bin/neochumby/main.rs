@@ -19,8 +19,18 @@
 //! button is the session's, to hand over or to return to the start app
 //! (button.rs).
 //!
-//!   neochumby           the session
-//!   neochumby sensors   prints the touchscreen, squeeze and accelerometer
+//!   neochumby                 the session
+//!   neochumby sensors         prints the touchscreen, squeeze and
+//!                             accelerometer
+//!   neochumby check-set DIR   for the boot hook: exits 0 if the synced set
+//!                             in DIR is complete (neochumby_sync)
+//!
+//! With `delivery=sync` in its settings, the session also runs
+//! neochumby-sync from the tree as a service of its own (restarted like
+//! the apps' services), which keeps a copy of the tree on the stick for the
+//! boot hook to run. A tree made for a stick has no neochumby-sync, and
+//! needs none. The session also keeps the boot hook in
+//! /psp up to date with the tree's (conf::refresh_hook).
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs is described in
@@ -38,12 +48,13 @@ use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
+use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use neochumby::apps;
+use neochumby::apps::{self, App, Needs};
 use neochumby::audio;
 use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
@@ -238,6 +249,12 @@ fn session() {
     let link = devlink::Link::start();
     let root = apps::root();
     let all = apps::all(&root);
+    match conf::refresh_hook(&root) {
+        Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
+        Ok(false) => {}
+        Err(e) => eprintln!("neochumby: {}: {e}", conf::HOOK),
+    }
+
     // The master volume as the boot set it from /psp/volume: nothing has
     // played yet.
     let boot_volume = audio::volume();
@@ -245,6 +262,7 @@ fn session() {
     // The server's `start`, else the local one: a name, trusted only as far
     // as the tree goes (start.rs).
     let settings = settings::load();
+    let core = core_services(&root, &settings);
     let local = conf::get(conf::CONF, "start");
     let choice = match settings::get(&settings, "start") {
         Some(s) => Some(("the server's settings", s)),
@@ -269,8 +287,8 @@ fn session() {
                 remote: link.as_ref().map(devlink::Link::remote),
             };
             // On either ending, the loop has closed the button, stopped the
-            // services and put the speaker back.
-            run::Session::new(&all, &root, first, chumby, run::Timing::default()).run()
+            // services (neochumby-sync with them) and put the speaker back.
+            run::Session::new(&all, &core, &root, first, chumby, run::Timing::default()).run()
         }
     };
 
@@ -296,11 +314,54 @@ fn session() {
     }
 }
 
+/// The session's own services, supervised like the apps' (services.rs) but
+/// no app's: neochumby-sync, when this Chumby's settings say
+/// `delivery=sync`. It opens no app, so it is never told what is in front
+/// and nothing it asks for is done.
+fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
+    if settings::get(settings, "delivery") != Some("sync") {
+        return Vec::new();
+    }
+    vec![App {
+        dir: root.to_path_buf(),
+        name: "neochumby-sync".into(),
+        title: None,
+        exec: None,
+        colour: 0,
+        service: Some(root.join("neochumby-sync")),
+        needs: Needs::Required,
+        start: false,
+        interrupt: false,
+        button: false,
+    }]
+}
+
+/// `neochumby check-set DIR`: whether the set in DIR (the stick's
+/// neochumby/a or /b) is complete. The boot hook runs it from the set
+/// itself, and runs the set only on exit 0.
+fn check_set(dir: Option<String>) -> ! {
+    let Some(dir) = dir else {
+        eprintln!("usage: neochumby check-set DIR");
+        std::process::exit(2)
+    };
+    match neochumby_sync::stick::check_set(Path::new(&dir), &neochumby_sync::LIMITS) {
+        Ok(m) => {
+            eprintln!("neochumby: {dir}: complete, {} files", m.len());
+            std::process::exit(0)
+        }
+        Err(e) => {
+            eprintln!("neochumby: {dir}: not complete: {e}");
+            std::process::exit(1)
+        }
+    }
+}
+
 fn main() {
     neochumby::debug::install("neochumby");
     match std::env::args().nth(1).as_deref() {
         None => session(),
         Some("sensors") => sensors(),
+        Some("check-set") => check_set(std::env::args().nth(2)),
         Some(other) => {
             eprintln!("neochumby: unknown command {other}");
             std::process::exit(2);

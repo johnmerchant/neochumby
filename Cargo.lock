@@ -295,6 +295,7 @@ dependencies = [
  "neochumby-macros",
  "neochumby-proto",
  "neochumby-softfloat",
+ "neochumby-sync",
  "neochumby-sys",
 ]
 
@@ -365,6 +366,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-sync"
+version = "0.1.0"
+dependencies = [
+ "neochumby-proto",
+ "neochumby-sys",
+ "ring",
+]
+
+[[package]]
 name = "neochumby-sys"
 version = "0.1.0"
 dependencies = [
@@ -377,6 +387,7 @@ version = "0.1.0"
 dependencies = [
  "async-trait",
  "neochumby-proto",
+ "neochumby-sync",
  "neochumby-sys",
  "nfsserve",
  "tokio",

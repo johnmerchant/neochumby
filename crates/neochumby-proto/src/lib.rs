@@ -19,6 +19,10 @@
 //! then go both ways as [`Msg::Data`], each one a [`frame`] on the
 //! companion's stdin or stdout.
 //!
+//! A Chumby with `delivery=sync` keeps a copy of its tree on its stick, in
+//! step with neochumbyd, through the `Sync*` messages (neochumby-sync has
+//! the rounds they make up).
+//!
 //! A paired Chumby's session also keeps a connection of its own, the
 //! developer link ([`dev`]): it sends [`Msg::Dev`], streams its log as
 //! [`Msg::Log`], and answers [`Msg::Restart`] and [`Msg::Shot`], so that
@@ -30,7 +34,7 @@ use std::io;
 
 pub mod dev;
 mod msg;
-pub use msg::Msg;
+pub use msg::{Msg, SyncEntry};
 
 /// A companion's frames, on its stdin and stdout: a u32 big-endian length,
 /// then that many bytes, at most [`MAX_FRAME`].
@@ -189,6 +193,22 @@ mod tests {
             Msg::Closed,
             Msg::Config(vec![]),
             Msg::Config(vec![("start".into(), "wx".into()), ("delivery".into(), "nfs".into())]),
+            Msg::SyncHave { live: [3; 32] },
+            Msg::SyncUpToDate,
+            Msg::SyncWant,
+            Msg::SyncManifest { entries: vec![], last: true },
+            Msg::SyncManifest {
+                entries: vec![
+                    SyncEntry { path: "neochumby".into(), size: 1 << 33, sha256: [1; 32] },
+                    SyncEntry { path: "apps/home/manifest".into(), size: 0, sha256: [0xff; 32] },
+                ],
+                last: false,
+            },
+            Msg::SyncFile(SyncEntry { path: "apps/doom/doom1.wad".into(), size: 4196020, sha256: [9; 32] }),
+            Msg::SyncData(vec![0; 1000]),
+            Msg::SyncEnd,
+            Msg::SyncDone { ok: false, detail: "no space".into() },
+            Msg::SyncProgress { done: 1 << 20, total: 512 << 20 },
             Msg::Dev,
             Msg::Log(vec![]),
             Msg::Log(vec!["neochumby: opening home".into(), String::new(), "ünïcode".into()]),
@@ -208,6 +228,10 @@ mod tests {
         assert!(Msg::decode(&[200]).is_err());
         assert!(Msg::decode(&[0, 9, 0]).is_err());
         assert!(Msg::decode(&[9, 0, 1]).is_err());
+        assert!(Msg::decode(&[10, 0]).is_err(), "short hash");
+        assert!(Msg::decode(&[13, 2, 0, 0]).is_err(), "a flag is 0 or 1");
+        assert!(Msg::decode(&[16, 0]).is_err());
+        assert!(Msg::decode(&[18, 0, 0, 0, 0, 0, 0, 0, 1]).is_err(), "short");
         // Short, long, and a count with too few lines.
         assert!(Msg::decode(&[36, 1, 64, 0]).is_err());
         assert!(Msg::decode(&[34, 0]).is_err());

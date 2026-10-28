@@ -25,12 +25,14 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
-      # The crates that build for the host: the protocol, neochumbyd, the
-      # manifest tool, the system calls, the macros, and AirPlay's companion.
-      - run: cargo clippy --all-targets -p neochumby-proto -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -- -D warnings
+      # The crates that build for the host: the protocol, sync's rounds (on
+      # both sides, so a temporary directory stands in for the stick),
+      # neochumbyd, the manifest tool, the system calls, the macros, and
+      # AirPlay's companion.
+      - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -- -D warnings
       - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
-      - run: cargo test -p neochumby-proto -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros
-      - run: cargo test -p neochumby-proto --features noise
+      - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros
+      - run: cargo test -p neochumby-proto -p neochumby-sync --features neochumby-proto/noise
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
 
   cross:
@@ -69,3 +71,13 @@ jobs:
       - name: A tree, as tools/tree lays it out
         if: matrix.proto == 'tls'
         run: tools/tree "$RUNNER_TEMP/tree" doom quake airplay && find "$RUNNER_TEMP/tree" -type f | sort
+      # That tree booted as a Chumby would, under qemu-arm (dev/emulate):
+      # the home screen, a tap on DOOM, the devices, the corner hold, CHUMBY
+      # MODE, and a boot from a stick image.
+      - name: The tree under dev/emulate
+        if: matrix.proto == 'tls'
+        timeout-minutes: 5
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
+          sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"
