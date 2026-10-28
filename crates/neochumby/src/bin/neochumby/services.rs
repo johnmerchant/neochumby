@@ -125,7 +125,7 @@ impl<'a> Services<'a> {
             };
             let mut r = s.running.take().expect("running");
             // What it started goes with it.
-            child::end(&mut r.child, Duration::ZERO);
+            let _ = child::end(&mut r.child, Duration::ZERO);
             let wait = s.backoff.after(r.since.elapsed());
             eprintln!("neochumby: service {} exited ({status:?}); again in {} ms", s.app.name, wait.as_millis());
             s.due = Instant::now() + wait;
@@ -155,7 +155,7 @@ impl<'a> Services<'a> {
             neochumby::sleep_ms(50);
         }
         for r in &mut running {
-            child::end(&mut r.child, Duration::ZERO);
+            let _ = child::end(&mut r.child, Duration::ZERO);
         }
     }
 }

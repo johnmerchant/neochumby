@@ -42,6 +42,8 @@ use std::time::{Duration, Instant};
 use neochumby::apps::App;
 use neochumby::session::{Pipe, Request};
 
+use neochumby_sys::process::exited;
+
 use crate::child;
 use crate::services::{Backoff, Services};
 use crate::start;
@@ -195,7 +197,7 @@ impl<'a, D: Device> Session<'a, D> {
             neochumby::sleep_ms(self.timing.tick_ms);
             if self.device.escaped() {
                 eprintln!("neochumby: escape: ending {} and what it started", f.app.name);
-                child::end(&mut f.child, self.timing.patience);
+                let _ = child::end(&mut f.child, self.timing.patience);
                 self.suppressed = true;
                 return Next::Open(start::home(self.apps).unwrap_or(self.start), None);
             }
@@ -216,28 +218,22 @@ impl<'a, D: Device> Session<'a, D> {
                 }
                 if let Some(next) = self.interrupting(&f, from, req) {
                     eprintln!("neochumby: service {} replaces {}", from.name, f.app.name);
-                    child::end(&mut f.child, self.timing.patience);
+                    let _ = child::end(&mut f.child, self.timing.patience);
                     return next;
                 }
             }
-            let status = match f.child.try_wait() {
-                Ok(None) => match f.asked {
+            // Exited, but not reaped yet (process::exited), so its group
+            // can still be ended safely: child::end does, and reaps it.
+            let status = match exited(f.child.id()) {
+                Ok(false) => match f.asked {
                     Some((_, at)) if at.elapsed() >= self.timing.grace => {
                         eprintln!("neochumby: {} asked, but hasn't exited; ending it", f.app.name);
-                        child::end(&mut f.child, self.timing.patience);
-                        continue;
+                        child::end(&mut f.child, self.timing.patience)
                     }
                     _ => continue,
                 },
-                Ok(Some(s)) => {
-                    // Anything it started goes with it.
-                    child::end(&mut f.child, self.timing.patience);
-                    Ok(s)
-                }
-                Err(e) => {
-                    child::end(&mut f.child, self.timing.patience);
-                    Err(e)
-                }
+                // Anything it started goes with it.
+                Ok(true) | Err(_) => child::end(&mut f.child, self.timing.patience),
             };
             // What it wrote just before it exited.
             self.read(&mut f);
