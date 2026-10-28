@@ -1076,38 +1076,31 @@ impl<P: Plat> Engine<P> {
             }
             return Err(());
         };
-        self.dir = newdir;
-        self.manifest_mtime = meta.as_ref().map(mtime).unwrap_or(0);
-        self.loaded_dir = self.dir.clone();
-        let hpath = self.dir.join("hashes.txt");
-        self.hashes = std::fs::metadata(&hpath)
+        let hpath = newdir.join("hashes.txt");
+        let hashes = std::fs::metadata(&hpath)
             .ok()
             .filter(|m| m.len() <= manifest::MAX_MANIFEST_BYTES)
             .and_then(|_| std::fs::read(&hpath).ok());
 
-        // Keep the old table to adopt unchanged files from; start a new one.
-        self.loader_forget(None);
-        self.glow_runs.clear();
-        self.logo_ix = None;
-        let mut old = std::mem::take(&mut self.c.assets);
-        self.glow_key = -1;
-        let dir = self.dir.clone();
-        let hashes = self.hashes.take();
-        let c = &mut self.c;
-        let budget = c.budget as u64;
+        // Parse into a new table first; nothing of the running set changes
+        // until the new one is known to have a page.
+        let budget = self.c.budget as u64;
         // Indices, so registering thousands of files stays linear: content
         // ids from hashes.txt, the new table's files, and the old table's
-        // files still in memory (to adopt the first match, as before).
+        // files still in memory (to keep the first match).
         let md5 = hashes.as_deref().map(cache::md5_index).unwrap_or_default();
         let mut have: std::collections::HashMap<(u64, usize), usize> = Default::default();
         let mut olds: std::collections::HashMap<(u64, usize), std::collections::VecDeque<usize>> = Default::default();
-        for (i, o) in old.iter().enumerate() {
+        for (i, o) in self.c.assets.iter().enumerate() {
             if o.state == State::Ready {
                 olds.entry((o.key, o.size)).or_default().push_back(i);
             }
         }
+        let mut assets: Vec<Asset> = Vec::new();
+        // For each new asset, the old one whose data it keeps.
+        let mut keep: Vec<Option<usize>> = Vec::new();
         let m = manifest::parse(&text, |name, expect| {
-            let path = dir.join(name);
+            let path = newdir.join(name);
             let st = std::fs::metadata(&path).ok().filter(|s| s.is_file() && s.len() > 0);
             // The right size, and never more than the whole cache.
             let fits = |s: &std::fs::Metadata| {
@@ -1131,29 +1124,48 @@ impl<P: Plat> Engine<P> {
             if let Some(&i) = have.get(&(key, size)) {
                 return Some(i);
             }
-            if c.assets.len() >= MAXASSET {
+            if assets.len() >= MAXASSET {
                 return None;
             }
-            let mut a = Asset::new(name, key, size);
-            if let Some(o) = olds.get_mut(&(key, size)).and_then(|q| q.pop_front()).map(|i| &mut old[i]) {
+            assets.push(Asset::new(name, key, size));
+            keep.push(olds.get_mut(&(key, size)).and_then(|q| q.pop_front()));
+            have.insert((key, size), assets.len() - 1);
+            Some(assets.len() - 1)
+        });
+        if m.pages.is_empty() {
+            // usable() saw a page, but parsing kept none (a limit reached
+            // first, or a file changed between the two looks): keep the
+            // last good set up.
+            eprintln!("manifest {}: no page kept; staying with the last one", newdir.display());
+            return Err(());
+        }
+
+        // Commit: the new set, keeping unchanged files from the old.
+        self.dir = newdir;
+        self.manifest_mtime = meta.as_ref().map(mtime).unwrap_or(0);
+        self.loaded_dir = self.dir.clone();
+        self.hashes = hashes;
+        self.loader_forget(None);
+        self.glow_runs.clear();
+        self.logo_ix = None;
+        self.glow_key = -1;
+        let mut old = std::mem::replace(&mut self.c.assets, assets);
+        for (a, k) in self.c.assets.iter_mut().zip(keep) {
+            if let Some(o) = k.map(|i| &mut old[i]) {
                 a.data = o.data.take();
                 a.state = State::Ready;
                 a.used = o.used;
                 a.ser = o.ser;
                 o.state = State::Empty;
             }
-            c.assets.push(a);
-            have.insert((key, size), c.assets.len() - 1);
-            Some(c.assets.len() - 1)
-        });
-        self.hashes = hashes;
-        // Whatever the new manifest didn't adopt is gone.
+        }
+        // Whatever the new manifest didn't keep is gone.
         for o in &old {
             if o.data.is_some() || o.state == State::Loading {
                 self.c.bytes -= o.size;
             }
         }
-        old.clear();
+        drop(old);
         self.m = m;
         self.glow_runs = vec![None; self.m.glows.len()];
         self.live_shown = vec![None; self.m.lives.len()];
@@ -1173,7 +1185,7 @@ impl<P: Plat> Engine<P> {
             self.c.total() / 1024,
             self.c.bytes / 1024
         );
-        if self.m.pages.is_empty() { Err(()) } else { Ok(()) }
+        Ok(())
     }
 
     // ------------------------------------------------------------ drawing
@@ -1186,7 +1198,9 @@ impl<P: Plat> Engine<P> {
         let p = self.page;
         let cpi = self.clk_px(p);
         let k = &self.m.clock;
-        let Some(cp) = self.c.px(cpi) else { return };
+        // Only a strip the size of this clock's cells (a clocknight sized
+        // for another clock is ignored).
+        let Some(cp) = self.c.px(cpi).filter(|p| p.len() as u64 >= k.cw as u64 * k.ch as u64 * 15) else { return };
         if self.m.pages[p as usize].noclock || k.right > W || k.y < 0 || k.y + k.ch > H {
             return;
         }
@@ -1224,7 +1238,9 @@ impl<P: Plat> Engine<P> {
 
     fn draw_ticker(&mut self, t: i64) {
         let k = &self.m.ticker;
-        let Some(tp) = self.c.px(self.tick_px(self.page)) else { return };
+        let Some(tp) = self.c.px(self.tick_px(self.page)).filter(|p| p.len() as u64 >= k.w as u64 * k.h as u64) else {
+            return;
+        };
         if k.w <= W || self.m.pages[self.page as usize].noticker || k.y < 0 || k.y + k.h > H {
             return;
         }
@@ -2396,10 +2412,19 @@ impl<P: Plat> Engine<P> {
             return true;
         }
         if self.waiting {
-            if t - self.last_check >= 1000 {
+            // Control commands still work (stats, reload...); with no
+            // pages, those that need one do nothing.
+            self.frame_no = self.frame_no.wrapping_add(1);
+            if self.frame_no.is_multiple_of(5) {
+                self.poll_ctl(t);
+            }
+            if t - self.last_check >= 1000 || std::mem::take(&mut self.want_reload) {
                 self.last_check = t;
                 if self.load().is_ok() {
                     self.waiting = false;
+                    self.inj.clear();
+                    self.inj_button = false;
+                    self.pending_app = None;
                     self.begin();
                     return true;
                 }
@@ -2888,6 +2913,88 @@ mod tests {
     }
 
     #[test]
+    fn hostile_night_strips_after_a_redefinition() {
+        // clocknight and tickernight sized for a small clock and ticker,
+        // then both redefined bigger; then night.
+        let (mut e, d) = hostile(
+            "redef",
+            "clock c.raw 4 4 300 10 4 4 4 4 4 4 4 4 4 4 4 4 4 4 4\n\
+             ticker t.raw 400 4 230 2\n\
+             clocknight cn.raw\n\
+             tickernight tn.raw\n\
+             clock c2.raw 20 20 300 10 20 20 20 20 20 20 20 20 20 20 20 20 20 20 20\n\
+             ticker t2.raw 800 8 230 2\n\
+             pagenight 0 p.raw\n\
+             sprite 0 x.raw 1 1 1 0 0 8\n\
+             glowseq 0 g 1 12 99999999 -99999999 2147483647 255\n\
+             page 1 p.raw -5\n",
+            &[
+                ("c.raw", 4 * 4 * 15 * 2),
+                ("cn.raw", 4 * 4 * 15 * 2),
+                ("t.raw", 400 * 4 * 2),
+                ("tn.raw", 400 * 4 * 2),
+                ("c2.raw", 20 * 20 * 15 * 2),
+                ("t2.raw", 800 * 8 * 2),
+                ("x.raw", 2),
+                ("g_000.l8", 12),
+            ],
+            512,
+        );
+        assert!(e.m.clock.pxn.is_none() && e.m.ticker.pxn.is_none(), "a redefinition drops the night strips");
+        assert_eq!(e.m.gsqs[0].lut[255], 0xF800 | 0x001F, "R and B saturate, G is 0");
+        assert_eq!(e.m.pages[1].secs, 1, "secs of 0 or less is a second");
+        // And if a stale strip got through anyway, drawing checks its size.
+        e.m.clock.pxn = e.c.assets.iter().position(|a| a.name == "cn.raw");
+        e.m.ticker.pxn = e.c.assets.iter().position(|a| a.name == "tn.raw");
+        e.ctl_line(b"night on", e.ms());
+        survive(&mut e, &d);
+    }
+
+    #[test]
+    fn a_reload_without_a_page_keeps_the_last_set() {
+        let d = std::env::temp_dir().join(format!("classic-nopage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("p.raw"), vec![0x44u8; manifest::FRAME_BYTES]).unwrap();
+        std::fs::write(d.join("manifest.txt"), "page 0 p.raw 12 noclock noticker\nscreen home p.raw\n").unwrap();
+        let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        e.start();
+        for _ in 0..15 {
+            assert!(e.frame());
+        }
+        let bytes = e.c.bytes;
+        assert!(bytes > 0);
+        // MAXASSET other files, then the only page: usable() sees the page,
+        // parsing never keeps it.
+        // (glowseq frames: the one kind of file with no lower limit.)
+        let mut m = String::new();
+        for k in 0..MAXASSET.div_ceil(1000) {
+            for f in 0..1000 {
+                std::fs::write(d.join(format!("g{k}_{f:03}.l8")), [0u8; 4]).unwrap();
+            }
+            m.push_str(&format!("glowseq 0 g{k} 1000 12 1 1 1 1\n"));
+        }
+        m.push_str("page 0 p.raw 12\n");
+        std::fs::write(d.join("manifest.txt"), m).unwrap();
+        e.ctl_line(b"reload", e.ms());
+        for _ in 0..30 {
+            assert!(e.frame());
+        }
+        assert_eq!(e.m.pages.len(), 1, "the last good set stays up");
+        assert_eq!(e.m.screens.len(), 1);
+        assert_eq!(e.c.assets.len(), 1);
+        assert_eq!(e.c.bytes, bytes);
+        assert!(e.plat.fb().iter().all(|&p| p == 0x4444));
+        e.ctl_line(b"show home", e.ms());
+        e.ctl_line(b"page 0", e.ms());
+        for _ in 0..30 {
+            assert!(e.frame());
+        }
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
     fn many_big_files_stay_under_the_ceiling() {
         let mut m = String::new();
         let mut files = Vec::new();
@@ -2915,6 +3022,11 @@ mod tests {
             assert!(e.frame());
         }
         assert!(e.waiting);
+        // Control commands are taken while waiting, harmlessly.
+        for c in ["page 3", "show home", "night on", "drop all", "pin on", "fx spin", "tap 5 5", "button", "stats"] {
+            e.ctl_line(c.as_bytes(), e.ms());
+            assert!(e.frame());
+        }
         std::fs::write(d.join("p.raw"), vec![0x77u8; manifest::FRAME_BYTES]).unwrap();
         std::fs::write(d.join("manifest.txt"), "page 0 p.raw 12 noclock noticker\n").unwrap();
         for _ in 0..40 {

@@ -474,7 +474,8 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
         if let Some(v) = some(sc("page %d %96s %d"), 3).filter(|_| o.pages.len() < MAXP) {
             let p = Page {
                 bg: asset(v[1].s(), Size::Exactly(FRAME_BYTES)),
-                secs: v[2].i(),
+                // At least a second: 0 or less would change pages every frame.
+                secs: v[2].i().max(1),
                 noclock: contains(line, "noclock"),
                 noticker: contains(line, "noticker"),
                 fullframe: contains(line, "fullframe"),
@@ -573,7 +574,8 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
             }
             o.clock = Clock {
                 px: asset(v[0].s(), bytes(&[cw, ch, 15, 2])),
-                pxn: o.clock.pxn,
+                // A clocknight before it was sized for another clock.
+                pxn: None,
                 cw,
                 ch,
                 right: v[3].i(),
@@ -581,17 +583,10 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 wd,
             };
         } else if let Some(v) =
-            some(sc("ticker %96s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0 && coords(v, &[2, 3]))
+            some(sc("ticker %96s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0 && coords(v, &[2, 3, 4]))
         {
             let (w, h) = (v[1].i(), v[2].i());
-            o.ticker = Ticker {
-                px: asset(v[0].s(), bytes(&[w, h, 2])),
-                pxn: o.ticker.pxn,
-                w,
-                h,
-                y: v[3].i(),
-                speed: v[4].i(),
-            };
+            o.ticker = Ticker { px: asset(v[0].s(), bytes(&[w, h, 2])), pxn: None, w, h, y: v[3].i(), speed: v[4].i() };
         } else if let Some(v) = some(sc("screen %48s %96s"), 2).filter(|_| o.screens.len() < MAXSCR) {
             if let Some(bg) = asset(v[1].s(), Size::Exactly(FRAME_BYTES)) {
                 o.screen_ix.entry(v[0].s().to_string()).or_insert(o.screens.len());
@@ -664,8 +659,8 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                     });
                 }
             }
-        } else if let Some(v) =
-            some(sc("bgscroll %d %96s %d %d"), 4).filter(|v| idx(v[0].i(), o.pages.len()) && v[2].i() > W)
+        } else if let Some(v) = some(sc("bgscroll %d %96s %d %d"), 4)
+            .filter(|v| idx(v[0].i(), o.pages.len()) && v[2].i() > W && coords(v, &[3]))
         {
             let p = &mut o.pages[v[0].i() as usize];
             p.pano = asset(v[1].s(), bytes(&[v[2].i(), H, 2]));
@@ -696,7 +691,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 };
             }
         } else if let Some(v) = some(sc("glow %d %96s %d %d %d %d"), 6)
-            .filter(|v| o.glows.len() < MAXGLOW && v[2].i() > 0 && v[3].i() > 0 && coords(v, &[2, 3, 4]))
+            .filter(|v| o.glows.len() < MAXGLOW && v[2].i() > 0 && v[3].i() > 0 && coords(v, &[2, 3, 4, 5]))
         {
             let (w, h) = (v[2].i(), v[3].i());
             let opt: Vec<i32> = scan(line, "glow %*d %*s %*d %*d %*d %*d %d %d %d %d %d %d").iter().map(V::i).collect();
@@ -737,13 +732,14 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 let mut lut = [0u16; 256];
                 for (i, e) in lut.iter_mut().enumerate() {
                     let i = i as i32;
-                    let c = |c: i32| (c * i / 255 * bright / 255).clamp(0, 255);
+                    // In 64 bits: the manifest's R, G and B aren't bounded.
+                    let c = |c: i32| (c as i64 * i as i64 / 255 * bright as i64 / 255).clamp(0, 255) as i32;
                     *e = ((c(r) >> 3) << 11 | (c(g) >> 2) << 5 | c(b) >> 3) as u16;
                 }
                 o.gsqs.push(GlowSeq { page: v[0].i(), mfps, frames, lut });
             }
         } else if let Some(v) = some(sc("scroller %d %96s %d %d %d %d %d"), 7)
-            .filter(|v| v[2].i() > 0 && v[3].i() > 0 && coords(v, &[3, 4, 6]))
+            .filter(|v| v[2].i() > 0 && v[3].i() > 0 && coords(v, &[3, 4, 5, 6]))
         {
             let (w, h) = (v[2].i(), v[3].i());
             o.scroller.px = asset(v[1].s(), bytes(&[w, h, 2]));
