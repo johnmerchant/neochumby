@@ -109,8 +109,10 @@ pub fn all(root: &Path) -> Vec<App> {
 mod tests {
     use super::*;
 
-    fn app(manifest: &str) -> App {
-        let dir = std::env::temp_dir().join(format!("neochumby-apps-test-{}", std::process::id()));
+    /// Loads `manifest` from a directory of its own: `test` names it, so
+    /// tests running at once don't share one.
+    fn app(test: &str, manifest: &str) -> App {
+        let dir = std::env::temp_dir().join(format!("neochumby-apps-{test}-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("manifest"), manifest).unwrap();
         let a = load(&dir).unwrap();
@@ -120,9 +122,9 @@ mod tests {
 
     #[test]
     fn shells() {
-        let any = app("title=DOOM\nexec=neochumby-doom\n");
+        let any = app("shells-any", "title=DOOM\nexec=neochumby-doom\n");
         assert!(any.offered_in("home") && any.offered_in("wx"));
-        let some = app("title=WEATHER\nshells=wx  other\n");
+        let some = app("shells-some", "title=WEATHER\nshells=wx  other\n");
         assert_eq!(some.shells, ["wx", "other"]);
         assert!(some.offered_in("wx") && some.offered_in("other") && !some.offered_in("home"));
     }
