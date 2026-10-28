@@ -61,10 +61,11 @@ crate's `Cargo.toml`:
 title = "QUAKE"                      # listed in app lists
 exec = "neochumby-quake"             # binaries, by name; exec runs in front
 colour = "8c5a28"                    # optional
-service = "neochumby-airplay"        # runs in the background
+service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
+interrupt = false                    # no service may replace it in front
 ```
 
 An app can use any of these keys:
@@ -94,6 +95,11 @@ An app can use any of these keys:
   that isn't one. **Holding the top-left
   corner of the screen for 3 seconds** always opens `neochumby-home`,
   ending whatever was in front. That's the way out of an app gone wrong.
+- **`service`:** runs in the background for as long as neochumby does, and
+  is started again if it exits. It's told which app is in front. Any
+  service may open an app over the start app, and the start app's service
+  over any app, unless the one in front says **`interrupt = false`**, as
+  Doom and Quake do.
 
 ## Building
 

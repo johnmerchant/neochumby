@@ -1,8 +1,10 @@
-//! The request pipe: how an app asks the session (neochumby) to open
-//! another app, or to hand the Chumby back to its own software.
+//! The request pipe: how an app or a service asks the session (neochumby)
+//! to open another app, or to hand the Chumby back to its own software, and
+//! how the session tells services which app is in front.
 //!
-//! The session runs every app with NEOCHUMBY_SESSION=<fd>: one end of a
-//! Unix socket pair, whose other end the session holds. It carries lines of
+//! The session runs every app and every service with
+//! NEOCHUMBY_SESSION=<fd>: one end of a Unix socket pair, whose other end
+//! the session holds. It carries lines of
 //! text, each ending in '\n', at most [`MAX_LINE`] bytes. Each end ignores
 //! lines it doesn't know, so lines can be added later without breaking
 //! anything.
@@ -14,6 +16,16 @@
 //!
 //! An app writes its request and then exits. The last request it made
 //! counts. If it hasn't exited a few seconds later, the session ends it.
+//!
+//! A service doesn't exit after asking, and its request ends the app in
+//! front first, so the session takes it only: over the start app from any
+//! service, over another app from the start app's service alone (and
+//! `chumby-mode` from that one alone); never over an app that says
+//! `interrupt = false`, or one that has asked for something itself; and
+//! not after the escape hatch until an app is opened by hand. What the
+//! session tells a service:
+//!
+//!   front <app>    that app is now in front (also as the service starts)
 //!
 //! NEOCHUMBY_REASON, when set, says why the session opened the app. An app
 //! ignores values it doesn't know.
@@ -59,6 +71,30 @@ impl Request {
         match self {
             Request::Open(app) => format!("open {app}\n"),
             Request::ChumbyMode => "chumby-mode\n".into(),
+        }
+    }
+}
+
+/// What the session tells a service.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Notice {
+    /// This app is now in front.
+    Front(String),
+}
+
+impl Notice {
+    /// The notice a line holds, or None for a line this end doesn't know.
+    pub fn parse(line: &str) -> Option<Notice> {
+        match line.split_once(' ') {
+            Some(("front", app)) if valid_name(app) => Some(Notice::Front(app.to_string())),
+            _ => None,
+        }
+    }
+
+    /// The notice as a line, with its '\n'.
+    pub fn line(&self) -> String {
+        match self {
+            Notice::Front(app) => format!("front {app}\n"),
         }
     }
 }
@@ -111,6 +147,8 @@ impl Lines {
 pub struct Pipe {
     sock: UnixStream,
     lines: Lines,
+    /// The rest of a line [`Pipe::try_send`] could write only part of.
+    waiting: Vec<u8>,
 }
 
 /// What [`Pipe::receive`] found.
@@ -133,18 +171,20 @@ impl Pipe {
         if !copy.metadata().ok()?.file_type().is_socket() {
             return None;
         }
-        Some(Pipe { sock: UnixStream::from(OwnedFd::from(copy)), lines: Lines::default() })
+        Some(Pipe { sock: UnixStream::from(OwnedFd::from(copy)), lines: Lines::default(), waiting: Vec::new() })
     }
 
-    /// A new pipe: the session's end, and the end to give to what it runs.
-    /// Neither is inherited by what the session runs until it says so.
+    /// A new pipe: the session's end, which never waits, and the end to
+    /// give to what it runs. Neither is inherited by what the session runs
+    /// until it says so.
     pub fn pair() -> io::Result<(Pipe, UnixStream)> {
         let (mine, theirs) = UnixStream::pair()?;
         // UnixStream::pair asks for close-on-exec, which the Chumby's 2.6.16
         // kernel predates; musl falls back to fcntl, and so does this.
         fd::set_cloexec(mine.as_fd(), true)?;
         fd::set_cloexec(theirs.as_fd(), true)?;
-        Ok((Pipe { sock: mine, lines: Lines::default() }, theirs))
+        mine.set_nonblocking(true)?;
+        Ok((Pipe { sock: mine, lines: Lines::default(), waiting: Vec::new() }, theirs))
     }
 
     /// Asks the session to run `app` next. Exit after this.
@@ -161,6 +201,40 @@ impl Pipe {
     /// Writes a whole line, waiting for room if need be.
     pub fn send(&mut self, line: &str) -> io::Result<()> {
         self.sock.write_all(line.as_bytes())
+    }
+
+    /// Writes a whole line if there's room for it now, on the session's
+    /// end; false if there isn't, or the other end has gone. A service that
+    /// doesn't read can't hold the session up.
+    ///
+    /// A line is never cut: if only part of it fits, the rest waits, and
+    /// goes before anything else, as [`Pipe::flush`] finds room. While it
+    /// waits, this writes nothing and returns false.
+    pub fn try_send(&mut self, line: &str) -> bool {
+        if !self.flush() {
+            return false;
+        }
+        match self.sock.write(line.as_bytes()) {
+            Ok(n) => {
+                self.waiting.extend_from_slice(&line.as_bytes()[n..]);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Writes what's left of a line [`Pipe::try_send`] began, as much as
+    /// fits now; true once nothing is left.
+    pub fn flush(&mut self) -> bool {
+        while !self.waiting.is_empty() {
+            match self.sock.write(&self.waiting) {
+                Ok(n) if n > 0 => {
+                    self.waiting.drain(..n);
+                }
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// Whatever has arrived, without waiting.
@@ -205,6 +279,15 @@ mod tests {
     }
 
     #[test]
+    fn notices() {
+        assert_eq!(Notice::parse("front doom"), Some(Notice::Front("doom".into())));
+        for unknown in ["front", "front ", "front Doom", "front doom now", "back doom"] {
+            assert_eq!(Notice::parse(unknown), None, "{unknown:?}");
+        }
+        assert_eq!(Notice::Front("wx".into()).line(), "front wx\n");
+    }
+
+    #[test]
     fn lines() {
         let mut l = Lines::default();
         assert_eq!(l.push(b"open d"), Vec::<String>::new());
@@ -227,7 +310,7 @@ mod tests {
     #[test]
     fn a_pipe_carries_lines_both_ways() {
         let (mut session, theirs) = Pipe::pair().unwrap();
-        let mut app = Pipe { sock: theirs, lines: Lines::default() };
+        let mut app = Pipe { sock: theirs, lines: Lines::default(), waiting: Vec::new() };
         assert_eq!(session.receive(), Received::default());
         app.open("doom").unwrap();
         app.send("something new\n").unwrap();
@@ -236,7 +319,29 @@ mod tests {
         assert_eq!(r.lines, ["open doom", "something new", "chumby-mode"]);
         assert!(!r.closed);
         session.send("hello\n").unwrap();
-        assert_eq!(app.receive().lines, ["hello"]);
+        assert!(session.try_send("front wx\n"));
+        assert_eq!(app.receive().lines, ["hello", "front wx"]);
+        // A reader that doesn't read: the writer isn't held up, and the
+        // reader never gets a line cut short. Lines of a size that doesn't
+        // divide the buffer, so the last one written is likely written in
+        // part.
+        let line = "x".repeat(MAX_LINE - 9) + "\n";
+        let mut sent = 0;
+        while session.try_send(&line) {
+            sent += 1;
+            assert!(sent < 100_000, "never full");
+        }
+        assert!(!session.try_send("front wx\n"), "written while a line waits");
+        let mut got = Vec::new();
+        while got.len() < sent {
+            session.flush();
+            got.extend(app.receive().lines);
+        }
+        assert!(session.flush());
+        assert_eq!(got.len(), sent);
+        assert!(got.iter().all(|l| l.len() == MAX_LINE - 9), "a line was cut");
+        assert!(session.try_send("front wx\n"));
+        assert_eq!(app.receive().lines, ["front wx"]);
         drop(app);
         assert!(session.receive().closed);
     }
