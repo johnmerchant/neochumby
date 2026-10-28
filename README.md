@@ -11,6 +11,11 @@ the Chumby back to its stock software, and a reboot brings neochumby back.
 Every binary is paged in as it runs, so apps cost the Chumby nothing until
 opened.
 
+An independent project, not affiliated with or endorsed by Chumby
+Industries, Blue Octy or anyone holding rights in Chumby; "Chumby" is a
+trademark of its owner. None of the Chumby's own software is distributed
+here: see [docs/legal.md](docs/legal.md).
+
 ## The hardware
 
 Freescale i.MX21: an ARM926EJ-S at about 266 MHz, with no FPU and 64 MB of
@@ -56,10 +61,11 @@ crate's `Cargo.toml`:
 title = "QUAKE"                      # listed in app lists
 exec = "neochumby-quake"             # binaries, by name; exec runs in front
 colour = "8c5a28"                    # optional
-service = "neochumby-airplay"        # runs in the background
+service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
+interrupt = false                    # no service may replace it in front
 ```
 
 An app can use any of these keys:
@@ -89,6 +95,11 @@ An app can use any of these keys:
   that isn't one. **Holding the top-left
   corner of the screen for 3 seconds** always opens `neochumby-home`,
   ending whatever was in front. That's the way out of an app gone wrong.
+- **`service`:** runs in the background for as long as neochumby does, and
+  is started again if it exits. It's told which app is in front. Any
+  service may open an app over the start app, and the start app's service
+  over any app, unless the one in front says **`interrupt = false`**, as
+  Doom and Quake do.
 
 ## Building
 

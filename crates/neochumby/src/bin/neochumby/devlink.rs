@@ -19,6 +19,11 @@
 //!   loop reads. When the connection drops it tries again, waiting longer
 //!   each time up to five minutes.
 //!
+//! Only descriptors 1 and 2 are replaced. The link's own sockets are
+//! close-on-exec, so programs the session runs get stdout and stderr (the
+//! capture socket) and their request pipe, as child.rs passes them, and
+//! nothing else of the link's.
+//!
 //! On a restart, the session ends its apps and services as for CHUMBY
 //! MODE, puts stdout and stderr back ([`Link::release`]), and replaces
 //! itself with the tree's `neochumby` (main.rs), so a tree deployed since
@@ -28,7 +33,7 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::os::fd::{AsFd, OwnedFd};
+use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -84,6 +89,19 @@ fn start(p: Paired) -> io::Result<Link> {
     let log = File::from(err.try_clone()?);
     let (capture, output) = UnixStream::pair()?;
     let (to_link, from_tee) = UnixStream::pair()?;
+    // None of these may reach a program the session runs, which gets only
+    // stdin, stdout, stderr and its request pipe (child.rs). The Chumby's
+    // kernel predates SOCK_CLOEXEC and F_DUPFD_CLOEXEC; musl falls back to
+    // fcntl, and so does this, as for the request pipes.
+    for f in [out.as_fd(), err.as_fd(), log.as_fd(), capture.as_fd(), output.as_fd(), to_link.as_fd(), from_tee.as_fd()]
+    {
+        // With 0, 1 or 2 closed at start, a socket could take its number,
+        // and redirecting would close it.
+        if f.as_raw_fd() <= 2 {
+            return Err(io::Error::other("stdin, stdout or stderr wasn't open"));
+        }
+        fd::set_cloexec(f, true)?;
+    }
     to_link.set_nonblocking(true)?;
     capture.set_read_timeout(Some(Duration::from_millis(200)))?;
     from_tee.set_read_timeout(Some(Duration::from_millis(100)))?;

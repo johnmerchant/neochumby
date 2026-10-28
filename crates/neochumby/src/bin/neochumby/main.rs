@@ -1,10 +1,11 @@
 //! neochumby: what the Chumby boots to, run by the boot hook from the tree.
-//! The session: it starts the apps' background services, and runs one app
-//! at a time in front, full-screen: first the start app (start.rs), then
-//! whatever the apps ask for over their request pipe (neochumby::session),
-//! going back to the start app whenever one exits (run.rs). On CHUMBY
-//! MODE it stops the services and exits, and the boot carries on with the
-//! Chumby's own software.
+//! The session: it runs the apps' background services, restarting them
+//! when they exit (services.rs), and runs one app at a time in front,
+//! full-screen: first the start app (start.rs), then whatever the apps ask
+//! for over their request pipe (neochumby::session), going back to the
+//! start app whenever one exits (run.rs). On CHUMBY MODE it stops the
+//! services and exits, and the boot carries on with the Chumby's own
+//! software.
 //!
 //! On a paired Chumby, its output also goes to its neochumbyd, which can
 //! ask it to restart, or for its screen (devlink.rs). A restart stops
@@ -25,15 +26,17 @@
 mod child;
 mod devlink;
 mod run;
+mod services;
 mod start;
 
 use std::os::unix::process::CommandExt;
-use std::process::{Child, Command};
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use neochumby::apps;
+use neochumby::audio;
 use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
@@ -109,6 +112,9 @@ fn watch_escape(flag: Arc<AtomicBool>) {
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
+    boot_volume: Option<u32>,
+    /// A thread is putting the volume back.
+    restoring: Arc<AtomicBool>,
     /// Set by the developer link.
     restart: Option<Arc<AtomicBool>>,
 }
@@ -116,6 +122,35 @@ struct Chumby {
 impl run::Device for Chumby {
     fn escaped(&mut self) -> bool {
         self.escape.swap(false, Ordering::SeqCst)
+    }
+
+    /// Mutes at once (a write to /proc). The volume is put back by a
+    /// thread, since audio::set_volume runs the stock chumby_set_volume and
+    /// the loop mustn't wait on it; one at a time. As the session ends, it
+    /// waits for that, up to `wait`.
+    fn reset_speaker(&mut self, wait: Duration) {
+        if let Err(e) = audio::mute(true) {
+            eprintln!("neochumby: muting the speaker: {e}");
+        }
+        if let Some(v) = self.boot_volume
+            && !self.restoring.swap(true, Ordering::SeqCst)
+        {
+            let restoring = self.restoring.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = audio::set_volume(v) {
+                    eprintln!("neochumby: setting the volume: {e}");
+                }
+                restoring.store(false, Ordering::SeqCst);
+            });
+        }
+        let deadline = Instant::now() + wait;
+        while self.restoring.load(Ordering::SeqCst) && Instant::now() < deadline {
+            neochumby::sleep_ms(20);
+        }
+    }
+
+    fn speaker_holder(&self) -> Option<u32> {
+        audio::holder()
     }
 
     fn restart(&mut self) -> bool {
@@ -128,16 +163,9 @@ fn session() {
     let link = devlink::Link::start();
     let root = apps::root();
     let all = apps::all(&root);
-
-    // Each app's service, where what it needs of a neochumbyd is here.
-    let mut services: Vec<Child> = all
-        .iter()
-        .filter(|a| a.runnable())
-        .filter_map(|a| {
-            let s = a.service.as_ref()?;
-            child::command(s, &a.dir, &root).spawn().map_err(|e| eprintln!("neochumby: {}: {e}", s.display())).ok()
-        })
-        .collect();
+    // The master volume as the boot set it from /psp/volume: nothing has
+    // played yet.
+    let boot_volume = audio::volume();
 
     // The server's `start`, else the local one: a name, trusted only as far
     // as the tree goes (start.rs).
@@ -150,23 +178,24 @@ fn session() {
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
-    let chumby = Chumby { escape, restart: link.as_ref().map(devlink::Link::restart_flag) };
     let ended = match start::choose(&all, choice) {
         None => {
             eprintln!("neochumby: no start app (not even {})", start::HOME);
             run::Ended::ChumbyMode
         }
-        Some(first) => run::Session::new(&all, &root, first, chumby, run::Timing::default()).run(),
+        Some(first) => {
+            let restart = link.as_ref().map(devlink::Link::restart_flag);
+            let chumby = Chumby { escape, boot_volume, restoring: Arc::default(), restart };
+            // On either ending, the loop has stopped the services and put
+            // the speaker back.
+            run::Session::new(&all, &root, first, chumby, run::Timing::default()).run()
+        }
     };
 
-    for s in &mut services {
-        let _ = s.kill();
-        let _ = s.wait();
-    }
     if ended == run::Ended::Restart {
         // Everything this process holds is close-on-exec (std opens files
-        // and sockets so), so the new session starts with what the boot
-        // hook gave this one.
+        // and sockets so, and the request pipes are marked so), so the new
+        // session starts with what the boot hook gave this one.
         if let Some(link) = link {
             link.release();
         }

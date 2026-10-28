@@ -65,6 +65,7 @@ pub mod tests {
             service: None,
             needs: Needs::Nothing,
             start,
+            interrupt: true,
         }
     }
 

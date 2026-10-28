@@ -9,6 +9,7 @@
 //!   neochumbyd=required        needs a paired neochumbyd (or `optional`:
 //!                              uses one when there is one; absent: never)
 //!   start=true                 may be the start app (see the session)
+//!   interrupt=false            no service may replace it in front (games)
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
@@ -40,6 +41,9 @@ pub struct App {
     /// It may be the start app: it promises to open other apps and CHUMBY
     /// MODE through the session, and to keep running.
     pub start: bool,
+    /// While it's in front, the start app's service may replace it (unless
+    /// its manifest says `interrupt=false`).
+    pub interrupt: bool,
 }
 
 impl App {
@@ -77,6 +81,7 @@ pub fn load(dir: &Path) -> Option<App> {
             _ => Needs::Nothing,
         },
         start: field("start").as_deref() == Some("true"),
+        interrupt: field("interrupt").as_deref() != Some("false"),
     })
 }
 
