@@ -277,6 +277,17 @@ through the state directory as `approve` does, so they need no port of
 their own. A restart ends the app in front and the services as CHUMBY
 MODE does, then runs the tree's `neochumby` again in the same process.
 
+`neochumbyd mcp` serves the same as an [MCP](https://modelcontextprotocol.io)
+server on stdin and stdout, so Claude Code (or any MCP client) can read a
+Chumby's log, restart it and look at its screen while working on an app.
+Its tools are `chumbys` (the pairing list and settings), `log`, `restart`,
+`screenshot` and `set`. Pairing itself is left to a person. Run it on the
+server, over SSH from wherever the client is:
+
+```sh
+claude mcp add neochumby -- ssh HOST neochumbyd mcp
+```
+
 When a stick and a server are both available, the stick wins. The hook
 times out every step that could block, and returns to the stock boot if
 anything fails. To skip it, create `/psp/neochumby-off`, or put a file
