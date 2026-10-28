@@ -19,3 +19,6 @@ cc = "1"
 title = "QUAKE"
 exec = "neochumby-quake"
 colour = "8c5a28"
+
+[lints]
+workspace = true

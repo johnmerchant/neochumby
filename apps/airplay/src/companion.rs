@@ -19,13 +19,13 @@
 
 use std::fs::File;
 use std::io::{self, Read};
-use std::os::fd::AsRawFd;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
 use neochumby_proto::{frame, valid_name};
+use neochumby_sys::process::{Signal, kill};
 
 const SLOTS: usize = 8;
 const AUDIO: u8 = 0;
@@ -37,7 +37,7 @@ struct Receiver(Child);
 
 impl Drop for Receiver {
     fn drop(&mut self) {
-        unsafe { libc::kill(self.0.id() as libc::pid_t, libc::SIGTERM) };
+        let _ = kill(self.0.id(), Signal::Term);
         let deadline = Instant::now() + Duration::from_secs(2);
         while matches!(self.0.try_wait(), Ok(None)) && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(100));
@@ -68,7 +68,7 @@ fn home_slot(name: &str) -> usize {
 /// A slot, held while the file stays open.
 fn try_slot(dir: &Path, slot: usize) -> Option<File> {
     let f = File::create(dir.join(format!("slot-{slot}.lock"))).ok()?;
-    (unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0).then_some(f)
+    f.try_lock().is_ok().then_some(f)
 }
 
 /// The Chumby's own slot, waiting a while for it (its last receiver may
