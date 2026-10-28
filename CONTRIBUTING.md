@@ -67,6 +67,7 @@ companion = "neochumby-weather-companion"   # optional: its server half
 neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
+button = true                        # optional: it gets the top button (games)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -91,12 +92,17 @@ Every app is opened the same way, whoever asked for it.
 - with `NEOCHUMBY_ROOT` (the tree) and `HOME=/tmp`. The root filesystem is
   read-only, and so is the tree;
 - with `NEOCHUMBY_SESSION=<fd>`, its request pipe to the session (below);
-- with `NEOCHUMBY_REASON` when the session has a reason to give. Ignore
-  values you don't know;
+- with `NEOCHUMBY_REASON` when the session has a reason to give: `button`
+  when the top button opened it. Ignore values you don't know;
 - owning the screen until it exits. What's on the screen when it starts is
   whatever was there: draw all of it;
 - sharing the touchscreen: every reader gets every touch. The session
-  watches the top-left corner for the escape hatch.
+  watches the top-left corner for the escape hatch;
+- **the top button** only with `button = true`. Only one process at a time
+  can have `/dev/switch` open, and the session keeps it. An app with
+  `button = true` is handed the open file as `NEOCHUMBY_BUTTON=<fd>`, and
+  `neochumby::input::Squeeze::open` picks it up. A read returns the level
+  now, so act on a 0 → 1 change.
 
 **To leave**, your app exits. Then the session opens the start app again.
 - **To open another app**, write `open <app>` (the app's name, its
@@ -113,6 +119,10 @@ Every app is opened the same way, whoever asked for it.
   your app the same way, whatever it is doing, and opens `neochumby-home`.
   So handle SIGTERM by exiting promptly, and expect anything you started to
   be ended with you.
+- **The top button:** unless your app says `button = true`, a press ends
+  it the same way and opens the start app with `NEOCHUMBY_REASON=button`,
+  as the stock Chumby does. There's no hold gesture: games hold the button
+  to fire, and the corner hold is the way out of anything.
 - **The start app's service** may end your app the same way, to open
   another (an alarm, say). Declare `interrupt = false` if your app mustn't
   be ended like that: games do.
@@ -138,6 +148,10 @@ promises:
 - it **opens other apps** through the request pipe;
 - it offers **CHUMBY MODE**, and the owner's settings, or at least points
   to where they are;
+- it handles **`NEOCHUMBY_REASON=button`** sensibly, for example by showing
+  its own main screen;
+- it **doesn't say `button = true`**, so a press always lands somewhere
+  useful. The session refuses a start app that does;
 - it **keeps running**. If it exits without asking for anything five times
   within a minute, the session makes `neochumby-home` the start app
   instead.

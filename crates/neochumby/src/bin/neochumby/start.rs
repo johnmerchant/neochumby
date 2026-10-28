@@ -5,7 +5,8 @@
 //! neochumbyd (neochumby::settings, kept in /psp for boots without it),
 //! else in /psp/neochumby.conf. Only an app whose manifest says
 //! `start = true` may be the start app: it promises a way to other apps and
-//! to CHUMBY MODE, so a Chumby can't be left stuck in a game. A name that
+//! to CHUMBY MODE, and leaves the top button to the session, so a Chumby
+//! can't be left stuck in a game. A name that
 //! isn't one is refused, with the reason logged, and the next choice is
 //! tried. When none is left, it's `home` (neochumby-home), as it is when
 //! nothing names one.
@@ -21,6 +22,8 @@ pub fn eligible<'a>(apps: &'a [App], name: &str) -> Result<&'a App, &'static str
     let app = apps.iter().find(|a| a.name == name).ok_or("no such app here")?;
     if !app.start {
         Err("its manifest doesn't say start = true")
+    } else if app.button {
+        Err("it says button = true, so the button couldn't bring it back")
     } else if app.exec.is_none() {
         Err("it has no exec")
     } else if !app.runnable() {
@@ -68,6 +71,7 @@ pub mod tests {
             needs: Needs::Nothing,
             start,
             interrupt: true,
+            button: false,
         }
     }
 
@@ -84,6 +88,9 @@ pub mod tests {
         assert_eq!(eligible(&apps, "doom").err(), Some("its manifest doesn't say start = true"));
         assert_eq!(eligible(&apps, "gone").err(), Some("no such app here"));
         assert_eq!(eligible(&apps, "paired").err(), Some("it needs a paired neochumbyd"));
+        apps[1].button = true;
+        assert!(eligible(&apps, "wx").is_err());
+        apps[1].button = false;
         assert_eq!(name(choose(&apps, &[("settings", "doom")])), Some("home".into()));
         // A refused choice falls through to the next one.
         assert_eq!(name(choose(&apps, &[("settings", "gone"), ("conf", "wx")])), Some("wx".into()));

@@ -9,7 +9,9 @@
 //!
 //! Holding the top-left corner of the screen for three seconds, whatever
 //! is running, ends the app in front and whatever it started, and opens
-//! neochumby-home: the way back from an app that has gone wrong.
+//! neochumby-home: the way back from an app that has gone wrong. The top
+//! button is the session's, to hand over or to return to the start app
+//! (button.rs).
 //!
 //!   neochumby           the session
 //!   neochumby sensors   prints the touchscreen, squeeze and accelerometer
@@ -18,11 +20,16 @@
 //! binary, paged in over NFS only when run. What it runs is described in
 //! child.rs.
 
+mod button;
 mod child;
 mod run;
 mod services;
 mod start;
 
+use std::fs::{File, OpenOptions};
+use std::io::Read;
+use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -101,10 +108,24 @@ fn watch_escape(flag: Arc<AtomicBool>) {
     });
 }
 
+/// The top button, opened once for the whole session (button.rs).
+fn open_button() -> Option<File> {
+    let open = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open("/dev/switch");
+    // Passed on only to an app with `button = true`.
+    match open.and_then(|f| neochumby_sys::fd::set_cloexec(f.as_fd(), true).map(|()| f)) {
+        Ok(f) => Some(f),
+        Err(e) => {
+            eprintln!("neochumby: /dev/switch: {e}; the top button does nothing");
+            None
+        }
+    }
+}
+
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
     boot_volume: Option<u32>,
+    button: Option<File>,
 }
 
 impl run::Device for Chumby {
@@ -121,6 +142,22 @@ impl run::Device for Chumby {
         {
             eprintln!("neochumby: setting the volume: {e}");
         }
+    }
+
+    fn button(&mut self) -> Option<bool> {
+        let mut b = [0u8; 1];
+        match self.button.as_mut()?.read(&mut b) {
+            Ok(1) => Some(b[0] != 0),
+            _ => None,
+        }
+    }
+
+    fn button_fd(&self) -> Option<RawFd> {
+        self.button.as_ref().map(|f| f.as_raw_fd())
+    }
+
+    fn close_button(&mut self) {
+        self.button = None;
     }
 }
 
@@ -148,7 +185,7 @@ fn session() {
     match start::choose(&all, &choices) {
         None => eprintln!("neochumby: no start app (not even {})", start::HOME),
         Some(first) => {
-            let chumby = Chumby { escape, boot_volume };
+            let chumby = Chumby { escape, boot_volume, button: open_button() };
             run::Session::new(&all, &root, first, chumby, run::Timing::default()).run()
         }
     }
