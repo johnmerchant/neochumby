@@ -7,6 +7,7 @@
 //!
 //!   neochumby-sync            a round now and one a minute, while this
 //!                             Chumby is paired and its delivery is sync
+//!                             (the session's service; it doesn't exit)
 //!   neochumby-sync once       one round; exits 0 if the live set is then
 //!                             the tree
 //!   neochumby-sync status     the sets on the stick
@@ -105,9 +106,12 @@ fn run() {
     let mut wait = EVERY;
     loop {
         match rounds(true, &mut log, &mut failed) {
+            // The session supervises this and would start it again at
+            // once: it waits, and looks again in an hour.
             Ok(_) => {
-                eprintln!("neochumby-sync: not syncing: not paired, or delivery is not sync");
-                return;
+                log.say("not syncing: not paired, or delivery is not sync; looking again in an hour".into());
+                failed = None;
+                wait = MOST;
             }
             Err(e) => {
                 // The same failure twice running (the same file for the same

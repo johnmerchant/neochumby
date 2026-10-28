@@ -13,6 +13,10 @@ changes easy to take.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL
   code says so in its `license` field and ships the upstream licence. Never
   commit game data, firmware images or anything from a Chumby's settings.
+- **None of the Chumby's own software, anywhere.** No firmware, images or
+  stock artwork in the repository, releases, CI or attachments, and the
+  emulator never impersonates a real device: see
+  [docs/legal.md](docs/legal.md).
 - **Nothing starts remote access by itself.** SSH on a Chumby is turned on
   by its owner, from its settings.
 
@@ -72,6 +76,7 @@ service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
 neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
+interrupt = false                    # optional: no service replaces it (games)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -123,6 +128,10 @@ speaker or the button.
   your app the same way, whatever it is doing, and opens `neochumby-home`.
   So handle SIGTERM by exiting promptly, and expect anything you started to
   be ended with you.
+- **A service** may end your app the same way, to open another: any
+  service over the start app, only the start app's over other apps (an
+  alarm, say). Declare `interrupt = false` if your app mustn't be ended
+  like that: games do.
 
 In Rust:
 
@@ -151,6 +160,52 @@ promises:
 
 Without `start = true`, the session refuses the app as the start app and
 uses `neochumby-home`, so a Chumby can't be left stuck in a game.
+
+### Services
+
+What has to keep working while another app is in front (alarms, a night
+schedule, music) belongs in the app's `service`. The session runs each
+app's service, where what it needs of a neochumbyd is here, for as long as
+neochumby runs:
+- with the same environment as an app (`NEOCHUMBY_ROOT`, `HOME=/tmp`,
+  `NEOCHUMBY_SESSION`), in a process group of its own;
+- **restarted when it exits**, after 1 second, then 2, 4 and so on up to a
+  minute. A run of a minute or more starts the wait again from 1 second;
+- **told what's in front:** `front <app>` on its pipe as it starts, and
+  whenever another app comes to the front. Reading these is optional. A
+  line is never cut; while the pipe is full, only the latest notice waits;
+- **stopped at CHUMBY MODE:** SIGTERM to its process group, then SIGKILL 5
+  seconds later.
+
+A service may write `open <app>` or `chumby-mode` to its pipe, like an
+app, but it doesn't exit after. That ends the app in front, so the session
+takes it only:
+- over the start app, from **any service** (an alarm, say); over any other
+  app, only from the **start app's service**, so services don't fight over
+  the screen. `chumby-mode` only from the start app's service;
+- when the app in front doesn't say `interrupt = false`;
+- not after the escape hatch, until an app is opened by hand (an `open`
+  from the app in front), so a service can't trap the Chumby in an app gone
+  wrong;
+- not once the app in front has asked for something itself: what it asked
+  for wins.
+
+Which services run is decided as the session starts: one that needs a
+neochumbyd starts on a paired Chumby only, and pairing asks for a restart.
+
+Anything else is ignored and logged, and so is an `open` for the app
+already in front.
+
+**The speaker.** When a service exits, the session mutes the speaker and
+puts back the master volume the Chumby booted with (`/psp/volume`),
+through `neochumby::audio`, so a service that dies while playing can't
+leave it on. If another live process holds the speaker (the handover's
+claim, which `audio::Unmuted` and `audio::Speaker` make), it's left alone.
+As the session ends, it does the same, waiting up to 3 seconds for the
+volume.
+
+In Rust, a service reads its notices with `Pipe::receive`, which doesn't
+wait, and `Notice::parse`.
 
 **Companions.** An app with a server half ships it as a second binary,
 named by `companion`. neochumbyd runs it for each paired Chumby that opens

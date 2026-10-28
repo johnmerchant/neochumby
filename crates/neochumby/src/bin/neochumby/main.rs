@@ -1,10 +1,11 @@
 //! neochumby: what the Chumby boots to, run by the boot hook from the tree.
-//! The session: it starts the apps' background services, and runs one app
-//! at a time in front, full-screen: first the start app (start.rs), then
-//! whatever the apps ask for over their request pipe (neochumby::session),
-//! going back to the start app whenever one exits (run.rs). On CHUMBY
-//! MODE it stops the services and exits, and the boot carries on with the
-//! Chumby's own software.
+//! The session: it runs the apps' background services, restarting them
+//! when they exit (services.rs), and runs one app at a time in front,
+//! full-screen: first the start app (start.rs), then whatever the apps ask
+//! for over their request pipe (neochumby::session), going back to the
+//! start app whenever one exits (run.rs). On CHUMBY MODE it stops the
+//! services and exits, and the boot carries on with the Chumby's own
+//! software.
 //!
 //! Holding the top-left corner of the screen for three seconds, whatever
 //! is running, ends the app in front and whatever it started, and opens
@@ -17,8 +18,9 @@
 //!                             in DIR is complete (neochumby_sync)
 //!
 //! With `delivery=sync` in its settings, the session also runs
-//! neochumby-sync from the tree, which keeps a copy of the tree on the
-//! stick for the boot hook to run. A tree made for a stick has no
+//! neochumby-sync from the tree as a service of its own (restarted like
+//! the apps' services), which keeps a copy of the tree on the stick for the
+//! boot hook to run. A tree made for a stick has no
 //! neochumby-sync, and needs none. The session also keeps the boot hook in
 //! /psp up to date with the tree's (conf::refresh_hook).
 //!
@@ -28,15 +30,16 @@
 
 mod child;
 mod run;
+mod services;
 mod start;
 
 use std::path::Path;
-use std::process::Child;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use neochumby::apps;
+use neochumby::apps::{self, App, Needs};
+use neochumby::audio;
 use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
@@ -112,11 +115,43 @@ fn watch_escape(flag: Arc<AtomicBool>) {
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
+    boot_volume: Option<u32>,
+    /// A thread is putting the volume back.
+    restoring: Arc<AtomicBool>,
 }
 
 impl run::Device for Chumby {
     fn escaped(&mut self) -> bool {
         self.escape.swap(false, Ordering::SeqCst)
+    }
+
+    /// Mutes at once (a write to /proc). The volume is put back by a
+    /// thread, since audio::set_volume runs the stock chumby_set_volume and
+    /// the loop mustn't wait on it; one at a time. As the session ends, it
+    /// waits for that, up to `wait`.
+    fn reset_speaker(&mut self, wait: Duration) {
+        if let Err(e) = audio::mute(true) {
+            eprintln!("neochumby: muting the speaker: {e}");
+        }
+        if let Some(v) = self.boot_volume
+            && !self.restoring.swap(true, Ordering::SeqCst)
+        {
+            let restoring = self.restoring.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = audio::set_volume(v) {
+                    eprintln!("neochumby: setting the volume: {e}");
+                }
+                restoring.store(false, Ordering::SeqCst);
+            });
+        }
+        let deadline = Instant::now() + wait;
+        while self.restoring.load(Ordering::SeqCst) && Instant::now() < deadline {
+            neochumby::sleep_ms(20);
+        }
+    }
+
+    fn speaker_holder(&self) -> Option<u32> {
+        audio::holder()
     }
 }
 
@@ -129,26 +164,14 @@ fn session() {
         Err(e) => eprintln!("neochumby: {}: {e}", conf::HOOK),
     }
 
-    // Each app's service, where what it needs of a neochumbyd is here.
-    let mut services: Vec<Child> = all
-        .iter()
-        .filter(|a| a.runnable())
-        .filter_map(|a| {
-            let s = a.service.as_ref()?;
-            child::command(s, &a.dir, &root).spawn().map_err(|e| eprintln!("neochumby: {}: {e}", s.display())).ok()
-        })
-        .collect();
+    // The master volume as the boot set it from /psp/volume: nothing has
+    // played yet.
+    let boot_volume = audio::volume();
 
     // The server's `start`, else the local one: a name, trusted only as far
     // as the tree goes (start.rs).
     let settings = settings::load();
-    if settings::get(&settings, "delivery") == Some("sync") {
-        let exe = root.join("neochumby-sync");
-        match child::command(&exe, &root, &root).spawn() {
-            Ok(c) => services.push(c),
-            Err(e) => eprintln!("neochumby: delivery=sync, but {}: {e}", exe.display()),
-        }
-    }
+    let core = core_services(&root, &settings);
     let local = conf::get(conf::CONF, "start");
     let choice = match settings::get(&settings, "start") {
         Some(s) => Some(("the server's settings", s)),
@@ -159,16 +182,36 @@ fn session() {
 
     match start::choose(&all, choice) {
         None => eprintln!("neochumby: no start app (not even {})", start::HOME),
-        Some(first) => run::Session::new(&all, &root, first, Chumby { escape }, run::Timing::default()).run(),
+        Some(first) => {
+            let chumby = Chumby { escape, boot_volume, restoring: Arc::default() };
+            run::Session::new(&all, &core, &root, first, chumby, run::Timing::default()).run()
+        }
     }
 
-    for s in &mut services {
-        let _ = s.kill();
-        let _ = s.wait();
-    }
     if let Ok(mut fb) = Fb::open() {
         fb.clear(rgb(0, 0, 0));
     }
+}
+
+/// The session's own services, supervised like the apps' (services.rs) but
+/// no app's: neochumby-sync, when this Chumby's settings say
+/// `delivery=sync`. It opens no app, so it is never told what is in front
+/// and nothing it asks for is done.
+fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
+    if settings::get(settings, "delivery") != Some("sync") {
+        return Vec::new();
+    }
+    vec![App {
+        dir: root.to_path_buf(),
+        name: "neochumby-sync".into(),
+        title: None,
+        exec: None,
+        colour: 0,
+        service: Some(root.join("neochumby-sync")),
+        needs: Needs::Required,
+        start: false,
+        interrupt: false,
+    }]
 }
 
 /// `neochumby check-set DIR`: whether the set in DIR (the stick's

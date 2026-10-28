@@ -18,6 +18,8 @@ cc = "1"
 title = "DOOM"
 exec = "neochumby-doom"
 colour = "dc281e"
+# A game: no service may replace it in front.
+interrupt = false
 
 [lints]
 workspace = true
