@@ -136,6 +136,13 @@ impl Handover {
         !held && self.other_request().is_none()
     }
 
+    /// The live process holding the speaker, if another one does: the
+    /// session asks this when a service dies, to leave a player that's
+    /// still going alone.
+    pub fn holder(&self) -> Option<u32> {
+        read_pid(&self.dir.join(CLAIM)).filter(|&p| p != self.me && process::alive(p))
+    }
+
     fn ask(&self) -> io::Result<()> {
         let tmp = self.dir.join(format!(".{REQUEST}.{}", self.me));
         fs::write(&tmp, format!("{}\n", self.me))?;
@@ -246,9 +253,12 @@ mod tests {
         let other = Live::new();
         let holder = d.side(other.pid());
         let me = d.side(std::process::id());
+        assert_eq!(me.holder(), None);
         assert_eq!(holder.take().unwrap(), Take::Taken);
         assert!(!holder.yield_requested());
         assert!(!me.free());
+        assert_eq!(me.holder(), Some(other.pid()));
+        assert_eq!(holder.holder(), None);
 
         assert_eq!(me.take().unwrap(), Take::Asked { holder: other.pid() });
         assert!(holder.yield_requested());
