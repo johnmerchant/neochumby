@@ -5,11 +5,12 @@ changes easy to take.
 
 ## Ground rules
 
-- **Rust** for everything we write. Third-party C is linked from a Rust
-  crate. What we change (the Doom and Quake engines) is vendored with as
-  few changes as possible, each marked with a comment naming the app
-  (`// neochumby-quake: ...`). What we don't (fetch's fastfetch) is a git
-  submodule, pinned to an upstream release.
+- **Rust** for everything we write. Third-party C (Doom's doomgeneric,
+  Quake's engine, fetch's fastfetch) is a git submodule, pinned to an
+  upstream commit and left unchanged, and linked from a Rust crate. Where
+  an app needs it to do otherwise, its `build.rs` builds that file with a
+  function renamed, so that the app's own takes its place, and says why
+  (`apps/quake/build.rs`).
 - **Comments say what the code does and why the rule is what it is**, not
   how it was debugged. One paragraph is usually enough.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL
@@ -36,7 +37,7 @@ neochumby-sys's documentation).
 ## Building and checking
 
 ```sh
-git submodule update --init   # fetch's fastfetch
+git submodule update --init   # the third-party C: Doom, Quake, fastfetch
 rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # zig 0.17 on PATH (the C compiler, linker and musl): https://ziglang.org
 # CMake 3.21 or later, for fetch

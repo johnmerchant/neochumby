@@ -40,8 +40,8 @@ jobs:
       matrix:
         proto: [tls, noise]
     steps:
-      # fetch's fastfetch is a submodule (cmake, which builds it, is on the
-      # runner).
+      # The apps' third-party C is in submodules (cmake, which builds
+      # fetch's fastfetch, is on the runner).
       - uses: actions/checkout@v4
         with:
           submodules: true

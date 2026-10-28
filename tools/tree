@@ -105,7 +105,7 @@ fetch() {
       ;;
     ./* | ../* | /*) (cd "$1" && pwd) ;;
     *)
-      # Third-party source it builds (fetch's fastfetch) is a submodule.
+      # The third-party C it builds is in submodules.
       git -C "$root" submodule update --quiet --init --recursive -- "apps/$1" >&2
       echo "$root/apps/$1"
       ;;

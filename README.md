@@ -34,9 +34,9 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
-| `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, vendored) with a Rust platform layer | GPL-2.0 |
+| `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
-| `apps/quake` | neochumby-quake: id's WinQuake software renderer, made fast on the ARM926 (below) | GPL-2.0-or-later |
+| `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
@@ -114,9 +114,9 @@ You'll need Rust with the `armv5te-unknown-linux-musleabi` target and
 [zig](https://ziglang.org) on `PATH`. zig is the C compiler and linker, and
 supplies musl (`tools/zigcc`).
 
-Third-party source that isn't changed (fetch's fastfetch) is a git
-submodule, and fetch builds it with [CMake](https://cmake.org) 3.21 or
-later.
+Third-party source (Doom, Quake, fetch's fastfetch) is in git
+submodules, and fetch builds fastfetch with [CMake](https://cmake.org)
+3.21 or later.
 
 ```sh
 git submodule update --init   # or clone with --recursive

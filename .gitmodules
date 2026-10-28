@@ -1,3 +1,9 @@
 [submodule "apps/fetch/third_party/fastfetch"]
 	path = apps/fetch/third_party/fastfetch
 	url = https://github.com/fastfetch-cli/fastfetch
+[submodule "apps/doom/third_party/doomgeneric"]
+	path = apps/doom/third_party/doomgeneric
+	url = https://github.com/ozkl/doomgeneric
+[submodule "apps/quake/third_party/quake"]
+	path = apps/quake/third_party/quake
+	url = https://github.com/id-Software/Quake
