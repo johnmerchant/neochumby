@@ -115,8 +115,8 @@ mounted when it stops):
                       on, as evdev does; writes are delivered as touches
   /dev/switch         the top button: each read returns its level, one byte;
                       one open at a time ("Resource busy"); writes fail
-  /dev/dsp            a sink, paced to the rate set by its OSS ioctls; one
-                      open at a time
+  /dev/dsp            a sink, paced to the rate set by its OSS ioctls, which
+                      reports its buffer (GETOSPACE); one open at a time
 
 event0, switch and dsp are served over FUSE by this script: a FIFO can't be
 the touchscreen, because every reader (the session's corner watch and the
@@ -290,6 +290,9 @@ FILES = {b"event0": EVENT0, b"switch": SWITCH, b"dsp": DSP}
 EVENT_QUEUE = 64 * 16
 # OSS requests (_IOWR('P', n, int)) and formats.
 SNDCTL_DSP_SPEED, SNDCTL_DSP_SETFMT, SNDCTL_DSP_CHANNELS = 0xC0045002, 0xC0045005, 0xC0045006
+# _IOR('P', 12, audio_buf_info): fragments, fragstotal, fragsize, bytes.
+SNDCTL_DSP_GETOSPACE = 0x8010500C
+DSP_FRAGMENTS = 4
 AFMT_U8, AFMT_S16_LE = 0x08, 0x10
 # How far ahead of the sound a writer may get: the driver's buffer.
 DSP_AHEAD = 0.25
@@ -429,7 +432,19 @@ class Devices:
             fh, _, cmd, _, in_size, out_size = IOCTL_IN.unpack_from(body)
             h = self.handles.get(fh)
             arg = body[IOCTL_IN.size:IOCTL_IN.size + in_size]
-            if h is None or h.node != DSP or len(arg) < 4 or out_size < 4:
+            if h is None or h.node != DSP:
+                return self.reply(unique, err=errno.ENOTTY)
+            if cmd == SNDCTL_DSP_GETOSPACE and out_size >= 16:
+                # The buffer is DSP_AHEAD of sound; what is in it, how far
+                # the writes are ahead of the sound.
+                second = h.rate * h.channels * h.width
+                size = int(DSP_AHEAD * second) // DSP_FRAGMENTS
+                total = size * DSP_FRAGMENTS
+                queued = min(total, int(max(0.0, h.played_to - time.monotonic()) * second))
+                free = total - queued
+                out = struct.pack("<iiii", free // size, DSP_FRAGMENTS, size, free) + bytes(out_size - 16)
+                return self.reply(unique, struct.pack("<iIII", 0, 0, 0, 0) + out)
+            if len(arg) < 4 or out_size < 4:
                 return self.reply(unique, err=errno.ENOTTY)
             (v,) = struct.unpack_from("<i", arg)
             if cmd == SNDCTL_DSP_SPEED:
