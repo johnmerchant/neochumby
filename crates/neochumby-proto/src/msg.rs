@@ -38,7 +38,7 @@ pub enum Msg {
     Closed,
     /// neochumbyd, right after `Welcome`: this Chumby's settings as its
     /// owner chose them on the server, as key/value pairs (`start` names the
-    /// home screen). A Chumby that has no use for them reads past them.
+    /// start app). A Chumby that has no use for them reads past them.
     Config(Vec<(String, String)>),
     /// Chumby, with `delivery=sync`, after `Config`: starts a round. `live`
     /// is the digest of its live set's manifest (zeros if it has none).

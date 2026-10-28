@@ -32,7 +32,7 @@ neochumby-sys's documentation).
 ```sh
 rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # zig 0.17 on PATH (the C compiler, linker and musl): https://ziglang.org
-cargo chumby            # the session and the home screen, for the Chumby
+cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
 tools/tree /tmp/tree doom quake airplay   # a whole tree, with apps
 ```
@@ -65,12 +65,13 @@ name = "neochumby-weather"
 neochumby = { git = "https://github.com/johnmerchant/neochumby" }
 
 [package.metadata.neochumby]
-title = "WEATHER"                    # listed on the home screen; runs exec
-exec = "neochumby-weather"
+title = "WEATHER"                    # listed in app lists
+exec = "neochumby-weather"           # runs in front when the app is opened
 colour = "4a90d9"                    # optional
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
 neochumbyd = "optional"              # "required" | "optional" | absent
+start = true                         # optional: it may be the start app
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -79,21 +80,77 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 `files/` directory beside `Cargo.toml`, optional, is copied into the app's
 directory as it is (icons, configuration).
 
-Binaries named by `exec`, `service` and `home` are built for the Chumby
+Binaries named by `exec` and `service` are built for the Chumby
 (`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`) and
-crash reports (`debug`). The screen is 320x240 RGB565, so prerender what
-you can, and keep in mind that the CPU is a 266 MHz ARM926 with no FPU.
+crash reports (`debug`), and the request pipe (`session`). The screen is
+320x240 RGB565, so prerender what you can, and keep in mind that the CPU is
+a 266 MHz ARM926 with no FPU.
 
-Things your app can rely on:
+### The app contract
 
-- **Starting:** the home screen runs it with `NEOCHUMBY_ROOT` (the tree) and
-  `HOME=/tmp`. The root filesystem is read-only, and so is the tree.
-- **The screen:** your app owns the screen until it exits. The home screen
-  redraws when it comes back.
-- **Getting out:** holding the top-left corner for 3 seconds ends your app,
-  whatever it is doing, and goes back to `neochumby-home`.
+The session (`neochumby`) runs one app at a time in front, full-screen.
+Every app is opened the same way, whoever asked for it.
+
+**When your app is opened**, the session runs its `exec`:
+- in the app's directory in the tree, in a process group of its own;
+- with `NEOCHUMBY_ROOT` (the tree) and `HOME=/tmp`. The root filesystem is
+  read-only, and so is the tree;
+- with `NEOCHUMBY_SESSION=<fd>`, its request pipe to the session (below);
+- with `NEOCHUMBY_REASON` when the session has a reason to give. Ignore
+  values you don't know;
+- owning the screen until it exits. What's on the screen when it starts is
+  whatever was there: draw all of it;
+- sharing the touchscreen: every reader gets every touch. The session
+  watches the top-left corner for the escape hatch.
+
+**To leave**, your app exits. Then the session opens the start app again,
+and ends anything your app left running in its process group (SIGTERM,
+then SIGKILL 200 ms later), so nothing you started keeps the screen, the
+speaker or the button.
+- **To open another app**, write `open <app>` (the app's name, its
+  directory under `apps/`) to the request pipe, then exit. The session runs
+  that app next.
+- **For CHUMBY MODE**, write `chumby-mode`, then exit. The session stops
+  the services and hands the Chumby back to its own software.
+- Lines end in `\n`. Each end ignores lines it doesn't know, and the
+  session ignores an `open` for an app that isn't here or can't run. The
+  last request before you exit counts.
+- After a request, exit within 5 seconds. Otherwise the session ends your
+  app: SIGTERM to its process group, then SIGKILL 2 seconds later.
+- **The escape hatch:** holding the top-left corner for 3 seconds ends
+  your app the same way, whatever it is doing, and opens `neochumby-home`.
+  So handle SIGTERM by exiting promptly, and expect anything you started to
+  be ended with you.
+
+In Rust:
+
+```rust
+use neochumby::session::Pipe;
+
+if let Some(mut pipe) = Pipe::from_env() {
+    let _ = pipe.open("doom"); // or pipe.chumby_mode()
+}
+std::process::exit(0);
+```
+
+`Pipe::from_env()` is None when the app wasn't started by the session (run
+by hand).
+
+**Start apps.** The start app is the one a Chumby opens at boot and comes
+back to. The owner picks it (`start=<app>`), and it defaults to
+`neochumby-home`. Declaring `start = true` lets your app be picked, and
+promises:
+- it **opens other apps** through the request pipe;
+- it offers **CHUMBY MODE**, and the owner's settings, or at least points
+  to where they are;
+- it **keeps running**. If it exits without asking for anything five times
+  within a minute, the session makes `neochumby-home` the start app
+  instead.
+
+Without `start = true`, the session refuses the app as the start app and
+uses `neochumby-home`, so a Chumby can't be left stuck in a game.
 
 **Companions.** An app with a server half ships it as a second binary,
 named by `companion`. neochumbyd runs it for each paired Chumby that opens

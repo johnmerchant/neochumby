@@ -1,23 +1,30 @@
 //! neochumby-manifest: an app crate's `[package.metadata.neochumby]`, as
 //! the `manifest` of key=value lines a Chumby's tree holds for it (read by
-//! the session, the home screen and neochumbyd). Run on the host by
+//! the session, the apps and neochumbyd). Run on the host by
 //! tools/tree.
 //!
 //!   neochumby-manifest path/to/Cargo.toml
 //!
 //! Prints the manifest, or fails with what is wrong: a crate not named
-//! neochumby-<name>, no metadata, an unknown key, or a value that is not a
-//! plain word. Values are strings; `shells` may also be a list, written
-//! space-separated. `neochumbyd` is `required` or `optional` (absent: the
-//! app never needs one), and an app with a `companion` must set it: only a
-//! neochumbyd runs companions. It is stated, not inferred from `companion`.
+//! neochumby-<name>, no metadata, an unknown key, or a value of the wrong
+//! kind. Values are strings, except `start`, `button` and `interrupt`,
+//! which are true or false. `neochumbyd` is `required` or `optional`
+//! (absent: the app never needs one), and an app with a `companion` must
+//! set it: only a neochumbyd runs companions. It is stated, not inferred
+//! from `companion`.
 
 use std::process::ExitCode;
 
 use toml::Value;
 
 /// The keys an app may set, as apps.rs reads them on the Chumby.
-const KEYS: &[&str] = &["title", "exec", "colour", "service", "companion", "neochumbyd", "home", "shells"];
+const KEYS: &[&str] =
+    &["title", "exec", "colour", "service", "companion", "neochumbyd", "start", "button", "interrupt"];
+/// The keys among them that are true or false:
+/// - `start`: the app may be the start app;
+/// - `button`: while in front, it gets the top button;
+/// - `interrupt`: false if no service may replace it in front.
+const FLAGS: &[&str] = &["start", "button", "interrupt"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {
@@ -40,14 +47,11 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
     let mut out = String::new();
     for key in KEYS {
         let Some(v) = meta.get(*key) else { continue };
-        let value = match (key, v) {
-            (_, Value::String(s)) => s.clone(),
-            (&"shells", Value::Array(a)) => a
-                .iter()
-                .map(|s| s.as_str().map(str::to_string).ok_or(format!("shells: {s} is not a string")))
-                .collect::<Result<Vec<_>, _>>()?
-                .join(" "),
-            _ => return Err(format!("{key}: not a string")),
+        let value = match (FLAGS.contains(key), v) {
+            (false, Value::String(s)) => s.clone(),
+            (false, _) => return Err(format!("{key}: not a string")),
+            (true, Value::Boolean(b)) => b.to_string(),
+            (true, _) => return Err(format!("{key}: not true or false")),
         };
         if !plain(&value) {
             return Err(format!("{key}: {value:?} is not a plain value"));
@@ -98,14 +102,17 @@ mod tests {
             [package]
             name = "neochumby-quake"
             [package.metadata.neochumby]
+            interrupt = false
             colour = "8c5a28"
             exec = "neochumby-quake"
+            button = true
             title = "QUAKE"
-            shells = ["home", "wx"]
             "#,
         )
         .unwrap();
-        assert_eq!(m, "title=QUAKE\nexec=neochumby-quake\ncolour=8c5a28\nshells=home wx\n");
+        assert_eq!(m, "title=QUAKE\nexec=neochumby-quake\ncolour=8c5a28\nbutton=true\ninterrupt=false\n");
+        let home = "[package]\nname = \"neochumby-home\"\n[package.metadata.neochumby]\nexec = \"neochumby-home\"\nstart = true";
+        assert_eq!(manifest(home).unwrap(), "exec=neochumby-home\nstart=true\n");
     }
 
     #[test]
@@ -115,6 +122,11 @@ mod tests {
         assert!(manifest(&wrap("titel = \"X\"")).is_err());
         assert!(manifest(&wrap("title = \"two\\nlines\"")).is_err());
         assert!(manifest(&wrap("title = 3")).is_err());
+        assert!(manifest(&wrap("start = \"true\"")).is_err());
+        assert!(manifest(&wrap("title = true")).is_err());
+        // Gone with proposal 0002: every app is a plain exec app.
+        assert!(manifest(&wrap("home = \"neochumby-x\"")).is_err());
+        assert!(manifest(&wrap("shells = [\"wx\"]")).is_err());
     }
 
     fn wrap(meta: &str) -> String {

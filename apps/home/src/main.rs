@@ -1,23 +1,27 @@
-//! neochumby's home screen, as an app (`home=` in its manifest): the
-//! installed apps as a list, tap one to open it; PAIR when booted with a
-//! neochumbyd this Chumby is not paired with; the time; and CHUMBY MODE,
-//! which exits cleanly so the session hands the Chumby back to its own
-//! software. The session falls back to it from any other home screen
-//! (holding the top-left corner).
+//! neochumby-home, the app list: the installed apps, tap one to open it;
+//! PAIR when booted with a neochumbyd this Chumby is not paired with; the
+//! time; and CHUMBY MODE, which hands the Chumby back to its own software.
+//! It's an ordinary app that may be the start app (`start = true`), and the
+//! start app when no other is chosen. The session also opens it from
+//! anything when the top-left corner is held.
+//!
+//! It opens apps and CHUMBY MODE by asking the session over its request
+//! pipe (neochumby::session), then exits: the session runs what it asked
+//! for, and opens the start app again when that exits. Opened for any
+//! reason (NEOCHUMBY_REASON), it shows its first page.
 //!
 //! An app that needs a neochumbyd this Chumby has not got is listed, greyed,
 //! and does not open.
 
 mod pair;
 
-use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::{self, App};
 use neochumby::conf;
 use neochumby::fb::{self, Fb, rgb};
 use neochumby::input::{Touch, Touchscreen};
+use neochumby::session::Pipe;
 
 const BG: u16 = rgb(16, 16, 32);
 const GREY: u16 = rgb(90, 90, 100);
@@ -130,9 +134,19 @@ fn draw(fb: &mut Fb, all: &[App], s: &Screen, pressed: Option<Hit>) {
     }
 }
 
-fn launch(a: &App, exec: &Path, root: &Path) {
-    let status = Command::new(exec).current_dir(&a.dir).env("NEOCHUMBY_ROOT", root).env("HOME", "/tmp").status();
-    eprintln!("neochumby-home: {} exited: {status:?}", a.name);
+/// Asks the session for `what` and exits, leaving the screen black, or
+/// returns if there's no session to ask (run by hand).
+fn ask(fb: &mut Fb, pipe: Option<&mut Pipe>, what: &str, send: impl FnOnce(&mut Pipe) -> std::io::Result<()>) {
+    let Some(pipe) = pipe else {
+        eprintln!("neochumby-home: no session to ask for {what} (not run by neochumby)");
+        return;
+    };
+    if let Err(e) = send(pipe) {
+        eprintln!("neochumby-home: asking for {what}: {e}");
+        return;
+    }
+    fb.clear(rgb(0, 0, 0));
+    std::process::exit(0);
 }
 
 /// A neochumbyd the boot hook found but this Chumby is not paired with.
@@ -149,6 +163,7 @@ fn pairing_offer() -> Option<(String, u16)> {
 fn main() {
     neochumby::debug::install("neochumby-home");
     let mut fb = Fb::open().expect("/dev/fb0");
+    let mut pipe = Pipe::from_env();
     let mut touch = Touchscreen::open();
     let root = apps::root();
     let all = apps::all(&root);
@@ -173,13 +188,10 @@ fn main() {
                 }
                 Touch::Up => {
                     match pressed.take() {
-                        Some(Hit::ChumbyMode) => {
-                            fb.clear(rgb(0, 0, 0));
-                            return;
-                        }
+                        Some(Hit::ChumbyMode) => ask(&mut fb, pipe.as_mut(), "CHUMBY MODE", |p| p.chumby_mode()),
                         Some(Hit::App(i)) => {
-                            if let (true, Some(exec)) = (all[i].runnable(), &all[i].exec) {
-                                launch(&all[i], exec, &root);
+                            if all[i].runnable() {
+                                ask(&mut fb, pipe.as_mut(), &all[i].name, |p| p.open(&all[i].name));
                             }
                         }
                         Some(Hit::More) => screen.page = (screen.page + 1) % screen.pages(),

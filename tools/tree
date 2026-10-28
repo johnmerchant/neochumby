@@ -6,12 +6,12 @@
 #   OUT/neochumby-sync   the receiver for delivery=sync (not on a stick made
 #                        by tools/stick)
 #   OUT/userhook2        the boot hook, which pairing installs
-#   OUT/apps/home/       the home screen, always
+#   OUT/apps/home/       neochumby-home, the app list, always
 #   OUT/apps/<name>/     each APP asked for
 #
 # An app is a crate named neochumby-<name>, whose Cargo.toml has a
-# [package.metadata.neochumby] table naming its binaries (exec, service and
-# home are built for the Chumby, companion for neochumbyd's host); the
+# [package.metadata.neochumby] table naming its binaries (exec and service
+# are built for the Chumby, companion for neochumbyd's host); the
 # tree's manifest is made from it (neochumby-manifest). A files/ directory
 # beside its Cargo.toml, if it has one, is copied as it is. An APP is one
 # of:
@@ -138,7 +138,7 @@ for app in home "$@"; do
   dest=$out/apps/$name
   mkdir -p "$dest"
   build --target $chumby_t -p "$crate"
-  for key in exec service home; do
+  for key in exec service; do
     f=$(field "$manifest" "$key")
     [ -z "$f" ] || cp "$bin/$chumby_t/release/$f" "$dest/"
   done

@@ -1,17 +1,14 @@
 //! neochumby: what the Chumby boots to, run by the boot hook from the tree.
-//! The session: it starts the apps' background services and runs the home
-//! screen, starting it again if it fails. When the home screen exits
-//! cleanly (CHUMBY MODE), it stops the services and exits, and the boot
-//! carries on with the Chumby's own software.
+//! The session: it starts the apps' background services, and runs one app
+//! at a time in front, full-screen: first the start app (start.rs), then
+//! whatever the apps ask for over their request pipe (neochumby::session),
+//! going back to the start app whenever one exits (run.rs). On CHUMBY
+//! MODE it stops the services and exits, and the boot carries on with the
+//! Chumby's own software.
 //!
-//! The home screen is an app whose manifest has `home=`: the one named by
-//! `start=<app>` in this Chumby's settings from its neochumbyd
-//! (neochumby::settings, kept in /psp for boots without it), else in
-//! /psp/neochumby.conf, else neochumby-home (apps/home).
 //! Holding the top-left corner of the screen for three seconds, whatever
-//! is running, ends the home screen and whatever it started, and brings up
-//! neochumby-home: the way back from a home screen that has gone wrong. A
-//! home screen that keeps failing also falls back to it.
+//! is running, ends the app in front and whatever it started, and opens
+//! neochumby-home: the way back from an app that has gone wrong.
 //!
 //!   neochumby                 the session
 //!   neochumby sensors         prints the touchscreen, squeeze and
@@ -22,29 +19,29 @@
 //! With `delivery=sync` in its settings, the session also runs
 //! neochumby-sync from the tree, which keeps a copy of the tree on the
 //! stick for the boot hook to run. A tree made for a stick has no
-//! neochumby-sync, and needs none.
+//! neochumby-sync, and needs none. The session also keeps the boot hook in
+//! /psp up to date with the tree's (conf::refresh_hook).
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
-//! binary, paged in over NFS only when run. What it runs gets
-//! NEOCHUMBY_ROOT, the tree, and HOME=/tmp: the root filesystem is
-//! read-only, and so is the tree.
+//! binary, paged in over NFS only when run. What it runs is described in
+//! child.rs.
 
-use std::os::unix::process::CommandExt;
+mod child;
+mod run;
+mod start;
+
 use std::path::Path;
-use std::process::{Child, Command, ExitStatus};
+use std::process::Child;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use neochumby::apps::{self, App};
+use neochumby::apps;
 use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
-use neochumby_sys::process::{Signal, kill_group};
 
-/// The built-in home screen, apps/<this>: the fallback.
-const DEFAULT_HOME: &str = "home";
 /// The escape hatch: a touch held this long in this corner. The resistive
 /// touchscreen reports brief releases during a steady hold; one shorter
 /// than ESCAPE_GRACE does not end it.
@@ -67,12 +64,6 @@ fn sensors() {
         tick += 1;
         neochumby::sleep_ms(30);
     }
-}
-
-fn command(exe: &Path, dir: &Path, root: &Path) -> Command {
-    let mut c = Command::new(exe);
-    c.current_dir(dir).env("NEOCHUMBY_ROOT", root).env("HOME", "/tmp");
-    c
 }
 
 /// Sets the flag when a touch is held in the top-left corner for
@@ -118,34 +109,14 @@ fn watch_escape(flag: Arc<AtomicBool>) {
     });
 }
 
-/// Runs the home screen in a process group of its own, so that it and
-/// whatever it started end together. Its exit, or None if the escape hatch
-/// ended it.
-fn run_home(home: &App, root: &Path, escape: &AtomicBool) -> Option<std::io::Result<ExitStatus>> {
-    let exe = home.home.as_ref()?;
-    let mut child = match command(exe, &home.dir, root).process_group(0).spawn() {
-        Ok(c) => c,
-        Err(e) => return Some(Err(e)),
-    };
-    let group = child.id();
-    loop {
-        match child.try_wait() {
-            Ok(Some(s)) => return Some(Ok(s)),
-            Err(e) => return Some(Err(e)),
-            Ok(None) => {}
-        }
-        if escape.swap(false, Ordering::SeqCst) {
-            eprintln!("neochumby: escape: ending {} and what it started", home.name);
-            let _ = kill_group(group, Signal::Term);
-            let deadline = Instant::now() + Duration::from_secs(2);
-            while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
-                neochumby::sleep_ms(100);
-            }
-            let _ = kill_group(group, Signal::Kill);
-            let _ = child.wait();
-            return None;
-        }
-        neochumby::sleep_ms(100);
+/// The Chumby, as the session's loop sees it.
+struct Chumby {
+    escape: Arc<AtomicBool>,
+}
+
+impl run::Device for Chumby {
+    fn escaped(&mut self) -> bool {
+        self.escape.swap(false, Ordering::SeqCst)
     }
 }
 
@@ -164,65 +135,31 @@ fn session() {
         .filter(|a| a.runnable())
         .filter_map(|a| {
             let s = a.service.as_ref()?;
-            command(s, &a.dir, &root).spawn().map_err(|e| eprintln!("neochumby: {}: {e}", s.display())).ok()
+            child::command(s, &a.dir, &root).spawn().map_err(|e| eprintln!("neochumby: {}: {e}", s.display())).ok()
         })
         .collect();
 
-    let is_home = |name: &str| all.iter().find(|a| a.name == name && a.home.is_some());
-    let fallback = is_home(DEFAULT_HOME);
+    // The server's `start`, else the local one: a name, trusted only as far
+    // as the tree goes (start.rs).
     let settings = settings::load();
     if settings::get(&settings, "delivery") == Some("sync") {
         let exe = root.join("neochumby-sync");
-        match command(&exe, &root, &root).spawn() {
+        match child::command(&exe, &root, &root).spawn() {
             Ok(c) => services.push(c),
             Err(e) => eprintln!("neochumby: delivery=sync, but {}: {e}", exe.display()),
         }
     }
-    // The server's `start` is a name, trusted only as far as the tree goes:
-    // it runs only if that app is here and has `home=`. Otherwise the local
-    // choice, then the built-in home screen.
-    let chosen = settings::get(&settings, "start")
-        .and_then(is_home)
-        .or_else(|| conf::get(conf::CONF, "start").and_then(|n| is_home(&n)))
-        .or(fallback);
+    let local = conf::get(conf::CONF, "start");
+    let choice = match settings::get(&settings, "start") {
+        Some(s) => Some(("the server's settings", s)),
+        None => local.as_deref().map(|s| (conf::CONF, s)),
+    };
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
-    match chosen {
-        None => eprintln!("neochumby: no home screen (no app with home=)"),
-        Some(mut home) => {
-            // Five failures within a minute is a home screen that cannot
-            // start: the built-in one, else the Chumby back.
-            let mut failures: Vec<Instant> = Vec::new();
-            loop {
-                match run_home(home, &root, &escape) {
-                    Some(Ok(s)) if s.success() => break,
-                    None => {
-                        if let Some(f) = fallback {
-                            home = f;
-                        }
-                        continue;
-                    }
-                    Some(r) => eprintln!("neochumby: {} ended: {r:?}", home.name),
-                }
-                failures.retain(|t| t.elapsed() < Duration::from_secs(60));
-                failures.push(Instant::now());
-                if failures.len() >= 5 {
-                    match fallback {
-                        Some(f) if f.name != home.name => {
-                            eprintln!("neochumby: {} keeps failing; {} instead", home.name, f.name);
-                            home = f;
-                            failures.clear();
-                        }
-                        _ => {
-                            eprintln!("neochumby: the home screen keeps failing; back to the Chumby");
-                            break;
-                        }
-                    }
-                }
-                neochumby::sleep_ms(1000);
-            }
-        }
+    match start::choose(&all, choice) {
+        None => eprintln!("neochumby: no start app (not even {})", start::HOME),
+        Some(first) => run::Session::new(&all, &root, first, Chumby { escape }, run::Timing::default()).run(),
     }
 
     for s in &mut services {
