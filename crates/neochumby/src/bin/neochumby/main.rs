@@ -38,6 +38,7 @@
 
 mod button;
 mod child;
+mod companion;
 mod devlink;
 mod jail;
 mod run;
@@ -388,6 +389,7 @@ fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
         interrupt: false,
         button: false,
         // It mounts the stick.
+        companion: false,
         access: neochumby::apps::Access { root: true, ..Default::default() },
     }]
 }

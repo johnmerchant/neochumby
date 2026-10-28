@@ -1179,6 +1179,7 @@ mod tests {
             start: false,
             interrupt: false,
             button: false,
+            companion: false,
             access: Default::default(),
         }];
         let all = apps::all(&root);

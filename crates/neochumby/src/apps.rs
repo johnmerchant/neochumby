@@ -40,6 +40,9 @@ pub struct App {
     pub exec: Option<PathBuf>,
     pub colour: u16,
     pub service: Option<PathBuf>,
+    /// It has a companion: the session opens it for the app
+    /// (neochumby::companion).
+    pub companion: bool,
     pub needs: Needs,
     /// It may be the start app: it promises to open other apps and CHUMBY
     /// MODE through the session, to keep running, and to handle the top
@@ -122,6 +125,7 @@ pub fn load(dir: &Path) -> Option<App> {
         exec: file("exec"),
         colour: field("colour").and_then(|c| parse_colour(&c)).unwrap_or(rgb(220, 160, 40)),
         service: file("service"),
+        companion: field("companion").is_some_and(|c| !c.is_empty()),
         needs: match field("neochumbyd").as_deref() {
             Some("required") => Needs::Required,
             Some("optional") => Needs::Optional,

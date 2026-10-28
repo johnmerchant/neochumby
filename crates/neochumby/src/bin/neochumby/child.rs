@@ -1,8 +1,10 @@
 //! Starting what the session runs, and ending it.
 //!
 //! Everything the session runs gets NEOCHUMBY_ROOT (the tree), HOME=/tmp
-//! (the root filesystem is read-only, and so is the tree) and its own
-//! request pipe as NEOCHUMBY_SESSION (neochumby::session). It runs in a
+//! (the root filesystem is read-only, and so is the tree), its own
+//! request pipe as NEOCHUMBY_SESSION (neochumby::session) and, if its app
+//! has a companion, a socket to it as NEOCHUMBY_COMPANION
+//! (neochumby::companion). It runs in a
 //! process group of its own, so that it and whatever it started end
 //! together. An app runs jailed, as jail.rs describes, unless its manifest
 //! says `access = ["root"]`; the session's own services run as root.
@@ -18,6 +20,7 @@ use neochumby::session::{self, Pipe};
 use neochumby_sys::jail::Process;
 use neochumby_sys::process::{Signal, exited, group_alive, kill_group, pass_fds};
 
+use crate::companion;
 use crate::jail::{self, Role};
 
 /// How long what's left of a process group has, after SIGTERM, once its
@@ -57,6 +60,11 @@ impl Launch<'_> {
         let (pipe, theirs) = Pipe::pair()?;
         self.keep.push(theirs.as_raw_fd());
         self.env.push((session::ENV.into(), theirs.as_raw_fd().to_string()));
+        let link = if self.app.companion { Some(companion::relay(&self.app.name)?) } else { None };
+        if let Some(l) = &link {
+            self.keep.push(l.as_raw_fd());
+            self.env.push((neochumby::companion::ENV.into(), l.as_raw_fd().to_string()));
+        }
         let process = if jail::jailed(self.app) {
             jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep)?
         } else {
@@ -66,8 +74,8 @@ impl Launch<'_> {
             pass_fds(&mut cmd, self.keep);
             Process::from(cmd.spawn()?)
         };
-        // The child has its own copy now.
-        drop(theirs);
+        // The child has its own copies now.
+        drop((theirs, link));
         Ok((process, pipe))
     }
 }
