@@ -8,14 +8,13 @@
 //!   for example dimming at sunset during a game.
 //! - **Music.** wx_music, wx_station and wx_volume, and the stations in the
 //!   manifest: btplay plays while the speaker is held unmuted
-//!   (`neochumby::audio::Unmuted`).
+//!   (`neochumby::audio::Unmuted`). The speaker goes to the newest player:
+//!   when another app asks for it (a game's sound), the music stops and the
+//!   speaker is given up; it starts again once the speaker is free.
 //!
 //! It reads the session's `front` notices, and logs which app is in front.
 //! It never asks the session to open classic: the top button already
 //! brings classic back.
-//!
-//! TODO(johnmerchant/neochumby#18): yield the speaker when another player
-//! takes it, once the speaker handover lands.
 
 use std::path::{Path, PathBuf};
 
@@ -110,18 +109,85 @@ pub mod device {
     struct Playing {
         url: String,
         vol: u32,
-        _unmuted: Unmuted,
+        unmuted: Unmuted,
     }
 
-    fn play(url: &str, vol: u32) -> Playing {
-        let unmuted = Unmuted::at(vol);
-        // The stock player's daemon, as the C engine started it.
-        sh("btplay --start-daemon \"$1\" >/dev/null 2>&1 &", &[url]);
-        Playing { url: url.to_string(), vol, _unmuted: unmuted }
+    /// The music, through the speaker handover.
+    enum Music {
+        Off,
+        /// Asked for the speaker; its holder is giving it up.
+        Asked,
+        Playing(Playing),
+        /// Gave the speaker to another player; waiting for it to be free.
+        Yielded,
+    }
+
+    /// Takes the speaker and starts the stream; Asked while another player
+    /// is still giving the speaker up.
+    fn start(url: &str, vol: u32) -> Music {
+        match Unmuted::at(vol) {
+            Ok(u) => {
+                // The stock player's daemon, as the C engine started it.
+                sh("btplay --start-daemon \"$1\" >/dev/null 2>&1 &", &[url]);
+                Music::Playing(Playing { url: url.to_string(), vol, unmuted: u })
+            }
+            Err(e) => {
+                if e.kind() != std::io::ErrorKind::WouldBlock {
+                    eprintln!("neochumby-classic-service: speaker: {e}");
+                }
+                Music::Asked
+            }
+        }
     }
 
     fn stop() {
         sh("btplay --passthru=stop >/dev/null 2>&1", &[]);
+    }
+
+    /// One step towards what is wanted.
+    fn step(music: Music, want: Option<(String, u32)>) -> Music {
+        match (music, want) {
+            (Music::Playing(p), Some((url, vol))) if p.url == url => {
+                if p.unmuted.yield_requested() {
+                    // Another player wants the speaker: stop, then give it up.
+                    stop();
+                    drop(p);
+                    return Music::Yielded;
+                }
+                let mut p = p;
+                if p.vol != vol {
+                    if let Err(e) = audio::set_volume(vol) {
+                        eprintln!("neochumby-classic-service: volume: {e}");
+                    }
+                    p.vol = vol;
+                }
+                Music::Playing(p)
+            }
+            (Music::Playing(p), Some((url, vol))) => {
+                // Another station: stop, let go, and take it again.
+                stop();
+                drop(p);
+                start(&url, vol)
+            }
+            (Music::Yielded, Some((url, vol))) => {
+                if audio::free() {
+                    start(&url, vol)
+                } else {
+                    Music::Yielded
+                }
+            }
+            (Music::Off | Music::Asked, Some((url, vol))) => start(&url, vol),
+            (Music::Playing(p), None) => {
+                stop();
+                drop(p);
+                Music::Off
+            }
+            (Music::Asked, None) => {
+                audio::withdraw();
+                Music::Off
+            }
+            (Music::Yielded | Music::Off, None) => Music::Off,
+        }
     }
 
     pub fn run() -> i32 {
@@ -131,7 +197,9 @@ pub mod device {
         let mut pipe = Pipe::from_env();
         let mut feed = Feed::default();
         let mut night: Option<bool> = None;
-        let mut playing: Option<Playing> = None;
+        // Started again while another player has the speaker (a restart
+        // during a game): wait for it rather than take it.
+        let mut music = if audio::free() { Music::Off } else { Music::Yielded };
         loop {
             if let Some(p) = &mut pipe {
                 let r = p.receive();
@@ -145,37 +213,15 @@ pub mod device {
                 }
             }
             feed.refresh(&base);
-            let Wants { night: n, music } = wants(st, &feed, crate::plat::wall_now());
+            let Wants { night: n, music: want_music } = wants(st, &feed, crate::plat::wall_now());
             if night != Some(n) {
                 backlight(n);
                 night = Some(n);
             }
-            match (&mut playing, music) {
-                (Some(p), Some((url, vol))) if p.url == url => {
-                    if p.vol != vol {
-                        if let Err(e) = audio::set_volume(vol) {
-                            eprintln!("neochumby-classic-service: volume: {e}");
-                        }
-                        p.vol = vol;
-                    }
-                }
-                (_, Some((url, vol))) => {
-                    // A new station, or nothing playing: let go of the
-                    // speaker first, then take it again for the new one.
-                    drop(playing.take());
-                    playing = Some(play(&url, vol));
-                }
-                (Some(_), None) => {
-                    stop();
-                    playing = None;
-                }
-                (None, None) => {}
-            }
+            music = step(music, want_music);
             neochumby::sleep_ms(POLL_MS);
         }
-        if playing.take().is_some() {
-            stop();
-        }
+        drop(step(music, None));
         0
     }
 }
