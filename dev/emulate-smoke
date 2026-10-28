@@ -116,7 +116,8 @@ emu wait exit 20 || fail "CHUMBY MODE didn't end the session"
 emu log > "$out/log.txt"
 
 step "boot from a stick"
-emu mkstick --force "$out/stick.img" "$tree"
+# Room for every app CI builds, not just a few: mkstick makes 64 MB.
+emu mkstick --size 256 --force "$out/stick.img" "$tree"
 emu start --stick "$out/stick.img"
 opened_home 1 "the home screen didn't open from the stick"
 emu shot "$out/4-stick.png"
