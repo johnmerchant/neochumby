@@ -66,6 +66,7 @@ service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
 neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
+interrupt = false                    # optional: no service replaces it (games)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -112,6 +113,9 @@ Every app is opened the same way, whoever asked for it.
   your app the same way, whatever it is doing, and opens `neochumby-home`.
   So handle SIGTERM by exiting promptly, and expect anything you started to
   be ended with you.
+- **The start app's service** may end your app the same way, to open
+  another (an alarm, say). Declare `interrupt = false` if your app mustn't
+  be ended like that: games do.
 
 In Rust:
 
@@ -140,6 +144,46 @@ promises:
 
 Without `start = true`, the session refuses the app as the start app and
 uses `neochumby-home`, so a Chumby can't be left stuck in a game.
+
+### Services
+
+What has to keep working while another app is in front (alarms, a night
+schedule, music) belongs in the app's `service`. The session runs each
+app's service, where what it needs of a neochumbyd is here, for as long as
+neochumby runs:
+- with the same environment as an app (`NEOCHUMBY_ROOT`, `HOME=/tmp`,
+  `NEOCHUMBY_SESSION`), in a process group of its own;
+- **restarted when it exits**, after 1 second, then 2, 4 and so on up to a
+  minute. A run of a minute or more starts the wait again from 1 second;
+- **told what's in front:** `front <app>` on its pipe as it starts, and
+  whenever another app comes to the front. Reading these is optional. A
+  service that leaves them unread until the pipe is full gets no more;
+- **stopped at CHUMBY MODE:** SIGTERM to its process group, then SIGKILL 5
+  seconds later.
+
+A service may write `open <app>` or `chumby-mode` to its pipe, like an
+app, but it doesn't exit after. That ends the app in front, so the session
+takes it only:
+- from the **start app's service**, so services don't fight over the
+  screen;
+- when the app in front doesn't say `interrupt = false`;
+- not after the escape hatch, until an app is opened by hand (an `open`
+  from the app in front), so a service can't trap the Chumby in an app gone
+  wrong.
+
+Anything else is ignored and logged, and so is an `open` for the app
+already in front.
+
+**The speaker.** When any service exits, the session mutes the speaker
+and puts back the master volume the Chumby booted with (`/psp/volume`),
+through `neochumby::audio`, so a service that dies while playing can't
+leave it on. The session can't tell whether another service is playing at
+that moment, so that one is muted too. Hold an `audio::Unmuted` or
+`audio::Speaker` only while you play, and take a new one each time you
+start, so a reset never leaves you silent for long.
+
+In Rust, a service reads its notices with `Pipe::receive`, which doesn't
+wait, and `Notice::parse`.
 
 **Companions.** An app with a server half ships it as a second binary,
 named by `companion`. neochumbyd runs it for each paired Chumby that opens

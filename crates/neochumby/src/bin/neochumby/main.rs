@@ -1,10 +1,11 @@
 //! neochumby: what the Chumby boots to, run by the boot hook from the tree.
-//! The session: it starts the apps' background services, and runs one app
-//! at a time in front, full-screen: first the start app (start.rs), then
-//! whatever the apps ask for over their request pipe (neochumby::session),
-//! going back to the start app whenever one exits (run.rs). On CHUMBY
-//! MODE it stops the services and exits, and the boot carries on with the
-//! Chumby's own software.
+//! The session: it runs the apps' background services, restarting them
+//! when they exit (services.rs), and runs one app at a time in front,
+//! full-screen: first the start app (start.rs), then whatever the apps ask
+//! for over their request pipe (neochumby::session), going back to the
+//! start app whenever one exits (run.rs). On CHUMBY MODE it stops the
+//! services and exits, and the boot carries on with the Chumby's own
+//! software.
 //!
 //! Holding the top-left corner of the screen for three seconds, whatever
 //! is running, ends the app in front and whatever it started, and opens
@@ -19,14 +20,15 @@
 
 mod child;
 mod run;
+mod services;
 mod start;
 
-use std::process::Child;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use neochumby::apps;
+use neochumby::audio;
 use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
@@ -102,27 +104,32 @@ fn watch_escape(flag: Arc<AtomicBool>) {
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
+    boot_volume: Option<u32>,
 }
 
 impl run::Device for Chumby {
     fn escaped(&mut self) -> bool {
         self.escape.swap(false, Ordering::SeqCst)
     }
+
+    fn reset_speaker(&mut self) {
+        if let Err(e) = audio::mute(true) {
+            eprintln!("neochumby: muting the speaker: {e}");
+        }
+        if let Some(v) = self.boot_volume
+            && let Err(e) = audio::set_volume(v)
+        {
+            eprintln!("neochumby: setting the volume: {e}");
+        }
+    }
 }
 
 fn session() {
     let root = apps::root();
     let all = apps::all(&root);
-
-    // Each app's service, where what it needs of a neochumbyd is here.
-    let mut services: Vec<Child> = all
-        .iter()
-        .filter(|a| a.runnable())
-        .filter_map(|a| {
-            let s = a.service.as_ref()?;
-            child::command(s, &a.dir, &root).spawn().map_err(|e| eprintln!("neochumby: {}: {e}", s.display())).ok()
-        })
-        .collect();
+    // The master volume as the boot set it from /psp/volume: nothing has
+    // played yet.
+    let boot_volume = audio::volume();
 
     // The server's `start` is a name, trusted only as far as the tree goes
     // (start.rs). Otherwise the local choice, then neochumby-home.
@@ -140,13 +147,12 @@ fn session() {
 
     match start::choose(&all, &choices) {
         None => eprintln!("neochumby: no start app (not even {})", start::HOME),
-        Some(first) => run::Session::new(&all, &root, first, Chumby { escape }, run::Timing::default()).run(),
+        Some(first) => {
+            let chumby = Chumby { escape, boot_volume };
+            run::Session::new(&all, &root, first, chumby, run::Timing::default()).run()
+        }
     }
 
-    for s in &mut services {
-        let _ = s.kill();
-        let _ = s.wait();
-    }
     if let Ok(mut fb) = Fb::open() {
         fb.clear(rgb(0, 0, 0));
     }

@@ -19,6 +19,8 @@ cc = "1"
 title = "QUAKE"
 exec = "neochumby-quake"
 colour = "8c5a28"
+# A game: no service may replace it in front.
+interrupt = false
 
 [lints]
 workspace = true
