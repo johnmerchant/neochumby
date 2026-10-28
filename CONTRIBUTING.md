@@ -6,7 +6,8 @@ changes easy to take.
 ## Ground rules
 
 - **Rust** for everything we write. Third-party engines in C (Doom, Quake)
-  are vendored as they are, and linked from a Rust crate.
+  are vendored with as few changes as possible, each marked with a comment
+  naming the app (`// neochumby-quake: ...`), and linked from a Rust crate.
 - **Comments say what the code does and why the rule is what it is**, not
   how it was debugged. One paragraph is usually enough.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL
