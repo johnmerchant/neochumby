@@ -17,10 +17,13 @@
 //! An app writes its request and then exits. The last request it made
 //! counts. If it hasn't exited a few seconds later, the session ends it.
 //!
-//! A service's request ends the app in front first, so the session takes
-//! it only from the start app's service, never over an app that says
-//! `interrupt = false`, and not after the escape hatch until an app is
-//! opened by hand. What the session tells a service:
+//! A service doesn't exit after asking, and its request ends the app in
+//! front first, so the session takes it only: over the start app from any
+//! service, over another app from the start app's service alone (and
+//! `chumby-mode` from that one alone); never over an app that says
+//! `interrupt = false`, or one that has asked for something itself; and
+//! not after the escape hatch until an app is opened by hand. What the
+//! session tells a service:
 //!
 //!   front <app>    that app is now in front (also as the service starts)
 //!
