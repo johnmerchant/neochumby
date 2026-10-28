@@ -1063,7 +1063,12 @@ impl<P: Plat> Engine<P> {
         let newdir = resolve_dir(&self.base_dir);
         let mpath = newdir.join("manifest.txt");
         let meta = std::fs::metadata(&mpath);
-        let text = meta.as_ref().ok().and_then(|_| std::fs::read(&mpath).ok()).filter(|t| t.len() <= 1 << 20);
+        let text = meta
+            .as_ref()
+            .ok()
+            .filter(|m| m.len() <= manifest::MAX_MANIFEST_BYTES)
+            .and_then(|_| std::fs::read(&mpath).ok())
+            .filter(|t| t.len() as u64 <= manifest::MAX_MANIFEST_BYTES);
         let size_of = |n: &str| std::fs::metadata(newdir.join(n)).ok().map(|m| m.len());
         let Some(text) = text.filter(|t| manifest::usable(t, size_of)) else {
             if !self.waiting {
@@ -1074,7 +1079,11 @@ impl<P: Plat> Engine<P> {
         self.dir = newdir;
         self.manifest_mtime = meta.as_ref().map(mtime).unwrap_or(0);
         self.loaded_dir = self.dir.clone();
-        self.hashes = std::fs::read(self.dir.join("hashes.txt")).ok().filter(|h| h.len() <= 1 << 20);
+        let hpath = self.dir.join("hashes.txt");
+        self.hashes = std::fs::metadata(&hpath)
+            .ok()
+            .filter(|m| m.len() <= manifest::MAX_MANIFEST_BYTES)
+            .and_then(|_| std::fs::read(&hpath).ok());
 
         // Keep the old table to adopt unchanged files from; start a new one.
         self.loader_forget(None);
@@ -1086,6 +1095,17 @@ impl<P: Plat> Engine<P> {
         let hashes = self.hashes.take();
         let c = &mut self.c;
         let budget = c.budget as u64;
+        // Indices, so registering thousands of files stays linear: content
+        // ids from hashes.txt, the new table's files, and the old table's
+        // files still in memory (to adopt the first match, as before).
+        let md5 = hashes.as_deref().map(cache::md5_index).unwrap_or_default();
+        let mut have: std::collections::HashMap<(u64, usize), usize> = Default::default();
+        let mut olds: std::collections::HashMap<(u64, usize), std::collections::VecDeque<usize>> = Default::default();
+        for (i, o) in old.iter().enumerate() {
+            if o.state == State::Ready {
+                olds.entry((o.key, o.size)).or_default().push_back(i);
+            }
+        }
         let m = manifest::parse(&text, |name, expect| {
             let path = dir.join(name);
             let st = std::fs::metadata(&path).ok().filter(|s| s.is_file() && s.len() > 0);
@@ -1104,18 +1124,18 @@ impl<P: Plat> Engine<P> {
                 return None;
             };
             let size = st.len() as usize;
-            let key = match hashes.as_deref().map(|h| cache::md5_key(h, name)) {
-                Some(k) if k != 0 => k,
+            let key = match md5.get(name) {
+                Some(&k) if k != 0 => k,
                 _ => cache::file_key(name, st.len(), mtime(&st)),
             };
-            if let Some(i) = c.assets.iter().position(|a| a.key == key && a.size == size) {
+            if let Some(&i) = have.get(&(key, size)) {
                 return Some(i);
             }
             if c.assets.len() >= MAXASSET {
                 return None;
             }
             let mut a = Asset::new(name, key, size);
-            if let Some(o) = old.iter_mut().find(|o| o.key == key && o.size == size && o.state == State::Ready) {
+            if let Some(o) = olds.get_mut(&(key, size)).and_then(|q| q.pop_front()).map(|i| &mut old[i]) {
                 a.data = o.data.take();
                 a.state = State::Ready;
                 a.used = o.used;
@@ -1123,6 +1143,7 @@ impl<P: Plat> Engine<P> {
                 o.state = State::Empty;
             }
             c.assets.push(a);
+            have.insert((key, size), c.assets.len() - 1);
             Some(c.assets.len() - 1)
         });
         self.hashes = hashes;
@@ -2175,7 +2196,7 @@ impl<P: Plat> Engine<P> {
 
     /// One control line; anything malformed is ignored.
     pub fn ctl_line(&mut self, l: &[u8], t: i64) {
-        let v = scan(l, "%15s %23s");
+        let v = scan(l, "%15s %48s");
         let Some(w) = v.first().map(|w| w.s().to_string()) else { return };
         let a1 = v.get(1).map(|a| a.s().to_string()).unwrap_or_default();
         self.last_touch = t; // a remote poke counts as a touch

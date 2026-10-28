@@ -212,6 +212,7 @@ impl Cache {
 /// The content id hashes.txt gives a file: its md5's first 16 hex digits,
 /// made odd so it never equals a fallback id. 0 if it isn't listed. Lines
 /// are md5sum's, "<32 hex>  <name>".
+#[cfg(test)]
 pub fn md5_key(hashes: &[u8], name: &str) -> u64 {
     for l in hashes.split(|&b| b == b'\n') {
         if l.len() > 34 && &l[34..] == name.as_bytes() && l[32] == b' ' {
@@ -228,6 +229,27 @@ pub fn md5_key(hashes: &[u8], name: &str) -> u64 {
         }
     }
     0
+}
+
+/// md5_key for every name in hashes.txt at once: what md5_key would give
+/// each (the first line naming a file decides), in one pass.
+pub fn md5_index(hashes: &[u8]) -> std::collections::HashMap<String, u64> {
+    let mut m = std::collections::HashMap::new();
+    for l in hashes.split(|&b| b == b'\n') {
+        if l.len() > 34 && l[32] == b' ' {
+            let name = String::from_utf8_lossy(&l[34..]).into_owned();
+            let k = l[..16].iter().try_fold(0u64, |k, &c| {
+                let v = match c {
+                    b'0'..=b'9' => c - b'0',
+                    b'a'..=b'f' => c - b'a' + 10,
+                    _ => return None,
+                };
+                Some(k << 4 | v as u64)
+            });
+            m.entry(name).or_insert(k.map_or(0, |k| k | 1));
+        }
+    }
+    m
 }
 
 /// The fallback content id: FNV-1a of the name, size and mtime, made even.
@@ -336,6 +358,9 @@ mod tests {
         assert_eq!(md5_key(h, "page"), 0);
         assert_eq!(md5_key(h, "y.raw"), 0);
         assert_eq!(md5_key(b"0123456789abcdeg0123456789abcdef  z\n", "z"), 0);
+        let ix = md5_index(h);
+        assert_eq!((ix["page0.raw"], ix["x.raw"]), (md5_key(h, "page0.raw"), md5_key(h, "x.raw")));
+        assert_eq!(md5_index(b"0123456789abcdeg0123456789abcdef  z\n")["z"], 0);
         let k = file_key("a.raw", 10, 5);
         assert_eq!(k & 1, 0);
         assert_ne!(k, file_key("a.raw", 10, 6));

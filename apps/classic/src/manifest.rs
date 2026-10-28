@@ -49,21 +49,54 @@ pub const H: i32 = 240;
 pub const FPS: i32 = 25;
 pub const FRAME_BYTES: usize = (W * H * 2) as usize;
 
-// The C engine's limits, kept so a manifest means the same here: the feeder
-// is written to them.
-pub const MAXP: usize = 48;
-pub const MAXS: usize = 64;
-pub const MAXA: usize = 64;
-pub const MAXSCR: usize = 160;
-pub const MAXPANE: usize = 128;
-pub const MAXHOT: usize = 768;
-pub const MAXST: usize = 16;
-pub const MAXASSET: usize = 640;
-pub const MAXSUN: usize = 16;
+// The limits: how many of each thing a manifest may have. Lines past a limit
+// are skipped, so a hostile manifest can't grow the engine without bound.
+// Every list is a Vec, so what a manifest doesn't use costs nothing; the
+// costs below are the most a full manifest can hold, beyond its pictures
+// (which the cache's budget bounds). engine-limits.md, in the notes the
+// feeder works from, has the same numbers.
+//
+// The C engine had fixed arrays: 48 pages, 160 screens, 128 panes, 768 tap
+// zones, 640 files and 23-byte names. A channel with every widget needs
+// about 153 screens, so these are raised; a feeder written for the C
+// engine's limits works as before.
+
+/// Slideshow pages (each about 100 bytes).
+pub const MAXP: usize = 128;
+/// Sprites, over all pages (about 50 bytes each).
+pub const MAXS: usize = 256;
+/// Actors (about 70 bytes each).
+pub const MAXA: usize = 128;
+/// Screens, and sliders (about 80 bytes each, with the name).
+pub const MAXSCR: usize = 512;
+/// Panes, on screens and pages (about 100 bytes each).
+pub const MAXPANE: usize = 512;
+/// Tap zones (about 120 bytes each, with the action and argument).
+pub const MAXHOT: usize = 2048;
+/// Music stations (each a URL of up to 255 bytes).
+pub const MAXST: usize = 64;
+/// Files a manifest names (about 150 bytes each, with the name, plus its
+/// picture while it is in the cache).
+pub const MAXASSET: usize = 4096;
+/// Sunrise/sunset lines.
+pub const MAXSUN: usize = 32;
+/// Slideshow timings Settings steps through.
 pub const MAXSECS: usize = 12;
-pub const MAXGLOW: usize = 16;
-pub const MAXGSQ: usize = 4;
+/// Glow layers (each a few hundred bytes of lit spans when indexed).
+pub const MAXGLOW: usize = 32;
+/// Glowseq clips, and frames in each.
+pub const MAXGSQ: usize = 8;
 pub const MAXGSQ_FRAMES: i32 = 1000;
+/// The longest name of a screen, font or tap-zone argument, in bytes (the
+/// `%48s` in the formats below; the C engine's was 23). The tests check
+/// the formats against it.
+#[cfg_attr(not(test), allow(dead_code))]
+pub const NAME_LEN: usize = 48;
+/// The longest file name, in bytes (`%96s`; the C engine's was 63).
+#[cfg_attr(not(test), allow(dead_code))]
+pub const FILE_LEN: usize = 96;
+/// The largest manifest.txt and hashes.txt read, in bytes.
+pub const MAX_MANIFEST_BYTES: u64 = 2 << 20;
 
 /// The logo intros, in the order the manifest, `fx N` and the stats file number them.
 pub const FX_NAMES: [&str; 10] =
@@ -95,8 +128,9 @@ pub enum Target {
     PageNight(usize),
 }
 
-pub const MAXFONT: usize = 16;
-pub const MAXLIVE: usize = 128;
+/// Live-text fonts, and live boxes.
+pub const MAXFONT: usize = 32;
+pub const MAXLIVE: usize = 512;
 
 /// A `livefont`: a strip of the charset's glyphs (values::CHARSET).
 #[derive(Clone, Debug)]
@@ -332,6 +366,9 @@ pub struct Manifest {
     pub gsqs: Vec<GlowSeq>,
     pub fonts: Vec<Font>,
     pub lives: Vec<Live>,
+    /// Screen names to indices (the first screen of a name), so lookups
+    /// stay fast with hundreds of screens and thousands of tap zones.
+    pub screen_ix: std::collections::HashMap<String, usize>,
 }
 
 impl Manifest {
@@ -352,7 +389,7 @@ impl Manifest {
     }
 
     pub fn find_screen(&self, name: &str) -> Option<usize> {
-        self.screens.iter().position(|s| s.name == name)
+        self.screen_ix.get(name).copied()
     }
 }
 
@@ -387,7 +424,7 @@ pub fn parse_milli(t: &str) -> i32 {
 /// one that hasn't is ignored, and the last good set stays up.
 pub fn usable(m: &[u8], size_of: impl Fn(&str) -> Option<u64>) -> bool {
     m.split(|&b| b == b'\n').any(|l| {
-        let v = scan(l, "page %d %63s %d");
+        let v = scan(l, "page %d %96s %d");
         v.len() == 3 && size_of(v[1].s()) == Some(FRAME_BYTES as u64)
     })
 }
@@ -434,7 +471,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
     let mut o = Manifest::default();
     for line in lines(m) {
         let sc = |fmt: &str| scan(line, fmt);
-        if let Some(v) = some(sc("page %d %63s %d"), 3).filter(|_| o.pages.len() < MAXP) {
+        if let Some(v) = some(sc("page %d %96s %d"), 3).filter(|_| o.pages.len() < MAXP) {
             let p = Page {
                 bg: asset(v[1].s(), Size::Exactly(FRAME_BYTES)),
                 secs: v[2].i(),
@@ -451,19 +488,19 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
             if p.bg.is_some() {
                 o.pages.push(p);
             }
-        } else if let Some(v) = some(sc("pagenight %d %63s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
+        } else if let Some(v) = some(sc("pagenight %d %96s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
             o.pages[v[0].i() as usize].nbg = asset(v[1].s(), Size::Exactly(FRAME_BYTES));
         } else if let Some(v) = some(sc("pageapp %d %d"), 2).filter(|v| idx(v[0].i(), o.pages.len()) && v[1].i() >= 0) {
             o.pages[v[0].i() as usize].app = v[1].i();
-        } else if let Some(v) = some(sc("pagetap %d %23s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
+        } else if let Some(v) = some(sc("pagetap %d %48s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
             o.pages[v[0].i() as usize].tap = v[1].s().to_string();
-        } else if let Some(v) = some(sc("clocknight %63s"), 1).filter(|_| o.clock.px.is_some()) {
+        } else if let Some(v) = some(sc("clocknight %96s"), 1).filter(|_| o.clock.px.is_some()) {
             let c = &o.clock;
             o.clock.pxn = asset(v[0].s(), bytes(&[c.cw, c.ch, 15, 2]));
-        } else if let Some(v) = some(sc("tickernight %63s"), 1).filter(|_| o.ticker.px.is_some()) {
+        } else if let Some(v) = some(sc("tickernight %96s"), 1).filter(|_| o.ticker.px.is_some()) {
             let t = &o.ticker;
             o.ticker.pxn = asset(v[0].s(), bytes(&[t.w, t.h, 2]));
-        } else if let Some(v) = some(sc("sprite %d %63s %d %d %d %d %d %d"), 8).filter(|v| {
+        } else if let Some(v) = some(sc("sprite %d %96s %d %d %d %d %d %d"), 8).filter(|v| {
             o.sprites.len() < MAXS
                 && v[2].i() > 0
                 && v[3].i() > 0
@@ -485,7 +522,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                     px,
                 });
             }
-        } else if let Some(v) = some(sc("actor %d %63s %d %d %d %d %63s %d"), 8).filter(|v| {
+        } else if let Some(v) = some(sc("actor %d %96s %d %d %d %d %96s %d"), 8).filter(|v| {
             // fps may be 0 (a still frame), never negative.
             o.actors.len() < MAXA
                 && v[2].i() > 0
@@ -513,7 +550,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 });
             }
         } else if let Some(v) =
-            some(sc("clock %63s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0 && coords(v, &[1, 2, 3, 4]))
+            some(sc("clock %96s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0 && coords(v, &[1, 2, 3, 4]))
         {
             // The widths follow the sixth space.
             let mut wd = [0i32; 15];
@@ -544,7 +581,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 wd,
             };
         } else if let Some(v) =
-            some(sc("ticker %63s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0 && coords(v, &[2, 3]))
+            some(sc("ticker %96s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0 && coords(v, &[2, 3]))
         {
             let (w, h) = (v[1].i(), v[2].i());
             o.ticker = Ticker {
@@ -555,11 +592,12 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 y: v[3].i(),
                 speed: v[4].i(),
             };
-        } else if let Some(v) = some(sc("screen %23s %63s"), 2).filter(|_| o.screens.len() < MAXSCR) {
+        } else if let Some(v) = some(sc("screen %48s %96s"), 2).filter(|_| o.screens.len() < MAXSCR) {
             if let Some(bg) = asset(v[1].s(), Size::Exactly(FRAME_BYTES)) {
+                o.screen_ix.entry(v[0].s().to_string()).or_insert(o.screens.len());
                 o.screens.push(Screen { name: v[0].s().to_string(), bg });
             }
-        } else if let Some(v) = some(sc("pane %23s %63s %d %d %d %d %11s %d"), 8).filter(|v| {
+        } else if let Some(v) = some(sc("pane %48s %96s %d %d %d %d %11s %d"), 8).filter(|v| {
             o.panes.len() < MAXPANE && v[2].i() > 0 && v[3].i() > 0 && v[7].i() > 0 && coords(v, &[2, 3, 4, 5])
         }) {
             let (w, h, frames) = (v[2].i(), v[3].i(), v[7].i());
@@ -579,9 +617,9 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 });
             }
         } else if let Some(v) =
-            some(sc("hot %23s %d %d %d %d %15s"), 6).filter(|v| o.hots.len() < MAXHOT && coords(v, &[1, 2, 3, 4]))
+            some(sc("hot %48s %d %d %d %d %15s"), 6).filter(|v| o.hots.len() < MAXHOT && coords(v, &[1, 2, 3, 4]))
         {
-            let arg = scan(line, "hot %*s %*d %*d %*d %*d %*s %23s");
+            let arg = scan(line, "hot %*s %*d %*d %*d %*d %*s %48s");
             let name = arg.first().map(|a| a.s().to_string()).unwrap_or_default();
             if let Some(scr) = o.find_screen(v[0].s()) {
                 o.hots.push(Hot {
@@ -595,7 +633,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                     name,
                 });
             }
-        } else if let Some(v) = some(sc("slider %23s %63s %63s %255s %d %d %d %d %d %d %d %d"), 12).filter(|v| {
+        } else if let Some(v) = some(sc("slider %48s %96s %96s %255s %d %d %d %d %d %d %d %d"), 12).filter(|v| {
             o.sliders.len() < MAXSCR
                 && v[4].i() > 0
                 && v[5].i() > 0
@@ -627,13 +665,13 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 }
             }
         } else if let Some(v) =
-            some(sc("bgscroll %d %63s %d %d"), 4).filter(|v| idx(v[0].i(), o.pages.len()) && v[2].i() > W)
+            some(sc("bgscroll %d %96s %d %d"), 4).filter(|v| idx(v[0].i(), o.pages.len()) && v[2].i() > W)
         {
             let p = &mut o.pages[v[0].i() as usize];
             p.pano = asset(v[1].s(), bytes(&[v[2].i(), H, 2]));
             p.pano_w = v[2].i();
             p.pano_speed = v[3].i();
-        } else if let Some(v) = some(sc("logofx %d %63s %d %d %d %d"), 6)
+        } else if let Some(v) = some(sc("logofx %d %96s %d %d %d %d"), 6)
             .filter(|v| v[2].i() > 0 && v[3].i() > 0 && coords(v, &[2, 3, 4, 5]))
         {
             let (w, h) = (v[2].i(), v[3].i());
@@ -657,7 +695,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                     hold_ms: if (1..=600).contains(&hold) { hold * 1000 } else { 4000 },
                 };
             }
-        } else if let Some(v) = some(sc("glow %d %63s %d %d %d %d"), 6)
+        } else if let Some(v) = some(sc("glow %d %96s %d %d %d %d"), 6)
             .filter(|v| o.glows.len() < MAXGLOW && v[2].i() > 0 && v[3].i() > 0 && coords(v, &[2, 3, 4]))
         {
             let (w, h) = (v[2].i(), v[3].i());
@@ -682,7 +720,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                     on_ms: o6(5),
                 });
             }
-        } else if let Some((v, mfps)) = some(sc("glowseq %d %47s %d %15s %d %d %d %d"), 8)
+        } else if let Some((v, mfps)) = some(sc("glowseq %d %88s %d %15s %d %d %d %d"), 8)
             .map(|v| {
                 let m = parse_milli(v[3].s());
                 (v, m)
@@ -704,7 +742,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 }
                 o.gsqs.push(GlowSeq { page: v[0].i(), mfps, frames, lut });
             }
-        } else if let Some(v) = some(sc("scroller %d %63s %d %d %d %d %d"), 7)
+        } else if let Some(v) = some(sc("scroller %d %96s %d %d %d %d %d"), 7)
             .filter(|v| v[2].i() > 0 && v[3].i() > 0 && coords(v, &[3, 4, 6]))
         {
             let (w, h) = (v[2].i(), v[3].i());
@@ -713,7 +751,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 o.scroller =
                     Scroller { page: v[0].i(), px: o.scroller.px, w, h, y: v[4].i(), speed: v[5].i(), amp: v[6].i() };
             }
-        } else if let Some(v) = some(sc("livefont %23s %63s %d %d"), 4)
+        } else if let Some(v) = some(sc("livefont %48s %96s %d %d"), 4)
             .filter(|v| o.fonts.len() < MAXFONT && (1..=64).contains(&v[2].i()) && (1..=64).contains(&v[3].i()))
         {
             let (cw, ch) = (v[2].i(), v[3].i());
@@ -732,7 +770,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
             {
                 o.fonts.push(Font { name: v[0].s().to_string(), px, cw, ch, wd });
             }
-        } else if let Some(v) = some(sc("live %23s %15s %23s %d %d %d %d %7s %7s"), 9).filter(|v| {
+        } else if let Some(v) = some(sc("live %48s %15s %48s %d %d %d %d %7s %7s"), 9).filter(|v| {
             let (x, y, w, h) = (v[3].i(), v[4].i(), v[5].i(), v[6].i());
             o.lives.len() < MAXLIVE
                 && x >= 0
@@ -1005,11 +1043,37 @@ mod tests {
     #[test]
     fn limits() {
         let mut s = String::new();
-        for i in 0..60 {
+        for i in 0..MAXP + 12 {
             s.push_str(&format!("page {i} p{i}.raw 5\n"));
         }
+        for i in 0..MAXSCR + 40 {
+            s.push_str(&format!("screen s{i} s{i}.raw\n"));
+        }
+        for i in 0..MAXHOT + 100 {
+            s.push_str(&format!("hot s{} 0 0 10 10 screen s{}\n", i % MAXSCR, i % 7));
+        }
+        let t = std::time::Instant::now();
         let m = Files::new(&[]).parse(&s);
-        assert_eq!(m.pages.len(), MAXP);
+        assert!(t.elapsed().as_secs() < 2, "parsing stays fast");
+        assert_eq!((m.pages.len(), m.screens.len()), (MAXP, MAXSCR));
+        assert_eq!(m.hots.len(), MAXHOT);
+        assert_eq!(m.find_screen("s0"), Some(0));
+        assert_eq!(m.find_screen(&format!("s{MAXSCR}")), None);
+        // Names up to NAME_LEN bytes.
+        let long = "n".repeat(NAME_LEN);
+        let m = Files::new(&[]).parse(&format!(
+            "page 0 p.raw 5\nscreen {long} a.raw\nscreen {long}x b.raw\npagetap 0 {long}\n\
+             hot {long} 0 0 1 1 screen {long}\n"
+        ));
+        // A longer name is cut at NAME_LEN, as sscanf cuts it (and the rest
+        // is read as the next field).
+        assert!(m.screens.iter().all(|s| s.name.len() <= NAME_LEN));
+        assert_eq!(m.find_screen(&long), Some(0));
+        assert_eq!(m.pages[0].tap, long);
+        assert_eq!(m.hots[0].name, long);
+        let file = format!("{}.raw", "f".repeat(FILE_LEN - 4));
+        let m = Files::new(&[]).parse(&format!("page 0 {file} 5\n"));
+        assert_eq!(m.pages.len(), 1);
     }
 
     #[test]
