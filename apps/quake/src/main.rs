@@ -56,6 +56,8 @@ struct State {
     sound: Option<Stream>,
     /// The engine's open files, by handle (sys.rs).
     files: Vec<Option<std::fs::File>>,
+    /// The answer for this host's own name, once asked (net.rs).
+    own_host: Option<Box<net::OwnHost>>,
 }
 
 /// The engine is single-threaded and calls in only from its own thread.
@@ -133,6 +135,7 @@ fn main() {
             start: Instant::now(),
             sound: None,
             files: Vec::new(),
+            own_host: None,
         });
     }
     let args: Vec<CString> = std::env::args().map(|a| CString::new(a).expect("argument with a NUL")).collect();
