@@ -6,10 +6,9 @@
 //! else in /psp/neochumby.conf. Only an app whose manifest says
 //! `start = true` may be the start app: it promises a way to other apps and
 //! to CHUMBY MODE, and leaves the top button to the session, so a Chumby
-//! can't be left stuck in a game. A name that
-//! isn't one is refused, with the reason logged, and the next choice is
-//! tried. When none is left, it's `home` (neochumby-home), as it is when
-//! nothing names one.
+//! can't be left stuck in a game. A name that isn't one is refused, with
+//! the reason logged, and the start app is `home` (neochumby-home), as it
+//! is when nothing names one.
 
 use neochumby::apps::App;
 
@@ -33,22 +32,21 @@ pub fn eligible<'a>(apps: &'a [App], name: &str) -> Result<&'a App, &'static str
     }
 }
 
-/// The start app: the first of `choices` (where the name came from, and
-/// the name) that may be one, else `home`. None if there's no `home`
-/// either.
-pub fn choose<'a>(apps: &'a [App], choices: &[(&str, &str)]) -> Option<&'a App> {
-    for (from, name) in choices {
+/// The start app: `choice` (where the name came from, and the name) if it
+/// may be one, else `home`. None if there's no `home` either.
+pub fn choose<'a>(apps: &'a [App], choice: Option<(&str, &str)>) -> Option<&'a App> {
+    if let Some((from, name)) = choice {
         match eligible(apps, name) {
             Ok(app) => return Some(app),
-            Err(why) => eprintln!("neochumby: start={name} ({from}) can't be the start app: {why}"),
+            Err(why) => eprintln!("neochumby: start={name} ({from}) can't be the start app: {why}; {HOME} instead"),
         }
     }
     home(apps)
 }
 
-/// neochumby-home, if it's in the tree.
+/// neochumby-home, if it's in the tree and can run.
 pub fn home(apps: &[App]) -> Option<&App> {
-    apps.iter().find(|a| a.name == HOME && a.exec.is_some())
+    apps.iter().find(|a| a.name == HOME && a.exec.is_some() && a.runnable())
 }
 
 #[cfg(test)]
@@ -81,8 +79,8 @@ pub mod tests {
         apps[3].needs = Needs::Required;
         let name = |a: Option<&App>| a.map(|a| a.name.clone());
 
-        assert_eq!(name(choose(&apps, &[("settings", "wx")])), Some("wx".into()));
-        assert_eq!(name(choose(&apps, &[])), Some("home".into()));
+        assert_eq!(name(choose(&apps, Some(("settings", "wx")))), Some("wx".into()));
+        assert_eq!(name(choose(&apps, None)), Some("home".into()));
         // Refused: no start = true, not in the tree, or not runnable here
         // (no neochumbyd is paired on a host).
         assert_eq!(eligible(&apps, "doom").err(), Some("its manifest doesn't say start = true"));
@@ -91,11 +89,10 @@ pub mod tests {
         apps[1].button = true;
         assert!(eligible(&apps, "wx").is_err());
         apps[1].button = false;
-        assert_eq!(name(choose(&apps, &[("settings", "doom")])), Some("home".into()));
-        // A refused choice falls through to the next one.
-        assert_eq!(name(choose(&apps, &[("settings", "gone"), ("conf", "wx")])), Some("wx".into()));
+        assert_eq!(name(choose(&apps, Some(("settings", "doom")))), Some("home".into()));
+        assert_eq!(name(choose(&apps, Some(("settings", "gone")))), Some("home".into()));
         // No exec: not even home.
         apps[0].exec = None;
-        assert_eq!(name(choose(&apps, &[("settings", "doom")])), None);
+        assert_eq!(name(choose(&apps, Some(("settings", "doom")))), None);
     }
 }

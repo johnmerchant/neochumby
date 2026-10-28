@@ -104,7 +104,10 @@ Every app is opened the same way, whoever asked for it.
   `neochumby::input::Squeeze::open` picks it up. A read returns the level
   now, so act on a 0 → 1 change.
 
-**To leave**, your app exits. Then the session opens the start app again.
+**To leave**, your app exits. Then the session opens the start app again,
+and ends anything your app left running in its process group (SIGTERM,
+then SIGKILL 200 ms later), so nothing you started keeps the screen, the
+speaker or the button.
 - **To open another app**, write `open <app>` (the app's name, its
   directory under `apps/`) to the request pipe, then exit. The session runs
   that app next.
@@ -123,9 +126,10 @@ Every app is opened the same way, whoever asked for it.
   it the same way and opens the start app with `NEOCHUMBY_REASON=button`,
   as the stock Chumby does. There's no hold gesture: games hold the button
   to fire, and the corner hold is the way out of anything.
-- **The start app's service** may end your app the same way, to open
-  another (an alarm, say). Declare `interrupt = false` if your app mustn't
-  be ended like that: games do.
+- **A service** may end your app the same way, to open another: any
+  service over the start app, only the start app's over other apps (an
+  alarm, say). Declare `interrupt = false` if your app mustn't be ended
+  like that: games do.
 
 In Rust:
 
@@ -171,19 +175,25 @@ neochumby runs:
   minute. A run of a minute or more starts the wait again from 1 second;
 - **told what's in front:** `front <app>` on its pipe as it starts, and
   whenever another app comes to the front. Reading these is optional. A
-  service that leaves them unread until the pipe is full gets no more;
+  line is never cut; while the pipe is full, only the latest notice waits;
 - **stopped at CHUMBY MODE:** SIGTERM to its process group, then SIGKILL 5
   seconds later.
 
 A service may write `open <app>` or `chumby-mode` to its pipe, like an
 app, but it doesn't exit after. That ends the app in front, so the session
 takes it only:
-- from the **start app's service**, so services don't fight over the
-  screen;
+- over the start app, from **any service** (an alarm, say); over any other
+  app, only from the **start app's service**, so services don't fight over
+  the screen. `chumby-mode` only from the start app's service;
 - when the app in front doesn't say `interrupt = false`;
 - not after the escape hatch, until an app is opened by hand (an `open`
   from the app in front), so a service can't trap the Chumby in an app gone
-  wrong.
+  wrong;
+- not once the app in front has asked for something itself: what it asked
+  for wins.
+
+Which services run is decided as the session starts: one that needs a
+neochumbyd starts on a paired Chumby only, and pairing asks for a restart.
 
 Anything else is ignored and logged, and so is an `open` for the app
 already in front.

@@ -125,6 +125,8 @@ fn open_button() -> Option<File> {
 struct Chumby {
     escape: Arc<AtomicBool>,
     boot_volume: Option<u32>,
+    /// A thread is putting the volume back.
+    restoring: Arc<AtomicBool>,
     button: Option<File>,
 }
 
@@ -133,15 +135,24 @@ impl run::Device for Chumby {
         self.escape.swap(false, Ordering::SeqCst)
     }
 
+    /// Mutes at once (a write to /proc). The volume is put back by a
+    /// thread, since audio::set_volume runs the stock chumby_set_volume and
+    /// the loop mustn't wait on it; one at a time.
     fn reset_speaker(&mut self) {
         if let Err(e) = audio::mute(true) {
             eprintln!("neochumby: muting the speaker: {e}");
         }
-        if let Some(v) = self.boot_volume
-            && let Err(e) = audio::set_volume(v)
-        {
-            eprintln!("neochumby: setting the volume: {e}");
+        let Some(v) = self.boot_volume else { return };
+        if self.restoring.swap(true, Ordering::SeqCst) {
+            return;
         }
+        let restoring = self.restoring.clone();
+        std::thread::spawn(move || {
+            if let Err(e) = audio::set_volume(v) {
+                eprintln!("neochumby: setting the volume: {e}");
+            }
+            restoring.store(false, Ordering::SeqCst);
+        });
     }
 
     fn button(&mut self) -> Option<bool> {
@@ -168,24 +179,21 @@ fn session() {
     // played yet.
     let boot_volume = audio::volume();
 
-    // The server's `start` is a name, trusted only as far as the tree goes
-    // (start.rs). Otherwise the local choice, then neochumby-home.
+    // The server's `start`, else the local one: a name, trusted only as far
+    // as the tree goes (start.rs).
     let settings = settings::load();
     let local = conf::get(conf::CONF, "start");
-    let mut choices = Vec::new();
-    if let Some(s) = settings::get(&settings, "start") {
-        choices.push(("the server's settings", s));
-    }
-    if let Some(s) = local.as_deref() {
-        choices.push((conf::CONF, s));
-    }
+    let choice = match settings::get(&settings, "start") {
+        Some(s) => Some(("the server's settings", s)),
+        None => local.as_deref().map(|s| (conf::CONF, s)),
+    };
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
-    match start::choose(&all, &choices) {
+    match start::choose(&all, choice) {
         None => eprintln!("neochumby: no start app (not even {})", start::HOME),
         Some(first) => {
-            let chumby = Chumby { escape, boot_volume, button: open_button() };
+            let chumby = Chumby { escape, boot_volume, restoring: Arc::default(), button: open_button() };
             run::Session::new(&all, &root, first, chumby, run::Timing::default()).run()
         }
     }

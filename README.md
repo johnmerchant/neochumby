@@ -83,16 +83,17 @@ An app can use any of these keys:
   neochumbyd (`neochumbyd set NAME start=<app>`, kept in
   `/psp/neochumby.settings`), else in `/psp/neochumby.conf`, or else it's
   `home` (neochumby-home). Only an app with `start = true` may be the start
-  app; the session refuses any other and logs why. `neochumbyd pairing`
+  app; the session refuses any other, logs why, and uses `home`. `neochumbyd pairing`
   names the start apps in the tree, and suggests one to a Chumby whose
   `start` isn't set; `neochumbyd set NAME start=<app>` warns about a name
   that isn't one. **Holding the top-left
   corner of the screen for 3 seconds** always opens `neochumby-home`,
   ending whatever was in front. That's the way out of an app gone wrong.
 - **`service`:** runs in the background for as long as neochumby does, and
-  is started again if it exits. It's told which app is in front. The start
-  app's service may open an app over the one in front, unless that one
-  says **`interrupt = false`**, as Doom and Quake do.
+  is started again if it exits. It's told which app is in front. Any
+  service may open an app over the start app, and the start app's service
+  over any app, unless the one in front says **`interrupt = false`**, as
+  Doom and Quake do.
 - **`button`:** the session keeps the top button (`/dev/switch`, which only
   one process can have open). A press returns to the start app, as on the
   stock Chumby, unless the app in front says `button = true`: then it has

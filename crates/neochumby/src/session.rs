@@ -144,6 +144,8 @@ impl Lines {
 pub struct Pipe {
     sock: UnixStream,
     lines: Lines,
+    /// The rest of a line [`Pipe::try_send`] could write only part of.
+    waiting: Vec<u8>,
 }
 
 /// What [`Pipe::receive`] found.
@@ -166,7 +168,7 @@ impl Pipe {
         if !copy.metadata().ok()?.file_type().is_socket() {
             return None;
         }
-        Some(Pipe { sock: UnixStream::from(OwnedFd::from(copy)), lines: Lines::default() })
+        Some(Pipe { sock: UnixStream::from(OwnedFd::from(copy)), lines: Lines::default(), waiting: Vec::new() })
     }
 
     /// A new pipe: the session's end, which never waits, and the end to
@@ -179,7 +181,7 @@ impl Pipe {
         fd::set_cloexec(mine.as_fd(), true)?;
         fd::set_cloexec(theirs.as_fd(), true)?;
         mine.set_nonblocking(true)?;
-        Ok((Pipe { sock: mine, lines: Lines::default() }, theirs))
+        Ok((Pipe { sock: mine, lines: Lines::default(), waiting: Vec::new() }, theirs))
     }
 
     /// Asks the session to run `app` next. Exit after this.
@@ -201,8 +203,35 @@ impl Pipe {
     /// Writes a whole line if there's room for it now, on the session's
     /// end; false if there isn't, or the other end has gone. A service that
     /// doesn't read can't hold the session up.
+    ///
+    /// A line is never cut: if only part of it fits, the rest waits, and
+    /// goes before anything else, as [`Pipe::flush`] finds room. While it
+    /// waits, this writes nothing and returns false.
     pub fn try_send(&mut self, line: &str) -> bool {
-        matches!(self.sock.write(line.as_bytes()), Ok(n) if n == line.len())
+        if !self.flush() {
+            return false;
+        }
+        match self.sock.write(line.as_bytes()) {
+            Ok(n) => {
+                self.waiting.extend_from_slice(&line.as_bytes()[n..]);
+                true
+            }
+            Err(_) => false,
+        }
+    }
+
+    /// Writes what's left of a line [`Pipe::try_send`] began, as much as
+    /// fits now; true once nothing is left.
+    pub fn flush(&mut self) -> bool {
+        while !self.waiting.is_empty() {
+            match self.sock.write(&self.waiting) {
+                Ok(n) if n > 0 => {
+                    self.waiting.drain(..n);
+                }
+                _ => return false,
+            }
+        }
+        true
     }
 
     /// Whatever has arrived, without waiting.
@@ -278,7 +307,7 @@ mod tests {
     #[test]
     fn a_pipe_carries_lines_both_ways() {
         let (mut session, theirs) = Pipe::pair().unwrap();
-        let mut app = Pipe { sock: theirs, lines: Lines::default() };
+        let mut app = Pipe { sock: theirs, lines: Lines::default(), waiting: Vec::new() };
         assert_eq!(session.receive(), Received::default());
         app.open("doom").unwrap();
         app.send("something new\n").unwrap();
@@ -289,13 +318,27 @@ mod tests {
         session.send("hello\n").unwrap();
         assert!(session.try_send("front wx\n"));
         assert_eq!(app.receive().lines, ["hello", "front wx"]);
-        // A reader that doesn't read: the writer isn't held up.
-        let line = "x".repeat(MAX_LINE - 1) + "\n";
+        // A reader that doesn't read: the writer isn't held up, and the
+        // reader never gets a line cut short. Lines of a size that doesn't
+        // divide the buffer, so the last one written is likely written in
+        // part.
+        let line = "x".repeat(MAX_LINE - 9) + "\n";
         let mut sent = 0;
         while session.try_send(&line) {
             sent += 1;
             assert!(sent < 100_000, "never full");
         }
+        assert!(!session.try_send("front wx\n"), "written while a line waits");
+        let mut got = Vec::new();
+        while got.len() < sent {
+            session.flush();
+            got.extend(app.receive().lines);
+        }
+        assert!(session.flush());
+        assert_eq!(got.len(), sent);
+        assert!(got.iter().all(|l| l.len() == MAX_LINE - 9), "a line was cut");
+        assert!(session.try_send("front wx\n"));
+        assert_eq!(app.receive().lines, ["front wx"]);
         drop(app);
         assert!(session.receive().closed);
     }
