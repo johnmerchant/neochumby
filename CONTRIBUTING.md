@@ -254,3 +254,45 @@ Keep a pull request to one change, explain why in its description, and make
 sure CI is green. If you're changing how a Chumby boots
 (`boot/userhook2`), test on a real one or say that you couldn't: a hook
 that hangs stops the Chumby's boot.
+
+### Test on a Chumby, or an emulated one, and show it
+
+CI builds and unit-tests everything, but it can't tell whether a change
+works on a Chumby. So a pull request that changes what runs on the Chumby
+(`crates/neochumby`, `crates/neochumby-sys`, `apps/`, `boot/`) is
+approved only once its description, or a comment, shows it running. There
+are three ways, from quickest to most faithful:
+
+1. **`dev/emulate`** (user mode, on Linux, or a Linux VM on a Mac): your
+   tree's binaries against fake devices, on the PC's kernel. Run the
+   scenarios that cover your change (`dev/emulate-smoke` at least), or
+   drive it by hand with `start`, `tap`, `button`, `shot` and `log`. Enough
+   for most app and session changes.
+2. **The emulator** (`emu/`, QEMU with the Chumby Classic machine): the
+   Chumby's stock 2.6.16 kernel and firmware, from **your own device's**
+   flash backup (`emu/README.md` says how to build the images; they never
+   leave your machine). Use it for anything that depends on the kernel,
+   the flash, FAT, the boot or the handover to the stock software:
+   `dev/emulate --machine chumby-classic` runs the same scenarios on it.
+3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
+   `neochumbyd shot` (see [On a Chumby](#on-a-chumby)). Needed for what no
+   emulator models: timing, the touchscreen's noise, a USB stick's own
+   behaviour, power cuts.
+
+**The evidence to include:**
+- which of the three, and the commit you tested;
+- the commands you ran, and what they reported (the scenarios' pass and
+  fail lines, or a short log excerpt showing the behaviour);
+- screenshots of **neochumby's** screens or your app's, as PNG, showing
+  the change.
+
+**Never attach:**
+- the stock software's screens or artwork (the control panel, the Chumby
+  logo or octopus, widgets), firmware, images, or anything from a
+  device's settings ([docs/legal.md](docs/legal.md));
+- anything that identifies you, your network or your device: addresses,
+  host and network names, Wi-Fi names, a device's name or serial. Cut
+  them from logs before pasting.
+
+If you couldn't test something (no Chumby, or a path no emulator covers
+yet), say which and why. A reviewer may run it on a Chumby for you.
