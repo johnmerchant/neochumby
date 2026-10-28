@@ -474,6 +474,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-top"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "neochumby",
+ "neochumby-ncurses",
+]
+
+[[package]]
 name = "neochumbyd"
 version = "0.1.0"
 dependencies = [
