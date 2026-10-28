@@ -23,6 +23,8 @@
 //!   network   copies of /etc/resolv.conf and /etc/hosts (with `system`,
 //!             /etc has them); and the session lets it keep internet
 //!             sockets (network.rs)
+//!   terminal  /dev/ptmx and the Chumby's /dev/pts, for pseudo-terminals
+//!             (neochumby::term)
 //!
 //! Each app runs as its own uid (from FIRST_UID, in the tree's name order:
 //! an app's exec and its service share one), with a group of the same id
@@ -174,7 +176,14 @@ pub fn start(
         j.kernel_fs("proc", "/proc")?;
         j.kernel_fs("sysfs", "/sys")?;
         j.bind(Path::new("/etc"), "/etc")?;
-    } else if a.network {
+    }
+    if a.terminal {
+        // The Chumby's own devpts (the only one this kernel has): another
+        // uid's terminals are listed there but closed to this one.
+        j.device("/dev/ptmx", Path::new("/dev/ptmx"), 0o666, 0, 0)?;
+        j.bind(Path::new("/dev/pts"), "/dev/pts")?;
+    }
+    if a.network && !a.system {
         for f in NAMES {
             if let Ok(c) = std::fs::read(f) {
                 j.file(f, c, 0o444, 0, 0)?;

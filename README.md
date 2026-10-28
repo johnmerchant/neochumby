@@ -113,7 +113,7 @@ An app can use any of these keys:
 - **`access`:** each app runs as a user of its own, jailed in a directory
   holding only its own files, a `/tmp` of its own and what `access` lists:
   `screen`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
-  and `network`. It never sees the Chumby's key. `root`, listed alone, runs
+  `network` and `terminal`. It never sees the Chumby's key. `root`, listed alone, runs
   it unjailed, as root: only `home` does, as it pairs the Chumby.
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
 

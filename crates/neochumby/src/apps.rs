@@ -74,6 +74,8 @@ pub struct Access {
     pub system: bool,
     /// Internet sockets, and /etc/resolv.conf and /etc/hosts.
     pub network: bool,
+    /// /dev/ptmx and /dev/pts.
+    pub terminal: bool,
     /// No jail: root, as the session.
     pub root: bool,
 }
@@ -91,6 +93,7 @@ impl Access {
                 "accel" => a.accel = true,
                 "system" => a.system = true,
                 "network" => a.network = true,
+                "terminal" => a.terminal = true,
                 "root" => a.root = true,
                 _ => {}
             }

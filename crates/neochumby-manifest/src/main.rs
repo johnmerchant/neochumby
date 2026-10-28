@@ -39,8 +39,10 @@ const FLAGS: &[&str] = &["start", "button", "interrupt"];
 /// - `network`: the names it needs to look hosts up (/etc/resolv.conf and
 ///   /etc/hosts); without it, the session ends an app it finds with an
 ///   internet socket open;
+/// - `terminal`: /dev/ptmx and /dev/pts, for a pseudo-terminal
+///   (neochumby::term);
 /// - `root`: no jail: it runs as root, as the session does. Listed alone.
-const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "root"];
+const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "terminal", "root"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {

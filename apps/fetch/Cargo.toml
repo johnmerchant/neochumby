@@ -19,7 +19,7 @@ title = "FETCH"
 exec = "neochumby-fetch"
 colour = "3c8cb4"
 # fastfetch reads the system: /proc, /sys and /etc.
-access = ["screen", "touch", "system"]
+access = ["screen", "touch", "system", "terminal"]
 
 [lints]
 workspace = true

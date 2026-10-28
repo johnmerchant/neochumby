@@ -370,6 +370,7 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `accel` | the accelerometer |
 | `system` | `/proc`, `/sys` and `/etc` |
 | `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
+| `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
 | `root` | no jail: it runs as root, as the session does. Listed alone |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
