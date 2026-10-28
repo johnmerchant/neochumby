@@ -104,21 +104,20 @@ read-only.
 ### Scenarios
 
 **neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; CI runs it
-once classic is a start app, #26).
-classic is the start app (`start=classic` in `/psp/neochumby.conf`), with
-pictures from neochumby-classic's offline smoke render (`python3
-tests/smoke.py --out PICTURES` in that repository): made-up data and
-placeholder artwork. The script checks that:
+once classic is a start app, #26). classic is the start app
+(`start=classic` in `/psp/neochumby.conf`), with pictures from
+neochumby-classic's offline smoke render, made with `NEOCHUMBY_TREE=TREE`
+so that its APPS screen lists the tree's apps: made-up data and placeholder
+artwork. The script checks that:
 - classic draws a slideshow page;
 - the top button toggles Home and back without restarting classic;
-- a tap zone's `app doom` opens Doom through the session's pipe, and
-  classic comes back when Doom exits;
+- Home's APPS, then the DOOM tile, opens Doom through the session's pipe,
+  and classic comes back when Doom exits;
 - classic's service starts once, hears that Doom is in front, and keeps
   running;
 - CHUMBY on Home ends the session with exit 0.
 
-No renderer lists apps yet, so the script adds one `app doom` tap zone to
-its copy of Settings.
+Where it taps comes from the pictures' own tap zones.
 
 **Sync** (manual, not in CI). It needs a paired Chumby and neochumbyd's
 side of a round, so it waits until `delivery=sync` (#10) and the session
