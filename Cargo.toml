@@ -12,6 +12,7 @@ members = [
     "apps/airplay",
     "apps/home",
     "apps/doom",
+    "apps/fetch",
     "apps/quake",
 ]
 

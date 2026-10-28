@@ -14,6 +14,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <netdb.h>
+#include <netinet/in.h>
+#include <unistd.h>
 
 #include "quakedef.h"
 #include "d_local.h"
@@ -267,6 +270,29 @@ void Sys_HighFPPrecision (void)
 
 void Sys_LowFPPrecision (void)
 {
+}
+
+/* ---- networking ----------------------------------------------------- */
+
+/*
+ * net_udp.c is built with gethostbyname renamed to this (build.rs). It
+ * looks up its own address from its host name, and crashed when that
+ * failed, as it does for a Chumby whose name isn't in DNS: this host's own
+ * name gives INADDR_ANY then, which will do. Any other name is looked up
+ * as before.
+ */
+struct hostent *chum_gethostbyname (const char *name)
+{
+	static in_addr_t	any = INADDR_ANY;
+	static char	*addrs[] = { (char *)&any, NULL };
+	static struct hostent	self = { NULL, NULL, AF_INET, sizeof any, addrs };
+	struct hostent	*h = gethostbyname (name);
+	char	me[256];
+
+	if (h || gethostname (me, sizeof me) != 0 || strcmp (me, name) != 0)
+		return h;
+	self.h_name = (char *)name;
+	return &self;
 }
 
 /* ---- main loop ------------------------------------------------------ */
