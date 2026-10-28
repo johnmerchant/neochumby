@@ -5,8 +5,10 @@
 //! named after this Chumby while it is connected and sends what it plays
 //! here as PCM ([0] + PCM; [1] when it stops), which goes to /dev/dsp. The
 //! speaker is held only while something plays, so apps can have it
-//! otherwise; if something else has it, what arrives meanwhile is dropped,
-//! and the connection kept.
+//! otherwise. A new stream takes the speaker from whoever holds it, and
+//! yields it to a newer player (see `neochumby::audio`); what arrives while
+//! the speaker is someone else's is dropped, the connection kept, and the
+//! stream plays again once the speaker is free.
 //!
 //! Connects to the paired neochumbyd (/psp/neochumby.conf) and checks its
 //! key against the one pinned there; reconnects, backing off, whenever the
@@ -15,7 +17,7 @@
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
-use neochumby::audio::Speaker;
+use neochumby::audio::{self, Speaker};
 use neochumby::companion;
 use neochumby::conf;
 use neochumby_proto::{Identity, Msg, Session};
@@ -34,10 +36,19 @@ fn open_speaker() -> io::Result<Speaker> {
     Speaker::open(2, 44100, PLAY_VOLUME)
 }
 
+/// Having asked for the speaker, or given it up: when to look again. Soon,
+/// as a holder that was asked only has to stop its player.
+const ASKED_RETRY: Duration = Duration::from_millis(250);
+/// /dev/dsp busy with a program outside the handover: when to try again.
+const BUSY_RETRY: Duration = Duration::from_secs(2);
+
 fn play(mut s: Session) -> io::Result<()> {
     let mut speaker: Option<Speaker> = None;
     // While the speaker is someone else's: when to try it again.
     let mut busy_until: Option<Instant> = None;
+    // This stream gave the speaker up to a newer player: it takes it back
+    // only once the speaker is free, rather than asking for it.
+    let mut yielded = false;
     loop {
         let frame = match s.recv()? {
             Msg::Data(f) => f,
@@ -46,17 +57,29 @@ fn play(mut s: Session) -> io::Result<()> {
         };
         match frame.split_first() {
             Some((&AUDIO, pcm)) => {
+                if speaker.as_ref().is_some_and(Speaker::yield_requested) {
+                    eprintln!("neochumby-airplay: yielding the speaker to a newer player");
+                    speaker = None;
+                    yielded = true;
+                    busy_until = Some(Instant::now() + ASKED_RETRY);
+                }
                 if speaker.is_none() && busy_until.is_none_or(|t| Instant::now() >= t) {
-                    match open_speaker() {
-                        Ok(sp) => {
-                            speaker = Some(sp);
-                            busy_until = None;
-                        }
-                        Err(e) => {
-                            if busy_until.is_none() {
-                                eprintln!("neochumby-airplay: /dev/dsp: {e}; dropping audio until it is free");
+                    if yielded && !audio::free() {
+                        busy_until = Some(Instant::now() + ASKED_RETRY);
+                    } else {
+                        match open_speaker() {
+                            Ok(sp) => {
+                                speaker = Some(sp);
+                                busy_until = None;
+                                yielded = false;
                             }
-                            busy_until = Some(Instant::now() + Duration::from_secs(2));
+                            Err(e) => {
+                                if busy_until.is_none() {
+                                    eprintln!("neochumby-airplay: the speaker: {e}; dropping audio until it is free");
+                                }
+                                let wait = if e.kind() == io::ErrorKind::WouldBlock { ASKED_RETRY } else { BUSY_RETRY };
+                                busy_until = Some(Instant::now() + wait);
+                            }
                         }
                     }
                 }
@@ -70,6 +93,8 @@ fn play(mut s: Session) -> io::Result<()> {
             Some((&END, _)) => {
                 speaker = None;
                 busy_until = None;
+                yielded = false;
+                audio::withdraw();
             }
             _ => {}
         }
@@ -93,6 +118,9 @@ fn main() {
     loop {
         let started = Instant::now();
         let r = companion::open(neochumby::companion!(), &p, &me).and_then(play);
+        // The stream has gone with the connection: so has any wish for the
+        // speaker.
+        audio::withdraw();
         if let Err(e) = r {
             eprintln!("neochumby-airplay: {e}");
         }
