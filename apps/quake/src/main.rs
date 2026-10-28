@@ -9,6 +9,11 @@
 //!   LEFT   FIRE   RIGHT
 //!   ENTER  BACK   Y (next weapon in play: bound in autoexec.cfg)
 
+// FFI to a C engine (GPL), so allowed unsafe code, as neochumby-sys is. Its
+// unsafe blocks follow the engine's contract and carry no SAFETY comments.
+#![allow(unsafe_code)]
+#![allow(clippy::undocumented_unsafe_blocks)]
+
 mod span;
 
 use std::cell::UnsafeCell;

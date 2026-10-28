@@ -33,6 +33,7 @@ use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
+use neochumby_sys::process::{Signal, kill_group};
 
 /// The built-in home screen, apps/<this>: the fallback.
 const DEFAULT_HOME: &str = "home";
@@ -118,7 +119,7 @@ fn run_home(home: &App, root: &Path, escape: &AtomicBool) -> Option<std::io::Res
         Ok(c) => c,
         Err(e) => return Some(Err(e)),
     };
-    let group = child.id() as libc::pid_t;
+    let group = child.id();
     loop {
         match child.try_wait() {
             Ok(Some(s)) => return Some(Ok(s)),
@@ -127,12 +128,12 @@ fn run_home(home: &App, root: &Path, escape: &AtomicBool) -> Option<std::io::Res
         }
         if escape.swap(false, Ordering::SeqCst) {
             eprintln!("neochumby: escape: ending {} and what it started", home.name);
-            unsafe { libc::kill(-group, libc::SIGTERM) };
+            let _ = kill_group(group, Signal::Term);
             let deadline = Instant::now() + Duration::from_secs(2);
             while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
                 neochumby::sleep_ms(100);
             }
-            unsafe { libc::kill(-group, libc::SIGKILL) };
+            let _ = kill_group(group, Signal::Kill);
             let _ = child.wait();
             return None;
         }
