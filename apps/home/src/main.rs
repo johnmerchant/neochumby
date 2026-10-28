@@ -8,7 +8,9 @@
 //! It opens apps and CHUMBY MODE by asking the session over its request
 //! pipe (neochumby::session), then exits: the session runs what it asked
 //! for, and opens the start app again when that exits. Opened for any
-//! reason (NEOCHUMBY_REASON), it shows its first page.
+//! reason (NEOCHUMBY_REASON), it shows its first page. It has one screen,
+//! so it ignores the `button` line the session writes when the top button
+//! is pressed with it in front.
 //!
 //! An app that needs a neochumbyd this Chumby has not got is listed, greyed,
 //! and does not open.

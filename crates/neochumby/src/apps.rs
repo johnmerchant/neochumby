@@ -40,8 +40,8 @@ pub struct App {
     pub service: Option<PathBuf>,
     pub needs: Needs,
     /// It may be the start app: it promises to open other apps and CHUMBY
-    /// MODE through the session, to keep running, and to handle
-    /// NEOCHUMBY_REASON=button.
+    /// MODE through the session, to keep running, and to handle the top
+    /// button (a `button` line on its pipe, or NEOCHUMBY_REASON=button).
     pub start: bool,
     /// While it's in front, the start app's service may replace it (unless
     /// its manifest says `interrupt=false`).

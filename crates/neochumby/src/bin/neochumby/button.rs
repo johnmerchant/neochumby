@@ -3,8 +3,14 @@
 //! - an app whose manifest says `button = true` (Doom and Quake fire with
 //!   it) inherits the open file while it's in front, as NEOCHUMBY_BUTTON,
 //!   and the session doesn't read it meanwhile;
+//! - with the start app in front, a press is a `button` line on its pipe,
+//!   so it can show its main screen without starting again; if the line
+//!   can't be written, it's opened again as below;
 //! - for any other app, a press ends the app in front and opens the start
 //!   app with NEOCHUMBY_REASON=button, as the stock Chumby does.
+//!
+//! If /dev/switch can't be opened as the session starts (another process
+//! has it), the session tries again every 5 s.
 //!
 //! There's no hold gesture, since games hold the button to fire: the corner
 //! hold is the way out of anything. On CHUMBY MODE the session closes it,

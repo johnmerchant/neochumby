@@ -29,9 +29,10 @@
 //! app failed), services wait to be restarted and their requests to be
 //! read.
 //!
-//! The top button belongs to the session (button.rs). A press returns to
-//! the start app, with NEOCHUMBY_REASON=button, unless the app in front
-//! has the button (`button = true`).
+//! The top button belongs to the session (button.rs). Unless the app in
+//! front has the button (`button = true`), a press goes to the start app:
+//! as a `button` line on its pipe when it's in front, else (or if the line
+//! can't be written) by opening it with NEOCHUMBY_REASON=button.
 //!
 //! When a service exits, the session mutes the speaker and puts back the
 //! volume the Chumby booted with (neochumby::audio), so a service that dies
@@ -45,7 +46,7 @@ use std::process::{Child, ExitStatus};
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
-use neochumby::session::{Pipe, Request};
+use neochumby::session::{Notice, Pipe, Request};
 
 use crate::button::Edges;
 use crate::child;
@@ -188,6 +189,8 @@ impl<'a, D: Device> Session<'a, D> {
             };
         }
         eprintln!("neochumby: CHUMBY MODE");
+        // Every way out of watch() has ended the app in front and its whole
+        // process group (child::end), so no copy of the button is left.
         self.device.close_button();
         self.services.stop(self.timing.service_patience);
         self.device.reset_speaker();
@@ -227,12 +230,18 @@ impl<'a, D: Device> Session<'a, D> {
             } else if let Some(down) = self.device.button()
                 && self.button.press(down)
             {
-                eprintln!("neochumby: the top button: ending {}, opening {}", f.app.name, self.start.name);
-                child::end(&mut f.child, self.timing.patience);
                 // A person chose this.
                 self.suppressed = false;
-                return Next::Open(self.start, Some("button"));
+                if f.app.name == self.start.name && f.pipe.try_send(&Notice::Button.line()) {
+                    eprintln!("neochumby: the top button: told {}", f.app.name);
+                } else {
+                    eprintln!("neochumby: the top button: ending {}, opening {}", f.app.name, self.start.name);
+                    child::end(&mut f.child, self.timing.patience);
+                    return Next::Open(self.start, Some("button"));
+                }
             }
+            // The rest of a line the pipe had no room for.
+            f.pipe.flush();
             self.read(&mut f);
             let ev = self.services.poll(&f.app.name);
             if !ev.died.is_empty() {
@@ -419,6 +428,8 @@ mod tests {
         down: Arc<AtomicBool>,
         switch: Option<Arc<std::fs::File>>,
         closed: Arc<AtomicBool>,
+        /// A pid file, whose process must be gone when the button closes.
+        gone_at_close: Option<PathBuf>,
     }
 
     impl Device for Fake {
@@ -441,6 +452,11 @@ mod tests {
 
         fn close_button(&mut self) {
             self.switch = None;
+            if let Some(pid) = &self.gone_at_close {
+                let pid = std::fs::read_to_string(pid).unwrap();
+                let alive = std::process::Command::new("kill").args(["-0", pid.trim()]).status().unwrap().success();
+                assert!(!alive, "a process the button app started is still running as the button closes");
+            }
             self.closed.store(true, Ordering::SeqCst);
         }
     }
@@ -679,6 +695,86 @@ mod tests {
         run(&root, &[("conf", "wx")], escape);
         assert_eq!(log(&root), ["wx", "home"]);
         gone(&root.join("pid"));
+    }
+
+    /// Presses the button once `start` is in the log, from a thread.
+    fn press_after(fake: &Fake, root: &Path, start: &'static str) {
+        let (down, r) = (fake.down.clone(), root.to_path_buf());
+        std::thread::spawn(move || {
+            wait_for(&r, start);
+            neochumby::sleep_ms(100);
+            press(&down);
+        });
+    }
+
+    #[test]
+    fn a_press_tells_the_start_app_in_front() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree(
+            "buttonline",
+            &[(
+                "wx",
+                "start=true\n",
+                "while read -r line <&\"$NEOCHUMBY_SESSION\"; do\n  echo \"wx heard $line\" >> \"$log\"\n  \
+                 [ \"$line\" = button ] && { ask chumby-mode; exit 0; }\ndone",
+            )],
+        );
+        let fake = with_button();
+        press_after(&fake, &root, "wx");
+        run_on(&root, &[("settings", "wx")], fake);
+        // Told, not opened again.
+        assert_eq!(log(&root), ["wx", "wx heard button"]);
+    }
+
+    #[test]
+    fn a_start_app_that_ignores_the_line_stays() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree("buttonignored", &[("wx", "start=true\n", "sleep 1\nask chumby-mode")]);
+        let fake = with_button();
+        press_after(&fake, &root, "wx");
+        run_on(&root, &[("settings", "wx")], fake);
+        assert_eq!(log(&root), ["wx"]);
+    }
+
+    #[test]
+    fn a_start_app_that_cant_be_told_is_opened_again() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree(
+            "buttonclosed",
+            &[(
+                "wx",
+                "start=true\n",
+                // Closes its pipe, so the line can't be written.
+                "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\neval \"exec $NEOCHUMBY_SESSION>&-\"\nexec sleep 30",
+            )],
+        );
+        let fake = with_button();
+        press_after(&fake, &root, "wx");
+        run_on(&root, &[("settings", "wx")], fake);
+        assert_eq!(log(&root), ["wx", "wx button"]);
+    }
+
+    #[test]
+    fn nothing_a_button_app_started_outlives_the_button() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let pid = "\"$NEOCHUMBY_ROOT/pid\"";
+        let root = tree(
+            "buttonhelper",
+            &[
+                ("wx", "start=true\n", "ask 'open game'"),
+                // A helper, holding a copy of the button, and CHUMBY MODE.
+                (
+                    "game",
+                    "button=true\n",
+                    &format!("sleep 30 &\necho $! > {pid}.new\nmv {pid}.new {pid}\nask chumby-mode"),
+                ),
+            ],
+        );
+        let fake = Fake { gone_at_close: Some(root.join("pid")), ..with_button() };
+        let closed = fake.closed.clone();
+        run_on(&root, &[("settings", "wx")], fake);
+        assert_eq!(log(&root), ["wx", "game"]);
+        assert!(closed.load(Ordering::SeqCst));
     }
 
     #[test]

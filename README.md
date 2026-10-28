@@ -97,7 +97,8 @@ An app can use any of these keys:
 - **`button`:** the session keeps the top button (`/dev/switch`, which only
   one process can have open). A press returns to the start app, as on the
   stock Chumby, unless the app in front says `button = true`: then it has
-  the button. Doom and Quake fire with it.
+  the button. Doom and Quake fire with it. With the start app in front, a
+  press is a `button` line on its pipe.
 
 ## Building
 

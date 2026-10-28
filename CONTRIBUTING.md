@@ -124,7 +124,8 @@ speaker or the button.
   be ended with you.
 - **The top button:** unless your app says `button = true`, a press ends
   it the same way and opens the start app with `NEOCHUMBY_REASON=button`,
-  as the stock Chumby does. There's no hold gesture: games hold the button
+  as the stock Chumby does. If your app is the start app, it gets a
+  `button` line on its pipe instead (below). There's no hold gesture: games hold the button
   to fire, and the corner hold is the way out of anything.
 - **A service** may end your app the same way, to open another: any
   service over the start app, only the start app's over other apps (an
@@ -152,8 +153,12 @@ promises:
 - it **opens other apps** through the request pipe;
 - it offers **CHUMBY MODE**, and the owner's settings, or at least points
   to where they are;
-- it handles **`NEOCHUMBY_REASON=button`** sensibly, for example by showing
-  its own main screen;
+- it handles **the top button**, for example by showing its own main
+  screen. A press while it's in front arrives as a `button` line on its
+  pipe (read it with `Pipe::receive` and `Notice::parse`, without waiting).
+  If the line can't be written (the pipe is closed or full), the session
+  opens the start app again with `NEOCHUMBY_REASON=button`, as it does
+  after a press over any other app;
 - it **doesn't say `button = true`**, so a press always lands somewhere
   useful. The session refuses a start app that does;
 - it **keeps running**. If it exits without asking for anything five times

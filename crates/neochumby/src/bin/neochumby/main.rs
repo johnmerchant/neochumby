@@ -108,14 +108,26 @@ fn watch_escape(flag: Arc<AtomicBool>) {
     });
 }
 
-/// The top button, opened once for the whole session (button.rs).
-fn open_button() -> Option<File> {
+/// How often the session tries /dev/switch again while it hasn't got it
+/// (another process had it at boot, say).
+const BUTTON_RETRY: Duration = Duration::from_secs(5);
+
+/// The top button, opened once for the whole session (button.rs); `again`
+/// when retrying, which logs only success.
+fn open_button(again: bool) -> Option<File> {
     let open = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open("/dev/switch");
     // Passed on only to an app with `button = true`.
     match open.and_then(|f| neochumby_sys::fd::set_cloexec(f.as_fd(), true).map(|()| f)) {
-        Ok(f) => Some(f),
+        Ok(f) => {
+            if again {
+                eprintln!("neochumby: /dev/switch: open now");
+            }
+            Some(f)
+        }
         Err(e) => {
-            eprintln!("neochumby: /dev/switch: {e}; the top button does nothing");
+            if !again {
+                eprintln!("neochumby: /dev/switch: {e}; trying again every {} s", BUTTON_RETRY.as_secs());
+            }
             None
         }
     }
@@ -128,6 +140,9 @@ struct Chumby {
     /// A thread is putting the volume back.
     restoring: Arc<AtomicBool>,
     button: Option<File>,
+    /// When the session last tried to open the button, while it hasn't got
+    /// it; None once it has closed it for good.
+    button_tried: Option<Instant>,
 }
 
 impl run::Device for Chumby {
@@ -156,6 +171,13 @@ impl run::Device for Chumby {
     }
 
     fn button(&mut self) -> Option<bool> {
+        if self.button.is_none()
+            && let Some(t) = self.button_tried
+            && t.elapsed() >= BUTTON_RETRY
+        {
+            self.button = open_button(true);
+            self.button_tried = Some(Instant::now());
+        }
         let mut b = [0u8; 1];
         match self.button.as_mut()?.read(&mut b) {
             Ok(1) => Some(b[0] != 0),
@@ -169,6 +191,7 @@ impl run::Device for Chumby {
 
     fn close_button(&mut self) {
         self.button = None;
+        self.button_tried = None;
     }
 }
 
@@ -193,7 +216,13 @@ fn session() {
     match start::choose(&all, choice) {
         None => eprintln!("neochumby: no start app (not even {})", start::HOME),
         Some(first) => {
-            let chumby = Chumby { escape, boot_volume, restoring: Arc::default(), button: open_button() };
+            let chumby = Chumby {
+                escape,
+                boot_volume,
+                restoring: Arc::default(),
+                button: open_button(false),
+                button_tried: Some(Instant::now()),
+            };
             run::Session::new(&all, &root, first, chumby, run::Timing::default()).run()
         }
     }
