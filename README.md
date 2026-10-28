@@ -69,7 +69,9 @@ An app can use any of these keys:
 - **`companion`:** an app with a server half ships it as a second binary.
   neochumbyd runs it for each Chumby that asks, and relays frames between
   the two halves over the paired connection. neochumbyd knows no app by
-  name.
+  name. An app with a companion sets `neochumbyd` too, and its Chumby half
+  opens it with `neochumby::companion!()`, which fails the build if the
+  app's `Cargo.toml` declares no companion.
 - **`exec`:** what runs, full-screen, when the app is opened. The session
   (`neochumby`) runs one app at a time in front. An app opens another, or
   CHUMBY MODE, by asking the session over its request pipe
