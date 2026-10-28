@@ -81,3 +81,19 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
           sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"
+      # neochumby-classic as the start app, with pictures from that
+      # repository's offline smoke render (made-up data, placeholder art).
+      # Its own checks are its CI's business: only the pictures are used.
+      - name: neochumby-classic under dev/emulate
+        if: matrix.proto == 'tls'
+        timeout-minutes: 5
+        env:
+          CLASSIC_REPO: https://github.com/phoozle/neochumby-classic
+          CLASSIC_REV: ae86c465db81e18ed8c511878c4fbc8dc8dafdbf
+        run: |
+          git clone -q "$CLASSIC_REPO" "$RUNNER_TEMP/nc"
+          git -C "$RUNNER_TEMP/nc" checkout -q "$CLASSIC_REV"
+          python3 -m venv "$RUNNER_TEMP/venv"
+          "$RUNNER_TEMP/venv/bin/pip" install -q Pillow segno
+          "$RUNNER_TEMP/venv/bin/python" "$RUNNER_TEMP/nc/tests/smoke.py" --out "$RUNNER_TEMP/pictures" > "$RUNNER_TEMP/render.log" 2>&1 || true
+          sudo dev/emulate-classic "$RUNNER_TEMP/tree" "$RUNNER_TEMP/pictures" "$RUNNER_TEMP/classic"

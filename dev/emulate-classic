@@ -1,0 +1,112 @@
+#!/bin/sh
+# neochumby-classic under dev/emulate, which CI runs: the start app and its
+# service, with a renderer's output for pictures. It checks that
+#   - classic, the start app (start=classic in /psp/neochumby.conf), draws
+#     a slideshow page;
+#   - the top button, which the session holds, toggles Home and back, with
+#     no restart of classic;
+#   - a tap zone's `app doom` opens Doom through the session's pipe, and the
+#     session opens classic again when Doom exits;
+#   - classic's service starts once, is told Doom is in front, and is still
+#     the same process afterwards;
+#   - CHUMBY on Home ends the session with exit 0.
+#
+#   sudo dev/emulate-classic TREE PICTURES OUT
+#
+# TREE from tools/tree, with classic and doom. PICTURES is a renderer's
+# output (manifest.txt and its pictures), such as neochumby-classic's offline
+# smoke render (`python3 tests/smoke.py --out PICTURES` in that repository):
+# made-up data and placeholder artwork. No renderer lists apps yet, so a copy
+# of it gets one tap zone more, `app doom`, at the bottom left of Settings.
+set -eu
+tree=${1:?usage: dev/emulate-classic TREE PICTURES OUT}
+pictures=${2:?usage: dev/emulate-classic TREE PICTURES OUT}
+out=${3:?usage: dev/emulate-classic TREE PICTURES OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+state=$out/state
+emu() { "$dev/emulate" --state "$state" "$@"; }
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the session's log:"
+  emu log || true
+  emu stop || true
+  exit 1
+}
+count() { emu log | grep -c "$1" || true; }
+
+[ -x "$tree/apps/classic/neochumby-classic" ] || fail "the tree has no classic"
+[ -f "$pictures/manifest.txt" ] || fail "$pictures: no manifest.txt"
+mkdir -p "$out/psp"
+rm -rf "$out/pictures"
+cp -R "$pictures" "$out/pictures"
+pictures=$out/pictures
+echo "hot settings 0 200 72 40 app doom" >> "$pictures/manifest.txt"
+echo "start=classic" > "$out/psp/neochumby.conf"
+
+# The pictures the screen may show: each page, by day and by night, and the
+# screens the taps go to.
+pages=$(awk '$1 == "page" || $1 == "pagenight" { print $3 }' "$pictures/manifest.txt" | sort -u | sed "s|^|$pictures/|")
+screens=
+for s in home home_night settings settings_night confirm confirm_night; do
+  [ -f "$pictures/$s.raw" ] && screens="$screens $pictures/$s.raw"
+done
+# Waits for the screen to be one of these (the best match, by name).
+showing() {
+  emu compare --min "$2" --wait 60 --want "$1" $pages $screens || fail "the screen isn't $1"
+}
+slideshow() { showing '^(?!home|settings|confirm)' 0.6; }
+
+step "boot classic"
+emu start --psp "$out/psp" --bind "$pictures:/tmp/classic" "$tree"
+emu wait log 'neochumby: opening classic' 30 || fail "the session didn't open classic"
+slideshow
+emu shot "$out/1-slideshow.png"
+emu wait log 'neochumby: service classic started' 30 || fail "classic's service didn't start"
+[ "$(emu status | grep 'button_open')" = "  button_open: True" ] || fail "the session hasn't the top button"
+
+step "the top button: Home, and back"
+emu button press
+emu wait log 'neochumby: the top button: told classic' 10 || fail "the session didn't tell classic"
+showing '^home' 0.5
+emu shot "$out/2-home.png"
+emu button press
+slideshow
+[ "$(count 'neochumby: opening classic')" = 1 ] || fail "classic was restarted"
+
+step "Settings, then app doom: Doom through the pipe, and back"
+emu button press
+showing '^home' 0.5
+emu tap 228 198 # Home's Settings
+showing '^settings' 0.5
+emu tap 36 220 # the added `app doom`
+emu wait log 'neochumby: classic asks: open doom' 10 || fail "classic didn't ask to open doom"
+emu wait log 'neochumby: opening doom' 10 || fail "the session didn't open doom"
+emu wait log 'neochumby-classic-service: doom in front' 10 || fail "the service wasn't told Doom is in front"
+emu wait log 'neochumby-doom: no IWAD found' 10 || fail "Doom didn't run"
+i=0
+until [ "$(count 'neochumby: opening classic')" = 2 ]; do
+  i=$((i + 1))
+  [ "$i" -lt 100 ] || fail "the session didn't open classic again after Doom"
+  sleep 0.1
+done
+slideshow
+emu shot "$out/3-back.png"
+# Its first notice came as it started; this is the second.
+[ "$(count 'neochumby-classic-service: classic in front')" -ge 2 ] || fail "the service wasn't told classic is back"
+[ "$(count 'neochumby: service classic started')" = 1 ] || fail "classic's service was restarted"
+[ "$(count 'neochumby: service classic exited')" = 0 ] || fail "classic's service exited"
+
+step "CHUMBY on Home"
+emu button press
+showing '^home' 0.5
+emu tap 148 214 # Home's CHUMBY
+showing '^confirm' 0.5
+emu tap 219 152 # yes
+emu wait log 'neochumby: classic asks: chumby-mode' 10 || fail "classic didn't ask for CHUMBY MODE"
+emu wait exit 20 || fail "the session didn't end"
+[ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
+
+echo "-- the session's log:"
+emu log | tee "$out/log.txt"
+echo "dev/emulate-classic: all passed"

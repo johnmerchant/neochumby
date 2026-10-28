@@ -18,10 +18,17 @@ the F flag, as Debian and Ubuntu do (`apt install qemu-user-binfmt`, or
          [--env KEY=VALUE]        more environment for the session
          [--run PATH]             what to run, in the fake root, if not the
                                   session
+         [--bind DIR:PATH]        DIR, read-only, at PATH in the fake root
+                                  (e.g. pictures at /tmp/classic)
   dev/emulate tap X Y [--hold MS] a touch at screen pixel (X, Y)
   dev/emulate button down|up|press  the top button (/dev/switch)
   dev/emulate shot OUT.png        the screen (dev/fb2png.py)
   dev/emulate pixel X Y           one pixel, as #rrggbb
+  dev/emulate compare [--min F] [--wait SECS] [--want RE] RAW ...
+                                  which 320x240 RGB565 picture the screen is
+                                  most like, and the share of its pixels
+                                  that match; with --wait, until the best
+                                  matches --min of them and is named by RE
   dev/emulate log [-f]            the session's output
   dev/emulate wait screen|exit [SECS]   until the screen settles, or the
   dev/emulate wait log REGEX [SECS]     session ends; or a log line matches
@@ -644,6 +651,10 @@ def supervise(state, opts, tree, interp, fixed):
     for name in ("resolv.conf", "hosts"):
         if os.path.exists(f"/etc/{name}"):
             shutil.copy(f"/etc/{name}", os.path.join(root, "etc", name))
+    for host, guest in opts["binds"]:
+        target = os.path.join(root, guest.lstrip("/"))
+        os.makedirs(target, exist_ok=True)
+        bind(host, target, ro=True)
     # Without the F flag, the kernel looks for qemu inside the chroot.
     if not fixed:
         os.makedirs(os.path.join(root, os.path.dirname(interp).lstrip("/")), exist_ok=True)
@@ -765,6 +776,27 @@ def cmd_pixel(state, x, y):
     r, g, b = (p >> 11) & 0x1F, (p >> 5) & 0x3F, p & 0x1F
     # Widened as dev/fb2png.py does.
     print("#%02x%02x%02x" % (r << 3 | r >> 2, g << 2 | g >> 4, b << 3 | b >> 2))
+
+
+def cmd_compare(state, files, least, secs, want):
+    pictures = {}
+    for f in files:
+        with open(f, "rb") as fh:
+            data = fh.read(FB_BYTES + 1)
+        if len(data) != FB_BYTES:
+            sys.exit(f"dev/emulate compare: {f}: not {FB_BYTES} bytes")
+        pictures[os.path.basename(f)] = memoryview(data).cast("H")
+    deadline = time.monotonic() + secs
+    while True:
+        now = memoryview(screen(state)).cast("H")
+        share, name = max((sum(a == b for a, b in zip(now, p)) / (W * H), n) for n, p in pictures.items())
+        ok = share >= least and (not want or re.search(want, name))
+        if ok or time.monotonic() >= deadline:
+            print(f"{share:.2f} {name}")
+            if not ok and (secs or least):
+                sys.exit(1)
+            return
+        time.sleep(0.3)
 
 
 def cmd_wait(state, what, arg, secs):
@@ -1000,6 +1032,13 @@ def main(argv):
             "psp": flag("--psp"),
             "run": flag("--run"),
         }
+        binds = []
+        while "--bind" in args:
+            host, _, guest = flag("--bind").partition(":")
+            if not os.path.isdir(host) or not guest.startswith("/"):
+                sys.exit("dev/emulate start: --bind DIR:/PATH, DIR a directory")
+            binds.append((os.path.abspath(host), guest))
+        opts["binds"] = binds
         env = {}
         while "--env" in args:
             k, _, v = flag("--env").partition("=")
@@ -1016,6 +1055,9 @@ def main(argv):
                         args[0]], check=True)
     elif cmd == "pixel":
         cmd_pixel(state, int(args[0]), int(args[1]))
+    elif cmd == "compare":
+        least, secs, want = float(flag("--min", "0")), float(flag("--wait", "0")), flag("--want")
+        cmd_compare(state, args, least, secs, want)
     elif cmd == "log":
         cmd_log(state, "-f" in args)
     elif cmd == "wait":
