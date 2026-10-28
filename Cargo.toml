@@ -11,6 +11,7 @@ members = [
     "crates/neochumby-sys",
     "crates/neochumbyd",
     "apps/airplay",
+    "apps/bonsai",
     "apps/home",
     "apps/doom",
     "apps/fetch",

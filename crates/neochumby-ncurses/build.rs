@@ -1,10 +1,10 @@
 // Builds ncurses (third_party/ncurses) with its own configure and make, as
-// one static library, libncursesw, for the C compiler cargo is given
-// (tools/zigcc for the Chumby). There is no terminfo database on the
-// Chumby: xterm-256color, which neochumby's terminal is, is compiled in
-// (a "fallback"), and nothing else. Compiling it takes ncurses' tic and
-// infocmp, which are built for the host first: the host's own may be too
-// old to read ncurses' terminfo.src (macOS's is).
+// static libraries, libncursesw and libpanelw (which cbonsai uses), for the
+// C compiler cargo is given (tools/zigcc for the Chumby). There is no
+// terminfo database on the Chumby: xterm-256color, which neochumby's
+// terminal is, is compiled in (a "fallback"), and nothing else. Compiling it
+// takes ncurses' tic and infocmp, which are built for the host first: the
+// host's own may be too old to read ncurses' terminfo.src (macOS's is).
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
@@ -87,19 +87,21 @@ fn main() {
     }
     run(&mut cfg);
     let lib = out.join("target");
+    // "libs" makes libpanelw too, in the same lib directory.
     make(&lib, &["libs"]);
 
     // Its headers, as it would install them, for the crates that link it
     // (DEP_NCURSESW_INCLUDE).
     let include = out.join("include");
     std::fs::create_dir_all(&include).unwrap();
-    for h in ["curses.h", "ncurses_dll.h", "term.h", "termcap.h", "unctrl.h"] {
+    for h in ["curses.h", "ncurses_dll.h", "panel.h", "term.h", "termcap.h", "unctrl.h"] {
         std::fs::copy(lib.join("include").join(h), include.join(h)).unwrap();
     }
     std::fs::copy(include.join("curses.h"), include.join("ncurses.h")).unwrap();
     println!("cargo:include={}", include.display());
     println!("cargo:rustc-link-search=native={}", lib.join("lib").display());
     println!("cargo:rustc-link-lib=static=ncursesw");
+    println!("cargo:rustc-link-lib=static=panelw");
     println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rerun-if-changed=third_party/ncurses/ncurses");
     println!("cargo:rerun-if-changed=third_party/ncurses/include");

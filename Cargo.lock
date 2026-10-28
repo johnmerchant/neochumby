@@ -376,6 +376,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-bonsai"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "neochumby",
+ "neochumby-ncurses",
+]
+
+[[package]]
 name = "neochumby-clock"
 version = "0.1.0"
 dependencies = [
