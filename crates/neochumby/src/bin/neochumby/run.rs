@@ -37,6 +37,9 @@ pub struct Timing {
     pub patience: Duration,
     /// The pause before starting the start app again after it failed.
     pub retry: Duration,
+    /// The least time between opening one app and the next, so two apps
+    /// that open each other and exit at once can't spin.
+    pub min_gap: Duration,
 }
 
 impl Default for Timing {
@@ -46,6 +49,7 @@ impl Default for Timing {
             grace: Duration::from_secs(5),
             patience: Duration::from_secs(2),
             retry: Duration::from_secs(1),
+            min_gap: Duration::from_millis(500),
         }
     }
 }
@@ -53,6 +57,9 @@ impl Default for Timing {
 /// Five failures of the start app within this long: it can't start.
 const FAILURES: usize = 5;
 const FAILURE_WINDOW: Duration = Duration::from_secs(60);
+/// How many lines an app may write that the session doesn't know before
+/// they stop being logged.
+const LOGGED_UNKNOWN: u32 = 3;
 
 /// What the session does next.
 #[derive(Clone, Copy, Debug)]
@@ -69,6 +76,8 @@ struct Front<'a> {
     pipe: Pipe,
     /// What it asked for, and when it first asked.
     asked: Option<(Next<'a>, Instant)>,
+    /// Lines it wrote that the session doesn't know.
+    unknown: u32,
 }
 
 pub struct Session<'a, D: Device> {
@@ -78,17 +87,22 @@ pub struct Session<'a, D: Device> {
     device: D,
     timing: Timing,
     failures: Vec<Instant>,
+    last_open: Option<Instant>,
 }
 
 impl<'a, D: Device> Session<'a, D> {
     pub fn new(apps: &'a [App], root: &'a Path, start: &'a App, device: D, timing: Timing) -> Session<'a, D> {
-        Session { apps, root, start, device, timing, failures: Vec::new() }
+        Session { apps, root, start, device, timing, failures: Vec::new(), last_open: None }
     }
 
     /// Runs apps until CHUMBY MODE.
     pub fn run(mut self) {
         let mut next = Next::Open(self.start, None);
         while let Next::Open(app, reason) = next {
+            if let Some(gap) = self.last_open.and_then(|t| self.timing.min_gap.checked_sub(t.elapsed())) {
+                neochumby::sleep_ms(gap.as_millis() as u32);
+            }
+            self.last_open = Some(Instant::now());
             next = match self.open(app, reason) {
                 Ok(front) => self.watch(front),
                 Err(e) => {
@@ -108,7 +122,7 @@ impl<'a, D: Device> Session<'a, D> {
         }
         eprintln!("neochumby: opening {}{}", app.name, reason.map(|r| format!(" ({r})")).unwrap_or_default());
         let (child, pipe) = child::spawn(cmd, &[])?;
-        Ok(Front { app, child, pipe, asked: None })
+        Ok(Front { app, child, pipe, asked: None, unknown: 0 })
     }
 
     /// Watches the app in front until it has gone; what to do next.
@@ -130,7 +144,11 @@ impl<'a, D: Device> Session<'a, D> {
                     }
                     _ => continue,
                 },
-                Ok(Some(s)) => Ok(s),
+                Ok(Some(s)) => {
+                    // Anything it started goes with it.
+                    child::end(&mut f.child, self.timing.patience);
+                    Ok(s)
+                }
                 Err(e) => {
                     child::end(&mut f.child, self.timing.patience);
                     Err(e)
@@ -155,7 +173,13 @@ impl<'a, D: Device> Session<'a, D> {
                     }
                 },
                 None => {
-                    eprintln!("neochumby: {}: ignoring {line:?}", f.app.name);
+                    f.unknown += 1;
+                    if f.unknown <= LOGGED_UNKNOWN {
+                        eprintln!("neochumby: {}: ignoring {line:?}", f.app.name);
+                    }
+                    if f.unknown == LOGGED_UNKNOWN {
+                        eprintln!("neochumby: {}: not logging more lines it doesn't know", f.app.name);
+                    }
                     continue;
                 }
             };
@@ -250,6 +274,7 @@ mod tests {
             grace: Duration::from_millis(300),
             patience: Duration::from_secs(1),
             retry: Duration::from_millis(10),
+            min_gap: Duration::from_millis(20),
         }
     }
 
@@ -278,14 +303,68 @@ mod tests {
     }
 
     fn run(root: &Path, choices: &[(&str, &str)], escape: Arc<AtomicBool>) {
+        run_timed(root, choices, escape, timing());
+    }
+
+    fn run_timed(root: &Path, choices: &[(&str, &str)], escape: Arc<AtomicBool>, timing: Timing) {
         let all = apps::all(root);
-        let start = start::choose(&all, choices).expect("a start app");
-        Session::new(&all, root, start, Fake { escape }, timing()).run();
+        let start = start::choose(&all, choices.first().copied()).expect("a start app");
+        Session::new(&all, root, start, Fake { escape }, timing).run();
+    }
+
+    /// Waits for the process whose pid is in `pid_file` to be gone.
+    fn gone(pid_file: &Path) {
+        let pid = std::fs::read_to_string(pid_file).unwrap();
+        let deadline = Instant::now() + Duration::from_secs(3);
+        let running = || std::process::Command::new("kill").args(["-0", pid.trim()]).status().unwrap().success();
+        while running() {
+            assert!(Instant::now() < deadline, "{} still running", pid_file.display());
+            neochumby::sleep_ms(20);
+        }
+    }
+
+    #[test]
+    fn what_an_app_started_goes_when_it_exits() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let pid = "\"$NEOCHUMBY_ROOT/pid\"";
+        let root = tree(
+            "group",
+            &[
+                ("home", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open game'"),
+                // A helper left behind as it exits.
+                ("game", "", &format!("sleep 30 &\necho $! > {pid}.new\nmv {pid}.new {pid}")),
+            ],
+        );
+        run(&root, &[], Arc::default());
+        assert_eq!(log(&root), ["home", "game", "home"]);
+        gone(&root.join("pid"));
+    }
+
+    #[test]
+    fn apps_opening_each_other_cant_spin() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let stop = "\"$NEOCHUMBY_ROOT/stop\"";
+        let root = tree(
+            "spin",
+            &[
+                ("home", "start=true\n", &format!("[ -f {stop} ] && {{ ask chumby-mode; exit 0; }}\nask 'open game'")),
+                ("game", "", "exit 0"),
+            ],
+        );
+        let stop_file = root.join("stop");
+        std::thread::spawn(move || {
+            neochumby::sleep_ms(1000);
+            std::fs::write(stop_file, "").unwrap();
+        });
+        run_timed(&root, &[], Arc::default(), Timing { min_gap: Duration::from_millis(200), ..timing() });
+        // About one open every 200 ms for a second.
+        let games = log(&root).iter().filter(|l| *l == "game").count();
+        assert!((1..=4).contains(&games), "{games} games");
     }
 
     #[test]
     fn apps_open_apps_and_the_start_app_comes_back() {
-        let _one = ONE.lock().unwrap();
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let root = tree(
             "open",
             &[
@@ -306,7 +385,7 @@ mod tests {
 
     #[test]
     fn a_failing_start_app_falls_back_to_home() {
-        let _one = ONE.lock().unwrap();
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let root = tree("fail", &[("home", "start=true\n", "ask chumby-mode"), ("wx", "start=true\n", "exit 1")]);
         run(&root, &[("settings", "wx")], Arc::default());
         assert_eq!(log(&root), ["wx", "wx", "wx", "wx", "wx", "home"]);
@@ -314,7 +393,7 @@ mod tests {
 
     #[test]
     fn home_failing_hands_back_to_the_chumby() {
-        let _one = ONE.lock().unwrap();
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let root = tree("homefail", &[("home", "start=true\n", "exit 0")]);
         run(&root, &[], Arc::default());
         assert_eq!(log(&root).len(), FAILURES);
@@ -322,7 +401,7 @@ mod tests {
 
     #[test]
     fn an_app_that_asks_and_stays_is_ended() {
-        let _one = ONE.lock().unwrap();
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let root = tree(
             "grace",
             &[
@@ -342,7 +421,7 @@ mod tests {
 
     #[test]
     fn the_escape_hatch_ends_the_front_app_and_opens_home() {
-        let _one = ONE.lock().unwrap();
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let root = tree(
             "escape",
             &[
@@ -362,12 +441,6 @@ mod tests {
         });
         run(&root, &[("conf", "wx")], escape);
         assert_eq!(log(&root), ["wx", "home"]);
-        let pid = std::fs::read_to_string(root.join("pid")).unwrap();
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let running = || std::process::Command::new("kill").args(["-0", pid.trim()]).status().unwrap().success();
-        while running() {
-            assert!(Instant::now() < deadline, "what wx started is still running");
-            neochumby::sleep_ms(20);
-        }
+        gone(&root.join("pid"));
     }
 }

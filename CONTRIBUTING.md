@@ -97,7 +97,10 @@ Every app is opened the same way, whoever asked for it.
 - sharing the touchscreen: every reader gets every touch. The session
   watches the top-left corner for the escape hatch.
 
-**To leave**, your app exits. Then the session opens the start app again.
+**To leave**, your app exits. Then the session opens the start app again,
+and ends anything your app left running in its process group (SIGTERM,
+then SIGKILL 200 ms later), so nothing you started keeps the screen, the
+speaker or the button.
 - **To open another app**, write `open <app>` (the app's name, its
   directory under `apps/`) to the request pipe, then exit. The session runs
   that app next.
