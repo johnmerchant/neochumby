@@ -9,6 +9,22 @@
 //! [`Unmuted`] is the volume and the mute alone, for a process that has
 //! another program play (the stock btplay, which opens /dev/dsp itself);
 //! [`Speaker`] is that plus /dev/dsp, for one that writes PCM itself.
+//!
+//! A [`Speaker`] is written as an [`io::Write`] of interleaved 16-bit
+//! little-endian PCM, rather than through cpal, the crate most Rust audio
+//! (rodio, kira, Bevy's audio) is built on. cpal isn't an option yet:
+//! - On Linux it depends on the `alsa` crate unconditionally, even for a
+//!   custom host, and that links libasound, which the Chumby's static musl
+//!   binaries don't have.
+//! - It has no OSS host. One could be written with its `custom` feature,
+//!   but its own hosts run streams on threads synchronised with std's
+//!   `Mutex`, whose futex flags the stock 2.6.16 kernel lacks, so it would
+//!   need a futex-free design.
+//! - rodio, the usual way to play through it, mixes in floating point,
+//!   which the FPU-less ARM926 can only emulate.
+//!
+//! If cpal makes `alsa` optional, an OSS custom host would let those crates
+//! play here.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
