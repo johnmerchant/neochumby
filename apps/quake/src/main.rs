@@ -1,6 +1,6 @@
 //! neochumby-quake: Quake on the Chumby Classic. The engine
 //! (third_party/quake, C) calls the chum_* functions here, through
-//! csrc/glue.c, for the screen, time and input.
+//! csrc/glue.c, for the screen, time, input and sound.
 //!
 //! Controls, as neochumby's Doom: the screen is a 3x3 grid of keys, and
 //! squeezing the case fires.
@@ -14,6 +14,7 @@
 #![allow(unsafe_code)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+mod sound;
 mod span;
 
 use std::cell::UnsafeCell;
@@ -22,6 +23,7 @@ use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
 use std::io::Write;
 use std::time::Instant;
 
+use neochumby::audio::Stream;
 use neochumby::fb::{self, Palette};
 use neochumby::input::{Squeeze, Touch, Touchscreen};
 
@@ -47,6 +49,7 @@ struct State {
     held: Option<i32>,
     squeezed: bool,
     start: Instant,
+    sound: Option<Stream>,
 }
 
 /// The engine is single-threaded and calls in only from its own thread.
@@ -164,6 +167,7 @@ fn main() {
             held: None,
             squeezed: false,
             start: Instant::now(),
+            sound: None,
         });
     }
     let args: Vec<CString> = std::env::args().map(|a| CString::new(a).expect("argument with a NUL")).collect();

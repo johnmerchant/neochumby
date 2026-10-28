@@ -10,7 +10,8 @@ const ENGINE: &[&str] = &[
     "d_zpoint", "host", "host_cmd", "keys", "menu", "mathlib", "model", "net_dgrm", "net_loop", "net_main", "net_vcr",
     "net_bsd", "nonintel", "pr_cmds", "pr_edict", "pr_exec", "r_aclip", "r_alias", "r_bsp", "r_light", "r_draw",
     "r_efrag", "r_edge", "r_misc", "r_main", "r_sky", "r_sprite", "r_surf", "r_part", "r_vars", "screen", "sbar",
-    "sv_main", "sv_phys", "sv_move", "sv_user", "zone", "view", "wad", "world", "cd_null", "snd_null",
+    "sv_main", "sv_phys", "sv_move", "sv_user", "zone", "view", "wad", "world", "cd_null", "snd_dma", "snd_mem",
+    "snd_mix",
 ];
 
 /// Engine files built with names defined to others.

@@ -1,5 +1,6 @@
 // Builds doomgeneric (C, third_party/) into the binary; our platform layer
-// (src/platform.rs) provides the DG_* functions it calls.
+// (src/platform.rs) provides the DG_* functions it calls, and csrc/sound.c
+// its sound module (FEATURE_SOUND), mixed by src/sound.rs.
 const DOOM: &[&str] = &[
     "dummy",
     "am_map",
@@ -90,6 +91,11 @@ fn main() {
         build.file(format!("{dir}/{f}.c"));
     }
     build
+        .file("csrc/sound.c")
+        .include(dir)
+        // csrc's SDL_mixer.h, which i_sound.c includes for FEATURE_SOUND.
+        .include("csrc")
+        .define("FEATURE_SOUND", None)
         // The Chumby's screen: Doom's 320x200 centred in 320x240, unscaled.
         .define("DOOMGENERIC_RESX", "320")
         .define("DOOMGENERIC_RESY", "240")
@@ -102,4 +108,5 @@ fn main() {
         .flag_if_supported("-w")
         .compile("doomgeneric");
     println!("cargo:rerun-if-changed={dir}");
+    println!("cargo:rerun-if-changed=csrc");
 }

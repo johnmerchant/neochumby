@@ -28,6 +28,10 @@ void chum_fb_present (const unsigned char *buf, int width, int height, int rowby
 double chum_time (void);
 int chum_poll_key (int *key, int *down);
 void chum_log (const char *msg);
+int chum_snd_init (int channels, int rate);
+unsigned int chum_snd_played (void);
+void chum_snd_submit (const short *ring, int samples, int painted);
+void chum_snd_shutdown (void);
 
 /* ---- video ---------------------------------------------------------- */
 
@@ -92,6 +96,51 @@ void D_BeginDirectRect (int x, int y, byte *pbitmap, int width, int height)
 
 void D_EndDirectRect (int x, int y, int width, int height)
 {
+}
+
+/* ---- sound ---------------------------------------------------------- */
+
+/*
+ * snd_dma.c mixes into a ring as if a sound card played it by DMA. Here
+ * src/sound.rs plays it: SNDDMA_Submit writes out what has been mixed since
+ * the last, and SNDDMA_GetDMAPos says how far the speaker has got. 11025
+ * Hz, the rate of Quake's own sounds, so they load without resampling.
+ */
+
+#define SND_RATE	11025
+/* Mono samples, a power of two: three seconds of stereo. */
+#define SND_SAMPLES	(1 << 16)
+
+static short	snd_ring[SND_SAMPLES];
+
+qboolean SNDDMA_Init (void)
+{
+	shm = &sn;
+	shm->splitbuffer = 0;
+	shm->samplebits = 16;
+	shm->channels = 2;
+	shm->speed = chum_snd_init (shm->channels, SND_RATE);
+	shm->samples = SND_SAMPLES;
+	shm->samplepos = 0;
+	shm->submission_chunk = 1;
+	shm->buffer = (unsigned char *)snd_ring;
+	return true;
+}
+
+int SNDDMA_GetDMAPos (void)
+{
+	shm->samplepos = (int)(chum_snd_played () * shm->channels & (shm->samples - 1));
+	return shm->samplepos;
+}
+
+void SNDDMA_Submit (void)
+{
+	chum_snd_submit (snd_ring, shm->samples, paintedtime);
+}
+
+void SNDDMA_Shutdown (void)
+{
+	chum_snd_shutdown ();
 }
 
 /* ---- input ---------------------------------------------------------- */
