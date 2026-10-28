@@ -12,15 +12,19 @@ members = [
     "crates/neochumbyd",
     "apps/airplay",
     "apps/bonsai",
+    "apps/aquarium",
     "apps/home",
     "apps/doom",
     "apps/fetch",
     "apps/htop",
     "apps/cmatrix",
     "apps/tty-clock",
+    "apps/pipes",
     "apps/quake",
     "apps/top",
 ]
+# The apps' submodules are not members.
+exclude = ["apps/*/third_party"]
 
 [workspace.package]
 version = "0.1.0"

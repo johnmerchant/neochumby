@@ -25,3 +25,9 @@
 [submodule "apps/bonsai/third_party/cbonsai"]
 	path = apps/bonsai/third_party/cbonsai
 	url = https://gitlab.com/jallbrit/cbonsai
+[submodule "apps/pipes/third_party/pipes-rs"]
+	path = apps/pipes/third_party/pipes-rs
+	url = https://github.com/dnorhoj/pipes-rs
+[submodule "apps/aquarium/third_party/asciiquarium-rs"]
+	path = apps/aquarium/third_party/asciiquarium-rs
+	url = https://github.com/cablehead/asciiquarium-rs
