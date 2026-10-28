@@ -14,21 +14,21 @@
 #
 #   sudo dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
 #
-# With NEOCHUMBY_EMU_MACHINE=chumby-classic (and your own firmware; see
-# dev/emulate --help) it runs on the whole emulated Chumby instead, without
-# sudo: the steps that need user mode (selftest, sensors, the top button,
-# the FAT stick) are skipped, and the waits are longer. Without the
-# firmware it exits 77, skipped.
+# The same scenario runs on each of dev/emulate's backends, picked by the
+# environment: NEOCHUMBY_EMU_MACHINE=chumby-classic (the whole emulated
+# Chumby, your own firmware) or NEOCHUMBY_EMU_DEVICE=NAME (a real Chumby,
+# paired and set dev=on), without sudo for either. Steps only user mode can
+# do (selftest, sensors, the top button, the FAT stick) are skipped there;
+# the waits scale with `dev/emulate scale`; a backend that can't do a step
+# at all (no firmware, no remote tap yet) makes it exit 77, skipped.
 set -eu
 tree=${1:?usage: dev/emulate-smoke TREE OUT}
 out=${2:?usage: dev/emulate-smoke TREE OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$out"
 state=$out/state
-machine=${NEOCHUMBY_EMU_MACHINE:-user}
-# How much longer than user mode to wait: the stock firmware boots first.
-slow=1
-[ "$machine" = user ] || slow=${NEOCHUMBY_EMU_SLOW:-10}
+machine=$(emu backend)
+slow=$(emu scale)
 emu() { "$dev/emulate" --state "$state" "$@"; }
 step() { echo "== $*"; }
 fail() {
@@ -75,11 +75,11 @@ emu shot "$out/1-home.png"
 
 step "tap DOOM"
 emu tap 160 "$doom_y"
-# Without game data Doom exits at once; with it, it draws its bars.
+emu wait log 'neochumby: opening doom' $((10 * slow)) || fail "the session didn't open DOOM"
+# Without game data Doom exits at once, saying so; with it, it runs.
 i=0
-until emu log | grep -q 'neochumby-doom: no IWAD found' || [ "$(emu pixel 160 2)" = "#180000" ]; do
+until emu log | grep -q 'neochumby-doom: no IWAD found' || [ "$i" -ge $((30 * slow)) ]; do
   i=$((i + 1))
-  [ "$i" -lt $((300 * slow)) ] || fail "DOOM didn't open"
   sleep 0.1
 done
 emu shot "$out/2-doom.png"

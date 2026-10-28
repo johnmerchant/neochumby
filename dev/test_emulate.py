@@ -252,5 +252,143 @@ class Machine(unittest.TestCase):
             self.assertTrue(os.path.exists(os.path.join(stick, "neochumby", "apps", "home", "neochumby-home")))
 
 
+# A stand-in for neochumbyd's developer link, in its state directory as
+# tools/deploy installs it: one paired Chumby, "kitchen", whose log is a
+# file (with a line from before, which dev/emulate must let pass).
+FAKE_NEOCHUMBYD = textwrap.dedent(r'''
+    #!/usr/bin/env python3
+    import os, struct, sys, time, zlib
+    a = sys.argv[1:]
+    state = a[a.index("--state") + 1]
+    a = a[:a.index("--state")]
+    log = os.path.join(state, "fake-log")
+    def say(line):
+        with open(log, "a") as f:
+            f.write(line + "\n")
+    def usage():
+        print("usage: neochumbyd serve|...", file=sys.stderr)
+        sys.exit(2)
+    cmd, name = a[0], a[1] if len(a) > 1 else ""
+    if name != "kitchen":
+        print(f"no Chumby paired as {name}", file=sys.stderr)
+        sys.exit(1)
+    if cmd == "log":
+        with open(log) as f:
+            sys.stdout.write(f.read())
+            sys.stdout.flush()
+            while "-f" in a:
+                line = f.readline()
+                if line:
+                    sys.stdout.write(line)
+                    sys.stdout.flush()
+                else:
+                    time.sleep(0.05)
+    elif cmd == "restart":
+        say("neochumby: opening home")
+        print(f"{name}: restarting")
+    elif cmd == "shot":
+        rows = b"".join(b"\x00" + bytes([16, 16, 33]) * 320 for _ in range(240))
+        def chunk(t, d):
+            return struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d))
+        png = b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", 320, 240, 8, 2, 0, 0, 0))
+        png += chunk(b"IDAT", zlib.compress(rows)) + chunk(b"IEND", b"")
+        open(a[2], "wb").write(png)
+    elif cmd in ("tap", "button"):
+        if os.environ.get("FAKE_WITHOUT_INPUT"):
+            usage()
+        with open(os.path.join(state, "fake-input"), "a") as f:
+            f.write(" ".join(a) + "\n")
+        if a[:4] == ["tap", "kitchen", "160", "220"]:
+            say("neochumby: home asks: chumby-mode")
+            say("neochumby: CHUMBY MODE")
+    else:
+        usage()
+''').lstrip()
+
+
+class Device(unittest.TestCase):
+    def setUp(self):
+        self.t = tempfile.mkdtemp(prefix="emu.", dir="/tmp")
+        self.nd = os.path.join(self.t, "nd")
+        os.makedirs(os.path.join(self.nd, "tree"))
+        exe = os.path.join(self.nd, "neochumbyd")
+        with open(exe, "w") as f:
+            f.write(FAKE_NEOCHUMBYD)
+        os.chmod(exe, 0o755)
+        with open(os.path.join(self.nd, "fake-log"), "w") as f:
+            f.write("neochumby: opening home\nneochumby: CHUMBY MODE\n")
+        self.tree = os.path.join(self.t, "tree")
+        os.makedirs(self.tree)
+        with open(os.path.join(self.tree, "neochumby"), "w") as f:
+            f.write("session\n")
+        self.env = dict(os.environ, NEOCHUMBYD_DIR=self.nd, NEOCHUMBY_EMU_DEVICE="kitchen")
+        for k in ("NEOCHUMBY_EMU_MACHINE", "NEOCHUMBY_EMU_HOST", "NEOCHUMBY_EMU", "NEOCHUMBY_EMU_SLOW"):
+            self.env.pop(k, None)
+        self.state = os.path.join(self.t, "s")
+
+    def tearDown(self):
+        self.emu("stop")
+        subprocess.run(["rm", "-rf", self.t])
+
+    def emu(self, *args, env=None):
+        return subprocess.run([EMULATE, "--state", self.state, *args], env=env or self.env, capture_output=True,
+                              text=True, timeout=60)
+
+    def test_backends(self):
+        self.assertEqual(self.emu("backend").stdout.strip(), "device")
+        self.assertEqual(self.emu("scale").stdout.strip(), "5")
+        user = {k: v for k, v in self.env.items() if k != "NEOCHUMBY_EMU_DEVICE"}
+        self.assertEqual(self.emu("backend", env=user).stdout.strip(), "user")
+        self.assertEqual(self.emu("scale", env=user).stdout.strip(), "1")
+        self.assertEqual(self.emu("prompt", "pull the power", env=user).returncode, 77)
+        self.assertEqual(self.emu("scale", env=dict(user, NEOCHUMBY_EMU_MACHINE="chumby-classic")).stdout.strip(), "10")
+
+    def test_unpaired(self):
+        r = self.emu("start", self.tree, env=dict(self.env, NEOCHUMBY_EMU_DEVICE="lounge"))
+        self.assertNotEqual(r.returncode, 0)
+        self.assertIn("no Chumby paired as lounge", r.stderr)
+
+    def test_a_session(self):
+        r = self.emu("start", self.tree)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        with open(os.path.join(self.nd, "tree", "neochumby")) as f:
+            self.assertEqual(f.read(), "session\n", "the tree was installed")
+        self.assertEqual(self.emu("wait", "log", "opening home", "10").returncode, 0)
+        # Only the restart's line: the history before it was let pass.
+        self.assertEqual(self.emu("log").stdout, "neochumby: opening home\n")
+        self.assertIn("kitchen, a Chumby", self.emu("status").stdout)
+        self.assertEqual(self.emu("pixel", "5", "5").stdout.strip(), "#101021")
+        self.assertEqual(self.emu("exec", "/bin/true").returncode, 77)
+        self.assertEqual(self.emu("button", "press").returncode, 0)
+        self.assertEqual(self.emu("tap", "160", "220", "--hold", "150").returncode, 0)
+        with open(os.path.join(self.nd, "fake-input")) as f:
+            self.assertEqual(f.read(), "button kitchen press\ntap kitchen 160 220 --hold 150\n")
+        self.assertEqual(self.emu("wait", "exit", "10").stdout.strip(), "exit 0")
+
+    def test_without_remote_input(self):
+        self.assertEqual(self.emu("start", self.tree).returncode, 0)
+        env = dict(self.env, FAKE_WITHOUT_INPUT="1")
+        r = self.emu("tap", "1", "1", env=env)
+        self.assertEqual(r.returncode, 77)
+        self.assertIn("no `tap` yet", r.stdout)
+        self.assertEqual(self.emu("button", "press", env=env).returncode, 77)
+
+    def test_png(self):
+        import zlib
+        # Each of PNG's filters, on rows that need them.
+        rows = b""
+        for y in range(240):
+            rows += bytes([y % 5]) + bytes([(x * 7 + y) & 0xFF for x in range(320 * 3)])
+        png = b"\x89PNG\r\n\x1a\n"
+        for t, d in ((b"IHDR", (320).to_bytes(4, "big") + (240).to_bytes(4, "big") + bytes([8, 2, 0, 0, 0])),
+                     (b"IDAT", zlib.compress(rows)), (b"IEND", b"")):
+            png += len(d).to_bytes(4, "big") + t + d + zlib.crc32(t + d).to_bytes(4, "big")
+        import device
+        out = device.png_to_rgb565(png)
+        self.assertEqual(len(out), 320 * 240 * 2)
+        # Row 0 is unfiltered: its first pixel is (0, 7, 14).
+        self.assertEqual(int.from_bytes(out[:2], "little"), (0 >> 3) << 11 | (7 >> 2) << 5 | 14 >> 3)
+
+
 if __name__ == "__main__":
     unittest.main()

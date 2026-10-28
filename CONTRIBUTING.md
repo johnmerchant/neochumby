@@ -180,6 +180,23 @@ and `--bind` are user mode's only, for now. `python3 dev/test_emulate.py`
 (run by CI) checks its images against `chumby-emu`'s and its control path
 against a stub QEMU.
 
+### A real Chumby: --device NAME
+
+The same scenarios run on a real Chumby, paired with a neochumbyd and set
+`dev=on` (`neochumbyd set NAME dev=on`, which allows remote input), over
+its developer link: `NEOCHUMBY_EMU_DEVICE=NAME dev/emulate-smoke /tmp/tree
+/tmp/smoke`, with `NEOCHUMBY_EMU_HOST=HOST` when neochumbyd runs elsewhere
+(over ssh; its state in `NEOCHUMBYD_DIR`). `start` installs the tree there
+(`tools/deploy --tree`) and restarts the Chumby; `log` is its log from then
+on; `shot`, `tap` and `button` are neochumbyd's (a neochumbyd without remote
+tap or button skips those steps). Steps that need hands, like pulling the
+power, are `dev/emulate prompt` lines, shown only with `--device`.
+
+So that one scenario holds on every backend, it asserts on lines the
+session and apps log on purpose, compares only our own screens (with what
+changes masked), scales its waits by `dev/emulate scale`, and exits 77,
+skipped, where a backend can't do a step.
+
 `dev/emulate --help` lists the fake devices and what each does. What user
 mode can't catch is what the full-system machine and real devices are for:
 
