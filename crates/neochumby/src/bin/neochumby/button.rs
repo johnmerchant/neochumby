@@ -12,12 +12,27 @@
 //! If /dev/switch can't be opened as the session starts (another process
 //! has it), the session tries again every 5 s.
 //!
+//! On a paired Chumby whose owner allows it, neochumbyd can hold the button
+//! down too (devlink.rs): the session goes by either ([`level`]), so such a
+//! press goes where a real one would, except to an app with `button =
+//! true`, which reads /dev/switch itself and never sees it.
+//!
 //! There's no hold gesture, since games hold the button to fire: the corner
 //! hold is the way out of anything. On CHUMBY MODE the session closes it,
 //! so the Chumby's own software can open it.
 //!
 //! A read returns the button's level now (1 pressed, 0 not), never "no
 //! data", so the session reads it once a tick and acts on a 0 -> 1 edge.
+
+/// The level the session goes by: down if the button is, or neochumbyd
+/// holds it down (`remote`, while the developer link is up); None with
+/// neither to read.
+pub fn level(real: Option<bool>, remote: Option<bool>) -> Option<bool> {
+    match (real, remote) {
+        (Some(a), Some(b)) => Some(a || b),
+        (a, b) => a.or(b),
+    }
+}
 
 /// The presses in a series of readings of the level.
 #[derive(Default)]
@@ -43,7 +58,7 @@ impl Edges {
 
 #[cfg(test)]
 mod tests {
-    use super::Edges;
+    use super::{Edges, level};
 
     #[test]
     fn presses_are_edges() {
@@ -55,5 +70,22 @@ mod tests {
         assert!(!e.press(true));
         assert!(!e.press(false));
         assert!(e.press(true));
+    }
+
+    #[test]
+    fn a_press_from_neochumbyd_is_a_press() {
+        assert_eq!(level(None, None), None);
+        assert_eq!(level(Some(true), None), Some(true));
+        assert_eq!(level(None, Some(true)), Some(true));
+        assert_eq!(level(Some(false), Some(false)), Some(false));
+        assert_eq!(level(Some(true), Some(false)), Some(true));
+        assert_eq!(level(Some(false), Some(true)), Some(true));
+        // Down from neochumbyd and up again: one press, as from the button.
+        let mut e = Edges::default();
+        let presses: Vec<bool> =
+            [(false, false), (false, true), (false, true), (false, false), (true, false), (true, true)]
+                .map(|(real, remote)| e.press(level(Some(real), Some(remote)).unwrap()))
+                .to_vec();
+        assert_eq!(presses, [false, true, false, false, true, false]);
     }
 }

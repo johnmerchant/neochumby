@@ -4,6 +4,8 @@
 //!   neochumbyd log NAME [-f]       its log; -f follows it
 //!   neochumbyd restart NAME        its session starts again, from the tree
 //!   neochumbyd shot NAME OUT.png   its screen
+//!   neochumbyd tap NAME X Y [--hold MS]       a touch, if it is set dev=on
+//!   neochumbyd button NAME press|release|tap  its top button, likewise
 //!
 //! In the state directory:
 //!
@@ -15,6 +17,16 @@
 //!                                  Chumby, so a command that sees its file
 //!                                  stay knows the Chumby isn't connected
 //!   dev/<name>/shot.png, shot.err  the screenshot, or why there's none
+//!   dev/<name>/input               a tap or a button asked of it, one at
+//!                                  a time ([`input_line`]), taken as the
+//!                                  others are
+//!   dev/<name>/input.done, .err    the Chumby did it, or why not
+//!
+//! Input goes only to a Chumby whose settings say `dev=on`
+//! (neochumby_proto::dev::accepts_input), checked by the command, by the
+//! daemon as it takes the request, and by the Chumby, to which the daemon
+//! sends its settings again first. Off by default: pairing a Chumby lets
+//! its server see what it does, and drive it only once its owner says so.
 //!
 //! As with pairing, the commands and the daemon share only these files:
 //! whoever may write the state directory may use them, and nothing listens
@@ -34,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use neochumby_proto::dev::{ShotIn, clean_line};
+use neochumby_proto::dev::{MAX_HOLD_MS, ShotIn, accepts_input, clean_line};
 use neochumby_proto::{Msg, Session, valid_name};
 
 use crate::api::Api;
@@ -48,6 +60,8 @@ pub const LOG_RATE: u64 = 32 * 1024;
 pub const LOG_BURST: u64 = 256 * 1024;
 /// How long a Chumby has to send its screen.
 pub const SHOT_TIMEOUT: Duration = Duration::from_secs(20);
+/// How long a Chumby has to answer a tap (after its hold) or a button.
+pub const INPUT_ANSWER: Duration = Duration::from_secs(5);
 /// How often the daemon looks for what's asked of a Chumby.
 const TICK: Duration = Duration::from_millis(200);
 
@@ -223,6 +237,8 @@ pub fn run(api: &Api, name: &str, mut s: Session) -> io::Result<()> {
     let mut limit = RateLimit::new(LOG_RATE, LOG_BURST);
     // A screenshot asked for: when, and what has come of it.
     let mut shot: Option<(Instant, Option<ShotIn>)> = None;
+    // A tap or button sent and not yet answered: by when it must be.
+    let mut input: Option<Instant> = None;
     log.append(&format!("-- neochumbyd: {name} connected"))?;
 
     while api.links.current(name, id) && api.state.paired(s.peer()).as_deref() == Some(name) {
@@ -263,11 +279,43 @@ pub fn run(api: &Api, name: &str, mut s: Session) -> io::Result<()> {
                     shot = None;
                 }
             }
+            Some(Msg::Done { ok, why }) => {
+                if input.take().is_none() {
+                    return Err(invalid("an answer to nothing asked"));
+                }
+                if ok {
+                    std::fs::write(asks.join("input.done"), "")?;
+                } else {
+                    std::fs::write(asks.join("input.err"), format!("{name}: {}", clean_line(&why)))?;
+                }
+            }
             Some(m) => return Err(invalid(format!("unexpected {m:?}"))),
         }
         if shot.as_ref().is_some_and(|(at, _)| at.elapsed() > SHOT_TIMEOUT) {
             shot = None;
             std::fs::write(asks.join("shot.err"), format!("{name} didn't send its screen in time"))?;
+        }
+        if input.is_some_and(|by| Instant::now() > by) {
+            input = None;
+            std::fs::write(asks.join("input.err"), format!("{name} didn't answer (is its session this recent?)"))?;
+        }
+        if input.is_none()
+            && let Ok(line) = std::fs::read_to_string(asks.join("input"))
+        {
+            let _ = std::fs::remove_file(asks.join("input"));
+            let config = api.state.config(name);
+            match parse_input(&line) {
+                Err(e) => std::fs::write(asks.join("input.err"), e)?,
+                Ok(_) if !accepts_input(&config) => std::fs::write(asks.join("input.err"), input_off(name))?,
+                Ok(m) => {
+                    log.append(&format!("-- neochumbyd: {}", line.trim()))?;
+                    // What the Chumby goes by: its settings as they are now.
+                    s.send(&Msg::Config(config))?;
+                    s.send(&m)?;
+                    let hold = if let Msg::Tap { hold_ms, .. } = m { hold_ms } else { 0 };
+                    input = Some(Instant::now() + Duration::from_millis(hold.into()) + INPUT_ANSWER);
+                }
+            }
         }
         if take(&asks.join("restart")) {
             log.append("-- neochumbyd: restart asked")?;
@@ -298,6 +346,88 @@ pub fn restart(state_dir: &Path, name: &str, wait: Duration) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
+}
+
+/// Why a Chumby not set `dev=on` takes no input.
+pub fn input_off(name: &str) -> String {
+    format!(
+        "{name} takes no taps or button presses from here: its owner turns that on with `neochumbyd set {name} dev=on` (and off with `dev=`)"
+    )
+}
+
+/// A tap or a button as the commands ask for it in dev/<name>/input:
+/// `tap X Y HOLD_MS`, `button down`, `button up`.
+pub fn input_line(m: &Msg) -> Option<String> {
+    match m {
+        Msg::Tap { x, y, hold_ms } => Some(format!("tap {x} {y} {hold_ms}\n")),
+        Msg::Button { down } => Some(format!("button {}\n", if *down { "down" } else { "up" })),
+        _ => None,
+    }
+}
+
+/// The message an [`input_line`] asks for.
+pub fn parse_input(line: &str) -> Result<Msg, String> {
+    let w: Vec<&str> = line.split_whitespace().collect();
+    let n = |s: &str| s.parse::<u16>().map_err(|_| format!("not a number: {}", clean_line(s)));
+    match w[..] {
+        ["tap", x, y, hold] => {
+            let hold_ms = n(hold)?;
+            if hold_ms > MAX_HOLD_MS {
+                return Err(format!("a hold is at most {MAX_HOLD_MS} ms"));
+            }
+            Ok(Msg::Tap { x: n(x)?, y: n(y)?, hold_ms })
+        }
+        ["button", "down"] => Ok(Msg::Button { down: true }),
+        ["button", "up"] => Ok(Msg::Button { down: false }),
+        _ => Err(format!("not a tap or a button: {}", clean_line(line.trim()))),
+    }
+}
+
+/// Asks `name` for a tap or a button (`m`) through the daemon, and waits
+/// for the Chumby to say it's done. Fails if the daemon hasn't passed it on
+/// within `wait`, the Chumby says why not, or it hasn't answered in time.
+/// One at a time: fails if another is waiting.
+pub fn input(state_dir: &Path, name: &str, m: &Msg, wait: Duration) -> io::Result<()> {
+    let line = input_line(m).ok_or_else(|| io::Error::new(io::ErrorKind::InvalidInput, "not a tap or a button"))?;
+    let hold = match m {
+        Msg::Tap { hold_ms, .. } => Duration::from_millis((*hold_ms).into()),
+        _ => Duration::ZERO,
+    };
+    let asks = requests(state_dir, name);
+    std::fs::create_dir_all(&asks)?;
+    let (done, err, ask) = (asks.join("input.done"), asks.join("input.err"), asks.join("input"));
+    let _ = std::fs::remove_file(&done);
+    let _ = std::fs::remove_file(&err);
+    // Written aside and linked into place, so the daemon never reads half
+    // of it, and a request already waiting isn't replaced.
+    let tmp = asks.join(format!("input.{}", std::process::id()));
+    std::fs::write(&tmp, line)?;
+    let linked = std::fs::hard_link(&tmp, &ask);
+    let _ = std::fs::remove_file(&tmp);
+    match linked {
+        Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+            return Err(io::Error::new(e.kind(), format!("another tap or button for {name} is waiting")));
+        }
+        r => r?,
+    }
+    let start = Instant::now();
+    loop {
+        if std::fs::remove_file(&done).is_ok() {
+            return Ok(());
+        }
+        if let Ok(why) = std::fs::read_to_string(&err) {
+            let _ = std::fs::remove_file(&err);
+            return Err(io::Error::other(why));
+        }
+        if ask.exists() && start.elapsed() > wait {
+            let _ = std::fs::remove_file(&ask);
+            return Err(not_connected(name));
+        }
+        if start.elapsed() > wait + hold + INPUT_ANSWER + Duration::from_secs(1) {
+            return Err(io::Error::new(io::ErrorKind::TimedOut, format!("no answer from {name}")));
+        }
+        std::thread::sleep(Duration::from_millis(50));
+    }
 }
 
 fn not_connected(name: &str) -> io::Error {
@@ -435,7 +565,31 @@ mod tests {
         let e = shot(&d, "den", &d.join("out.png"), Duration::from_millis(200)).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::NotConnected);
         assert!(!d.join("dev/den/shot").exists());
+        let e = input(&d, "den", &Msg::Button { down: true }, Duration::from_millis(200)).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::NotConnected);
+        assert!(!d.join("dev/den/input").exists());
+        // One at a time.
+        std::fs::write(d.join("dev/den/input"), "button up\n").unwrap();
+        let e = input(&d, "den", &Msg::Button { down: true }, Duration::from_millis(200)).unwrap_err();
+        assert_eq!(e.kind(), io::ErrorKind::AlreadyExists);
+        assert_eq!(std::fs::read_to_string(d.join("dev/den/input")).unwrap(), "button up\n");
         std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn input_requests_round_trip() {
+        for m in [
+            Msg::Tap { x: 0, y: 0, hold_ms: 0 },
+            Msg::Tap { x: 319, y: 239, hold_ms: MAX_HOLD_MS },
+            Msg::Button { down: true },
+            Msg::Button { down: false },
+        ] {
+            assert_eq!(parse_input(&input_line(&m).unwrap()), Ok(m));
+        }
+        for bad in ["", "tap 1 2", "tap 1 2 3 4", "tap -1 2 3", "tap 1 2 10001", "button", "button left", "shot"] {
+            assert!(parse_input(bad).is_err(), "{bad}");
+        }
+        assert!(input_line(&Msg::Shot).is_none());
     }
 
     /// A fake Chumby on a real session with a real daemon: its log kept,
@@ -505,6 +659,38 @@ mod tests {
         assert_eq!((w, h), (320, 240));
         assert_eq!(&raw[..7], [0, 255, 0, 0, 0, 0, 255]);
 
+        // Input, without dev=on: refused, and nothing reaches the Chumby.
+        let ask = |m: Msg| {
+            let state_dir = d.clone();
+            std::thread::spawn(move || input(&state_dir, "den", &m, Duration::from_secs(5)))
+        };
+        let e = ask(Msg::Tap { x: 10, y: 20, hold_ms: 0 }).join().unwrap().unwrap_err();
+        assert_eq!(e.to_string(), input_off("den"));
+        let e = ask(Msg::Button { down: true }).join().unwrap().unwrap_err();
+        assert_eq!(e.to_string(), input_off("den"));
+        assert_eq!(s.recv_timeout(Duration::from_millis(300)).unwrap(), None);
+
+        // With it: the settings again, then the tap, answered once done.
+        State::open(d.clone()).unwrap().set("den", "dev", "on").unwrap();
+        let asked = ask(Msg::Tap { x: 10, y: 20, hold_ms: 100 });
+        let on = vec![("dev".to_string(), "on".to_string())];
+        assert_eq!(next(&mut s), Msg::Config(on.clone()));
+        assert_eq!(next(&mut s), Msg::Tap { x: 10, y: 20, hold_ms: 100 });
+        assert!(!asked.is_finished());
+        s.send(&Msg::Done { ok: true, why: String::new() }).unwrap();
+        asked.join().unwrap().unwrap();
+        // The button, and why it couldn't be pressed.
+        let asked = ask(Msg::Button { down: true });
+        assert_eq!(next(&mut s), Msg::Config(on));
+        assert_eq!(next(&mut s), Msg::Button { down: true });
+        s.send(&Msg::Done { ok: false, why: "game has the button\x1b[2J".into() }).unwrap();
+        assert_eq!(asked.join().unwrap().unwrap_err().to_string(), "den: game has the button?[2J");
+        // Turned off again: refused once more.
+        State::open(d.clone()).unwrap().set("den", "dev", "").unwrap();
+        let e = ask(Msg::Button { down: false }).join().unwrap().unwrap_err();
+        assert_eq!(e.to_string(), input_off("den"));
+        assert_eq!(s.recv_timeout(Duration::from_millis(300)).unwrap(), None);
+
         // What it logged, cleaned, after the daemon's own line.
         let kept = lines(&read_log(&d, "den").unwrap());
         assert_eq!(
@@ -514,7 +700,9 @@ mod tests {
                 "neochumby: opening home",
                 "?[2Jboo",
                 "-- neochumbyd: restart asked",
-                "mid-shot"
+                "mid-shot",
+                "-- neochumbyd: tap 10 20 100",
+                "-- neochumbyd: button down",
             ]
         );
 

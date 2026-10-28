@@ -3,7 +3,8 @@
 //!
 //! Tags taken: 0-9 the core (pairing, companions, settings); 10-18 sync
 //! (delivery=sync, #10), with 19-31 left for it and anything near it;
-//! 32-36 the developer link (crate::dev).
+//! 32-39 the developer link (crate::dev): 32-36 its log, restart and
+//! screenshot, 37-39 input (taps and the top button, opt-in).
 
 use std::io;
 
@@ -51,6 +52,16 @@ pub enum Msg {
     /// `Data`, width x height RGB565 pixels, little-endian, row by row, in
     /// as many messages as it takes. A width or height of 0: no screen.
     Screen { width: u16, height: u16 },
+    /// neochumbyd, on the developer link of a Chumby set `dev=on`: touch
+    /// the screen at (x, y), in screen pixels, for `hold_ms` (at most
+    /// [`crate::dev::MAX_HOLD_MS`]), then let go (`neochumbyd tap`).
+    Tap { x: u16, y: u16, hold_ms: u16 },
+    /// neochumbyd, on the developer link of a Chumby set `dev=on`: the top
+    /// button goes down, or comes up (`neochumbyd button`).
+    Button { down: bool },
+    /// Chumby, answering each `Tap` (once it has let go) or `Button`:
+    /// done, or why not.
+    Done { ok: bool, why: String },
 }
 
 impl Msg {
@@ -109,6 +120,17 @@ impl Msg {
                 b.extend_from_slice(&width.to_be_bytes());
                 b.extend_from_slice(&height.to_be_bytes());
             }
+            Msg::Tap { x, y, hold_ms } => {
+                b.push(37);
+                for v in [x, y, hold_ms] {
+                    b.extend_from_slice(&v.to_be_bytes());
+                }
+            }
+            Msg::Button { down } => b.extend_from_slice(&[38, *down as u8]),
+            Msg::Done { ok, why } => {
+                b.extend_from_slice(&[39, *ok as u8]);
+                s(&mut b, why);
+            }
         }
         b
     }
@@ -128,6 +150,15 @@ impl Msg {
             let (h, t) = r.split_at_checked(n).ok_or_else(|| invalid("short message"))?;
             *r = t;
             String::from_utf8(h.to_vec()).map_err(|_| invalid("not UTF-8"))
+        };
+        let bool_ = |r: &mut &[u8]| -> io::Result<bool> {
+            let (&b, t) = r.split_first().ok_or_else(|| invalid("short message"))?;
+            *r = t;
+            match b {
+                0 => Ok(false),
+                1 => Ok(true),
+                _ => Err(invalid("not a bool")),
+            }
         };
         let m = match tag {
             0 => Msg::Hello { name: string(&mut rest)? },
@@ -169,6 +200,19 @@ impl Msg {
             36 => {
                 let width = u16_(&mut rest)?;
                 Msg::Screen { width, height: u16_(&mut rest)? }
+            }
+            37 => {
+                let (x, y) = (u16_(&mut rest)?, u16_(&mut rest)?);
+                let hold_ms = u16_(&mut rest)?;
+                if hold_ms > crate::dev::MAX_HOLD_MS {
+                    return Err(invalid("too long a hold"));
+                }
+                Msg::Tap { x, y, hold_ms }
+            }
+            38 => Msg::Button { down: bool_(&mut rest)? },
+            39 => {
+                let ok = bool_(&mut rest)?;
+                Msg::Done { ok, why: string(&mut rest)? }
             }
             _ => return Err(invalid("unknown message")),
         };

@@ -18,6 +18,16 @@
 //!   the framebuffer, and turns `Msg::Restart` into a flag the session's
 //!   loop reads. When the connection drops it tries again, waiting longer
 //!   each time up to five minutes.
+//! - **Input**, only while neochumbyd's settings for this Chumby say
+//!   `dev=on` (as sent on this connection, first and before each input):
+//!   `Msg::Tap` is written to the touchscreen's device (neochumby::input),
+//!   so every reader, the app in front and the escape hatch included, sees
+//!   a touch; it's let go after its hold, or at once if the link fails,
+//!   and then answered. `Msg::Button` sets a level the session reads
+//!   alongside /dev/switch ([`Remote`]), so a press goes where a real one
+//!   would, except to an app with `button = true`, which reads the switch
+//!   itself: that is refused, and said so. The level goes back up if the
+//!   link fails. Without `dev=on`, both are refused, and the first logged.
 //!
 //! Only descriptors 1 and 2 are replaced. The link's own sockets are
 //! close-on-exec, so programs the session runs get stdout and stderr (the
@@ -30,18 +40,19 @@
 //! boot is what runs. The boot hook waits on the same process throughout,
 //! and needs no change.
 
-use std::fs::File;
+use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use neochumby::conf::{self, Paired};
 use neochumby::fb;
-use neochumby_proto::dev::{BATCH_LINES, Backoff, Lines, LogQueue, shot_chunks};
+use neochumby::input::{self, Calibration};
+use neochumby_proto::dev::{BATCH_LINES, Backoff, Lines, LogQueue, accepts_input, shot_chunks};
 use neochumby_proto::{Identity, Msg, PublicKey, Session, unhex_key};
 use neochumby_sys::fd::{self, Stdio};
 
@@ -51,9 +62,20 @@ const WRITE: Duration = Duration::from_secs(10);
 const FIRST_RETRY: Duration = Duration::from_secs(2);
 const LAST_RETRY: Duration = Duration::from_secs(300);
 
+/// What the link's input sets for the session's loop (main.rs).
+#[derive(Default)]
+pub struct Remote {
+    /// The top button, held down by neochumbyd.
+    pub button: AtomicBool,
+    /// The app in front has the top button itself (`button = true`), so a
+    /// press from neochumbyd can't reach it.
+    pub handed_over: AtomicBool,
+}
+
 /// The link, running.
 pub struct Link {
     restart: Arc<AtomicBool>,
+    remote: Arc<Remote>,
     /// Where stdout and stderr went before.
     out: OwnedFd,
     err: OwnedFd,
@@ -70,6 +92,11 @@ impl Link {
     /// The flag a `Msg::Restart` sets.
     pub fn restart_flag(&self) -> Arc<AtomicBool> {
         self.restart.clone()
+    }
+
+    /// What neochumbyd's input sets.
+    pub fn remote(&self) -> Arc<Remote> {
+        self.remote.clone()
     }
 
     /// Puts stdout and stderr back where they were, before the session
@@ -115,8 +142,10 @@ fn start(p: Paired) -> io::Result<Link> {
     }
     let restart = Arc::new(AtomicBool::new(false));
     let flag = restart.clone();
-    std::thread::spawn(move || link(p, me, server_key, from_tee, flag));
-    Ok(Link { restart, out, err })
+    let remote = Arc::new(Remote::default());
+    let r = remote.clone();
+    std::thread::spawn(move || link(p, me, server_key, from_tee, flag, r));
+    Ok(Link { restart, remote, out, err })
 }
 
 /// The tee: never waits on anything but its input.
@@ -158,18 +187,32 @@ fn tee(mut capture: UnixStream, mut log: File, mut to_link: UnixStream) {
 }
 
 /// The link: connects, serves, and connects again.
-fn link(p: Paired, me: Identity, server_key: PublicKey, mut from_tee: UnixStream, restart: Arc<AtomicBool>) {
+fn link(
+    p: Paired,
+    me: Identity,
+    server_key: PublicKey,
+    mut from_tee: UnixStream,
+    restart: Arc<AtomicBool>,
+    remote: Arc<Remote>,
+) {
     let mut backoff = Backoff::new(FIRST_RETRY, LAST_RETRY);
     let mut lines = Lines::default();
     // Taken from the tee and not yet sent.
     let mut batch: Vec<String> = Vec::new();
     let mut failing = false;
+    let mut warned = false;
     loop {
         match connect(&p, &me, &server_key) {
-            Ok(mut s) => {
+            Ok((mut s, on)) => {
                 backoff.reset();
                 failing = false;
-                let e = serve(&mut s, &mut from_tee, &mut lines, &mut batch, &restart);
+                let mut input = Input { on, warned, remote: &remote };
+                let e = serve(&mut s, &mut from_tee, &mut lines, &mut batch, &restart, &mut input);
+                warned = input.warned;
+                // Nothing stays held by a link that has gone.
+                if remote.button.swap(false, Ordering::SeqCst) {
+                    eprintln!("neochumby: the top button: up, the link having gone");
+                }
                 eprintln!("neochumby: developer link to {}: {e}", p.server);
             }
             // Said once each time it stops working, not on every try.
@@ -183,7 +226,8 @@ fn link(p: Paired, me: Identity, server_key: PublicKey, mut from_tee: UnixStream
     }
 }
 
-fn connect(p: &Paired, me: &Identity, server_key: &PublicKey) -> io::Result<Session> {
+/// The session, and whether this Chumby takes input (`dev=on`).
+fn connect(p: &Paired, me: &Identity, server_key: &PublicKey) -> io::Result<(Session, bool)> {
     let addr = (p.server.as_str(), p.api_port)
         .to_socket_addrs()?
         .next()
@@ -203,13 +247,91 @@ fn connect(p: &Paired, me: &Identity, server_key: &PublicKey) -> io::Result<Sess
         Some(Msg::Unpaired) => return Err(io::Error::new(io::ErrorKind::PermissionDenied, "no longer paired")),
         m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
     }
-    // The settings: the session has them already (settings.rs).
-    match s.recv_timeout(WRITE)? {
-        Some(Msg::Config(_)) => {}
+    // The settings: the session has them already (settings.rs), but the
+    // link goes by these, and those sent after, for input.
+    let on = match s.recv_timeout(WRITE)? {
+        Some(Msg::Config(c)) => accepts_input(&c),
         m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
-    }
+    };
     s.send(&Msg::Dev)?;
-    Ok(s)
+    Ok((s, on))
+}
+
+/// Input from neochumbyd, on one connection.
+struct Input<'a> {
+    /// The settings say `dev=on`.
+    on: bool,
+    /// Input refused without it has been logged (once a session).
+    warned: bool,
+    remote: &'a Remote,
+}
+
+impl Input<'_> {
+    fn allowed(&mut self) -> Result<(), String> {
+        if self.on {
+            return Ok(());
+        }
+        if !std::mem::replace(&mut self.warned, true) {
+            eprintln!("neochumby: neochumbyd sent a tap or a button, but isn't set dev=on for this Chumby: refused");
+        }
+        Err("not set dev=on for this Chumby".into())
+    }
+
+    /// Puts a finger down at (x, y).
+    fn tap(&mut self, x: u16, y: u16, hold_ms: u16) -> Result<Held, String> {
+        self.allowed()?;
+        let (x, y) = (i32::from(x), i32::from(y));
+        if x >= fb::W as i32 || y >= fb::H as i32 {
+            return Err(format!("({x}, {y}) is off the {}x{} screen", fb::W, fb::H));
+        }
+        let (rx, ry) = Calibration::load().raw(x, y);
+        let open = || -> io::Result<File> {
+            let f = OpenOptions::new().write(true).open(input::TOUCHSCREEN)?;
+            // The kernel ignores O_CLOEXEC; nothing the session runs while
+            // the finger is down gets this.
+            fd::set_cloexec(f.as_fd(), true)?;
+            Ok(f)
+        };
+        let mut file = open().map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
+        file.write_all(&input::touch_down(rx, ry)).map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
+        eprintln!("neochumby: neochumbyd taps ({x}, {y}) for {hold_ms} ms");
+        Ok(Held { file, until: Instant::now() + Duration::from_millis(hold_ms.into()) })
+    }
+
+    fn button(&mut self, down: bool) -> Result<(), String> {
+        self.allowed()?;
+        if down && self.remote.handed_over.load(Ordering::SeqCst) {
+            return Err("the app in front has the top button (button = true) and reads it itself: \
+                        a press from neochumbyd can't reach it"
+                .into());
+        }
+        self.remote.button.store(down, Ordering::SeqCst);
+        eprintln!("neochumby: neochumbyd puts the top button {}", if down { "down" } else { "up" });
+        Ok(())
+    }
+}
+
+/// A made-up touch, down until `until`. Let go when dropped, so a link
+/// that fails mid-tap leaves no finger on the screen.
+struct Held {
+    file: File,
+    until: Instant,
+}
+
+impl Drop for Held {
+    fn drop(&mut self) {
+        if let Err(e) = self.file.write_all(&input::touch_up()) {
+            eprintln!("neochumby: letting go of a tap: {}: {e}", input::TOUCHSCREEN);
+        }
+    }
+}
+
+/// The answer to a tap or a button.
+fn done(r: Result<(), String>) -> Msg {
+    match r {
+        Ok(()) => Msg::Done { ok: true, why: String::new() },
+        Err(why) => Msg::Done { ok: false, why },
+    }
 }
 
 /// Sends the log and answers neochumbyd until the connection fails.
@@ -219,8 +341,12 @@ fn serve(
     lines: &mut Lines,
     batch: &mut Vec<String>,
     restart: &AtomicBool,
+    input: &mut Input,
 ) -> io::Error {
     let mut buf = [0u8; 4096];
+    // A tap being held, let go (and answered) once its time is up, or
+    // before another; dropped, so let go, if the connection fails.
+    let mut held: Option<Held> = None;
     loop {
         if batch.len() < BATCH_LINES
             && let Ok(n) = from_tee.read(&mut buf)
@@ -234,13 +360,44 @@ fn serve(
             }
             batch.drain(..n);
         }
-        let r = match s.recv_timeout(Duration::from_millis(50)) {
+        if held.as_ref().is_some_and(|h| Instant::now() >= h.until) {
+            held = None;
+            if let Err(e) = s.send(&done(Ok(()))) {
+                return e;
+            }
+        }
+        let wait = held.as_ref().map_or(Duration::from_millis(50), |h| {
+            h.until.saturating_duration_since(Instant::now()).clamp(Duration::from_millis(1), Duration::from_millis(50))
+        });
+        let r = match s.recv_timeout(wait) {
             Ok(Some(Msg::Restart)) => {
                 eprintln!("neochumby: neochumbyd asks for a restart");
                 restart.store(true, Ordering::SeqCst);
                 Ok(())
             }
             Ok(Some(Msg::Shot)) => shot(s),
+            Ok(Some(Msg::Config(c))) => {
+                input.on = accepts_input(&c);
+                Ok(())
+            }
+            Ok(Some(Msg::Tap { x, y, hold_ms })) => {
+                // One finger: one still down is let go first.
+                let before = held.take().map_or(Ok(()), |h| {
+                    drop(h);
+                    s.send(&done(Ok(())))
+                });
+                before.and_then(|()| match input.tap(x, y, hold_ms) {
+                    Ok(h) => {
+                        held = Some(h);
+                        Ok(())
+                    }
+                    Err(why) => s.send(&done(Err(why))),
+                })
+            }
+            Ok(Some(Msg::Button { down })) => {
+                let r = input.button(down);
+                s.send(&done(r))
+            }
             // Anything else is for a newer session.
             Ok(_) => Ok(()),
             Err(e) => Err(e),
