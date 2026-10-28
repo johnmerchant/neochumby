@@ -1,5 +1,5 @@
 //! Doom as a neochumby app: doomgeneric (C, GPL-2.0) on the Chumby's screen,
-//! touchscreen and squeeze switch. The IWAD is found beside the binary
+//! touchscreen, squeeze switch and speaker (sound effects; no music yet). The IWAD is found beside the binary
 //! (freedoom1.wad, doom1.wad) unless NEOCHUMBY_WAD or -iwad says otherwise.
 
 // FFI to a C engine (GPL), so allowed unsafe code, as neochumby-sys is. Its
@@ -8,6 +8,7 @@
 #![allow(clippy::undocumented_unsafe_blocks)]
 
 mod platform;
+mod sound;
 
 use std::path::PathBuf;
 
