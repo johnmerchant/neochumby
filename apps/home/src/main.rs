@@ -74,10 +74,8 @@ impl Screen {
 }
 
 fn clock() -> String {
-    let now = unsafe { libc::time(std::ptr::null_mut()) };
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&now, &mut tm) };
-    format!("{:02}:{:02}", tm.tm_hour, tm.tm_min)
+    let t = neochumby_sys::time::local_time();
+    format!("{:02}:{:02}", t.hour, t.minute)
 }
 
 fn draw_clock(fb: &mut Fb) {

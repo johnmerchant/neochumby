@@ -21,3 +21,6 @@ snow = { version = "0.10", optional = true, default-features = false, features =
     "use-blake2",
     "use-getrandom",
 ] }
+
+[lints]
+workspace = true

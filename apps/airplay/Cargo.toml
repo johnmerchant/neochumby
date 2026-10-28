@@ -20,8 +20,8 @@ name = "neochumby-airplay-companion"
 path = "src/companion.rs"
 
 [dependencies]
-libc.workspace = true
 neochumby-proto.workspace = true
+neochumby-sys.workspace = true
 
 # Only the Chumby's half uses the device library.
 [target.'cfg(target_arch = "arm")'.dependencies]
@@ -31,3 +31,6 @@ neochumby.workspace = true
 service = "neochumby-airplay"
 companion = "neochumby-airplay-companion"
 neochumbyd = "required"
+
+[lints]
+workspace = true

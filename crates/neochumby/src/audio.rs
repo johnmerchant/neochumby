@@ -12,16 +12,11 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
-use std::os::fd::AsRawFd;
 use std::process::Command;
 
-use crate::debug;
+use neochumby_sys::oss::{self, AFMT_S16_LE, Setting};
 
-// sys/soundcard.h
-const SNDCTL_DSP_SPEED: libc::Ioctl = 0xc004_5002u32 as libc::Ioctl;
-const SNDCTL_DSP_SETFMT: libc::Ioctl = 0xc004_5005u32 as libc::Ioctl;
-const SNDCTL_DSP_CHANNELS: libc::Ioctl = 0xc004_5006u32 as libc::Ioctl;
-const AFMT_S16_LE: libc::c_int = 0x10;
+use crate::debug;
 
 const DSP: &str = "/dev/dsp";
 const SPEAKER_MUTE: &str = "/proc/sys/sense1/spkmute";
@@ -88,15 +83,10 @@ impl Speaker {
     /// /dev/dsp is busy or refuses the format.
     pub fn open(channels: u32, rate: u32, volume: u32) -> io::Result<Speaker> {
         let dsp = OpenOptions::new().write(true).open(DSP)?;
-        for (req, value) in [
-            (SNDCTL_DSP_SETFMT, AFMT_S16_LE),
-            (SNDCTL_DSP_CHANNELS, channels as libc::c_int),
-            (SNDCTL_DSP_SPEED, rate as libc::c_int),
-        ] {
-            let mut v = value;
-            if unsafe { libc::ioctl(dsp.as_raw_fd(), req, &mut v) } != 0 {
-                return Err(io::Error::last_os_error());
-            }
+        for (setting, value) in
+            [(Setting::Format, AFMT_S16_LE), (Setting::Channels, channels as i32), (Setting::Rate, rate as i32)]
+        {
+            oss::set(&dsp, setting, value)?;
         }
         Ok(Speaker { _unmuted: Unmuted::at(volume), dsp })
     }

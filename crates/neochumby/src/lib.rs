@@ -17,5 +17,5 @@ use neochumby_softfloat as _;
 /// Sleeps about `ms` milliseconds; use it instead of std::thread::sleep,
 /// which panics when this kernel fails an interrupted nanosleep with EINVAL.
 pub fn sleep_ms(ms: u32) {
-    unsafe { libc::poll(std::ptr::null_mut(), 0, ms.min(i32::MAX as u32) as i32) };
+    neochumby_sys::time::sleep_ms(ms);
 }
