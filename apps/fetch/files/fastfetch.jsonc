@@ -1,0 +1,25 @@
+// fastfetch's configuration on the Chumby: what fits 64 columns beside
+// the logo (chumby.txt, given on the command line). The stock firmware has
+// no os-release, so the host is named here. A line too long is cut at the
+// screen's edge, not wrapped.
+{
+    "display": { "disableLinewrap": true, "hideCursor": true },
+    "logo": {
+        "color": { "1": "yellow", "2": "cyan" },
+        "padding": { "right": 2 }
+    },
+    "modules": [
+        "title",
+        "separator",
+        { "type": "custom", "key": "Host", "format": "Chumby Classic" },
+        "os",
+        "kernel",
+        "uptime",
+        "cpu",
+        "memory",
+        "disk",
+        { "type": "localip", "compact": true },
+        "break",
+        "colors"
+    ]
+}

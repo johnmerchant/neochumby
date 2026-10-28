@@ -1,0 +1,3 @@
+[submodule "apps/fetch/third_party/fastfetch"]
+	path = apps/fetch/third_party/fastfetch
+	url = https://github.com/fastfetch-cli/fastfetch

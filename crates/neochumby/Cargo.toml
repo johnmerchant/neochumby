@@ -12,6 +12,7 @@ neochumby-proto.workspace = true
 neochumby-macros.workspace = true
 neochumby-sys.workspace = true
 font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
+vte = "0.15"
 neochumby-softfloat = { workspace = true, optional = true }
 
 [features]

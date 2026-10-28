@@ -74,6 +74,7 @@ fetch() {
         echo "tools/tree: $url at $rev (add #$rev to pin it)" >&2
       fi
       git -C "$dir" checkout --quiet --detach "$rev"
+      git -C "$dir" submodule update --quiet --init --recursive >&2
       echo "$dir"
       ;;
     crate:*)
@@ -103,7 +104,11 @@ fetch() {
       echo "$dir"
       ;;
     ./* | ../* | /*) (cd "$1" && pwd) ;;
-    *) echo "$root/apps/$1" ;;
+    *)
+      # Third-party source it builds (fetch's fastfetch) is a submodule.
+      git -C "$root" submodule update --quiet --init --recursive -- "apps/$1" >&2
+      echo "$root/apps/$1"
+      ;;
   esac
 }
 
