@@ -17,6 +17,7 @@ use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
+use neochumby_sys::fs::NO_FOLLOW;
 use ring::digest::{Context, SHA256};
 
 use crate::manifest::{self, line};
@@ -201,8 +202,7 @@ impl Stick {
             .collect();
         prune(&dir, "", &files, &dirs)?;
         room(&dir, tree, &have)?;
-        let journal =
-            OpenOptions::new().append(true).custom_flags(libc::O_NOFOLLOW).open(self.dir.join(self.journal(s)))?;
+        let journal = OpenOptions::new().append(true).custom_flags(NO_FOLLOW).open(self.dir.join(self.journal(s)))?;
         let unverified = if from_journal { kept.clone() } else { Vec::new() };
         Ok(Writer {
             stick: self,
@@ -408,7 +408,7 @@ impl Drop for Writer<'_> {
 
 /// A file's size and SHA-256, read in full.
 fn hash_file(p: &Path) -> io::Result<(u64, [u8; 32])> {
-    let mut f = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(p)?;
+    let mut f = OpenOptions::new().read(true).custom_flags(NO_FOLLOW).open(p)?;
     let mut h = Context::new(&SHA256);
     let mut buf = vec![0u8; 64 << 10];
     let mut n = 0u64;
@@ -436,7 +436,7 @@ fn room(dir: &Path, tree: &[Entry], have: &HashSet<&Entry>) -> io::Result<()> {
             largest = largest.max(m.len());
         }
     }
-    let free = free_bytes(dir)?;
+    let free = neochumby_sys::fs::available_bytes(dir)?;
     if free + freed < need + largest {
         let short = need + largest - free - freed;
         return Err(io::Error::new(io::ErrorKind::StorageFull, format!("the stick needs {short} more bytes free")));
@@ -444,22 +444,9 @@ fn room(dir: &Path, tree: &[Entry], have: &HashSet<&Entry>) -> io::Result<()> {
     Ok(())
 }
 
-/// What an unprivileged writer may still use on `p`'s filesystem.
-fn free_bytes(p: &Path) -> io::Result<u64> {
-    use std::os::unix::ffi::OsStrExt;
-    let c = std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| invalid("a NUL in a path"))?;
-    let mut v: libc::statvfs = unsafe { std::mem::zeroed() };
-    if unsafe { libc::statvfs(c.as_ptr(), &mut v) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    // The fields' widths differ between systems.
-    #[allow(clippy::unnecessary_cast)]
-    Ok(v.f_bavail as u64 * v.f_frsize as u64)
-}
-
 /// Everything written so far, on the stick.
 fn durable() {
-    unsafe { libc::sync() };
+    neochumby_sys::fs::sync();
 }
 
 /// Removes what is in `rel` under `base` and not named: files not in
@@ -518,7 +505,7 @@ fn write_whole(dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
 }
 
 fn create_new(p: &Path, mode: u32) -> io::Result<File> {
-    OpenOptions::new().write(true).create_new(true).mode(mode).custom_flags(libc::O_NOFOLLOW).open(p)
+    OpenOptions::new().write(true).create_new(true).mode(mode).custom_flags(NO_FOLLOW).open(p)
 }
 
 fn remove_if_there(p: &Path) -> io::Result<()> {
@@ -529,11 +516,11 @@ fn remove_if_there(p: &Path) -> io::Result<()> {
 }
 
 /// Makes `d`'s entries durable. A filesystem that cannot fsync a directory
-/// says EINVAL; a whole sync() does it then.
+/// says EINVAL (InvalidInput); a whole sync() does it then.
 fn sync_dir(d: &Path) -> io::Result<()> {
     match File::open(d)?.sync_all() {
-        Err(e) if e.raw_os_error() == Some(libc::EINVAL) => {
-            unsafe { libc::sync() };
+        Err(e) if e.kind() == io::ErrorKind::InvalidInput => {
+            durable();
             Ok(())
         }
         r => r,
@@ -542,7 +529,7 @@ fn sync_dir(d: &Path) -> io::Result<()> {
 
 /// A small file, refused if longer than `cap`, never through a link.
 fn read_capped(p: &Path, cap: u64) -> io::Result<String> {
-    let f = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(p)?;
+    let f = OpenOptions::new().read(true).custom_flags(NO_FOLLOW).open(p)?;
     let mut s = String::new();
     f.take(cap + 1).read_to_string(&mut s)?;
     if s.len() as u64 > cap {

@@ -1,4 +1,5 @@
-//! Signals to other processes, by pid or by process group.
+//! Signals to other processes, by pid or by process group, and this
+//! process's priority.
 
 use std::io;
 
@@ -32,6 +33,13 @@ pub fn kill(pid: u32, sig: Signal) -> io::Result<()> {
 /// value too large for a pid_t is refused, as for [`kill`].
 pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
+}
+
+/// Lowers this process's priority by `by` (nice(2)); 19 is the lowest. A
+/// process may always lower its own, so nothing is reported.
+pub fn lower_priority(by: u8) {
+    // SAFETY: nice(2) takes an integer and touches no memory of ours.
+    unsafe { libc::nice(libc::c_int::from(by.min(19))) };
 }
 
 fn positive(id: u32) -> io::Result<libc::pid_t> {

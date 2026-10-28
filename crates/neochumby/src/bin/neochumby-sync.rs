@@ -99,7 +99,7 @@ fn rounds(forever: bool, log: &mut Log, failed: &mut Option<String>) -> io::Resu
 
 fn run() {
     // Writing the stick competes with the screen for the one core.
-    unsafe { libc::nice(19) };
+    neochumby_sys::process::lower_priority(19);
     let mut log = Log::default();
     let mut failed: Option<String> = None;
     let mut wait = EVERY;
