@@ -181,8 +181,8 @@ decision from John.
    honest with `neochumbyd=required`, and keep a seed set on the stick so it
    shows the last pictures until the server answers.
 3. **Boot.** We'd drop wx's `debugchumby` + Flash-watchdog dance and use
-   `userhook2`, so nothing else changes. One trade-off we'd note: wx kept
-   Flash's alarms unreachable while running too, so no loss.
+   `userhook2`, so nothing else changes. As with wx today, the stock
+   Chumby alarms can't fire while a shell runs.
 4. **Hardware notes.** wx has a long list of measured traps (the level-
    triggered `/dev/switch` that spins `read()` loops, `mDNSResponder` at
    100% CPU, the clock drifting back a year, a 32 GB stick at power-on
