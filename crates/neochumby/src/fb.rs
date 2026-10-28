@@ -1,8 +1,14 @@
 //! The Chumby Classic's screen: /dev/fb0, 320x240, RGB565, 640-byte lines.
 
+use std::convert::Infallible;
 use std::fs::OpenOptions;
 use std::io;
 
+use embedded_graphics::Pixel;
+use embedded_graphics::pixelcolor::Rgb565;
+use embedded_graphics::pixelcolor::raw::RawU16;
+use embedded_graphics::prelude::*;
+use embedded_graphics::primitives::Rectangle;
 use font8x8::UnicodeFonts;
 use neochumby_sys::mm::DeviceMap;
 
@@ -73,6 +79,39 @@ impl Fb {
                 *d = pal.0[p[0] as usize] as u32 | (pal.0[p[1] as usize] as u32) << 16;
             }
         }
+    }
+}
+
+/// embedded-graphics draws on the screen: its fonts, shapes and text, and
+/// any crate built on it. What falls outside the screen is left out.
+impl DrawTarget for Fb {
+    type Color = Rgb565;
+    type Error = Infallible;
+
+    fn draw_iter<I: IntoIterator<Item = Pixel<Rgb565>>>(&mut self, pixels: I) -> Result<(), Infallible> {
+        let px = self.pixels();
+        for Pixel(p, c) in pixels {
+            if let (Ok(x @ 0..W), Ok(y @ 0..H)) = (usize::try_from(p.x), usize::try_from(p.y)) {
+                px[y * W + x] = RawU16::from(c).into_inner();
+            }
+        }
+        Ok(())
+    }
+
+    fn fill_solid(&mut self, area: &Rectangle, c: Rgb565) -> Result<(), Infallible> {
+        let area = area.intersection(&self.bounding_box());
+        if let Some(end) = area.bottom_right() {
+            let (x, y) = (area.top_left.x as usize, area.top_left.y as usize);
+            let (w, h) = (end.x as usize + 1 - x, end.y as usize + 1 - y);
+            self.rect(x, y, w, h, RawU16::from(c).into_inner());
+        }
+        Ok(())
+    }
+}
+
+impl OriginDimensions for Fb {
+    fn size(&self) -> Size {
+        Size::new(W as u32, H as u32)
     }
 }
 

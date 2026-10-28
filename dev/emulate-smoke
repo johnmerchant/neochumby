@@ -42,17 +42,23 @@ opened_home() {
 
 # Where to tap: neochumby-home's layout, rows of apps from y=44, 36 high
 # with 4 between, in name order, those with a title and exec; CHUMBY MODE
-# along the bottom. What happened is read from the session's log.
-row=0
-found=
+# along the bottom. More than four apps go three to a page, with MORE in
+# the fourth row. What happened is read from the session's log.
+index=
+listed=0
 for d in $(ls "$tree/apps"); do
   m=$tree/apps/$d/manifest
   grep -q '^title=' "$m" && grep -q '^exec=' "$m" || continue
-  [ "$d" = doom ] && found=1 && break
-  row=$((row + 1))
+  [ "$d" = doom ] && index=$listed
+  listed=$((listed + 1))
 done
-[ -n "$found" ] && [ "$row" -lt 4 ] || fail "the tree needs doom among its first four listed apps"
-doom_y=$((44 + row * 40 + 18))
+[ -n "$index" ] || fail "the tree needs doom"
+row_y() { echo $((44 + $1 * 40 + 18)); }
+if [ "$listed" -le 4 ]; then
+  page=0 row=$index
+else
+  page=$((index / 3)) row=$((index % 3))
+fi
 
 step "boot"
 emu start "$tree"
@@ -60,7 +66,13 @@ opened_home 1 "the home screen didn't open"
 emu shot "$out/1-home.png"
 
 step "tap DOOM"
-emu tap 160 "$doom_y"
+i=0
+while [ "$i" -lt "$page" ]; do
+  emu tap 160 "$(row_y 3)"
+  sleep 0.5
+  i=$((i + 1))
+done
+emu tap 160 "$(row_y "$row")"
 # Without game data Doom exits at once; with it, it draws its bars.
 i=0
 until emu log | grep -q 'neochumby-doom: no IWAD found' || [ "$(emu pixel 160 2)" = "#180000" ]; do
@@ -116,7 +128,8 @@ emu wait exit 20 || fail "CHUMBY MODE didn't end the session"
 emu log > "$out/log.txt"
 
 step "boot from a stick"
-emu mkstick --force "$out/stick.img" "$tree"
+# Room for every app CI builds, not just a few: mkstick makes 64 MB.
+emu mkstick --size 256 --force "$out/stick.img" "$tree"
 emu start --stick "$out/stick.img"
 opened_home 1 "the home screen didn't open from the stick"
 emu shot "$out/4-stick.png"
