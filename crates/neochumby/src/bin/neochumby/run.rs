@@ -31,9 +31,8 @@
 //!
 //! When a service exits, the session mutes the speaker and puts back the
 //! volume the Chumby booted with (neochumby::audio), so a service that dies
-//! while playing can't leave it on. It can't tell whether another service
-//! is playing at that moment (the library keeps no record of who holds the
-//! speaker), so that one is muted too, until it next unmutes.
+//! while playing can't leave it on; unless another live process holds the
+//! speaker (the handover's claim), whose playing is left alone.
 
 use std::path::Path;
 use std::process::{Child, ExitStatus};
@@ -52,8 +51,12 @@ use crate::start;
 pub trait Device {
     /// Whether the escape hatch was used since the last call.
     fn escaped(&mut self) -> bool;
-    /// Mutes the speaker and puts back the volume the Chumby booted with.
-    fn reset_speaker(&mut self);
+    /// Mutes the speaker and puts back the volume the Chumby booted with,
+    /// waiting up to `wait` for the volume to be set.
+    fn reset_speaker(&mut self, wait: Duration);
+    /// The live process holding the speaker (neochumby::audio), if one
+    /// does.
+    fn speaker_holder(&self) -> Option<u32>;
 }
 
 pub struct Timing {
@@ -87,6 +90,9 @@ impl Default for Timing {
         }
     }
 }
+
+/// How long putting the volume back may take as the session ends.
+const SPEAKER_WAIT: Duration = Duration::from_secs(3);
 
 /// Five failures of the start app within this long: it can't start.
 const FAILURES: usize = 5;
@@ -176,7 +182,9 @@ impl<'a, D: Device> Session<'a, D> {
         }
         eprintln!("neochumby: CHUMBY MODE");
         self.services.stop(self.timing.service_patience);
-        self.device.reset_speaker();
+        // Everything that could play has stopped: put the speaker back
+        // before the Chumby's own software runs.
+        self.device.reset_speaker(SPEAKER_WAIT);
     }
 
     fn open(&mut self, app: &'a App, reason: Option<&'static str>) -> std::io::Result<Front<'a>> {
@@ -204,7 +212,12 @@ impl<'a, D: Device> Session<'a, D> {
             self.read(&mut f);
             let ev = self.services.poll(&f.app.name);
             if !ev.died.is_empty() {
-                self.device.reset_speaker();
+                // The dead service, or something it started, may have held
+                // the speaker; a live player that holds it is left alone.
+                match self.device.speaker_holder() {
+                    Some(pid) => eprintln!("neochumby: process {pid} holds the speaker; leaving it as it is"),
+                    None => self.device.reset_speaker(Duration::ZERO),
+                }
             }
             for (from, req) in ev.requests {
                 if f.asked.is_some() {
@@ -377,6 +390,8 @@ mod tests {
     struct Fake {
         escape: Arc<AtomicBool>,
         resets: Arc<AtomicUsize>,
+        /// Who the speaker's holder is said to be.
+        holder: Option<u32>,
     }
 
     impl Device for Fake {
@@ -384,8 +399,12 @@ mod tests {
             self.escape.swap(false, Ordering::SeqCst)
         }
 
-        fn reset_speaker(&mut self) {
+        fn reset_speaker(&mut self, _wait: Duration) {
             self.resets.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn speaker_holder(&self) -> Option<u32> {
+            self.holder
         }
     }
 
@@ -758,6 +777,18 @@ mod tests {
         assert!((4..=9).contains(&runs), "{runs} runs");
         // One for each exit, and one as the session ends.
         assert!(resets.load(Ordering::SeqCst) >= runs, "{runs} runs, {resets:?} resets");
+    }
+
+    #[test]
+    fn a_dead_service_leaves_another_player_alone() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree_with("holder", &[("wx", "start=true\n", "sleep 1\nask chumby-mode")], &[("wx", "exit 1")]);
+        let fake = Fake { holder: Some(1), ..Fake::default() };
+        let resets = fake.resets.clone();
+        run_on(&root, &[("settings", "wx")], fake);
+        assert!(log(&root).iter().filter(|l| l.starts_with("wx-svc")).count() >= 2);
+        // Only as the session ends.
+        assert_eq!(resets.load(Ordering::SeqCst), 1);
     }
 
     #[test]

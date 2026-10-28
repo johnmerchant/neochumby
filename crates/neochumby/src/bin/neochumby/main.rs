@@ -116,22 +116,31 @@ impl run::Device for Chumby {
 
     /// Mutes at once (a write to /proc). The volume is put back by a
     /// thread, since audio::set_volume runs the stock chumby_set_volume and
-    /// the loop mustn't wait on it; one at a time.
-    fn reset_speaker(&mut self) {
+    /// the loop mustn't wait on it; one at a time. As the session ends, it
+    /// waits for that, up to `wait`.
+    fn reset_speaker(&mut self, wait: Duration) {
         if let Err(e) = audio::mute(true) {
             eprintln!("neochumby: muting the speaker: {e}");
         }
-        let Some(v) = self.boot_volume else { return };
-        if self.restoring.swap(true, Ordering::SeqCst) {
-            return;
+        if let Some(v) = self.boot_volume
+            && !self.restoring.swap(true, Ordering::SeqCst)
+        {
+            let restoring = self.restoring.clone();
+            std::thread::spawn(move || {
+                if let Err(e) = audio::set_volume(v) {
+                    eprintln!("neochumby: setting the volume: {e}");
+                }
+                restoring.store(false, Ordering::SeqCst);
+            });
         }
-        let restoring = self.restoring.clone();
-        std::thread::spawn(move || {
-            if let Err(e) = audio::set_volume(v) {
-                eprintln!("neochumby: setting the volume: {e}");
-            }
-            restoring.store(false, Ordering::SeqCst);
-        });
+        let deadline = Instant::now() + wait;
+        while self.restoring.load(Ordering::SeqCst) && Instant::now() < deadline {
+            neochumby::sleep_ms(20);
+        }
+    }
+
+    fn speaker_holder(&self) -> Option<u32> {
+        audio::holder()
     }
 }
 
