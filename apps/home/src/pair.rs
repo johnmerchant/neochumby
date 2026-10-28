@@ -1,4 +1,4 @@
-//! Pairing, from the home screen's PAIR button: this Chumby asks the
+//! Pairing, from neochumby-home's PAIR button: this Chumby asks the
 //! neochumbyd it was booted with to pair, and shows the code the two derive
 //! from their connection. Someone runs `neochumbyd approve <code>` on the
 //! server, having seen the same code there. Only then does anything get

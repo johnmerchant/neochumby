@@ -36,6 +36,7 @@
 
 #![allow(unsafe_code)]
 
+pub mod fd;
 pub mod net;
 pub mod process;
 pub mod speaker;
