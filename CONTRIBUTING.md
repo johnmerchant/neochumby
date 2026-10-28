@@ -6,7 +6,8 @@ changes easy to take.
 ## Ground rules
 
 - **Rust** for everything we write. Third-party engines in C (Doom, Quake)
-  are vendored as they are, and linked from a Rust crate.
+  are vendored with as few changes as possible, each marked with a comment
+  naming the app (`// neochumby-quake: ...`), and linked from a Rust crate.
 - **Comments say what the code does and why the rule is what it is**, not
   how it was debugged. One paragraph is usually enough.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL
@@ -33,22 +34,31 @@ crates), and `cargo test -p neochumby-proto -p neochumbyd`.
 ## Writing an app
 
 An app is a crate named `neochumby-<name>`. It lives in this repository
-under `apps/<name>/`, or in its own repository, where it is added to a
-Chumby from its git URL or from crates.io. At the crate's root:
+under `apps/<name>/`, or in its own repository with the crate at the root,
+where it is added to a tree from its git URL or from crates.io
+(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`). Its
+`Cargo.toml` says what it is:
 
-- `manifest`: key=value lines.
+```toml
+[package]
+name = "neochumby-weather"
+# ...
 
-  ```
-  title=WEATHER                      # listed on the home screen; runs exec
-  exec=neochumby-weather
-  colour=4a90d9                      # optional
-  service=neochumby-weather-sync     # optional: runs in the background
-  companion=neochumby-weather-companion   # optional: its server half
-  neochumbyd=optional                # required | optional | absent
-  ```
+[dependencies]
+neochumby = { git = "https://github.com/johnmerchant/neochumby" }
 
-- `files/`, optional: copied into the app's directory as it is (icons,
-  configuration).
+[package.metadata.neochumby]
+title = "WEATHER"                    # listed on the home screen; runs exec
+exec = "neochumby-weather"
+colour = "4a90d9"                    # optional
+service = "neochumby-weather-sync"   # optional: runs in the background
+companion = "neochumby-weather-companion"   # optional: its server half
+neochumbyd = "optional"              # "required" | "optional" | absent
+```
+
+`tools/tree` checks the table and writes the tree's `manifest` from it
+(`neochumby-manifest`). A `files/` directory beside `Cargo.toml`, optional,
+is copied into the app's directory as it is (icons, configuration).
 
 Binaries named by `exec`, `service` and `home` are built for the Chumby
 (`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend

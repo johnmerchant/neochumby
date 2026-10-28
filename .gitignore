@@ -8,3 +8,6 @@
 # Captures and profiles from the device.
 *.raw
 *.prof
+
+# Agents' worktrees
+/.claude/
