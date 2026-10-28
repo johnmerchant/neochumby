@@ -68,6 +68,9 @@ pub trait Device {
     /// Mutes the speaker and puts back the volume the Chumby booted with,
     /// waiting up to `wait` for the volume to be set.
     fn reset_speaker(&mut self, wait: Duration);
+    /// Sets the master volume to `volume` and unmutes, for a jailed app
+    /// that asked (`speaker <volume>`).
+    fn unmute(&mut self, volume: u32);
     /// The live process holding the speaker (neochumby::audio), if one
     /// does.
     fn speaker_holder(&self) -> Option<u32>;
@@ -167,6 +170,11 @@ pub struct Session<'a, D: Device> {
     suppressed: bool,
     last_open: Option<Instant>,
     button: Edges,
+    /// The app, as its exec or its service, that the session unmuted the
+    /// speaker for: only its `speaker off` mutes it again (a player that
+    /// yielded may say so after the next one asked), and when it goes the
+    /// speaker is put back.
+    speaker_by: Option<(&'a str, Role)>,
 }
 
 /// Whether the service of the app `from` may replace `front` in front;
@@ -206,6 +214,7 @@ impl<'a, D: Device> Session<'a, D> {
             services,
             suppressed: false,
             button: Edges::default(),
+            speaker_by: None,
         }
     }
 
@@ -231,7 +240,15 @@ impl<'a, D: Device> Session<'a, D> {
             }
             self.last_open = Some(Instant::now());
             next = match self.open(app, reason) {
-                Ok(front) => self.watch(front),
+                Ok(front) => {
+                    let next = self.watch(front);
+                    // It has gone, with whatever it started.
+                    if self.speaker_by == Some((app.name.as_str(), Role::Front)) {
+                        self.speaker_by = None;
+                        self.device.reset_speaker(Duration::ZERO);
+                    }
+                    next
+                }
                 Err(e) => {
                     eprintln!("neochumby: {}: {e}", app.name);
                     self.failed(app)
@@ -306,6 +323,9 @@ impl<'a, D: Device> Session<'a, D> {
             self.read(&mut f);
             let ev = self.services.poll(&f.app.name);
             if !ev.died.is_empty() {
+                if ev.died.iter().any(|(app, _)| self.speaker_by == Some((app.name.as_str(), Role::Service))) {
+                    self.speaker_by = None;
+                }
                 // The dead service, or something it started, may have held
                 // the speaker; a live player that holds it is left alone.
                 match self.device.speaker_holder() {
@@ -314,6 +334,10 @@ impl<'a, D: Device> Session<'a, D> {
                 }
             }
             for (from, req) in ev.requests {
+                if let Request::Speaker(on) = req {
+                    self.speaker(from, Role::Service, on);
+                    continue;
+                }
                 if f.asked.is_some() {
                     eprintln!(
                         "neochumby: service {} asks: {}; dropped: {} has asked already",
@@ -348,10 +372,35 @@ impl<'a, D: Device> Session<'a, D> {
         }
     }
 
+    /// `speaker <volume>` or `speaker off` from `app`, as `role`: only for
+    /// an app whose access lists the speaker.
+    fn speaker(&mut self, app: &'a App, role: Role, on: Option<u32>) {
+        if !app.access.speaker {
+            eprintln!("neochumby: {}: asks for the speaker, but its access doesn't list it", app.name);
+            return;
+        }
+        match on {
+            Some(v) => {
+                self.device.unmute(v);
+                self.speaker_by = Some((app.name.as_str(), role));
+            }
+            None if self.speaker_by == Some((app.name.as_str(), role)) => {
+                self.speaker_by = None;
+                self.device.reset_speaker(Duration::ZERO);
+            }
+            // A player that yielded, after the next one took the speaker.
+            None => {}
+        }
+    }
+
     /// Takes in what the app in front has asked for.
     fn read(&mut self, f: &mut Front<'a>) {
         for line in f.pipe.receive().lines {
             let next = match Request::parse(&line) {
+                Some(Request::Speaker(on)) => {
+                    self.speaker(f.app, Role::Front, on);
+                    continue;
+                }
                 Some(Request::ChumbyMode) => Next::ChumbyMode,
                 Some(Request::Open(name)) => match self.openable(&name) {
                     Ok(app) => {
@@ -393,6 +442,8 @@ impl<'a, D: Device> Session<'a, D> {
                 return None;
             }
             Request::ChumbyMode => Next::ChumbyMode,
+            // Taken in before it gets here (watch).
+            Request::Speaker(_) => return None,
             Request::Open(name) if *name == f.app.name => return None,
             Request::Open(name) => match self.openable(name) {
                 Ok(app) => Next::Open(app, None),
@@ -484,6 +535,8 @@ mod tests {
     struct Fake {
         escape: Arc<AtomicBool>,
         resets: Arc<AtomicUsize>,
+        /// The volumes the speaker was unmuted at, in order.
+        unmuted: Arc<Mutex<Vec<u32>>>,
         /// The button's level, and a file standing in for it.
         down: Arc<AtomicBool>,
         switch: Option<Arc<std::fs::File>>,
@@ -502,6 +555,10 @@ mod tests {
 
         fn reset_speaker(&mut self, _wait: Duration) {
             self.resets.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn unmute(&mut self, volume: u32) {
+            self.unmuted.lock().unwrap().push(volume);
         }
 
         fn speaker_holder(&self) -> Option<u32> {
@@ -684,6 +741,29 @@ mod tests {
         // About one open every 200 ms for a second.
         let games = log(&root).iter().filter(|l| *l == "game").count();
         assert!((1..=4).contains(&games), "{games} games");
+    }
+
+    #[test]
+    fn the_speaker_is_set_for_apps_whose_access_lists_it() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree(
+            "speaker",
+            &[
+                ("home", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open quiet'"),
+                // Not allowed: nothing happens.
+                ("quiet", "", "ask 'speaker 90'; sleep 0.3; ask 'open loud'"),
+                // Unmuted at one volume, then another; its going, without
+                // `speaker off`, puts the speaker back.
+                ("loud", "access=screen,speaker\n", "ask 'speaker 40'; sleep 0.3; ask 'speaker 70'; sleep 0.3"),
+            ],
+        );
+        let fake = Fake::default();
+        let (unmuted, resets) = (fake.unmuted.clone(), fake.resets.clone());
+        run_on(&root, &[("settings", "home")], fake);
+        assert_eq!(log(&root), ["home", "quiet", "loud", "home"]);
+        assert_eq!(*unmuted.lock().unwrap(), [40, 70]);
+        // Once as loud went, and once as the session ended.
+        assert_eq!(resets.load(Ordering::SeqCst), 2);
     }
 
     #[test]
