@@ -32,6 +32,12 @@ usage: chumby-emu boot --kernel ZIMAGE [options]
                      a full NAND image: the partitions from a backup's
                      nanddumps, PSP (a JFFS2 image) as the settings
                      partition, and the Cache partition erased
+       chumby-emu mkjffs2 PART DIR OUT
+                     JFFS2 image of a directory, the size of partition
+                     PART (psp, cache, or a number)
+       chumby-emu patchnand NAND OUT PART=FILE|PART=erased ...
+                     a copy of a whole NAND image with those partitions
+                     replaced by plain images (mkpsp, mkjffs2) or erased
 
   --kernel FILE      a zImage (a Kernel partition image works as is)
   --nand FILE        the NAND image; programs and erases are saved to it
@@ -157,7 +163,7 @@ fn boot(o: Options) -> Result<(), String> {
 fn screenshot(m: &Machine, path: &str) {
     let (w, h, px) = m.soc.lcdc.render(&m.ram);
     let tmp = format!("{path}.tmp");
-    if std::fs::write(&tmp, png::encode(w, h, &px)).is_ok() {
+    if std::fs::write(&tmp, png::encode_for(path, w, h, &px)).is_ok() {
         let _ = std::fs::rename(&tmp, path);
     }
 }
@@ -182,11 +188,36 @@ fn mknand(backup: &str, psp: &str, out: &str) -> Result<(), String> {
     std::fs::write(out, chip).map_err(|e| format!("{out}: {e}"))
 }
 
+/// A JFFS2 image of a directory, as big as a partition.
+fn mkjffs2(part: &str, dir: &str, out: &str) -> Result<(), String> {
+    let n = image::partition(part).ok_or(format!("no partition {part}"))?;
+    let img = image::mkjffs2(std::path::Path::new(dir), image::PARTITIONS[n].2)?;
+    std::fs::write(out, img).map_err(|e| format!("{out}: {e}"))
+}
+
+/// A copy of a whole NAND image with some partitions replaced, each
+/// `PART=FILE` (a plain image of the partition's size) or `PART=erased`.
+fn patchnand(input: &str, out: &str, edits: &[String]) -> Result<(), String> {
+    let mut chip = std::fs::read(input).map_err(|e| format!("{input}: {e}"))?;
+    for e in edits {
+        let (part, file) = e.split_once('=').ok_or(format!("{e}: expected PART=FILE or PART=erased"))?;
+        let n = image::partition(part).ok_or(format!("no partition {part}"))?;
+        let src = match file {
+            "erased" => image::Source::Erased,
+            f => image::Source::Data(std::fs::read(f).map_err(|e| format!("{f}: {e}"))?),
+        };
+        image::replace(&mut chip, n, src)?;
+    }
+    std::fs::write(out, chip).map_err(|e| format!("{out}: {e}"))
+}
+
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let r = match args.first().map(String::as_str) {
         Some("boot") => parse(&args[1..]).and_then(boot),
         Some("mkpsp") if args.len() == 3 => mkpsp(&args[1], &args[2]),
+        Some("mkjffs2") if args.len() == 4 => mkjffs2(&args[1], &args[2], &args[3]),
+        Some("patchnand") if args.len() >= 3 => patchnand(&args[1], &args[2], &args[3..]),
         Some("mknand") if args.len() == 4 => mknand(&args[1], &args[2], &args[3]),
         _ => Err(USAGE.into()),
     };

@@ -330,9 +330,9 @@ impl Soc {
                     self.set_touch(None);
                     let _ = req.reply.send("ok".into());
                 }
-                Command::Tap(x, y) => {
+                Command::Tap(x, y, ms) => {
                     self.set_touch(Some((x, y)));
-                    self.release = Some((now + crate::machine::CPU_HZ / 10, req.reply));
+                    self.release = Some((now + crate::machine::CPU_HZ * ms as u64 / 1000, req.reply));
                 }
                 Command::Console(text) => {
                     self.console_pending.extend(text.bytes());
@@ -341,7 +341,7 @@ impl Soc {
                 }
                 Command::Shot(path) => {
                     let (w, h, px) = self.lcdc.render(ram);
-                    let r = std::fs::write(&path, crate::png::encode(w, h, &px));
+                    let r = std::fs::write(&path, crate::png::encode_for(&path, w, h, &px));
                     let _ = req.reply.send(match r {
                         Ok(()) => "ok".into(),
                         Err(e) => format!("error: {e}"),

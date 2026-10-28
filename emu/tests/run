@@ -1,0 +1,20 @@
+#!/bin/sh
+# Runs the emulator scenarios (tests/scenarios.rs) in one go: builds a
+# neochumby tree with the probe app (tools/tree, so the Chumby toolchain
+# and zig are needed) unless NEOCHUMBY_EMU_TREE names one, then the tests.
+# The firmware comes from NEOCHUMBY_EMU_KERNEL, NEOCHUMBY_EMU_NAND and
+# NEOCHUMBY_EMU_PSP (README.md, "Tests"); without them every scenario is
+# skipped.
+#
+#   emu/tests/run [NAME ...]        e.g. emu/tests/run chumby_mode
+set -eu
+emu=$(cd "$(dirname "$0")/.." && pwd)
+root=$(cd "$emu/.." && pwd)
+if [ -z "${NEOCHUMBY_EMU_TREE:-}" ] && [ -n "${NEOCHUMBY_EMU_KERNEL:-}" ]; then
+  NEOCHUMBY_EMU_TREE=$emu/target/tmp/emutest-tree
+  rm -rf "$NEOCHUMBY_EMU_TREE"
+  (cd "$root" && tools/tree "$NEOCHUMBY_EMU_TREE" ./emu/tests/probe)
+  export NEOCHUMBY_EMU_TREE
+fi
+cd "$emu"
+exec cargo test --release --test scenarios -- "$@"

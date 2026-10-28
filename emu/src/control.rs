@@ -3,7 +3,8 @@
 //!
 //!     down X Y     touch the screen at pixel (X, Y) and hold
 //!     up           release
-//!     tap X Y      touch for 100 ms (emulated) and release
+//!     tap X Y [MS] touch for MS milliseconds (emulated; default 100) and
+//!                  release
 //!     shot FILE    write the screen to FILE as a PNG
 //!     console TEXT type TEXT and Enter on the serial console
 //!
@@ -16,7 +17,8 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 pub enum Command {
     Down(u32, u32),
     Up,
-    Tap(u32, u32),
+    /// Where, and for how many emulated milliseconds.
+    Tap(u32, u32, u32),
     Shot(String),
     Console(String),
 }
@@ -38,7 +40,11 @@ fn parse(line: &str) -> Result<Command, String> {
     match w.first().copied() {
         Some("down") => xy(&w[1..]).map(|(x, y)| Command::Down(x, y)),
         Some("up") => Ok(Command::Up),
-        Some("tap") => xy(&w[1..]).map(|(x, y)| Command::Tap(x, y)),
+        Some("tap") if w.len() == 4 => {
+            let ms = w[3].parse().map_err(|_| "bad milliseconds")?;
+            xy(&w[1..3]).map(|(x, y)| Command::Tap(x, y, ms))
+        }
+        Some("tap") => xy(&w[1..]).map(|(x, y)| Command::Tap(x, y, 100)),
         Some("shot") if w.len() == 2 => Ok(Command::Shot(w[1].into())),
         Some("console") => Ok(Command::Console(line.trim_start()["console".len()..].trim_start().into())),
         _ => Err(format!("unknown command: {line}")),

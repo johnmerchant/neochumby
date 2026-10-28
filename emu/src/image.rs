@@ -169,6 +169,38 @@ pub enum Source {
     Erased,
 }
 
+/// The partition a short name (`psp`, `cache`), a number (`6`, `mtd6`) or
+/// a backup's name (`mtd6-Cache`) means: its index in [`PARTITIONS`].
+pub fn partition(name: &str) -> Option<usize> {
+    let n = name.to_ascii_lowercase();
+    PARTITIONS.iter().position(|(full, _, _)| {
+        let full = full.to_ascii_lowercase();
+        let (num, label) = full.split_once('-').unwrap_or((&full, ""));
+        n == full || n == num || n == label || n == num.trim_start_matches("mtd")
+    })
+}
+
+/// Rewrites one partition of a whole-chip image in place: with plain data
+/// (blank spare areas, as [`mknand`] writes it), or erased.
+pub fn replace(chip: &mut [u8], part: usize, src: Source) -> Result<(), String> {
+    let (name, off, size) = PARTITIONS[part];
+    let want = size / PAGE * RECORD;
+    let at = off / PAGE * RECORD;
+    if chip.len() != PAGES * RECORD {
+        return Err(format!("not a whole NAND image: {} bytes, expected {}", chip.len(), PAGES * RECORD));
+    }
+    let records = match src {
+        Source::Dump(d) => d,
+        Source::Data(d) => with_spare(&d, 0xff),
+        Source::Erased => vec![0xff; want],
+    };
+    if records.len() != want {
+        return Err(format!("{name}: {} bytes, expected {want}", records.len()));
+    }
+    chip[at..at + want].copy_from_slice(&records);
+    Ok(())
+}
+
 /// Assembles the whole chip from one source per partition.
 pub fn mknand(parts: Vec<Source>) -> Result<Vec<u8>, String> {
     let mut chip = vec![0xffu8; PAGES * RECORD];

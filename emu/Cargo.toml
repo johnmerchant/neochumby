@@ -12,6 +12,13 @@ description = "A Chumby Classic (i.MX21) emulator that boots the stock firmware"
 
 [dependencies]
 
+# End-to-end tests on the emulated Chumby, from the developer's own images
+# (README.md, "Tests"); skipped without them. Their own runner, which
+# reports skips.
+[[test]]
+name = "scenarios"
+harness = false
+
 [profile.release]
 opt-level = 3
 debug = "line-tables-only"

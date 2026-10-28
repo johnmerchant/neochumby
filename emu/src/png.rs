@@ -57,3 +57,18 @@ pub fn encode(w: usize, h: usize, px: &[u32]) -> Vec<u8> {
     chunk(&mut out, b"IEND", &[]);
     out
 }
+
+/// Encodes 0x00RRGGBB pixels as a binary PPM (P6), the format QEMU's
+/// `screendump` writes, for tools that read both emulators' screens.
+pub fn encode_ppm(w: usize, h: usize, px: &[u32]) -> Vec<u8> {
+    let mut out = format!("P6\n{w} {h}\n255\n").into_bytes();
+    for &p in &px[..w * h] {
+        out.extend_from_slice(&[(p >> 16) as u8, (p >> 8) as u8, p as u8]);
+    }
+    out
+}
+
+/// A screen image for `path`: PPM if it ends in `.ppm`, else PNG.
+pub fn encode_for(path: &str, w: usize, h: usize, px: &[u32]) -> Vec<u8> {
+    if path.ends_with(".ppm") { encode_ppm(w, h, px) } else { encode(w, h, px) }
+}
