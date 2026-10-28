@@ -11,6 +11,11 @@ the Chumby back to its stock software, and a reboot brings neochumby back.
 Every binary is paged in as it runs, so apps cost the Chumby nothing until
 opened.
 
+An independent project, not affiliated with or endorsed by Chumby
+Industries, Blue Octy or anyone holding rights in Chumby; "Chumby" is a
+trademark of its owner. None of the Chumby's own software is distributed
+here: see [docs/legal.md](docs/legal.md).
+
 ## The hardware
 
 Freescale i.MX21: an ARM926EJ-S at about 266 MHz, with no FPU and 64 MB of
