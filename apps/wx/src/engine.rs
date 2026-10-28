@@ -29,11 +29,19 @@
 //! secs_down, and app NAME (open apps/NAME from the neochumby tree, through
 //! a launch::Launcher, and come back when it is done).
 //!
-//! Control: lines appended to /tmp/wxctl (WXCTL) run within 0.2 s:
+//! Control: lines appended to the control file run within 0.2 s:
 //! show SCREEN | page N | pin on|off | night on|off |
 //! nightmode auto|on|off|next | tap X Y | button | stats | bench on|off |
 //! reload | drop [all] | fx N|NAME|next|random | fx loop on|all|off | app NAME.
-//! stats (and every 5 s while bench is on) writes /tmp/wxstat (WXSTAT).
+//! stats (and every 5 s while bench is on) writes the stats file. Both are
+//! in a private directory, /tmp/neochumby-wx/ (`ctl`, `stat`), unless
+//! NEOCHUMBY_WX_CTL or NEOCHUMBY_WX_STAT name others. NEOCHUMBY_WX_CACHE_KB
+//! sets the cache's budget.
+//!
+//! The manifest and pictures come from a server and are not trusted: lines
+//! with numbers that make no sense are skipped (manifest.rs), no file may be
+//! bigger than the cache's budget, and the cache never grows past
+//! [`ceiling`] even for what is on screen.
 //!
 //! Pictures load lazily into a byte-budgeted cache (cache.rs): a page's or
 //! screen's files are read when it is shown, and the likely next ones are
@@ -42,9 +50,13 @@
 //! The picture directory: if DIR/current names a subdirectory (one word,
 //! "a" or "b"), the set lives there and a push switches sets by rewriting
 //! `current` (FAT has no atomic rename of a directory). Otherwise DIR holds
-//! manifest.txt itself.
+//! manifest.txt itself. Until there is a usable manifest, a waiting screen
+//! shows and the directory is looked at again every second.
 
 use std::collections::VecDeque;
+use std::fs::OpenOptions;
+use std::io::Write;
+use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::cache::{self, Asset, Cache, State};
@@ -52,7 +64,7 @@ use crate::draw::{KEY, add_light, sin};
 use crate::launch::{Launcher, Opened};
 use crate::loader::{self, Fail, Loader};
 use crate::logo::{self, FX_LOOP_GAP, FX_OUT_GAP, FX_SHINE, Logo};
-use crate::manifest::{self, FPS, H, Ix, MAXASSET, Manifest, NFX, Slider, W, fx_parse};
+use crate::manifest::{self, FPS, H, Ix, MAXASSET, Manifest, NFX, Size, Slider, W, fx_parse};
 use crate::plat::{Plat, Touch, local_hms};
 use crate::scan::{atoi, scan};
 
@@ -218,8 +230,10 @@ pub struct Engine<P: Plat> {
     inj_button: bool,
     want_reload: bool,
     pending_app: Option<String>,
-    ctl_path: PathBuf,
-    stat_path: PathBuf,
+    ctl_path: Option<PathBuf>,
+    stat_path: Option<PathBuf>,
+    /// No usable manifest yet: the waiting screen is up.
+    waiting: bool,
 
     // The frame loop's own.
     tx: i32,
@@ -235,19 +249,61 @@ pub struct Engine<P: Plat> {
     last_sec: i64,
 }
 
-fn env_path(name: &str, dflt: &str) -> PathBuf {
-    std::env::var_os(name).map_or_else(|| PathBuf::from(dflt), PathBuf::from)
+/// The private directory for the default control and stats files.
+const RUN_DIR: &str = "/tmp/neochumby-wx";
+
+/// The most memory the cache may hold, whatever is on screen: twice its
+/// budget, and at least 8 MB (the aurora page alone is about 2 MB).
+pub fn ceiling(budget: usize) -> usize {
+    (budget * 2).max(8 << 20)
+}
+
+/// A file named by `var`, else `name` in [`RUN_DIR`], which is made (or
+/// kept) a real directory of ours, mode 0700. None if it can't be.
+fn run_path(var: &str, name: &str) -> Option<PathBuf> {
+    if let Some(p) = std::env::var_os(var) {
+        return Some(PathBuf::from(p));
+    }
+    let d = Path::new(RUN_DIR);
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(d);
+    let ok = std::fs::symlink_metadata(d).is_ok_and(|m| {
+        use std::os::unix::fs::MetadataExt;
+        // SAFETY: getuid() only returns the user id.
+        m.is_dir() && m.uid() == unsafe { libc::getuid() }
+    });
+    if !ok || std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).is_err() {
+        eprintln!("{RUN_DIR} isn't a directory of ours: no {name} file");
+        return None;
+    }
+    Some(d.join(name))
+}
+
+/// Opens a file without following a symbolic link at the end of its path.
+fn open_nofollow(o: &mut OpenOptions) -> &mut OpenOptions {
+    o.custom_flags(libc::O_NOFOLLOW)
+}
+
+fn read_nofollow(path: &Path, cap: u64) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let f = open_nofollow(OpenOptions::new().read(true)).open(path).ok()?;
+    let mut b = Vec::new();
+    f.take(cap + 1).read_to_end(&mut b).ok()?;
+    (b.len() as u64 <= cap).then_some(b)
+}
+
+fn write_nofollow(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    open_nofollow(OpenOptions::new().write(true).create(true).truncate(true).mode(0o600)).open(path)?.write_all(data)
 }
 
 fn read_int(path: &Path, dflt: i32) -> i32 {
-    match std::fs::read(path) {
-        Ok(b) if !b.is_empty() => atoi(&b[..b.len().min(11)]),
+    match read_nofollow(path, 64) {
+        Some(b) if !b.is_empty() => atoi(&b[..b.len().min(11)]),
         _ => dflt,
     }
 }
 
 fn save_int(path: &Path, v: i32) {
-    let _ = std::fs::write(path, format!("{v}\n"));
+    let _ = write_nofollow(path, format!("{v}\n").as_bytes());
 }
 
 fn mtime(m: &std::fs::Metadata) -> i64 {
@@ -285,7 +341,13 @@ fn resolve_dir(base: &Path) -> PathBuf {
 
 impl<P: Plat> Engine<P> {
     pub fn new(plat: P, launcher: Box<dyn Launcher>, base_dir: PathBuf) -> Engine<P> {
-        let budget = std::env::var("WXCACHE_KB").ok().map(|v| atoi(v.as_bytes())).filter(|&k| k >= 512).unwrap_or(4096);
+        // At most 1 GB: far more than the Chumby has, and it keeps every
+        // picture's offsets inside 32 bits.
+        let budget = std::env::var("NEOCHUMBY_WX_CACHE_KB")
+            .ok()
+            .map(|v| atoi(v.as_bytes()))
+            .filter(|&k| (512..=1 << 20).contains(&k))
+            .unwrap_or(4096);
         Engine {
             plat,
             launcher,
@@ -339,8 +401,9 @@ impl<P: Plat> Engine<P> {
             inj_button: false,
             want_reload: false,
             pending_app: None,
-            ctl_path: env_path("WXCTL", "/tmp/wxctl"),
-            stat_path: env_path("WXSTAT", "/tmp/wxstat"),
+            ctl_path: run_path("NEOCHUMBY_WX_CTL", "ctl"),
+            stat_path: run_path("NEOCHUMBY_WX_STAT", "stat"),
+            waiting: false,
             tx: 0,
             ty: 0,
             dragging: false,
@@ -405,6 +468,7 @@ impl<P: Plat> Engine<P> {
             Err(e) => {
                 match e {
                     Fail::Open => eprintln!("cannot read {}", self.c.assets[i].name),
+                    Fail::Memory => eprintln!("no memory for {} ({size} bytes)", self.c.assets[i].name),
                     _ => eprintln!("short file {} (want {size} bytes)", self.c.assets[i].name),
                 }
                 self.c.mark_bad(i);
@@ -477,6 +541,7 @@ impl<P: Plat> Engine<P> {
                     Fail::Open => eprintln!("cannot read {name}"),
                     Fail::Size(n) => eprintln!("bad file {name} ({n} bytes, want {})", self.c.assets[i].size),
                     Fail::Short => eprintln!("short file {name}"),
+                    Fail::Memory => eprintln!("no memory for {name}"),
                 }
                 self.c.mark_bad(i);
                 self.s.bad += 1;
@@ -625,6 +690,12 @@ impl<P: Plat> Engine<P> {
             if self.c.state(i) == State::Empty {
                 let size = self.c.assets[i].size;
                 self.make_room(size, true);
+                // What is on screen may go over budget, never over the
+                // ceiling: past that, it is left out.
+                if self.c.bytes + size > ceiling(self.c.budget) {
+                    eprintln!("{} left out: the cache is at its ceiling", self.c.assets[i].name);
+                    continue;
+                }
             }
             self.load_now(i);
         }
@@ -710,7 +781,7 @@ impl<P: Plat> Engine<P> {
                     continue;
                 }
                 let flying = self.inflight.as_ref().is_some_and(|f| f.asset == Some(i));
-                if self.c.assets[i].data.is_some() && !flying {
+                if self.c.holds(i) && !flying {
                     self.evict(i);
                 }
             }
@@ -730,6 +801,9 @@ impl<P: Plat> Engine<P> {
                 }
                 let size = self.c.assets[i].size;
                 self.make_room(size, true);
+                if self.c.bytes + size > ceiling(self.c.budget) {
+                    return None;
+                }
                 self.c.assets[i].used = t;
                 return Some(i);
             }
@@ -880,7 +954,8 @@ fn pan_into_back(back: &mut [u16], pano: &[u16], pano_w: i32, t: i64, speed: i32
 }
 
 fn rect_ok(x: i32, y: i32, w: i32, h: i32) -> bool {
-    x >= 0 && y >= 0 && x + w <= W && y + h <= H
+    let (x, y, w, h) = (x as i64, y as i64, w as i64, h as i64);
+    x >= 0 && y >= 0 && w >= 0 && h >= 0 && x + w <= W as i64 && y + h <= H as i64
 }
 
 /// A static screen-sized light layer is mostly black, and scanning all of
@@ -964,7 +1039,9 @@ impl<P: Plat> Engine<P> {
         let text = meta.as_ref().ok().and_then(|_| std::fs::read(&mpath).ok()).filter(|t| t.len() <= 1 << 20);
         let size_of = |n: &str| std::fs::metadata(newdir.join(n)).ok().map(|m| m.len());
         let Some(text) = text.filter(|t| manifest::usable(t, size_of)) else {
-            eprintln!("no usable manifest in {}", newdir.display());
+            if !self.waiting {
+                eprintln!("no usable manifest in {}", newdir.display());
+            }
             return Err(());
         };
         self.dir = newdir;
@@ -981,12 +1058,22 @@ impl<P: Plat> Engine<P> {
         let dir = self.dir.clone();
         let hashes = self.hashes.take();
         let c = &mut self.c;
+        let budget = c.budget as u64;
         let m = manifest::parse(&text, |name, expect| {
             let path = dir.join(name);
             let st = std::fs::metadata(&path).ok().filter(|s| s.is_file() && s.len() > 0);
-            let Some(st) = st.filter(|s| expect == 0 || s.len() == expect as u64) else {
+            // The right size, and never more than the whole cache.
+            let fits = |s: &std::fs::Metadata| {
+                s.len() <= budget
+                    && match expect {
+                        Size::Exactly(n) => s.len() == n as u64,
+                        Size::Any => true,
+                        Size::Invalid => false,
+                    }
+            };
+            let Some(st) = st.filter(fits) else {
                 let got = std::fs::metadata(&path).map_or(-1, |s| s.len() as i64);
-                eprintln!("bad file {name} ({got} bytes, want {expect})");
+                eprintln!("bad file {name} ({got} bytes, want {expect:?}, at most {budget})");
                 return None;
             };
             let size = st.len() as usize;
@@ -1014,7 +1101,7 @@ impl<P: Plat> Engine<P> {
         self.hashes = hashes;
         // Whatever the new manifest didn't adopt is gone.
         for o in &old {
-            if o.data.is_some() {
+            if o.data.is_some() || o.state == State::Loading {
                 self.c.bytes -= o.size;
             }
         }
@@ -1121,7 +1208,7 @@ impl<P: Plat> Engine<P> {
     }
 
     fn actor_frame(a: &manifest::Actor, t: i64) -> i32 {
-        (t * a.fps as i64 / 1000 % a.frames as i64) as i32
+        (t * a.fps as i64 / 1000).rem_euclid(a.frames as i64) as i32
     }
 
     fn fxs_commit(&mut self) {
@@ -1899,7 +1986,7 @@ impl<P: Plat> Engine<P> {
             self.glow_key = -1;
         }
         for i in 0..self.c.assets.len() {
-            if self.c.assets[i].data.is_some() && (all || !self.c.protected(i)) {
+            if self.c.holds(i) && (all || !self.c.protected(i)) {
                 self.evict(i);
             }
         }
@@ -2017,9 +2104,10 @@ impl<P: Plat> Engine<P> {
             fx.logo_max,
             self.fx_hold_us,
         );
-        let tmp = self.stat_path.with_extension("tmp");
-        if std::fs::write(&tmp, out).is_ok() {
-            let _ = std::fs::rename(&tmp, &self.stat_path);
+        let Some(path) = &self.stat_path else { return };
+        let tmp = path.with_extension("tmp");
+        if write_nofollow(&tmp, out.as_bytes()).is_ok() {
+            let _ = std::fs::rename(&tmp, path);
         }
     }
 
@@ -2150,15 +2238,16 @@ impl<P: Plat> Engine<P> {
 
     /// Runs the lines appended to the control file since the last look.
     fn poll_ctl(&mut self, t: i64) {
-        if !self.ctl_path.exists() {
+        let Some(path) = &self.ctl_path else { return };
+        if std::fs::symlink_metadata(path).is_err() {
             return;
         }
-        let work = self.ctl_path.with_extension("work");
+        let work = path.with_extension("work");
         // Whoever appends next starts a new file.
-        if std::fs::rename(&self.ctl_path, &work).is_err() {
+        if std::fs::rename(path, &work).is_err() {
             return;
         }
-        let buf = std::fs::read(&work).ok().filter(|b| b.len() <= 8192);
+        let buf = read_nofollow(&work, 8192);
         let _ = std::fs::remove_file(&work);
         for l in crate::scan::lines(&buf.unwrap_or_default()) {
             self.ctl_line(l, t);
@@ -2169,12 +2258,27 @@ impl<P: Plat> Engine<P> {
 
     /// Loads the manifest and the persisted state, and shows the first
     /// page. Err if there is nothing to show.
-    pub fn start(&mut self) -> Result<(), String> {
+    pub fn start(&mut self) {
         self.loader = Loader::start();
         if self.loader.is_none() {
             eprintln!("no loader thread: loading synchronously");
         }
-        self.load().map_err(|()| format!("no pages in {}", self.base_dir.display()))?;
+        if self.load().is_ok() {
+            self.begin();
+            return;
+        }
+        // Nothing to show yet (the pictures haven't been delivered): say so,
+        // and look again every second.
+        self.waiting = true;
+        let dir = self.base_dir.display().to_string();
+        self.plat.message(&["Waiting for pictures in", &dir]);
+        let now = self.ms();
+        self.last_check = now;
+        self.next = now;
+    }
+
+    /// The persisted state, and the first page.
+    fn begin(&mut self) {
         self.vol = read_int(&self.st("wx_volume"), 65);
         if !(0..=100).contains(&self.vol) {
             self.vol = 65;
@@ -2206,7 +2310,6 @@ impl<P: Plat> Engine<P> {
         self.page_start = now;
         self.last_touch = now;
         self.go_slideshow(now);
-        Ok(())
     }
 
     /// Runs frames until an exit (Home's CHUMBY) or, on the host, the end
@@ -2223,6 +2326,19 @@ impl<P: Plat> Engine<P> {
         if let Some(name) = self.pending_app.take() {
             self.launch_app(&name);
             return true;
+        }
+        if self.waiting {
+            if t - self.last_check >= 1000 {
+                self.last_check = t;
+                if self.load().is_ok() {
+                    self.waiting = false;
+                    self.begin();
+                    return true;
+                }
+            }
+            let more = self.plat.present();
+            self.plat.sleep_us(1_000_000 / FPS as i64);
+            return more;
         }
         if self.background {
             // Another app has the screen: draw nothing, read nothing, and
@@ -2423,6 +2539,152 @@ mod tests {
         }
     }
 
+    /// An engine on `manifest` and files of the given sizes (filled with a
+    /// pattern), with this budget, started.
+    fn hostile(tag: &str, manifest: &str, files: &[(&str, usize)], budget_kb: usize) -> (Engine<Host>, PathBuf) {
+        let d = std::env::temp_dir().join(format!("wx-hostile-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("p.raw"), vec![0x21u8; manifest::FRAME_BYTES]).unwrap();
+        for (name, size) in files {
+            let data: Vec<u8> = (0..*size).map(|i| (i * 7 + 3) as u8).collect();
+            std::fs::write(d.join(name), data).unwrap();
+        }
+        std::fs::write(d.join("manifest.txt"), format!("page 0 p.raw 12\nscreen home p.raw\n{manifest}")).unwrap();
+        let h = Host::new("unused", vec![1 << 40], 1793150000, d.clone());
+        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        e.c.budget = budget_kb * 1024;
+        e.start();
+        (e, d)
+    }
+
+    /// Runs frames through the slideshow, every intro and a screen,
+    /// checking the memory rules all along.
+    fn survive(e: &mut Engine<Host>, d: &Path) {
+        let budget = e.c.budget;
+        for k in 0..300 {
+            match k {
+                10 => e.ctl_line(b"fx loop all", e.ms()),
+                100 => e.ctl_line(b"show home", e.ms()),
+                120 => e.ctl_line(b"tap 5 5", e.ms()),
+                140 => e.ctl_line(b"page 0", e.ms()),
+                200 => e.ctl_line(b"night on", e.ms()),
+                _ => {}
+            }
+            assert!(e.frame());
+            assert!(e.c.assets.iter().all(|a| a.size <= budget), "an asset over the budget");
+            assert!(e.c.bytes <= ceiling(budget), "the cache past its ceiling");
+            let held: usize = (0..e.c.assets.len()).filter(|&i| e.c.holds(i)).map(|i| e.c.assets[i].size).sum();
+            assert_eq!(held, e.c.bytes, "the cache's count is off");
+        }
+        std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn hostile_sizes_overflow_and_negatives() {
+        let (e, d) = hostile(
+            "sizes",
+            "sprite 0 big.raw 65536 32768 1 0 0 8\n\
+             sprite 0 neg.raw -4 -4 2 0 0 8\n\
+             actor 0 a.raw 4 4 2 -5 path.raw 2\n\
+             actor 0 a.raw 4 4 2 0 path.raw 2\n\
+             pane home pn.raw 4 4 2147483000 0 page 1\n\
+             pane home pn.raw 4 4 316 236 page 1\n\
+             hot home 2147483000 0 2147483000 10 slideshow\n\
+             slider home e.raw e.raw k.raw 4 4 -2147483000 0 0 3 2 2\n\
+             page 1 p.raw 99999999999999\n\
+             glow 0 g.raw 4 4 0 1 -9000 0 0 0 0 1\n\
+             glow 0 g.raw 4 4 0 1 9000 -5000 3 7 1 1\n\
+             scroller 0 s.raw 400 4 230 -3 2147483000\n\
+             scroller 0 s.raw 400 4 230 -3 5\n",
+            &[
+                ("big.raw", 4),
+                ("neg.raw", 64),
+                ("a.raw", 64),
+                ("path.raw", 8),
+                ("pn.raw", 32),
+                ("e.raw", 32),
+                ("k.raw", 8),
+                ("g.raw", 32),
+                ("s.raw", 400 * 4 * 2),
+            ],
+            512,
+        );
+        assert!(e.m.sprites.is_empty(), "overflowing and negative sizes are skipped");
+        assert_eq!(e.m.actors.len(), 1, "a negative fps is skipped; 0 is a still frame");
+        assert_eq!(e.m.panes.len(), 1);
+        assert!(e.m.hots.is_empty() && e.m.sliders.is_empty());
+        assert_eq!(e.m.glows.len(), 1, "a negative cycle is skipped");
+        assert_eq!(e.m.scroller.amp, 5);
+        assert!(!rect_ok(i32::MAX, 0, 10, 10) && !rect_ok(0, 0, -1, 1) && rect_ok(310, 230, 10, 10));
+        let mut e = e;
+        survive(&mut e, &d);
+    }
+
+    #[test]
+    fn hostile_clock_and_bigger_than_the_budget() {
+        let wide = 30000usize;
+        let (mut e, d) = hostile(
+            "clock",
+            "clock c.raw 4 4 300 2 -100 -5 99999 4 4 4 4 4 4 4 4 4 4 4 4\n\
+             bgscroll 0 pano.raw 30000 2\n\
+             glowseq 0 g 3 12 255 255 255 255\n\
+             logofx 0 logo.raw 32767 1 0 100 spin\n",
+            &[
+                ("c.raw", 4 * 4 * 15 * 2),
+                ("pano.raw", wide * 240 * 2),
+                ("g_000.l8", 600 * 1024),
+                ("g_001.l8", 5000),
+                ("logo.raw", 32767 * 2),
+            ],
+            512,
+        );
+        assert_eq!(&e.m.clock.wd[..4], &[0, 0, 4, 4], "glyph widths are clamped to the cell");
+        assert!(e.m.pages[0].pano.is_none(), "a panorama bigger than the budget is refused");
+        let g = &e.m.gsqs[0];
+        assert!(g.frames[0].is_none() && g.frames[1].is_some() && g.frames[2].is_none());
+        assert!(e.m.logo.px.is_some());
+        survive(&mut e, &d);
+    }
+
+    #[test]
+    fn many_big_files_stay_under_the_ceiling() {
+        let mut m = String::new();
+        let mut files = Vec::new();
+        let names: Vec<String> = (0..24).map(|i| format!("s{i}.raw")).collect();
+        for n in &names {
+            // 250x250x4 frames x 2 bytes = 500,000 bytes each: 12 MB in all.
+            m.push_str(&format!("sprite 0 {n} 250 250 4 0 0 8\n"));
+            files.push((n.as_str(), 500_000));
+        }
+        let (mut e, d) = hostile("many", &m, &files, 512);
+        assert_eq!(e.m.sprites.len(), 24);
+        assert!(e.c.bytes <= ceiling(e.c.budget));
+        survive(&mut e, &d);
+    }
+
+    #[test]
+    fn waits_for_a_manifest() {
+        let d = std::env::temp_dir().join(format!("wx-wait-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        e.start();
+        for _ in 0..30 {
+            assert!(e.frame());
+        }
+        assert!(e.waiting);
+        std::fs::write(d.join("p.raw"), vec![0x77u8; manifest::FRAME_BYTES]).unwrap();
+        std::fs::write(d.join("manifest.txt"), "page 0 p.raw 12 noclock noticker\n").unwrap();
+        for _ in 0..40 {
+            assert!(e.frame());
+        }
+        assert!(!e.waiting, "it starts once the pictures are there");
+        assert!(e.plat.fb().iter().all(|&p| p == 0x7777));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
     #[test]
     fn an_app_in_front() {
         let d = std::env::temp_dir().join(format!("wx-front-{}", std::process::id()));
@@ -2438,7 +2700,7 @@ mod tests {
         let back = Rc::new(Cell::new(false));
         let h = Host::new("unused", vec![1_000_000], 0, d.clone());
         let mut e = Engine::new(h, Box::new(Session(back.clone())), d.clone());
-        e.start().unwrap();
+        e.start();
         e.ctl_line(b"show home", 0);
         assert!(e.c.bytes > 0);
         e.ctl_line(b"app nothing", 0);

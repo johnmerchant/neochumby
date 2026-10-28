@@ -6,7 +6,7 @@ use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use neochumby::fb::Fb;
+use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Squeeze, Touchscreen};
 
 use crate::engine::Engine;
@@ -127,6 +127,21 @@ impl Plat for Device {
         }
     }
 
+    fn message(&mut self, lines: &[&str]) {
+        self.fb.clear(rgb(0, 0, 0));
+        let mut y = 96;
+        for (i, l) in lines.iter().enumerate() {
+            // The first line large; the rest (a path) small, wrapped.
+            let (scale, per) = if i == 0 { (2, 19) } else { (1, 38) };
+            let chars: Vec<char> = l.chars().collect();
+            for part in chars.chunks(per) {
+                let s: String = part.iter().collect();
+                self.fb.text(8, y, &s, scale, rgb(220, 220, 220));
+                y += 10 * scale;
+            }
+        }
+    }
+
     fn sync_prefetch(&self) -> bool {
         false
     }
@@ -150,10 +165,7 @@ pub fn run(dir: PathBuf) -> i32 {
         last: (0, 0),
     };
     let mut e = Engine::new(d, Box::new(DirectExec), dir);
-    if let Err(err) = e.start() {
-        eprintln!("neochumby-wx: {err}");
-        return 1;
-    }
+    e.start();
     e.run();
     0
 }

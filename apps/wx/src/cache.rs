@@ -52,9 +52,12 @@ pub struct Cache {
     pub load_ser: u32,
 }
 
-/// A buffer of `size` bytes, as words.
-pub fn alloc(size: usize) -> Vec<u16> {
-    vec![0; size.div_ceil(2)]
+/// A buffer of `size` bytes, as words; None if there isn't the memory.
+pub fn alloc(size: usize) -> Option<Vec<u16>> {
+    let mut v = Vec::new();
+    v.try_reserve_exact(size.div_ceil(2)).ok()?;
+    v.resize(size.div_ceil(2), 0);
+    Some(v)
 }
 
 /// The bytes of a word buffer, in memory order (little-endian here, as the
@@ -99,25 +102,34 @@ impl Cache {
 
     /// Frees its memory, keeping the entry (and its state).
     pub fn drop_data(&mut self, i: usize) {
-        if self.assets[i].data.take().is_some() {
+        if self.holds(i) {
             self.bytes -= self.assets[i].size;
+        }
+        self.assets[i].data = None;
+        if self.assets[i].state == State::Loading {
+            self.assets[i].state = State::Empty;
         }
     }
 
-    /// Gives it a buffer to load into, counted from now on.
+    /// Whether its size is counted: it is in memory, or on its way.
+    pub fn holds(&self, i: usize) -> bool {
+        let a = &self.assets[i];
+        a.data.is_some() || a.state == State::Loading
+    }
+
+    /// Counts its memory from now on, while it is read (the reader makes
+    /// the buffer, so a load never holds two).
     pub fn start_load(&mut self, i: usize) {
         if self.assets[i].state != State::Empty {
             self.drop_data(i);
         }
-        let a = &mut self.assets[i];
-        a.data = Some(alloc(a.size));
-        a.state = State::Loading;
-        self.bytes += a.size;
+        self.assets[i].state = State::Loading;
+        self.bytes += self.assets[i].size;
     }
 
     /// The load finished: `data` holds the file.
     pub fn finish_load(&mut self, i: usize, data: Vec<u16>) {
-        if self.assets[i].data.is_none() {
+        if !self.holds(i) {
             self.bytes += self.assets[i].size;
         }
         self.load_ser += 1;
@@ -161,7 +173,7 @@ impl Cache {
         while self.bytes + n > self.budget {
             let mut best: Option<usize> = None;
             for (i, a) in self.assets.iter().enumerate() {
-                if a.data.is_none() || a.prot == self.prot_gen {
+                if !(a.data.is_some() || a.state == State::Loading) || a.prot == self.prot_gen {
                     continue;
                 }
                 if best.is_none_or(|b| a.used < self.assets[b].used) {
@@ -231,7 +243,7 @@ mod tests {
 
     fn load(c: &mut Cache, i: usize, used: i64) {
         c.start_load(i);
-        let d = alloc(c.assets[i].size);
+        let d = alloc(c.assets[i].size).unwrap();
         c.finish_load(i, d);
         c.assets[i].used = used;
     }
@@ -255,7 +267,7 @@ mod tests {
         // A load that was in flight and is finished counts once.
         c.start_load(0);
         assert_eq!(c.bytes, 100);
-        c.finish_load(0, alloc(100));
+        c.finish_load(0, alloc(100).unwrap());
         assert_eq!(c.bytes, 100);
         assert_eq!(c.assets[0].ser, 3);
     }

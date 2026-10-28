@@ -34,9 +34,13 @@ pub trait Plat {
     /// Wall clock time, in seconds since the epoch.
     fn wall(&self) -> i64;
     fn sleep_us(&mut self, us: i64);
-    /// Lets go of the inputs (false) for an app that takes them, or takes
-    /// them back (true), forgetting what happened meanwhile.
+    /// Closes the top button's device (false) while another app runs, so
+    /// that app can open it whatever its driver allows, or opens it again
+    /// (true), forgetting the touches made meanwhile. (Under proposal 0002
+    /// the session owns the button; this goes then.)
     fn inputs(&mut self, ours: bool);
+    /// A few lines of text on an otherwise blank screen (the waiting screen).
+    fn message(&mut self, lines: &[&str]);
     /// Whether prefetching should finish everything it starts before the
     /// frame ends, for frames that are the same on every run (the host).
     fn sync_prefetch(&self) -> bool;

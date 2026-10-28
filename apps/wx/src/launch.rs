@@ -1,9 +1,8 @@
 //! Opening another app from the tree (the `app NAME` action). Kept behind
-//! one small trait because how a home screen opens apps is still being
-//! decided (johnmerchant/neochumby#8): today the home screen runs the app
-//! itself and waits, as neochumby-home does; a session pipe that opens it
-//! for us, while we stay resident and don't draw, would be another
-//! [`Launcher`].
+//! one small trait while proposal 0002 (johnmerchant/neochumby#8) lands:
+//! there, an app asks the session to open another (`open NAME` on
+//! NEOCHUMBY_SESSION) and exits. Until the session's side is in, wx runs
+//! the app itself and waits, as neochumby-home does.
 
 /// What opening an app did.
 #[derive(Debug, PartialEq)]

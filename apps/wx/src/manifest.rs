@@ -313,16 +313,51 @@ pub fn usable(m: &[u8], size_of: impl Fn(&str) -> Option<u64>) -> bool {
     })
 }
 
+/// The size a file must have.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Size {
+    Exactly(usize),
+    /// Any size (glowseq frames); the cache still caps it at its budget.
+    Any,
+    /// The manifest's numbers make no sense (zero, negative, overflowing):
+    /// no file can match.
+    Invalid,
+}
+
+/// The bytes a picture of these dimensions takes: their product, checked.
+/// The manifest comes from a server, so it is not trusted to keep its
+/// numbers sane.
+fn bytes(dims: &[i32]) -> Size {
+    let mut n: usize = 1;
+    for &d in dims {
+        let Some(m) = usize::try_from(d).ok().filter(|&d| d > 0).and_then(|d| n.checked_mul(d)) else {
+            return Size::Invalid;
+        };
+        n = m;
+    }
+    Size::Exactly(n)
+}
+
+/// A position, offset or small factor: the drawing code adds and
+/// multiplies these in 32 bits, so they stay well inside that.
+fn coord(v: i32) -> bool {
+    (-32768..=32767).contains(&v)
+}
+
+fn coords(v: &[V], k: &[usize]) -> bool {
+    k.iter().all(|&i| coord(v[i].i()))
+}
+
 /// Reads a manifest. `asset` registers a file and returns its index: given
-/// the name and the size it must have (0: any), None if it is missing or
-/// the wrong size.
-pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
+/// the name and the size it must have, None if it is missing or the wrong
+/// size (or too big to hold).
+pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
     let mut o = Manifest::default();
     for line in lines(m) {
         let sc = |fmt: &str| scan(line, fmt);
         if let Some(v) = some(sc("page %d %63s %d"), 3).filter(|_| o.pages.len() < MAXP) {
             let p = Page {
-                bg: asset(v[1].s(), FRAME_BYTES),
+                bg: asset(v[1].s(), Size::Exactly(FRAME_BYTES)),
                 secs: v[2].i(),
                 noclock: contains(line, "noclock"),
                 noticker: contains(line, "noticker"),
@@ -337,20 +372,25 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                 o.pages.push(p);
             }
         } else if let Some(v) = some(sc("pagenight %d %63s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
-            o.pages[v[0].i() as usize].nbg = asset(v[1].s(), FRAME_BYTES);
+            o.pages[v[0].i() as usize].nbg = asset(v[1].s(), Size::Exactly(FRAME_BYTES));
         } else if let Some(v) = some(sc("pagetap %d %23s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
             o.pages[v[0].i() as usize].tap = v[1].s().to_string();
         } else if let Some(v) = some(sc("clocknight %63s"), 1).filter(|_| o.clock.px.is_some()) {
             let c = &o.clock;
-            o.clock.pxn = asset(v[0].s(), (c.cw * c.ch * 15 * 2) as usize);
+            o.clock.pxn = asset(v[0].s(), bytes(&[c.cw, c.ch, 15, 2]));
         } else if let Some(v) = some(sc("tickernight %63s"), 1).filter(|_| o.ticker.px.is_some()) {
             let t = &o.ticker;
-            o.ticker.pxn = asset(v[0].s(), (t.w * t.h * 2) as usize);
-        } else if let Some(v) = some(sc("sprite %d %63s %d %d %d %d %d %d"), 8)
-            .filter(|v| o.sprites.len() < MAXS && v[2].i() > 0 && v[3].i() > 0 && v[4].i() > 0 && v[7].i() > 0)
-        {
+            o.ticker.pxn = asset(v[0].s(), bytes(&[t.w, t.h, 2]));
+        } else if let Some(v) = some(sc("sprite %d %63s %d %d %d %d %d %d"), 8).filter(|v| {
+            o.sprites.len() < MAXS
+                && v[2].i() > 0
+                && v[3].i() > 0
+                && v[4].i() > 0
+                && v[7].i() > 0
+                && coords(v, &[2, 3, 5, 6])
+        }) {
             let (w, h, frames) = (v[2].i(), v[3].i(), v[4].i());
-            if let Some(px) = asset(v[1].s(), (w * h * frames * 2) as usize) {
+            if let Some(px) = asset(v[1].s(), bytes(&[w, h, frames, 2])) {
                 o.sprites.push(Sprite {
                     page: v[0].i(),
                     w,
@@ -363,12 +403,19 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                     px,
                 });
             }
-        } else if let Some(v) = some(sc("actor %d %63s %d %d %d %d %63s %d"), 8)
-            .filter(|v| o.actors.len() < MAXA && v[2].i() > 0 && v[3].i() > 0 && v[4].i() > 0 && v[7].i() > 0)
-        {
+        } else if let Some(v) = some(sc("actor %d %63s %d %d %d %d %63s %d"), 8).filter(|v| {
+            // fps may be 0 (a still frame), never negative.
+            o.actors.len() < MAXA
+                && v[2].i() > 0
+                && v[3].i() > 0
+                && v[4].i() > 0
+                && v[5].i() >= 0
+                && v[7].i() > 0
+                && coords(v, &[2, 3])
+        }) {
             let (w, h, frames, n) = (v[2].i(), v[3].i(), v[4].i(), v[7].i());
-            let px = asset(v[1].s(), (w * h * frames * 2) as usize);
-            let path = asset(v[6].s(), (n * 4) as usize);
+            let px = asset(v[1].s(), bytes(&[w, h, frames, 2]));
+            let path = asset(v[6].s(), bytes(&[n, 4]));
             if let (Some(px), Some(path)) = (px, path) {
                 o.actors.push(Actor {
                     page: v[0].i(),
@@ -383,7 +430,9 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                     ..Actor::default()
                 });
             }
-        } else if let Some(v) = some(sc("clock %63s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0) {
+        } else if let Some(v) =
+            some(sc("clock %63s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0 && coords(v, &[1, 2, 3, 4]))
+        {
             // The widths follow the sixth space.
             let mut wd = [0i32; 15];
             let mut p = Some(0usize);
@@ -399,8 +448,12 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                 p = next_space(line, q);
             }
             let (cw, ch) = (v[1].i(), v[2].i());
+            // A glyph is at most a cell wide.
+            for w in &mut wd {
+                *w = (*w).clamp(0, cw);
+            }
             o.clock = Clock {
-                px: asset(v[0].s(), (cw * ch * 15 * 2) as usize),
+                px: asset(v[0].s(), bytes(&[cw, ch, 15, 2])),
                 pxn: o.clock.pxn,
                 cw,
                 ch,
@@ -408,10 +461,12 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                 y: v[4].i(),
                 wd,
             };
-        } else if let Some(v) = some(sc("ticker %63s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0) {
+        } else if let Some(v) =
+            some(sc("ticker %63s %d %d %d %d"), 5).filter(|v| v[1].i() > 0 && v[2].i() > 0 && coords(v, &[2, 3]))
+        {
             let (w, h) = (v[1].i(), v[2].i());
             o.ticker = Ticker {
-                px: asset(v[0].s(), (w * h * 2) as usize),
+                px: asset(v[0].s(), bytes(&[w, h, 2])),
                 pxn: o.ticker.pxn,
                 w,
                 h,
@@ -419,15 +474,15 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                 speed: v[4].i(),
             };
         } else if let Some(v) = some(sc("screen %23s %63s"), 2).filter(|_| o.screens.len() < MAXSCR) {
-            if let Some(bg) = asset(v[1].s(), FRAME_BYTES) {
+            if let Some(bg) = asset(v[1].s(), Size::Exactly(FRAME_BYTES)) {
                 o.screens.push(Screen { name: v[0].s().to_string(), bg });
             }
-        } else if let Some(v) = some(sc("pane %23s %63s %d %d %d %d %11s %d"), 8)
-            .filter(|v| o.panes.len() < MAXPANE && v[2].i() > 0 && v[3].i() > 0 && v[7].i() > 0)
-        {
+        } else if let Some(v) = some(sc("pane %23s %63s %d %d %d %d %11s %d"), 8).filter(|v| {
+            o.panes.len() < MAXPANE && v[2].i() > 0 && v[3].i() > 0 && v[7].i() > 0 && coords(v, &[2, 3, 4, 5])
+        }) {
             let (w, h, frames) = (v[2].i(), v[3].i(), v[7].i());
             if let Some(scr) = o.find_screen(v[0].s())
-                && let Some(px) = asset(v[1].s(), (w * h * frames * 2) as usize)
+                && let Some(px) = asset(v[1].s(), bytes(&[w, h, frames, 2]))
             {
                 o.panes.push(Pane {
                     scr,
@@ -441,7 +496,9 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                     px,
                 });
             }
-        } else if let Some(v) = some(sc("hot %23s %d %d %d %d %15s"), 6).filter(|_| o.hots.len() < MAXHOT) {
+        } else if let Some(v) =
+            some(sc("hot %23s %d %d %d %d %15s"), 6).filter(|v| o.hots.len() < MAXHOT && coords(v, &[1, 2, 3, 4]))
+        {
             let arg = scan(line, "hot %*s %*d %*d %*d %*d %*s %23s");
             let name = arg.first().map(|a| a.s().to_string()).unwrap_or_default();
             if let Some(scr) = o.find_screen(v[0].s()) {
@@ -463,12 +520,13 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                 && v[10].i() > 0
                 && v[11].i() > 0
                 && v[9].i() > v[8].i()
+                && coords(v, &[4, 5, 6, 7, 8, 9, 10, 11])
         }) {
             let (w, h, kw, kh) = (v[4].i(), v[5].i(), v[10].i(), v[11].i());
             if let Some(scr) = o.find_screen(v[0].s()) {
-                let empty = asset(v[1].s(), (w * h * 2) as usize);
-                let full = asset(v[2].s(), (w * h * 2) as usize);
-                let knob = asset(v[3].s(), (kw * kh * 2) as usize);
+                let empty = asset(v[1].s(), bytes(&[w, h, 2]));
+                let full = asset(v[2].s(), bytes(&[w, h, 2]));
+                let knob = asset(v[3].s(), bytes(&[kw, kh, 2]));
                 if let (Some(empty), Some(full), Some(knob)) = (empty, full, knob) {
                     o.sliders.push(Slider {
                         scr,
@@ -490,12 +548,14 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
             some(sc("bgscroll %d %63s %d %d"), 4).filter(|v| idx(v[0].i(), o.pages.len()) && v[2].i() > W)
         {
             let p = &mut o.pages[v[0].i() as usize];
-            p.pano = asset(v[1].s(), (v[2].i() * H * 2) as usize);
+            p.pano = asset(v[1].s(), bytes(&[v[2].i(), H, 2]));
             p.pano_w = v[2].i();
             p.pano_speed = v[3].i();
-        } else if let Some(v) = some(sc("logofx %d %63s %d %d %d %d"), 6).filter(|v| v[2].i() > 0 && v[3].i() > 0) {
+        } else if let Some(v) = some(sc("logofx %d %63s %d %d %d %d"), 6)
+            .filter(|v| v[2].i() > 0 && v[3].i() > 0 && coords(v, &[2, 3, 4, 5]))
+        {
             let (w, h) = (v[2].i(), v[3].i());
-            o.logo.px = asset(v[1].s(), (w * h * 2) as usize);
+            o.logo.px = asset(v[1].s(), bytes(&[w, h, 2]));
             if o.logo.px.is_some() {
                 let opt = scan(line, "logofx %*d %*s %*d %*d %*d %*d %23s %23s %d");
                 let mut force = opt.first().map_or(-1, |s| fx_parse(s.s()));
@@ -515,13 +575,16 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                     hold_ms: if (1..=600).contains(&hold) { hold * 1000 } else { 4000 },
                 };
             }
-        } else if let Some(v) =
-            some(sc("glow %d %63s %d %d %d %d"), 6).filter(|v| o.glows.len() < MAXGLOW && v[2].i() > 0 && v[3].i() > 0)
+        } else if let Some(v) = some(sc("glow %d %63s %d %d %d %d"), 6)
+            .filter(|v| o.glows.len() < MAXGLOW && v[2].i() > 0 && v[3].i() > 0 && coords(v, &[2, 3, 4]))
         {
             let (w, h) = (v[2].i(), v[3].i());
             let opt: Vec<i32> = scan(line, "glow %*d %*s %*d %*d %*d %*d %d %d %d %d %d %d").iter().map(V::i).collect();
             let o6 = |k: usize| opt.get(k).copied().unwrap_or(0);
-            if let Some(px) = asset(v[1].s(), (w * h * 2) as usize) {
+            // Cycle lengths can't be negative; the sway and the start in
+            // the strip are offsets.
+            let sane = o6(0) >= 0 && o6(3) >= 0 && o6(5) >= 0 && coord(o6(2)) && coord(o6(4));
+            if sane && let Some(px) = asset(v[1].s(), bytes(&[w, h, 2])) {
                 o.glows.push(Glow {
                     page: v[0].i(),
                     w,
@@ -547,7 +610,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
             })
         {
             let n = v[2].i();
-            let frames: Vec<Ix> = (0..n).map(|q| asset(&format!("{}_{q:03}.l8", v[1].s()), 0)).collect();
+            let frames: Vec<Ix> = (0..n).map(|q| asset(&format!("{}_{q:03}.l8", v[1].s()), Size::Any)).collect();
             if frames.iter().any(Option::is_some) {
                 let (r, g, b) = (v[4].i(), v[5].i(), v[6].i());
                 let bright = v[7].i().clamp(0, 255);
@@ -559,10 +622,11 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, usize) -> Ix) -> Manifest {
                 }
                 o.gsqs.push(GlowSeq { page: v[0].i(), mfps, frames, lut });
             }
-        } else if let Some(v) = some(sc("scroller %d %63s %d %d %d %d %d"), 7).filter(|v| v[2].i() > 0 && v[3].i() > 0)
+        } else if let Some(v) = some(sc("scroller %d %63s %d %d %d %d %d"), 7)
+            .filter(|v| v[2].i() > 0 && v[3].i() > 0 && coords(v, &[3, 4, 6]))
         {
             let (w, h) = (v[2].i(), v[3].i());
-            o.scroller.px = asset(v[1].s(), (w * h * 2) as usize);
+            o.scroller.px = asset(v[1].s(), bytes(&[w, h, 2]));
             if o.scroller.px.is_some() {
                 o.scroller =
                     Scroller { page: v[0].i(), px: o.scroller.px, w, h, y: v[4].i(), speed: v[5].i(), amp: v[6].i() };
@@ -624,6 +688,11 @@ mod tests {
 
         fn parse(&mut self, m: &str) -> Manifest {
             parse(m.as_bytes(), |name, size| {
+                let size = match size {
+                    Size::Exactly(n) => n,
+                    Size::Any => 0,
+                    Size::Invalid => return None,
+                };
                 if self.missing.contains(&name) {
                     return None;
                 }

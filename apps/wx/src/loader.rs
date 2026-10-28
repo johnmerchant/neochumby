@@ -7,8 +7,13 @@
 //! Requests and replies cross between the threads as boxes passed through
 //! pipes, not through std's channels: std's blocking waits use futex flags
 //! (FUTEX_PRIVATE_FLAG, FUTEX_WAIT_BITSET) that the Chumby's 2.6.16 kernel
-//! doesn't have. A pipe blocks, and poll()s, on any kernel. If the thread
-//! goes, the engine reads synchronously instead.
+//! doesn't have. A pipe blocks, and poll()s, on any kernel.
+//!
+//! If the thread's pipes fail, the engine reads synchronously instead. A
+//! panic in the thread is not caught: release builds abort on panic, so it
+//! would end the process like a panic anywhere else. Nothing here panics on
+//! bad input: a missing, short or wrong-sized file, or a buffer that can't
+//! be allocated, comes back as a [`Fail`].
 
 use std::fs::File;
 use std::io::{Read, Write};
@@ -27,6 +32,8 @@ pub enum Fail {
     Size(u64),
     /// It got shorter while it was being read.
     Short,
+    /// There wasn't the memory to hold it.
+    Memory,
 }
 
 pub struct Reply {
@@ -55,7 +62,7 @@ pub fn read_file(path: &std::path::Path, size: usize, exact: bool) -> Result<Vec
     if exact && len != size as u64 {
         return Err(Fail::Size(len));
     }
-    let mut buf = cache::alloc(size);
+    let mut buf = cache::alloc(size).ok_or(Fail::Memory)?;
     f.read_exact(&mut cache::as_bytes_mut(&mut buf)[..size]).map_err(|_| Fail::Short)?;
     Ok(buf)
 }

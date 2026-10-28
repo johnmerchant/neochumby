@@ -1,5 +1,5 @@
-//! neochumby-wx: a home screen in the style of the 2008 Chumby, as a
-//! neochumby app (`home=`). A feeder on a server renders every pixel (the
+//! neochumby-wx: the 2008 Chumby's look, as a neochumby app; run it as the
+//! start app with `start=wx` in /psp/neochumby.conf. A feeder on a server renders every pixel (the
 //! weather, news, stocks, the aurora screensaver, the Home, Music and
 //! Settings screens) and this shows them: see engine.rs for what it does
 //! and manifest.rs for what it reads. It is the Rust port of wxshow.c, and

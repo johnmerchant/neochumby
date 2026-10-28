@@ -1,6 +1,6 @@
 [package]
 name = "neochumby-wx"
-description = "A home screen in the 2008 Chumby's style: pages and screens a feeder prerenders, shown with wipes, panes, tap zones and animation"
+description = "The 2008 Chumby's look as an app: pages and screens a feeder prerenders, shown with wipes, panes, tap zones and animation"
 license = "MIT"
 version.workspace = true
 edition.workspace = true
@@ -15,5 +15,9 @@ libc.workspace = true
 [target.'cfg(target_arch = "arm")'.dependencies]
 neochumby.workspace = true
 
+# Run it as the start app: start=wx in /psp/neochumby.conf.
+# TODO(proposal 0002, johnmerchant/neochumby#8): `start = true` here, and
+# opening apps through NEOCHUMBY_SESSION instead of launch.rs, once the
+# session's side has landed.
 [package.metadata.neochumby]
-home = "neochumby-wx"
+exec = "neochumby-wx"

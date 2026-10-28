@@ -14,7 +14,8 @@
 //!   at or after each time, then stop. Default 1000.
 //! - `--taps`: at MS, a tap at X,Y (pressed and released in one frame), or
 //!   `b` for the top button.
-//! - `--ctl`: at MS, a line written to the control file (WXCTL, read every
+//! - `--ctl`: at MS, a line written to the control file (NEOCHUMBY_WX_CTL,
+//!   else /tmp/neochumby-wx/ctl; read every
 //!   5th frame), e.g. `3000:show home;5000:night on`.
 //! - `--wall`: the wall clock at the start (the clock, night mode), default
 //!   now. Local time is TZ's.
@@ -26,6 +27,7 @@
 
 use std::collections::VecDeque;
 use std::io::Write;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 use crate::engine::Engine;
@@ -67,7 +69,8 @@ impl Host {
             buttons: VecDeque::new(),
             pressed: false,
             ctl: VecDeque::new(),
-            ctl_path: std::env::var_os("WXCTL").map_or_else(|| PathBuf::from("/tmp/wxctl"), PathBuf::from),
+            ctl_path: std::env::var_os("NEOCHUMBY_WX_CTL")
+                .map_or_else(|| PathBuf::from("/tmp/neochumby-wx/ctl"), PathBuf::from),
             state,
         }
     }
@@ -88,7 +91,11 @@ impl Plat for Host {
             && at <= e
         {
             self.ctl.pop_front();
-            let f = std::fs::OpenOptions::new().create(true).append(true).open(&self.ctl_path);
+            let f = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .custom_flags(libc::O_NOFOLLOW)
+                .open(&self.ctl_path);
             if let Ok(mut f) = f {
                 let _ = writeln!(f, "{line}");
             }
@@ -167,6 +174,11 @@ impl Plat for Host {
 
     fn inputs(&mut self, _ours: bool) {}
 
+    fn message(&mut self, lines: &[&str]) {
+        self.fb.fill(0);
+        eprintln!("[screen] {}", lines.join(" "));
+    }
+
     fn sync_prefetch(&self) -> bool {
         true
     }
@@ -229,10 +241,7 @@ pub fn render(args: &[String]) -> i32 {
         return 1;
     }
     let mut e = Engine::new(h, Box::new(Pretend), PathBuf::from(dir));
-    if let Err(err) = e.start() {
-        eprintln!("render: {err}");
-        return 1;
-    }
+    e.start();
     e.run();
     0
 }
