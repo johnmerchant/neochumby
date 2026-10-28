@@ -14,12 +14,20 @@
 //!
 //! The apps' services run alongside (services.rs). A service's request ends
 //! the app in front first, so the session takes it only:
-//! - from the start app's service, so services don't fight over the
-//!   screen;
+//! - over the start app from any service, but over any other app only from
+//!   the start app's service, so services don't fight over the screen;
+//!   CHUMBY MODE only from the start app's service;
 //! - when the app in front doesn't say `interrupt = false` (games);
 //! - not after the escape hatch, until an app is opened by hand (asked for
 //!   by the app in front), so a service can't trap the Chumby in an app
-//!   gone wrong.
+//!   gone wrong;
+//! - not once the app in front has asked for something itself: it's
+//!   leaving, and what it asked for wins.
+//!
+//! Services are looked after in the same loop, so while the session waits
+//! on an app (ending it, up to `patience`, or the pause after the start
+//! app failed), services wait to be restarted and their requests to be
+//! read.
 //!
 //! When a service exits, the session mutes the speaker and puts back the
 //! volume the Chumby booted with (neochumby::audio), so a service that dies
@@ -121,8 +129,8 @@ pub struct Session<'a, D: Device> {
 /// Whether the service of the app `from` may replace `front` in front;
 /// why not, if it may not.
 pub fn may_interrupt(from: &str, start: &str, front: &App, suppressed: bool) -> Result<(), &'static str> {
-    if from != start {
-        Err("only the start app's service may")
+    if front.name != start && from != start {
+        Err("only the start app's service may, over an app other than the start app")
     } else if !front.interrupt {
         Err("the app in front says interrupt = false")
     } else if suppressed {
@@ -197,6 +205,15 @@ impl<'a, D: Device> Session<'a, D> {
                 self.device.reset_speaker();
             }
             for (from, req) in ev.requests {
+                if f.asked.is_some() {
+                    eprintln!(
+                        "neochumby: service {} asks: {}; dropped: {} has asked already",
+                        from.name,
+                        req.line().trim_end(),
+                        f.app.name
+                    );
+                    continue;
+                }
                 if let Some(next) = self.interrupting(&f, from, req) {
                     eprintln!("neochumby: service {} replaces {}", from.name, f.app.name);
                     child::end(&mut f.child, self.timing.patience);
@@ -265,6 +282,13 @@ impl<'a, D: Device> Session<'a, D> {
     /// front, if it may.
     fn interrupting(&self, f: &Front<'a>, from: &App, req: Request) -> Option<Next<'a>> {
         let next = match &req {
+            Request::ChumbyMode if from.name != self.start.name => {
+                eprintln!(
+                    "neochumby: service {} asks for CHUMBY MODE; refused: only the start app's service may",
+                    from.name
+                );
+                return None;
+            }
             Request::ChumbyMode => Next::ChumbyMode,
             Request::Open(name) if *name == f.app.name => return None,
             Request::Open(name) => match self.openable(name) {
@@ -586,10 +610,14 @@ mod tests {
     fn rules_for_services() {
         let mut game = start::tests::app("doom", false);
         let wx = start::tests::app("wx", true);
-        assert_eq!(may_interrupt("wx", "wx", &game, false), Ok(()));
+        // Over the start app: any service. Over another: the start app's.
         assert_eq!(may_interrupt("wx", "wx", &wx, false), Ok(()));
-        assert!(may_interrupt("airplay", "wx", &game, false).is_err());
+        assert_eq!(may_interrupt("alarm", "wx", &wx, false), Ok(()));
+        assert_eq!(may_interrupt("wx", "wx", &game, false), Ok(()));
+        assert!(may_interrupt("alarm", "wx", &game, false).is_err());
+        // Not after the escape hatch, nor over interrupt = false.
         assert!(may_interrupt("wx", "wx", &game, true).is_err());
+        assert!(may_interrupt("alarm", "wx", &wx, true).is_err());
         game.interrupt = false;
         assert!(may_interrupt("wx", "wx", &game, false).is_err());
     }
@@ -636,6 +664,53 @@ mod tests {
         );
         run(&root, &[("settings", "wx")], Arc::default());
         assert_eq!(apps_log(&root), ["wx", "game", "game done", "wx"]);
+    }
+
+    #[test]
+    fn any_service_may_open_over_the_start_app_only() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let once = "\"$NEOCHUMBY_ROOT/once\"";
+        let root = tree_with(
+            "anyservice",
+            &[
+                ("wx", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nexec sleep 30"),
+                // Opened over wx by its own service; opens the game by hand.
+                ("alarm", "", "ask 'open game'"),
+                ("game", "", "sleep 1\necho 'game done' >> \"$log\""),
+            ],
+            &[(
+                "alarm",
+                &listen(&format!(
+                    "    'front wx') [ -f {once} ] || {{ touch {once}; ask 'open alarm'; }} ;;\n    \
+                     'front game') ask 'open alarm' ;;"
+                )),
+            )],
+        );
+        run(&root, &[("settings", "wx")], Arc::default());
+        // Not over the game: alarm isn't the start app's.
+        assert_eq!(apps_log(&root), ["wx", "alarm", "game", "game done", "wx"]);
+    }
+
+    #[test]
+    fn what_the_front_app_asked_wins() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree_with(
+            "frontwins",
+            &[
+                // Asks for CHUMBY MODE, then takes its time to exit.
+                ("wx", "start=true\n", "ask chumby-mode\necho 'wx asked' >> \"$log\"\nexec sleep 30"),
+                ("game", "", "exit 0"),
+            ],
+            &[(
+                "wx",
+                &listen(
+                    "    'front wx') [ -f \"$NEOCHUMBY_ROOT/once\" ] && continue; touch \"$NEOCHUMBY_ROOT/once\"\n      \
+                     until grep -q '^wx asked' \"$log\"; do sleep 0.02; done; ask 'open game' ;;",
+                ),
+            )],
+        );
+        run(&root, &[("settings", "wx")], Arc::default());
+        assert_eq!(apps_log(&root), ["wx", "wx asked"]);
     }
 
     #[test]

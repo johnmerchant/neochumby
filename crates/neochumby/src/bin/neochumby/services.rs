@@ -5,8 +5,13 @@
 //! A service that exits is started again: after 1 s, then 2, 4 and so on up
 //! to a minute. A run of a minute or more starts the wait again from 1 s.
 //! Each service is told which app is in front (`front <app>`) as it starts
-//! and whenever that changes. When the session ends, each gets SIGTERM,
-//! with its process group, and SIGKILL if it hasn't exited after 5 s.
+//! and whenever that changes; if its pipe is full, only the latest waits.
+//! When the session ends, each gets SIGTERM, with its process group, and
+//! SIGKILL if it hasn't exited after 5 s.
+//!
+//! Which services run is decided as the session starts, from whether this
+//! Chumby is paired (an app that needs a neochumbyd). Pairing asks for a
+//! restart anyway, so that's when a newly paired Chumby starts them.
 
 use std::path::Path;
 use std::process::Child;
@@ -47,9 +52,9 @@ struct Running {
     child: Child,
     pipe: Pipe,
     since: Instant,
-    /// Whether it takes notices: it stops being sent them if it doesn't
-    /// read them.
-    listening: bool,
+    /// The app in front, if this service hasn't been told yet: its pipe
+    /// was full. Only the latest is kept, and sent once there's room.
+    untold: Option<String>,
 }
 
 struct Service<'a> {
@@ -103,6 +108,9 @@ impl<'a> Services<'a> {
                 }
                 continue;
             };
+            if let Some(front) = r.untold.take() {
+                r.tell(s.app, &front);
+            }
             let exited = r.child.try_wait();
             for line in r.pipe.receive().lines {
                 match Request::parse(&line) {
@@ -157,7 +165,7 @@ impl Service<'_> {
         match child::spawn(child::command(self.exe, &self.app.dir, root), &[]) {
             Ok((child, pipe)) => {
                 eprintln!("neochumby: service {} started", self.app.name);
-                let mut r = Running { child, pipe, since: Instant::now(), listening: true };
+                let mut r = Running { child, pipe, since: Instant::now(), untold: None };
                 r.tell(self.app, front);
                 self.running = Some(r);
             }
@@ -176,10 +184,16 @@ impl Service<'_> {
 }
 
 impl Running {
+    /// Tells it `front` is in front, or keeps that for later if its pipe
+    /// is full: the session never waits on a service.
     fn tell(&mut self, service: &App, front: &str) {
-        if self.listening && !self.pipe.try_send(&Notice::Front(front.to_string()).line()) {
-            eprintln!("neochumby: service {} isn't reading its pipe; no more notices to it", service.name);
-            self.listening = false;
+        if self.pipe.try_send(&Notice::Front(front.to_string()).line()) {
+            self.untold = None;
+        } else {
+            if self.untold.is_none() {
+                eprintln!("neochumby: service {} isn't reading its pipe; its notices wait", service.name);
+            }
+            self.untold = Some(front.to_string());
         }
     }
 }

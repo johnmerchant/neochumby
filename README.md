@@ -89,9 +89,10 @@ An app can use any of these keys:
   corner of the screen for 3 seconds** always opens `neochumby-home`,
   ending whatever was in front. That's the way out of an app gone wrong.
 - **`service`:** runs in the background for as long as neochumby does, and
-  is started again if it exits. It's told which app is in front. The start
-  app's service may open an app over the one in front, unless that one
-  says **`interrupt = false`**, as Doom and Quake do.
+  is started again if it exits. It's told which app is in front. Any
+  service may open an app over the start app, and the start app's service
+  over any app, unless the one in front says **`interrupt = false`**, as
+  Doom and Quake do.
 
 ## Building
 
