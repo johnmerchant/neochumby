@@ -1,0 +1,13 @@
+[package]
+name = "neochumby-sync"
+description = "delivery=sync: a Chumby's tree on its stick, kept in step with its neochumbyd"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc.workspace = true
+neochumby-proto.workspace = true
+# SHA-256. Already in every build through neochumby-proto.
+ring = "0.17"

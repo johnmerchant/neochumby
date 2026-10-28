@@ -5,6 +5,7 @@ members = [
     "crates/neochumby-manifest",
     "crates/neochumby-proto",
     "crates/neochumby-softfloat",
+    "crates/neochumby-sync",
     "crates/neochumbyd",
     "apps/airplay",
     "apps/home",
@@ -22,6 +23,7 @@ libc = "0.2"
 neochumby = { path = "crates/neochumby" }
 neochumby-softfloat = { path = "crates/neochumby-softfloat" }
 neochumby-proto = { path = "crates/neochumby-proto" }
+neochumby-sync = { path = "crates/neochumby-sync" }
 
 [profile.release]
 opt-level = 2

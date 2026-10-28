@@ -294,6 +294,7 @@ dependencies = [
  "libc",
  "neochumby-proto",
  "neochumby-softfloat",
+ "neochumby-sync",
 ]
 
 [[package]]
@@ -356,12 +357,22 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-sync"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "neochumby-proto",
+ "ring",
+]
+
+[[package]]
 name = "neochumbyd"
 version = "0.1.0"
 dependencies = [
  "async-trait",
  "libc",
  "neochumby-proto",
+ "neochumby-sync",
  "nfsserve",
  "tokio",
 ]

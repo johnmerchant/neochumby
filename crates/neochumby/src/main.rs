@@ -13,8 +13,16 @@
 //! neochumby-home: the way back from a home screen that has gone wrong. A
 //! home screen that keeps failing also falls back to it.
 //!
-//!   neochumby           the session
-//!   neochumby sensors   prints the touchscreen, squeeze and accelerometer
+//!   neochumby                 the session
+//!   neochumby sensors         prints the touchscreen, squeeze and
+//!                             accelerometer
+//!   neochumby check-set DIR   for the boot hook: exits 0 if the synced set
+//!                             in DIR is complete (neochumby_sync)
+//!
+//! With `delivery=sync` in its settings, the session also runs
+//! neochumby-sync from the tree, which keeps a copy of the tree on the
+//! stick for the boot hook to run. A tree made for a stick has no
+//! neochumby-sync, and needs none.
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs gets
@@ -156,10 +164,17 @@ fn session() {
 
     let is_home = |name: &str| all.iter().find(|a| a.name == name && a.home.is_some());
     let fallback = is_home(DEFAULT_HOME);
+    let settings = settings::load();
+    if settings::get(&settings, "delivery") == Some("sync") {
+        let exe = root.join("neochumby-sync");
+        match command(&exe, &root, &root).spawn() {
+            Ok(c) => services.push(c),
+            Err(e) => eprintln!("neochumby: delivery=sync, but {}: {e}", exe.display()),
+        }
+    }
     // The server's `start` is a name, trusted only as far as the tree goes:
     // it runs only if that app is here and has `home=`. Otherwise the local
     // choice, then the built-in home screen.
-    let settings = settings::load();
     let chosen = settings::get(&settings, "start")
         .and_then(is_home)
         .or_else(|| conf::get(conf::CONF, "start").and_then(|n| is_home(&n)))
@@ -213,11 +228,32 @@ fn session() {
     }
 }
 
+/// `neochumby check-set DIR`: whether the set in DIR (the stick's
+/// neochumby/a or /b) is complete. The boot hook runs it from the set
+/// itself, and runs the set only on exit 0.
+fn check_set(dir: Option<String>) -> ! {
+    let Some(dir) = dir else {
+        eprintln!("usage: neochumby check-set DIR");
+        std::process::exit(2)
+    };
+    match neochumby_sync::stick::check_set(Path::new(&dir), &neochumby_sync::LIMITS) {
+        Ok(m) => {
+            eprintln!("neochumby: {dir}: complete, {} files", m.len());
+            std::process::exit(0)
+        }
+        Err(e) => {
+            eprintln!("neochumby: {dir}: not complete: {e}");
+            std::process::exit(1)
+        }
+    }
+}
+
 fn main() {
     neochumby::debug::install("neochumby");
     match std::env::args().nth(1).as_deref() {
         None => session(),
         Some("sensors") => sensors(),
+        Some("check-set") => check_set(std::env::args().nth(2)),
         Some(other) => {
             eprintln!("neochumby: unknown command {other}");
             std::process::exit(2);

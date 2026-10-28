@@ -9,6 +9,7 @@ publish.workspace = true
 [dependencies]
 libc.workspace = true
 neochumby-proto.workspace = true
+neochumby-sync.workspace = true
 font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
 neochumby-softfloat = { workspace = true, optional = true }
 

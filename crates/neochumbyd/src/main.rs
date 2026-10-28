@@ -1,4 +1,5 @@
-//! neochumbyd: what a Chumby pairs with. Serves the app tree over NFS,
+//! neochumbyd: what a Chumby pairs with. Serves the app tree over NFS, or
+//! keeps a copy of it on the Chumby's stick (`delivery=sync`, sync.rs),
 //! pairs Chumbys, and runs the server half of their apps (companion.rs)
 //! over neochumby-proto. It knows no app by name: an app brings its own
 //! companion, in its directory of the tree.
@@ -10,7 +11,10 @@
 //!   neochumbyd forget NAME
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
 //!                                  sent to it when it next connects;
-//!                                  KEY= removes it
+//!                                  KEY= removes it; `delivery=sync`
+//!                                  keeps its tree on its stick
+//!   neochumbyd manifest NAME       the files a sync sends NAME: the tree
+//!                                  and its overlay (sync.rs)
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -22,6 +26,7 @@ mod api;
 mod companion;
 mod nfs;
 mod state;
+mod sync;
 
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -43,7 +48,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest NAME [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
     );
     std::process::exit(2)
 }
@@ -107,8 +112,31 @@ fn main() {
             let (key, value) = setting.split_once('=').unwrap_or_else(|| usage());
             state.set(&operand(), key, value).unwrap_or_else(|e| fail(e));
         }
+        "manifest" => manifest(&a, &operand()),
         _ => usage(),
     }
+}
+
+/// What a sync would send `name`, as its set's manifest, then what is left
+/// out of it and the manifest's digest.
+fn manifest(a: &Args, name: &str) {
+    if !neochumby_proto::valid_name(name) {
+        fail("not a Chumby's name");
+    }
+    let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
+    let hashes = neochumby_sync::serve::Hashes::default();
+    let tree = neochumby_sync::serve::scan(&sync::layers(&tree, &a.state, name), &hashes).unwrap_or_else(|e| fail(e));
+    let m = tree.manifest();
+    for e in &m {
+        print!("{}", neochumby_sync::manifest::line(e));
+    }
+    for l in &tree.left_out {
+        eprintln!("left out: {l}");
+    }
+    if let Err(e) = neochumby_sync::manifest::validate(&m, &neochumby_sync::LIMITS) {
+        eprintln!("a Chumby would refuse this tree: {e}");
+    }
+    eprintln!("digest {}", neochumby_proto::hex(&neochumby_sync::manifest::digest(&m)));
 }
 
 fn serve(a: &Args, state: State) {
@@ -124,7 +152,9 @@ fn serve(a: &Args, state: State) {
     );
 
     let listener = TcpListener::bind(&a.api).unwrap_or_else(|e| fail(format!("{}: {e}", a.api)));
-    let api = Arc::new(api::Api { state, identity, nfs_port, tree: tree.clone(), state_dir: a.state.clone() });
+    let hashes = neochumby_sync::serve::Hashes::default();
+    let state_dir = a.state.clone();
+    let api = Arc::new(api::Api { state, identity, nfs_port, tree: tree.clone(), state_dir, hashes });
     std::thread::spawn(move || api::serve(listener, api));
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));

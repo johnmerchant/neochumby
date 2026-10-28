@@ -51,6 +51,12 @@ fn valid((k, v): &(String, String)) -> bool {
 }
 
 fn fetch(p: &Paired) -> io::Result<Vec<(String, String)>> {
+    connect(p).map(|(_, settings)| settings)
+}
+
+/// A session with the paired neochumbyd, past `Welcome` and `Config`, and
+/// this Chumby's settings from it. neochumby-sync carries on with it.
+pub fn connect(p: &Paired) -> io::Result<(Session, Vec<(String, String)>)> {
     let me = Identity::from_secret(&p.secret)?;
     let server_key = unhex_key(&p.server_key)?;
     let addr = (p.server.as_str(), p.api_port)
@@ -73,10 +79,11 @@ fn fetch(p: &Paired) -> io::Result<Vec<(String, String)>> {
     }
     // A neochumbyd from before Msg::Config sends nothing more: that times
     // out, and the kept settings are used.
-    match next()? {
-        Msg::Config(pairs) => Ok(pairs.into_iter().filter(valid).collect()),
-        m => Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
-    }
+    let settings = match next()? {
+        Msg::Config(pairs) => pairs.into_iter().filter(valid).collect(),
+        m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
+    };
+    Ok((s, settings))
 }
 
 /// Writes SETTINGS only when they changed: /psp is a small flash.
