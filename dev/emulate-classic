@@ -41,7 +41,8 @@ mkdir -p "$out/psp"
 rm -rf "$out/pictures"
 cp -R "$pictures" "$out/pictures"
 pictures=$out/pictures
-echo "hot settings 0 200 72 40 app doom" >> "$pictures/manifest.txt"
+# Tap zones belong to a screen by name, and by night Settings is another.
+printf 'hot settings 0 200 72 40 app doom\nhot settings_night 0 200 72 40 app doom\n' >> "$pictures/manifest.txt"
 echo "start=classic" > "$out/psp/neochumby.conf"
 
 # The pictures the screen may show: each page, by day and by night, and the
