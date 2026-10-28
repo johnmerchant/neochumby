@@ -19,7 +19,9 @@ pub trait Plat {
     /// The next touch event this frame, if any.
     fn touch(&mut self) -> Option<Touch>;
     /// The top button's level (true while pressed), read once a frame;
-    /// None if it can't be read.
+    /// None if this machine has none to read. On the Chumby the session
+    /// owns the button (a press comes as a `button` line, session.rs); the
+    /// host renderer scripts presses here.
     fn button(&mut self) -> Option<bool>;
     fn backlight(&mut self, night: bool);
     /// Plays a stream at a volume (0-100), or stops (None).
@@ -34,11 +36,6 @@ pub trait Plat {
     /// Wall clock time, in seconds since the epoch.
     fn wall(&self) -> i64;
     fn sleep_us(&mut self, us: i64);
-    /// Closes the top button's device (false) while another app runs, so
-    /// that app can open it whatever its driver allows, or opens it again
-    /// (true), forgetting the touches made meanwhile. (Under proposal 0002
-    /// the session owns the button; this goes then.)
-    fn inputs(&mut self, ours: bool);
     /// A few lines of text on an otherwise blank screen (the waiting screen).
     fn message(&mut self, lines: &[&str]);
     /// A live device value (values.rs); None if it is missing.

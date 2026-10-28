@@ -27,8 +27,10 @@
 //! Actions (tap zones): slideshow, screen NAME, chumby (exit: the session
 //! hands the Chumby back to its own software), music_toggle, station N,
 //! next_station, night, nightmode, pin, next_app, prev_app, secs_up,
-//! secs_down (next_app and prev_app step whole apps with pageapp), and app NAME (open apps/NAME from the neochumby tree, through
-//! a launch::Launcher, and come back when it is done).
+//! secs_down (next_app and prev_app step whole apps with pageapp), and app
+//! NAME: open apps/NAME from the neochumby tree. classic is a start app
+//! (proposal 0002): it asks the session (session.rs) to open an app, or for
+//! CHUMBY MODE, and exits; the top button arrives from the session too.
 //!
 //! Control: lines appended to the control file run within 0.2 s:
 //! show SCREEN | page N | pin on|off | night on|off |
@@ -60,19 +62,18 @@
 //! shows and the directory is looked at again every second.
 
 use std::collections::VecDeque;
-use std::fs::OpenOptions;
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use crate::cache::{self, Asset, Cache, State};
 use crate::draw::{KEY, add_light, sin};
-use crate::launch::{Launcher, Opened};
 use crate::loader::{self, Fail, Loader};
 use crate::logo::{self, FX_LOOP_GAP, FX_OUT_GAP, FX_SHINE, Logo};
 use crate::manifest::{self, Align, FPS, H, Ix, MAXASSET, Manifest, NFX, Size, Slider, Target, W, fx_parse};
 use crate::plat::{Plat, Touch, local_hms};
 use crate::scan::{atoi, scan};
+use crate::session::{Ask, Heard, Session, valid_app};
+use crate::state::{self, mtime, read_int, read_nofollow, resolve_dir, save_int, write_nofollow};
 use crate::values::{self, Key};
 
 const WIPE_FRAMES: i32 = 10;
@@ -173,11 +174,18 @@ struct Inflight {
     t0: i64,
 }
 
+/// load() found no usable manifest: the last good set (if any) stays up.
+#[derive(Debug, PartialEq, Eq)]
+pub struct NoManifest;
+
 pub struct Engine<P: Plat> {
     pub plat: P,
-    launcher: Box<dyn Launcher>,
-    /// Another app is in front: we don't draw, and hold almost nothing.
-    background: bool,
+    /// The session's pipe, if the session started us.
+    session: Option<Box<dyn Session>>,
+    /// The session opened us for a button press: start on Home.
+    reason_button: bool,
+    /// An app has been asked for (or CHUMBY MODE): leave at the frame's end.
+    leave: bool,
     m: Manifest,
     c: Cache,
     back: Vec<u16>,
@@ -238,7 +246,7 @@ pub struct Engine<P: Plat> {
     inj: VecDeque<Touch>,
     inj_button: bool,
     want_reload: bool,
-    pending_app: Option<String>,
+
     /// The device values last read, by Key::index; None: missing.
     vals: [Option<String>; values::KEYS.len()],
     /// When they were last read, in ms.
@@ -292,69 +300,8 @@ fn run_path(var: &str, name: &str) -> Option<PathBuf> {
     Some(d.join(name))
 }
 
-/// Opens a file without following a symbolic link at the end of its path.
-fn open_nofollow(o: &mut OpenOptions) -> &mut OpenOptions {
-    o.custom_flags(libc::O_NOFOLLOW)
-}
-
-fn read_nofollow(path: &Path, cap: u64) -> Option<Vec<u8>> {
-    use std::io::Read;
-    let f = open_nofollow(OpenOptions::new().read(true)).open(path).ok()?;
-    let mut b = Vec::new();
-    f.take(cap + 1).read_to_end(&mut b).ok()?;
-    (b.len() as u64 <= cap).then_some(b)
-}
-
-fn write_nofollow(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    open_nofollow(OpenOptions::new().write(true).create(true).truncate(true).mode(0o600)).open(path)?.write_all(data)
-}
-
-fn read_int(path: &Path, dflt: i32) -> i32 {
-    match read_nofollow(path, 64) {
-        Some(b) if !b.is_empty() => atoi(&b[..b.len().min(11)]),
-        _ => dflt,
-    }
-}
-
-fn save_int(path: &Path, v: i32) {
-    let _ = write_nofollow(path, format!("{v}\n").as_bytes());
-}
-
-fn mtime(m: &std::fs::Metadata) -> i64 {
-    use std::os::unix::fs::MetadataExt;
-    m.mtime()
-}
-
-/// Where the current set lives: base/<word in base/current>, else base.
-fn resolve_dir(base: &Path) -> PathBuf {
-    if let Ok(cur) = std::fs::read(base.join("current"))
-        && cur.len() <= 64
-    {
-        let w: String = cur
-            .iter()
-            .map(|&c| c as char)
-            .skip_while(|c| !(c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_'))
-            .take_while(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || *c == '_')
-            .take(16)
-            .collect();
-        if !w.is_empty() && base.join(&w).join("manifest.txt").exists() {
-            return base.join(w);
-        }
-    }
-    if base.join("manifest.txt").exists() {
-        return base.to_path_buf();
-    }
-    // `current` missing or broken (a power cut mid-switch): any complete set.
-    for s in ["a", "b"] {
-        if base.join(s).join("manifest.txt").exists() {
-            return base.join(s);
-        }
-    }
-    base.to_path_buf()
-}
-
 impl<P: Plat> Engine<P> {
-    pub fn new(plat: P, launcher: Box<dyn Launcher>, base_dir: PathBuf) -> Engine<P> {
+    pub fn new(plat: P, base_dir: PathBuf) -> Engine<P> {
         // At most 1 GB: far more than the Chumby has, and it keeps every
         // picture's offsets inside 32 bits.
         let budget = std::env::var("NEOCHUMBY_CLASSIC_CACHE_KB")
@@ -364,8 +311,9 @@ impl<P: Plat> Engine<P> {
             .unwrap_or(4096);
         Engine {
             plat,
-            launcher,
-            background: false,
+            session: None,
+            reason_button: false,
+            leave: false,
             m: Manifest::default(),
             c: Cache::new(budget as usize * 1024),
             back: vec![0; N],
@@ -414,7 +362,7 @@ impl<P: Plat> Engine<P> {
             inj: VecDeque::new(),
             inj_button: false,
             want_reload: false,
-            pending_app: None,
+
             vals: Default::default(),
             vals_t: 0,
             live_shown: Vec::new(),
@@ -527,7 +475,7 @@ impl<P: Plat> Engine<P> {
         };
         let t0 = self.us();
         let rep = match l.recv(timeout) {
-            Err(()) => {
+            Err(_) => {
                 self.loader_dead();
                 return None;
             }
@@ -1059,7 +1007,7 @@ impl<P: Plat> Engine<P> {
     /// Reads the manifest of the current set, keeping in memory every file
     /// it shares with the last one. Err if it has no usable page: the last
     /// good set then stays up.
-    pub fn load(&mut self) -> Result<(), ()> {
+    pub fn load(&mut self) -> Result<(), NoManifest> {
         let newdir = resolve_dir(&self.base_dir);
         let mpath = newdir.join("manifest.txt");
         let meta = std::fs::metadata(&mpath);
@@ -1074,7 +1022,7 @@ impl<P: Plat> Engine<P> {
             if !self.waiting {
                 eprintln!("no usable manifest in {}", newdir.display());
             }
-            return Err(());
+            return Err(NoManifest);
         };
         let hpath = newdir.join("hashes.txt");
         let hashes = std::fs::metadata(&hpath)
@@ -1137,7 +1085,7 @@ impl<P: Plat> Engine<P> {
             // first, or a file changed between the two looks): keep the
             // last good set up.
             eprintln!("manifest {}: no page kept; staying with the last one", newdir.display());
-            return Err(());
+            return Err(NoManifest);
         }
 
         // Commit: the new set, keeping unchanged files from the old.
@@ -1868,25 +1816,8 @@ impl<P: Plat> Engine<P> {
         self.s.trans_what = self.m.screens[s as usize].name.clone();
     }
 
-    /// Whether it is dark (in the feeder's town); -1 without sun data.
-    fn sun_dark(&self, now: i64) -> i32 {
-        if self.m.sun.is_empty() {
-            return -1;
-        }
-        if self.m.sun.iter().any(|&(r, s)| now >= r && now < s) { 0 } else { 1 }
-    }
-
     fn next_sun_change(&self, now: i64) -> i64 {
-        let mut best = now + 12 * 3600; // if the data has run out
-        for &(r, s) in &self.m.sun {
-            if r > now && r < best {
-                best = r;
-            }
-            if s > now && s < best {
-                best = s;
-            }
-        }
-        best
+        state::next_sun_change(&self.m.sun, now)
     }
 
     /// Opens a screen by its base name: its _night variant at night.
@@ -1934,17 +1865,13 @@ impl<P: Plat> Engine<P> {
     /// What night mode wants now, ignoring a tap's override; -1: no
     /// opinion (auto, without sun data).
     fn night_wanted(&self, now: i64) -> i32 {
-        match self.nightmode {
-            1 => 1,
-            2 => 0,
-            _ => self.sun_dark(now),
-        }
+        state::night_wanted(self.nightmode, &self.m.sun, now)
     }
 
     fn set_nightmode(&mut self, m: i32) {
         self.nightmode = m.rem_euclid(3);
         save_int(&self.st("wx_nightmode"), self.nightmode);
-        self.night_override_until = 0; // a new mode drops a tap's override
+        self.set_override(0); // a new mode drops a tap's override
         let w = self.night_wanted(self.plat.wall());
         if w >= 0 {
             self.apply_night(w);
@@ -1983,6 +1910,7 @@ impl<P: Plat> Engine<P> {
             }
             "screen" => self.show(&name),
             "chumby" => return true,
+            "app" if !name.is_empty() => self.open_app(&name),
             "music_toggle" => self.set_music((self.music_on == 0) as i32),
             "station" if arg >= 0 && arg < ns => {
                 self.station = arg;
@@ -1998,7 +1926,8 @@ impl<P: Plat> Engine<P> {
             }
             "night" => {
                 // For now: until the next sunrise or sunset.
-                self.night_override_until = self.next_sun_change(self.plat.wall());
+                let until = self.next_sun_change(self.plat.wall());
+                self.set_override(until);
                 self.apply_night((self.night == 0) as i32);
             }
             "nightmode" => self.set_nightmode(self.nightmode + 1),
@@ -2007,52 +1936,39 @@ impl<P: Plat> Engine<P> {
             "secs_down" => self.step_secs(-1),
             "next_app" => self.set_page(self.app_step(1), t),
             "prev_app" => self.set_page(self.app_step(-1), t),
-            "app" if !name.is_empty() => self.pending_app = Some(name),
             _ => {}
         }
         self.refresh_panes();
         false
     }
 
-    /// Opens an app from the tree. If it ran to the end, the screen is ours
-    /// again; if it is in front, we go to the background until it isn't.
-    fn launch_app(&mut self, name: &str) {
-        eprintln!("app: {name}");
-        let takes = self.launcher.takes_inputs();
-        if takes {
-            self.plat.inputs(false);
-        }
-        let opened = self.launcher.open(name);
-        if takes {
-            self.plat.inputs(true);
-        }
-        match opened {
-            Opened::Missing => eprintln!("app: no app {name} to run"),
-            Opened::Ran => self.come_back(),
-            Opened::InFront => {
-                self.background = true;
-                self.drop_cache(true);
-            }
-        }
+    /// A NIGHT tap's override, until `until` (0: none). Kept in
+    /// wx_night_until too, for the service's backlight.
+    fn set_override(&mut self, until: i64) {
+        self.night_override_until = until;
+        state::save_time(&self.st("wx_night_until"), until);
     }
 
-    /// In front again: nothing that happened meanwhile counts (those taps
-    /// were the app's); redraw what was up.
-    fn come_back(&mut self) {
-        self.background = false;
-        let t = self.ms();
-        self.last_touch = t;
-        self.last_tap = t;
-        self.dragging = false;
-        self.inj.clear();
-        self.next = t;
-        self.plat.backlight(self.night != 0);
-        if self.scr >= 0 {
-            self.go_screen(self.scr);
-        } else {
-            self.ss_page = -1;
-            self.go_slideshow(t);
-            self.page_start = t;
+    /// Gives the engine the session's pipe; `reason_button`: the session
+    /// opened it for a button press (NEOCHUMBY_REASON=button).
+    pub fn set_session(&mut self, s: Box<dyn Session>, reason_button: bool) {
+        self.session = Some(s);
+        self.reason_button = reason_button;
+    }
+
+    /// Asks the session to open an app, and leaves once it has asked.
+    fn open_app(&mut self, name: &str) {
+        if !valid_app(name) {
+            eprintln!("app: {name:?} isn't an app name");
+            return;
+        }
+        match self.session.as_mut().map(|s| s.ask(&Ask::Open(name.to_string()))) {
+            Some(true) => {
+                eprintln!("app: asked for {name}");
+                self.leave = true;
+            }
+            Some(false) => eprintln!("app: couldn't ask the session for {name}"),
+            None => eprintln!("app: {name}: not started by the session, so nothing can open it"),
         }
     }
 
@@ -2243,7 +2159,8 @@ impl<P: Plat> Engine<P> {
                     _ => (self.night == 0) as i32,
                 };
                 if on != self.night {
-                    self.night_override_until = self.next_sun_change(self.plat.wall());
+                    let until = self.next_sun_change(self.plat.wall());
+                    self.set_override(until);
                     self.apply_night(on);
                 }
             }
@@ -2315,7 +2232,7 @@ impl<P: Plat> Engine<P> {
             // Testing: forget all but what is on screen (`drop all`: and that,
             // until it is next drawn).
             "drop" => self.drop_cache(a1 == "all"),
-            "app" if !a1.is_empty() => self.pending_app = Some(a1),
+            "app" if !a1.is_empty() => self.open_app(&a1),
             _ => {}
         }
     }
@@ -2375,10 +2292,12 @@ impl<P: Plat> Engine<P> {
         if !(0..=2).contains(&self.nightmode) {
             self.nightmode = 0;
         }
-        // The mode, or the sun; else as last time.
-        let dark = self.night_wanted(self.plat.wall());
-        let night = if dark >= 0 { dark } else { (read_int(&self.st("wx_night"), 0) == 1) as i32 };
-        self.set_night(night);
+        // A NIGHT tap's override still running; else the mode, or the sun;
+        // else as last time (state::night_now, as the service decides it).
+        self.night_override_until = state::read_time(&self.st("wx_night_until"));
+        let last = read_int(&self.st("wx_night"), 0) == 1;
+        let night = state::night_now(self.nightmode, &self.m.sun, self.plat.wall(), self.night_override_until, last);
+        self.set_night(night as i32);
         self.music_on = (read_int(&self.st("wx_music"), 0) == 1) as i32;
         self.secs_override = read_int(&self.st("wx_secs"), 0);
         if !(0..=3600).contains(&self.secs_override) {
@@ -2394,6 +2313,11 @@ impl<P: Plat> Engine<P> {
         self.page_start = now;
         self.last_touch = now;
         self.go_slideshow(now);
+        // Opened for a button press the session couldn't pass on: the
+        // press means Home, as from the slideshow.
+        if std::mem::take(&mut self.reason_button) && self.find_screen("home") >= 0 {
+            self.show("home");
+        }
     }
 
     /// Runs frames until an exit (Home's CHUMBY) or, on the host, the end
@@ -2407,10 +2331,6 @@ impl<P: Plat> Engine<P> {
         let f0 = self.us();
         let t = self.ms();
 
-        if let Some(name) = self.pending_app.take() {
-            self.launch_app(&name);
-            return true;
-        }
         if self.waiting {
             // Control commands still work (stats, reload...); with no
             // pages, those that need one do nothing.
@@ -2424,7 +2344,6 @@ impl<P: Plat> Engine<P> {
                     self.waiting = false;
                     self.inj.clear();
                     self.inj_button = false;
-                    self.pending_app = None;
                     self.begin();
                     return true;
                 }
@@ -2433,24 +2352,25 @@ impl<P: Plat> Engine<P> {
             self.plat.sleep_us(1_000_000 / FPS as i64);
             return more;
         }
-        if self.background {
-            // Another app has the screen: draw nothing, read nothing, and
-            // look again a frame from now.
-            if self.launcher.returned() {
-                self.come_back();
-            } else {
-                self.plat.sleep_us(1_000_000 / FPS as i64);
-            }
-            return true;
-        }
 
         self.frame_no = self.frame_no.wrapping_add(1);
         if self.frame_no.is_multiple_of(5) {
             self.poll_ctl(t); // 5 Hz: one stat() on tmpfs
         }
+        if self.leave {
+            return false; // an app was asked for
+        }
 
         // The top button: slideshow <-> Home on each press. It is
         // level-triggered: act on the 0 -> 1 edge.
+        // From the session, a press is a `button` line: the same as a press.
+        if let Some(s) = &mut self.session {
+            for h in s.heard() {
+                match h {
+                    Heard::Button => self.inj_button = true,
+                }
+            }
+        }
         let bl = self.plat.button();
         if (bl == Some(true) && !self.button_last) || self.inj_button {
             self.inj_button = false;
@@ -2507,6 +2427,9 @@ impl<P: Plat> Engine<P> {
                         self.plat.music_quit();
                     }
                     self.set_night(0);
+                    if let Some(s) = &mut self.session {
+                        s.ask(&Ask::ChumbyMode);
+                    }
                     return false;
                 }
             } else if tx < 64 && ty < 40 && self.find_screen("home") >= 0 {
@@ -2523,6 +2446,10 @@ impl<P: Plat> Engine<P> {
                 self.last_tap = t;
                 self.page_start = 0; // anywhere else: the next page
             }
+        }
+
+        if self.leave {
+            return false; // an app was asked for
         }
 
         // New pictures? (a new manifest, or `current` naming another set)
@@ -2786,23 +2713,8 @@ impl<P: Plat> Engine<P> {
 mod tests {
     use super::*;
     use crate::host::Host;
-    use std::cell::Cell;
+    use std::cell::RefCell;
     use std::rc::Rc;
-
-    /// Opens apps "in front" until told they have gone.
-    struct Session(Rc<Cell<bool>>);
-
-    impl Launcher for Session {
-        fn takes_inputs(&self) -> bool {
-            false
-        }
-        fn open(&mut self, name: &str) -> Opened {
-            if name == "doom" { Opened::InFront } else { Opened::Missing }
-        }
-        fn returned(&mut self) -> bool {
-            self.0.get()
-        }
-    }
 
     /// An engine on `manifest` and files of the given sizes (filled with a
     /// pattern), with this budget, started.
@@ -2817,7 +2729,7 @@ mod tests {
         }
         std::fs::write(d.join("manifest.txt"), format!("page 0 p.raw 12\nscreen home p.raw\n{manifest}")).unwrap();
         let h = Host::new("unused", vec![1 << 40], 1793150000, d.clone());
-        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        let mut e = Engine::new(h, d.clone());
         e.c.budget = budget_kb * 1024;
         e.start();
         (e, d)
@@ -2958,7 +2870,7 @@ mod tests {
         std::fs::write(d.join("p.raw"), vec![0x44u8; manifest::FRAME_BYTES]).unwrap();
         std::fs::write(d.join("manifest.txt"), "page 0 p.raw 12 noclock noticker\nscreen home p.raw\n").unwrap();
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
-        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        let mut e = Engine::new(h, d.clone());
         e.start();
         for _ in 0..15 {
             assert!(e.frame());
@@ -3016,7 +2928,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
-        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        let mut e = Engine::new(h, d.clone());
         e.start();
         for _ in 0..30 {
             assert!(e.frame());
@@ -3084,7 +2996,7 @@ mod tests {
         h.values.insert("ip".into(), "1.2".into());
         h.values.insert("wifi".into(), "3".into());
         h.values.insert("name".into(), "a?b-z".into());
-        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        let mut e = Engine::new(h, d.clone());
         e.start();
         assert_eq!(e.m.fonts.len(), 1, "a strip of the wrong size is refused");
         assert_eq!(e.m.lives.len(), 4);
@@ -3151,7 +3063,7 @@ mod tests {
         )
         .unwrap();
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
-        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        let mut e = Engine::new(h, d.clone());
         e.start();
         let step = |e: &mut Engine<Host>, p: i32, dir: i32| {
             e.page = p;
@@ -3171,44 +3083,115 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
-    #[test]
-    fn an_app_in_front() {
-        let d = std::env::temp_dir().join(format!("wx-front-{}", std::process::id()));
+    /// A session that hands out queued lines and records requests.
+    #[derive(Clone, Default)]
+    struct FakeSession {
+        incoming: Rc<RefCell<Vec<Heard>>>,
+        asked: Rc<RefCell<Vec<Ask>>>,
+    }
+
+    impl Session for FakeSession {
+        fn heard(&mut self) -> Vec<Heard> {
+            std::mem::take(&mut *self.incoming.borrow_mut())
+        }
+        fn ask(&mut self, a: &Ask) -> bool {
+            self.asked.borrow_mut().push(a.clone());
+            true
+        }
+    }
+
+    /// A small set: a page, Home (one zone opens doom, one is CHUMBY, one
+    /// names no app), and the session's fake end.
+    fn with_session(tag: &str, reason_button: bool) -> (Engine<Host>, FakeSession, PathBuf) {
+        let d = std::env::temp_dir().join(format!("classic-session-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
         std::fs::write(d.join("p.raw"), vec![0x55u8; manifest::FRAME_BYTES]).unwrap();
         std::fs::write(d.join("home.raw"), vec![0xAAu8; manifest::FRAME_BYTES]).unwrap();
         std::fs::write(
             d.join("manifest.txt"),
-            "page 0 p.raw 12\nscreen home home.raw\nhot home 0 0 320 240 app doom\n",
+            "page 0 p.raw 12 noclock noticker\nscreen home home.raw\n\
+             hot home 0 0 100 100 app doom\nhot home 100 0 100 100 chumby\nhot home 200 0 100 100 app ../x\n",
         )
         .unwrap();
-        let back = Rc::new(Cell::new(false));
-        let h = Host::new("unused", vec![1_000_000], 0, d.clone());
-        let mut e = Engine::new(h, Box::new(Session(back.clone())), d.clone());
+        let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+        let mut e = Engine::new(h, d.clone());
+        let s = FakeSession::default();
+        e.set_session(Box::new(s.clone()), reason_button);
         e.start();
-        e.ctl_line(b"show home", 0);
-        assert!(e.c.bytes > 0);
-        e.ctl_line(b"app nothing", 0);
-        assert!(e.frame());
-        assert!(!e.background, "no such app: nothing changes");
-        e.ctl_line(b"tap 10 10", e.ms());
-        for _ in 0..3 {
+        (e, s, d)
+    }
+
+    /// Frames until the engine leaves (true), or `n` of them (false).
+    fn leaves(e: &mut Engine<Host>, n: usize) -> bool {
+        (0..n).any(|_| !e.frame())
+    }
+
+    #[test]
+    fn the_session_button_line_toggles_home() {
+        let (mut e, s, d) = with_session("button", false);
+        for _ in 0..12 {
             assert!(e.frame());
         }
-        assert!(e.background);
-        assert_eq!(e.c.bytes, 0, "in the background the cache is empty");
-        e.plat.fb().fill(0x1234);
-        for _ in 0..5 {
-            assert!(e.frame());
-        }
-        assert!(e.plat.fb().iter().all(|&p| p == 0x1234), "nothing is drawn in the background");
-        back.set(true);
+        assert_eq!(e.scr, -1);
+        s.incoming.borrow_mut().push(Heard::Button);
         assert!(e.frame());
-        assert!(!e.background);
-        assert!(e.plat.fb().iter().all(|&p| p == 0xAAAA), "Home is redrawn");
-        e.ctl_line(b"drop all", e.ms());
-        assert_eq!(e.c.bytes, 0);
+        assert_eq!(e.m.screens[e.scr as usize].name, "home", "a press: Home");
+        assert!(e.plat.fb().iter().all(|&p| p == 0xAAAA));
+        s.incoming.borrow_mut().push(Heard::Button);
+        assert!(e.frame());
+        assert_eq!(e.scr, -1, "again: the slideshow");
+        assert!(s.asked.borrow().is_empty());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn opened_for_the_button_starts_on_home() {
+        let (mut e, _s, d) = with_session("reason", true);
+        assert!(e.frame());
+        assert_eq!(e.m.screens[e.scr as usize].name, "home");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn apps_and_chumby_mode_go_through_the_session() {
+        let (mut e, s, d) = with_session("open", false);
+        e.ctl_line(b"show home", e.ms());
+        assert!(e.frame());
+        // A zone naming no valid app asks nothing.
+        e.ctl_line(b"tap 250 50", e.ms());
+        assert!(!leaves(&mut e, 12));
+        assert!(s.asked.borrow().is_empty());
+        // The doom zone: `open doom`, then the app leaves.
+        e.ctl_line(b"tap 50 50", e.ms());
+        assert!(leaves(&mut e, 3), "it exits after asking");
+        assert_eq!(*s.asked.borrow(), vec![Ask::Open("doom".into())]);
+        std::fs::remove_dir_all(&d).unwrap();
+
+        let (mut e, s, d) = with_session("chumby", false);
+        e.ctl_line(b"show home", e.ms());
+        assert!(e.frame());
+        e.ctl_line(b"tap 150 50", e.ms());
+        assert!(leaves(&mut e, 3));
+        assert_eq!(*s.asked.borrow(), vec![Ask::ChumbyMode]);
+        std::fs::remove_dir_all(&d).unwrap();
+
+        // The control file's `app` asks the same way.
+        let (mut e, s, d) = with_session("ctl", false);
+        e.ctl_line(b"app quake", e.ms());
+        assert!(!e.frame());
+        assert_eq!(*s.asked.borrow(), vec![Ask::Open("quake".into())]);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_night_tap_is_kept_for_the_service() {
+        let (mut e, _s, d) = with_session("night", false);
+        e.ctl_line(b"night on", e.ms());
+        assert!(state::read_time(&e.st("wx_night_until")) > 0);
+        assert_eq!(read_int(&e.st("wx_night"), 0), 1);
+        e.ctl_line(b"nightmode auto", e.ms());
+        assert_eq!(state::read_time(&e.st("wx_night_until")), 0, "a new mode drops it");
         std::fs::remove_dir_all(&d).unwrap();
     }
 

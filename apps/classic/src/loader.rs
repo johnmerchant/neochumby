@@ -102,8 +102,8 @@ impl Loader {
 
     /// Waits up to `timeout_ms` (-1: for ever) for a reply. Err if the
     /// thread has gone.
-    pub fn recv(&self, timeout_ms: i32) -> Result<Option<Reply>, ()> {
-        self.rep.recv(timeout_ms).map_err(|_| ())
+    pub fn recv(&self, timeout_ms: i32) -> Result<Option<Reply>, chan::Disconnected> {
+        self.rep.recv(timeout_ms)
     }
 }
 

@@ -1,17 +1,20 @@
-//! The engine on the Chumby: the screen and inputs through the neochumby
-//! crate, music through the stock firmware's btplay, the backlight through
-//! /proc, settings in /psp, and other apps run from the neochumby tree.
+//! The engine on the Chumby: the screen and touch through the neochumby
+//! crate, the backlight through /proc, settings in /psp, and the session's
+//! pipe (opening apps, CHUMBY MODE, the top button). The music plays in the
+//! classic service (service.rs), which follows the settings this app
+//! writes, so it carries on while another app is in front.
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use neochumby::fb::{Fb, rgb};
-use neochumby::input::{self, Squeeze, Touchscreen};
+use neochumby::input::{self, Touchscreen};
+use neochumby::session::{Notice, Pipe};
 
 use crate::engine::Engine;
-use crate::launch::DirectExec;
 use crate::plat::{Plat, Touch, wall_now};
+use crate::session::{Ask, Heard, Session};
 
 /// /proc/sys/sense1/brightness, 0..65535; 12000 already looks very dark.
 const NIGHT_BRIGHTNESS: u32 = 9000;
@@ -19,8 +22,6 @@ const NIGHT_BRIGHTNESS: u32 = 9000;
 pub struct Device {
     fb: Fb,
     touch: Touchscreen,
-    /// None while an app has it: /dev/switch is opened exclusively.
-    squeeze: Option<Squeeze>,
     events: VecDeque<Touch>,
     polled: bool,
     last: (i32, i32),
@@ -64,9 +65,8 @@ impl Plat for Device {
     }
 
     fn button(&mut self) -> Option<bool> {
-        // Level-triggered: every read is the current state. Read once a
-        // frame; the engine acts on the 0 -> 1 edge.
-        self.squeeze.as_mut().map(Squeeze::squeezed)
+        // The session owns the top button; a press arrives on its pipe.
+        None
     }
 
     fn backlight(&mut self, night: bool) {
@@ -74,19 +74,12 @@ impl Plat for Device {
         let _ = std::fs::write("/proc/sys/sense1/brightness", format!("{v}\n"));
     }
 
-    fn music(&mut self, url: Option<&str>, vol: i32) {
-        match url {
-            Some(u) => sh(
-                "amixer -q sset Master \"$1\"%; btplay --start-daemon \"$2\" >/dev/null 2>&1 &",
-                &[&vol.to_string(), u],
-            ),
-            None => sh("btplay --passthru=stop >/dev/null 2>&1 &", &[]),
-        }
+    fn music(&mut self, _url: Option<&str>, _vol: i32) {
+        // The service plays it, from wx_music, wx_station and wx_volume,
+        // which the engine has just written.
     }
 
-    fn volume(&mut self, vol: i32) {
-        sh("amixer -q sset Master \"$1\"% &", &[&vol.to_string()]);
-    }
+    fn volume(&mut self, _vol: i32) {}
 
     fn music_quit(&mut self) {
         sh("btplay --passthru=quit >/dev/null 2>&1", &[]);
@@ -108,17 +101,6 @@ impl Plat for Device {
 
     fn sleep_us(&mut self, us: i64) {
         neochumby::sleep_ms((us / 1000).clamp(0, u32::MAX as i64) as u32);
-    }
-
-    fn inputs(&mut self, ours: bool) {
-        if ours {
-            self.squeeze = Some(Squeeze::open());
-            // The touches meanwhile were the app's.
-            self.touch.poll();
-            self.events.clear();
-        } else {
-            self.squeeze = None;
-        }
     }
 
     fn message(&mut self, lines: &[&str]) {
@@ -157,14 +139,45 @@ pub fn run(dir: PathBuf) -> i32 {
     let d = Device {
         fb,
         touch: Touchscreen::open(),
-        squeeze: Some(Squeeze::open()),
         events: VecDeque::new(),
         polled: false,
         last: (0, 0),
         t0: std::time::Instant::now(),
     };
-    let mut e = Engine::new(d, Box::new(DirectExec), dir);
+    let mut e = Engine::new(d, dir);
+    if let Some(p) = Pipe::from_env() {
+        let button = neochumby::session::reason().as_deref() == Some("button");
+        e.set_session(Box::new(SessionPipe(p)), button);
+    } else {
+        eprintln!("neochumby-classic: not started by the session: no apps can be opened");
+    }
     e.start();
     e.run();
     0
+}
+
+/// The session's pipe, as the engine uses it.
+struct SessionPipe(Pipe);
+
+impl Session for SessionPipe {
+    fn heard(&mut self) -> Vec<Heard> {
+        // Without waiting; lines this end doesn't know are ignored.
+        self.0
+            .receive()
+            .lines
+            .iter()
+            .filter_map(|l| match Notice::parse(l) {
+                Some(Notice::Button) => Some(Heard::Button),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn ask(&mut self, a: &Ask) -> bool {
+        match a {
+            Ask::Open(app) => self.0.open(app),
+            Ask::ChumbyMode => self.0.chumby_mode(),
+        }
+        .is_ok()
+    }
 }

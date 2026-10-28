@@ -34,7 +34,6 @@ use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 use crate::engine::Engine;
-use crate::launch::Pretend;
 use crate::manifest::{H, W};
 use crate::plat::{Plat, Touch, wall_now};
 
@@ -181,8 +180,6 @@ impl Plat for Host {
         self.t += us.max(0);
     }
 
-    fn inputs(&mut self, _ours: bool) {}
-
     fn message(&mut self, lines: &[&str]) {
         self.fb.fill(0);
         eprintln!("[screen] {}", lines.join(" "));
@@ -264,7 +261,7 @@ pub fn render(args: &[String]) -> i32 {
         eprintln!("render: {}: {e}", h.state.display());
         return 1;
     }
-    let mut e = Engine::new(h, Box::new(Pretend), PathBuf::from(dir));
+    let mut e = Engine::new(h, PathBuf::from(dir));
     e.start();
     e.run();
     0
