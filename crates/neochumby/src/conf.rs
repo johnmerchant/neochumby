@@ -6,6 +6,8 @@
 //!                         reads it too, and accepts only the characters
 //!                         [`valid_value`] does.
 //!   /psp/neochumby.key    this Chumby's private key (0600)
+//!   /psp/rfs1/userhook2   the boot hook, which pairing installs and the
+//!                         session keeps up to date ([`refresh_hook`])
 
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -13,6 +15,9 @@ use std::path::Path;
 
 pub const CONF: &str = "/psp/neochumby.conf";
 pub const KEY: &str = "/psp/neochumby.key";
+pub const HOOK: &str = "/psp/rfs1/userhook2";
+/// A stick's own tree, made by hand (tools/stick).
+const STICK_TREE: &str = "/mnt/usb/neochumby";
 
 /// What a value may hold: what an address, port, path or hex key needs.
 pub fn valid_value(s: &str) -> bool {
@@ -57,6 +62,40 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> io::Result<()> {
     std::fs::rename(&tmp, path)
 }
 
+/// Brings the boot hook pairing installed up to date with the tree's copy,
+/// so a Chumby paired before the hook changed (to boot synced sets, say)
+/// boots the new way. Only a hook that is there is replaced, only from a
+/// tree a neochumbyd delivered (over NFS, or synced to the stick), never
+/// from a stick made by hand, and only by a higher version
+/// ([`hook_version`]): after a rollback to an older set, its older hook
+/// leaves the newer one alone. True if it was replaced.
+pub fn refresh_hook(root: &Path) -> io::Result<bool> {
+    let hook = Path::new(HOOK);
+    if root == Path::new(STICK_TREE) || !hook.is_file() {
+        return Ok(false);
+    }
+    let new = std::fs::read(root.join("userhook2"))?;
+    if new.len() > 64 << 10 || !new.starts_with(b"#!/bin/sh\n") {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "the tree's userhook2 is not a hook"));
+    }
+    let old = std::fs::read(hook).unwrap_or_default();
+    if hook_version(&new) <= hook_version(&old) {
+        return Ok(false);
+    }
+    write_atomic(hook, &new, 0o755)?;
+    Ok(true)
+}
+
+/// A hook's `# neochumby-hook-version=N` line; 0 for a hook from before
+/// there was one.
+pub fn hook_version(hook: &[u8]) -> u32 {
+    String::from_utf8_lossy(hook)
+        .lines()
+        .take(10)
+        .find_map(|l| l.strip_prefix("# neochumby-hook-version=")?.trim().parse().ok())
+        .unwrap_or(0)
+}
+
 /// key=value lines from pairs whose values are all [`valid_value`].
 pub fn render(pairs: &[(&str, String)]) -> io::Result<String> {
     let mut out = String::new();
@@ -92,6 +131,14 @@ fn sanitise_name(raw: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hook_versions() {
+        assert_eq!(super::hook_version(b"#!/bin/sh\n# neochumby-hook-version=3\nexit 0\n"), 3);
+        assert_eq!(super::hook_version(b"#!/bin/sh\n# neochumby's boot hook\n"), 0);
+        assert_eq!(super::hook_version(b"#!/bin/sh\n# neochumby-hook-version=x\n"), 0);
+        assert_eq!(super::hook_version(b""), 0);
+    }
+
     #[test]
     fn names() {
         assert_eq!(super::sanitise_name("Kitchen Chumby!"), "kitchen_chumby_");

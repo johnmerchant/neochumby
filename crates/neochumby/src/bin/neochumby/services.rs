@@ -12,6 +12,11 @@
 //! Which services run is decided as the session starts, from whether this
 //! Chumby is paired (an app that needs a neochumbyd). Pairing asks for a
 //! restart anyway, so that's when a newly paired Chumby starts them.
+//!
+//! The session's own services (core: neochumby-sync, for delivery=sync)
+//! are run, restarted and stopped the same way, but open no app: they are
+//! never told what is in front, and what they ask for is dropped, so the
+//! interruption rules never come into it.
 
 use std::path::Path;
 use std::process::Child;
@@ -64,6 +69,8 @@ struct Service<'a> {
     backoff: Backoff,
     /// When to start it, while it isn't running.
     due: Instant,
+    /// The session's own, not an app's.
+    core: bool,
 }
 
 /// What happened to the services since the last look.
@@ -81,17 +88,18 @@ pub struct Services<'a> {
 }
 
 impl<'a> Services<'a> {
-    /// The service of each app in `apps` that can run here; none started
-    /// yet.
-    pub fn new(apps: &'a [App], root: &'a Path, backoff: Backoff) -> Services<'a> {
+    /// The service of each app in `apps` that can run here, and each of
+    /// `core`, the session's own; none started yet.
+    pub fn new(apps: &'a [App], core: &'a [App], root: &'a Path, backoff: Backoff) -> Services<'a> {
         let now = Instant::now();
+        let ours = |a: &'a App, core| {
+            Some(Service { app: a, exe: a.service.as_deref()?, running: None, backoff, due: now, core })
+        };
         let list = apps
             .iter()
             .filter(|a| a.runnable())
-            .filter_map(|app| {
-                let exe = app.service.as_deref()?;
-                Some(Service { app, exe, running: None, backoff, due: now })
-            })
+            .filter_map(|a| ours(a, false))
+            .chain(core.iter().filter_map(|a| ours(a, true)))
             .collect();
         Services { list, root }
     }
@@ -119,8 +127,8 @@ impl<'a> Services<'a> {
             let gone = exited(r.child.id());
             for line in r.pipe.receive().lines {
                 match Request::parse(&line) {
-                    Some(req) => ev.requests.push((s.app, req)),
-                    None => eprintln!("neochumby: service {}: ignoring {line:?}", s.app.name),
+                    Some(req) if !s.core => ev.requests.push((s.app, req)),
+                    _ => eprintln!("neochumby: service {}: ignoring {line:?}", s.app.name),
                 }
             }
             if let Ok(false) = gone {
@@ -140,7 +148,7 @@ impl<'a> Services<'a> {
 
     /// Tells each running service that `app` is now in front.
     pub fn front(&mut self, app: &str) {
-        for s in &mut self.list {
+        for s in self.list.iter_mut().filter(|s| !s.core) {
             if let Some(r) = s.running.as_mut() {
                 r.tell(s.app, app);
             }
@@ -170,7 +178,9 @@ impl Service<'_> {
             Ok((child, pipe)) => {
                 eprintln!("neochumby: service {} started", self.app.name);
                 let mut r = Running { child, pipe, since: Instant::now(), untold: None };
-                r.tell(self.app, front);
+                if !self.core {
+                    r.tell(self.app, front);
+                }
                 self.running = Some(r);
             }
             Err(e) => {
