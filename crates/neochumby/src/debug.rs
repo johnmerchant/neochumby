@@ -69,6 +69,15 @@ pub fn dump() {
     }
 }
 
+/// The name given to [`install`], to prefix the library's own messages;
+/// "neochumby" until it is called.
+pub(crate) fn name() -> &'static str {
+    match unsafe { *std::ptr::addr_of!(NAME) } {
+        "" => "neochumby",
+        n => n,
+    }
+}
+
 /// Installs the crash and termination handlers, and starts the profiler if
 /// NEOCHUMBY_PROF is set. `name` prefixes crash reports.
 pub fn install(name: &'static str) {

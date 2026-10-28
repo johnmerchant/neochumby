@@ -1,7 +1,9 @@
-//! neochumby: the Chumby Classic's screen and inputs, for the launcher and
-//! the apps (stock 2.6.16 kernel, static musl, ARM926).
+//! neochumby: the Chumby Classic's screen, inputs and speaker, for the
+//! launcher, the apps and the services (stock 2.6.16 kernel, static musl,
+//! ARM926).
 
 pub mod apps;
+pub mod audio;
 pub mod conf;
 pub mod debug;
 pub mod fb;
