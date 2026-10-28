@@ -31,7 +31,7 @@ build on neochumby and bring wx in as a shell, not the other way round.
 | | neochumby | wx (Matt) |
 | --- | --- | --- |
 | Boot | `userhook2` from stick or `/psp`, before Flash starts; nothing flashed; CHUMBY MODE hands back | `debugchumby` on a stick, run just before Flash; stops Flash and guards against its watchdog |
-| Where apps come from | NFS tree from a paired neochumbyd, or a stick | USB stick (a/b sets), pushed over SSH by a feeder |
+| Where apps come from | **Pull:** NFS tree from a paired neochumbyd, or a stick | **Push:** the server writes a/b sets onto the Chumby's USB stick (over SSH today) |
 | Security | Paired TLS 1.3 / Noise with pinned keys; never starts SSH | Relies on SSH being on (the stock root login) |
 | Rendering | On device, each app draws its own pixels (Rust, `fb`, font8x8) | On a server: Python + Pillow renders every pixel as RGB565; the device only blits |
 | On-device engine | One program per app | `wxshow`, ~2,400 lines of C, ~1% CPU on static pages, 25 fps animations, dirty rectangles, transitions, ticker, clock, glow/video layers |
@@ -107,22 +107,53 @@ pages in wx's channel, configured in the web page, not entries in
 `apps/`. **Question 3:** is a `shells=` key the right place, or would you
 rather keep shell-specific things entirely inside the shell's own app?
 
-### 4. wx's server half becomes a neochumbyd companion, not SSH
+### 4. Two delivery modes: pull (NFS) and push (stick)
 
-wx's feeder (render + push) maps well onto a companion: neochumbyd runs it
-per paired Chumby. Instead of pushing over SSH, it would:
+The two projects get files onto a Chumby in opposite ways, and Matt would
+like the merged project to **support both, as a per-Chumby choice**:
 
-- render into a per-Chumby directory under `NEOCHUMBY_STATE`, keeping the
-  a/b sets, md5 delta and atomic switch, and
-- serve them to `wxshow` either through the NFS tree (wxshow's loader child
-  already copes with slow reads) or as `Msg::Data` frames over the paired
-  session.
+- **Pull (neochumby today):** the Chumby mounts the tree from neochumbyd
+  over NFS and pages things in as they're used. Nothing is stored on the
+  Chumby; it needs the server at boot.
+- **Push (wx today):** the server writes into the Chumby's own USB stick,
+  and the Chumby runs from that local copy. wx keeps two complete sets on the
+  stick (`a/`, `b/`) and a one-word `current` pointer. A push writes only the
+  files whose md5 differs into the *standby* set, verifies them, then flips
+  `current`, so the live set is never touched and rollback is one flip.
+  The Chumby keeps working, showing the last push, when the server is down
+  or unreachable.
 
-That removes wx's dependence on SSH entirely, which matches your rule that
-nothing turns on remote access. `chumbyctl`'s control commands
-(show/tap/stats/bench) would go over the same session instead of SSH.
-**Question 4:** NFS-served pictures or frames over the session? (We lean
-NFS: zero new protocol, and the loader already handles latency.)
+| | Pull (NFS) | Push (stick) |
+| --- | --- | --- |
+| Storage on the Chumby | none | a stick (small, old, low-power: see `docs/hardware.md`) |
+| Server down | nothing to boot from | runs on the last push |
+| Updates | instant: the server's tree is the tree | on each push, deltas only, atomic, with rollback |
+| Network use | every page-in (cached by the kernel) | only changed files, gzip'd |
+| Good for | a desk of Chumbys next to the server; developing | a Chumby on flaky WiFi, or away from the server |
+
+Proposed shape:
+
+- A per-Chumby `delivery=pull|push` setting, chosen in the web page (or the
+  CLI) and kept by neochumbyd. The boot hook already prefers a stick's tree
+  over NFS, so push mode is "the stick's tree, kept up to date by the server".
+- **Push goes over the paired session, not SSH.** wx pushes over SSH today;
+  in the merged project a small receiver on the Chumby (part of the session,
+  or a `service=`) takes the files from neochumbyd as frames, writes the
+  standby set, checks the md5s and flips `current`. Same algorithm wx uses
+  now, new transport, and still nothing turns on SSH.
+- It covers the **whole tree**, not just wx's pictures: binaries, manifests
+  and app files are pushed the same way, so Doom works in push mode too.
+- wx's renderer (the feeder) becomes a companion that renders into the
+  Chumby's tree on the server under `NEOCHUMBY_STATE`. In pull mode that's
+  read over NFS; in push mode it is what gets pushed. `wxshow` reads from
+  "the tree" and doesn't care which. Its loader child already copes with
+  slow reads from either.
+- `chumbyctl`'s control commands (show/tap/stats/bench/rollback) would go
+  over the same session instead of SSH.
+
+**Question 4:** happy to support both modes, with push implemented as a
+receiver over the paired session? Any preference on where the receiver
+lives (inside `neochumby`, or its own service)?
 
 ### 5. The web page lives with neochumbyd
 
@@ -192,8 +223,8 @@ decision from John.
 
 ## Licensing
 
-- Matt's project has no licence yet. Anything we contribute here would be
-  **MIT, like the rest** (Matt confirms before the first code PR).
+- **Confirmed by Matt: everything we contribute here is MIT**, like the
+  rest of neochumby.
 - Some of wx's assets **can't** come across and would stay in Matt's private
   config or be replaced: the ABC News banner and logo, the Chumby logo and
   octopus (Chumby's trademarks; we'd draw our own or fetch at runtime), a
@@ -213,9 +244,11 @@ Small and reviewable, each standing alone:
 3. Shell from neochumbyd (Question 2), with the `/psp` cache.
 4. Git-URL apps in `tools/tree` (Question 6).
 5. `apps/wx`: the engine, per the language decision, with the simulator.
-6. wx's companion: renderer + delta sets, served per Question 4.
-7. The web page in neochumbyd, with pairing and the shell picker.
-8. Widgets as their own repos, aurora first.
+6. Push mode: the on-Chumby receiver (a/b sets, md5 delta, atomic flip,
+   rollback) over the paired session, and `delivery=` per Chumby.
+7. wx's companion: the renderer, writing into the Chumby's tree.
+8. The web page in neochumbyd, with pairing and the shell picker.
+9. Widgets as their own repos, aurora first.
 
 Steps 1 and 2 don't depend on any of the open questions; we can start there
 whenever you're happy.
