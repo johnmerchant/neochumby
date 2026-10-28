@@ -18,9 +18,10 @@
 # environment: NEOCHUMBY_EMU_MACHINE=chumby-classic (the whole emulated
 # Chumby, your own firmware) or NEOCHUMBY_EMU_DEVICE=NAME (a real Chumby,
 # paired and set dev=on), without sudo for either. Steps only user mode can
-# do (selftest, sensors, the top button, the FAT stick) are skipped there;
-# the waits scale with `dev/emulate scale`; a backend that can't do a step
-# at all (no firmware, no remote tap yet) makes it exit 77, skipped.
+# do (selftest, sensors, the FAT stick) are skipped there, and the top
+# button on the full-system machine too, until it has one; the waits scale
+# with `dev/emulate scale`; a backend that can't do a step at all (no
+# firmware, a neochumbyd from before remote input) makes it exit 77.
 set -eu
 tree=${1:?usage: dev/emulate-smoke TREE OUT}
 out=${2:?usage: dev/emulate-smoke TREE OUT}
@@ -140,7 +141,9 @@ if [ "$machine" != user ]; then
   emu stop
   echo "-- the console:"
   cat "$out/log.txt"
-  echo "dev/emulate-smoke: all passed ($machine; selftest, sensors, the top button and the FAT stick skipped)"
+  skipped="selftest, sensors and the FAT stick"
+  [ "$machine" = device ] || skipped="selftest, sensors, the top button and the FAT stick"
+  echo "dev/emulate-smoke: all passed ($machine; $skipped skipped)"
   exit 0
 fi
 
