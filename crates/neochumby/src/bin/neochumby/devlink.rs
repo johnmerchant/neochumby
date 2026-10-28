@@ -293,6 +293,9 @@ impl Input<'_> {
             Ok(f)
         };
         let mut file = open().map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
+        // Up first: a finger a session left down (one that ended or crashed
+        // mid-tap) would make the kernel drop this press as no change.
+        file.write_all(&input::touch_up()).map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
         file.write_all(&input::touch_down(rx, ry)).map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
         eprintln!("neochumby: neochumbyd taps ({x}, {y}) for {hold_ms} ms");
         Ok(Held { file, until: Instant::now() + Duration::from_millis(hold_ms.into()) })
@@ -372,8 +375,15 @@ fn serve(
         let r = match s.recv_timeout(wait) {
             Ok(Some(Msg::Restart)) => {
                 eprintln!("neochumby: neochumbyd asks for a restart");
+                // A tap still held is let go first: the restart replaces this
+                // process, so nothing would let go of it after, and the kernel
+                // would take the next touch for the same finger.
+                let before = held.take().map_or(Ok(()), |h| {
+                    drop(h);
+                    s.send(&done(Err("the session restarted before the tap ended".into())))
+                });
                 restart.store(true, Ordering::SeqCst);
-                Ok(())
+                before
             }
             Ok(Some(Msg::Shot)) => shot(s),
             Ok(Some(Msg::Config(c))) => {
