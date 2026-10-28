@@ -43,6 +43,11 @@ qemu-user-static on older releases); dosfstools for `mkstick`.
                                   to overwrite one), with TREE as neochumby/
                                   if given (as tools/stick)
 
+On a Mac, every command runs as root in a Lima VM sharing this checkout
+(dev/lima.yaml), so no sudo: `brew install lima`, `dev/emulate vm start`
+once (`vm stop`, `vm delete`), then the commands above, from inside the
+checkout, with paths inside it.
+
 The emulator's directory is --state DIR, else $NEOCHUMBY_EMU, else
 /var/tmp/neochumby-emulate-UID for the user who ran sudo. sudo drops
 NEOCHUMBY_EMU, so pass it on (`sudo --preserve-env=NEOCHUMBY_EMU`) or use
@@ -1284,8 +1289,46 @@ def cmd_mkstick(img, size_mb, tree, force):
 
 USAGE = "usage: dev/emulate [--state DIR] COMMAND ... (dev/emulate --help)"
 
+# On a Mac: a Lima VM (dev/lima.yaml) runs every command, as root.
+VM = "neochumby-emulate"
+
+
+def on_mac(argv):
+    lima = shutil.which("limactl")
+    if not lima:
+        sys.exit("dev/emulate: on a Mac it runs in a Linux VM, with Lima: `brew install lima`, then "
+                 "`dev/emulate vm start`")
+    if argv[:1] == ["vm"]:
+        what = argv[1] if len(argv) > 1 else ""
+        if what == "start":
+            listed = subprocess.run([lima, "list", "--format", "{{.Name}}"], capture_output=True, text=True)
+            if VM not in listed.stdout.split():
+                with open(os.path.join(REPO, "dev", "lima.yaml")) as f:
+                    template = f.read().replace("REPO", REPO)
+                spec = os.path.join(tempfile.mkdtemp(), f"{VM}.yaml")
+                with open(spec, "w") as f:
+                    f.write(template)
+                print(f"dev/emulate: making the VM {VM}: Ubuntu 24.04 (a download of about 600 MB, once), "
+                      f"with {REPO} shared", flush=True)
+                os.execv(lima, [lima, "start", "--tty=false", f"--name={VM}", spec])
+            os.execv(lima, [lima, "start", VM])
+        if what in ("stop", "delete"):
+            os.execv(lima, [lima, what, VM])
+        sys.exit("usage: dev/emulate vm start|stop|delete")
+    listed = subprocess.run([lima, "list", "--format", "{{.Name}} {{.Status}}"], capture_output=True, text=True)
+    if f"{VM} Running" not in listed.stdout.splitlines():
+        sys.exit(f"dev/emulate: the VM {VM} isn't running: dev/emulate vm start")
+    here = os.getcwd()
+    if not (here + "/").startswith(REPO + "/"):
+        sys.exit(f"dev/emulate: on a Mac, run it from inside {REPO}, which the VM shares; "
+                 "give it paths there too")
+    os.execv(lima, [lima, "shell", "--workdir", here, VM, "sudo", "python3", os.path.join(REPO, "dev", "emulate")]
+             + argv)
+
 
 def main(argv):
+    if sys.platform == "darwin" and argv[:1] not in (["-h"], ["--help"], ["help"]):
+        on_mac(argv)
     def flag(args, name, default=None):
         """The value after `name` in args, taken out of them."""
         if name not in args:

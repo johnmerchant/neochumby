@@ -56,7 +56,9 @@ request's tree with it (`dev/emulate-smoke`).
 
 It needs Linux, root, Python 3.9+, FUSE, util-linux's `mount` with loop
 devices, qemu-user's binfmt handler (static), and dosfstools for stick
-images. On a Mac, run it in a Linux VM.
+images. On a Mac, it runs itself in a Lima VM that shares the checkout:
+`brew install lima` and `dev/emulate vm start` once, then the same
+commands without sudo, from inside the checkout.
 
 ```sh
 sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
