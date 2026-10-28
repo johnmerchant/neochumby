@@ -96,22 +96,13 @@ the app:
 
 `apps/airplay` is a worked example of both halves.
 
-## Files for one Chumby
+## Files in the tree
 
-With `delivery=sync`, each Chumby's tree is the shared tree plus its own
-files from neochumbyd's `overlay/<name>/` (see the README). A program that
-renders for one Chumby writes there:
-
-- **Atomically:** each file goes in under a name starting with `.`, then is
-  renamed into place. Names starting with `.` are never sent.
-- **Stable names:** the same picture keeps the same name on every run. A
-  new name is a new file to send and write to the stick.
-- **Only when changed:** leave an identical file alone. Per-run
-  timestamps baked into large files make them change every run, so they
-  are sent every time.
-- **Names a Chumby takes:** A-Z a-z 0-9 `.` `_` `+` `-`, not starting or
-  ending with `.`, and unique ignoring case (the stick is FAT).
-  `neochumbyd manifest NAME` reports anything left out.
+With `delivery=sync`, a Chumby keeps a copy of the tree on its FAT stick.
+Names must be ones it can take: A-Z a-z 0-9 `.` `_` `+` `-`, not starting
+or ending with `.`, unique ignoring case, and not a DOS device name (`con`,
+`aux.txt`). `neochumbyd manifest` lists anything left out. Only files that
+change are sent, so keep names stable and leave identical files alone.
 
 ## Pull requests
 

@@ -196,19 +196,25 @@ say sync, the session runs `neochumby-sync`, which once a minute:
 2. otherwise sends the standby set's SHA-256 manifest, and neochumbyd sends
    only the files that differ, whole;
 3. writes them into the standby set only, each under a temporary name,
-   hashed as it streams, fsynced and renamed into place. Files the tree no
-   longer has are removed;
-4. writes the set's completion marker (`a.complete`, carrying its manifest)
-   last, then rewrites `current` to make it live from the next boot.
+   hashed as it streams, and renamed into place. Files the tree no longer
+   has are removed. Files are synced in batches, and each batch is listed
+   in the set's journal only after it is on the stick;
+4. hashes any file kept from a round that was cut short, then writes the
+   set's completion marker (`a.complete`, carrying its manifest) last, and
+   rewrites `current` to make it live from the next boot.
 
 Files arrive only over the paired session, from the pinned neochumbyd key,
-never SSH. Writes stay inside the stick's `neochumby/`: no `..`, absolute
-paths or symbolic links, at most 64 MB a file and 512 MB a set. The live
-set is never written. A rename on FAT can tear in a power cut, so the boot
-hook doesn't trust `current` alone. It runs the set `current` names only if
-that set's marker is whole and every file it lists is there at its size
-(`neochumby check-set`), else the other set, else it boots as before. A
-power cut at any point leaves a complete set to boot.
+never SSH. Writes stay inside the stick's `neochumby/`, and happen only
+while a stick is mounted at `/mnt/usb`. No `..`, absolute paths, symbolic
+links or names FAT refuses (`con`, `aux.txt`), at most 64 MB a file and 512
+MB a set, and only if the stick has room. A round has an hour in all. The
+live set is never written. A rename on FAT can tear in a power cut, so the
+boot hook doesn't trust `current` alone. It runs the set `current` names
+only if that set's marker is whole and every file it lists is there at its
+size (`neochumby check-set`, 30 seconds at most for both sets), else the
+other set, else it boots as before. A power cut at any point leaves a
+complete set to boot. The session keeps the boot hook in `/psp` up to date
+with the tree's, so Chumbys paired before sync boot their sets too.
 
 On the Chumby (with SSH enabled by its owner):
 
@@ -218,22 +224,10 @@ neochumby-sync rollback   # the other set is live from the next boot; syncing ho
 neochumby-sync resume     # sync again
 ```
 
-**Files for one Chumby.** A Chumby's tree is the shared tree (what NFS
-serves) with its own files on top, from `<state>/overlay/<name>/`, laid
-out like the tree (`overlay/kitchen/apps/wx/forecast.raw`). A file there
-replaces the shared one at the same path. This is the hook for per-Chumby
-renderers, such as a weather feed that draws each Chumby's screens:
-
-- write into the overlay, putting each file in under a name starting with
-  `.` and renaming it into place. Names starting with `.` are never sent;
-- keep names stable, and leave unchanged files alone, so that only what
-  changed is sent and written to the stick;
-- `neochumbyd manifest NAME` prints what NAME would be sent, and whether a
-  Chumby would take it.
-
-The overlay is for sync only; NFS serves the shared tree. A Chumby paired
-before sync has the old boot hook in `/psp`, which pairing installs, so
-pair it again to boot from its synced sets.
+A Chumby on sync is sent the tree NFS serves. `neochumbyd manifest`
+prints it, with anything a Chumby couldn't take. Files for one Chumby only
+(a renderer's output, say) would be laid over the tree where neochumbyd's
+`sync.rs` scans it; that isn't built yet.
 
 When a stick and a server are both available, the stick wins. The hook
 times out every step that could block, and returns to the stock boot if
