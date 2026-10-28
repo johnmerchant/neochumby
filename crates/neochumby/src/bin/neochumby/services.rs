@@ -154,7 +154,7 @@ impl<'a> Services<'a> {
     pub fn end_offline(&mut self, owners: &HashSet<u32>) {
         for s in &self.list {
             if let Some(r) = &s.running
-                && jail::offline(s.app).is_some_and(|uid| owners.contains(&uid))
+                && jail::offline(s.app).is_some_and(|n| owners.contains(&n))
             {
                 eprintln!(
                     "neochumby: service {} has an internet socket open, without network access; ending it",

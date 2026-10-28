@@ -111,8 +111,8 @@ pub fn jailed(app: &App) -> bool {
     JAILS.get().is_some() && !app.access.root
 }
 
-/// The uid `app` runs as, jailed.
-fn uid(app: &App) -> io::Result<u32> {
+/// The number `app` runs as, jailed: its uid, and its group.
+fn number(app: &App) -> io::Result<u32> {
     let names = JAILS.get().ok_or_else(|| io::Error::other("jails are off"))?;
     let i = names.iter().position(|n| *n == app.name).ok_or_else(|| io::Error::other("not in the tree"))?;
     Ok(FIRST_UID + i as u32)
@@ -121,7 +121,7 @@ fn uid(app: &App) -> io::Result<u32> {
 /// The uid of `app`, if it runs jailed without `network`: one the session
 /// ends if it finds it with an internet socket.
 pub fn offline(app: &App) -> Option<u32> {
-    (jailed(app) && !app.access.network).then(|| uid(app).ok()).flatten()
+    (jailed(app) && !app.access.network).then(|| number(app).ok()).flatten()
 }
 
 /// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
@@ -135,7 +135,7 @@ pub fn start(
     mut env: Vec<(String, String)>,
     keep: &[RawFd],
 ) -> io::Result<Process> {
-    let uid = uid(app)?;
+    let uid = number(app)?;
     let a = app.access;
     let front = role == Role::Front;
     let path = |p: &Path| {

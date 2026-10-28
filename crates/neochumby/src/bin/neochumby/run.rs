@@ -359,7 +359,7 @@ impl<'a, D: Device> Session<'a, D> {
             }
             if let Some(owners) = self.network.due() {
                 self.services.end_offline(&owners);
-                if jail::offline(f.app).is_some_and(|uid| owners.contains(&uid)) {
+                if jail::offline(f.app).is_some_and(|n| owners.contains(&n)) {
                     eprintln!(
                         "neochumby: {} has an internet socket open, without network access; ending it",
                         f.app.name
