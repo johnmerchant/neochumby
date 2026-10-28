@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2024"
 publish = false
 license = "MIT"
-description = "A Chumby Classic (i.MX21) emulator that boots the stock firmware"
+description = "Builds the NAND and settings images the Chumby Classic emulator boots"
 
 # A host tool, built apart from the neochumby workspace (which targets the
 # Chumby itself).

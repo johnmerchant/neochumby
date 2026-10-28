@@ -1,0 +1,29 @@
+#!/bin/sh
+# build: builds qemu-system-arm with the chumby-classic machine from
+# qemu-chumby at a pinned commit, into emu/qemu/build/obj/qemu-system-arm.
+#
+# qemu-chumby is fetched into emu/qemu/qemu-chumby; git checks that the
+# checkout is the pinned commit by its hash. Its own build script then
+# fetches the QEMU release it pins, checks the tarball's SHA-256 and
+# applies the patches. Keep rev in step with flake.nix.
+set -eu
+
+repo=https://github.com/johnmerchant/qemu-chumby
+rev=a872dff94227a8e5935f2a7ce93c23c248b7d4e4
+
+here=$(cd "$(dirname "$0")" && pwd)
+src=$here/qemu-chumby
+
+if [ ! -d "$src/.git" ]; then
+    git init -q "$src"
+fi
+if [ "$(git -C "$src" rev-parse -q --verify HEAD || true)" != "$rev" ]; then
+    git -C "$src" fetch -q --depth 1 "$repo" "$rev"
+    git -C "$src" -c advice.detachedHead=false checkout -q "$rev"
+fi
+if [ "$(git -C "$src" rev-parse HEAD)" != "$rev" ]; then
+    echo "$src: not at $rev" >&2
+    exit 1
+fi
+
+exec "$src/build" "$here/build"

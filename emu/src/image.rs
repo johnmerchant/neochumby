@@ -4,7 +4,12 @@
 use std::fs;
 use std::path::Path;
 
-use crate::soc::nfc::{PAGE, PAGES, RECORD, SPARE};
+/// The NAND chip: 512-byte pages with 16 spare bytes, 131072 pages. An
+/// image is a record of data then spare per page, as nanddump writes.
+const PAGE: usize = 512;
+const SPARE: usize = 16;
+const RECORD: usize = PAGE + SPARE;
+const PAGES: usize = 131_072;
 
 /// The Chumby's MTD partitions: name in the backup, offset, size.
 pub const PARTITIONS: [(&str, usize, usize); 8] = [

@@ -8,3 +8,8 @@
 zImage*
 psp*/
 MD5SUMS*
+# QEMU: the build, the fetched qemu-chumby, Nix results, sockets.
+/qemu/build/
+/qemu/qemu-chumby/
+result
+*.sock
