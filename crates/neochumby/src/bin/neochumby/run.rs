@@ -395,6 +395,10 @@ impl<'a, D: Device> Session<'a, D> {
             return;
         }
         match on {
+            Some(v) => eprintln!("neochumby: {} asks for the speaker, at {v}", app.name),
+            None => eprintln!("neochumby: {} gives the speaker back", app.name),
+        }
+        match on {
             Some(v) => {
                 self.device.unmute(v);
                 self.speaker_by = Some((app.name.as_str(), role));

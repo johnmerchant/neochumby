@@ -206,8 +206,13 @@ impl Volumes {
                 // Unmuted only if that is still what's wanted: a reset that
                 // came while the volume was being set has muted it.
                 let mute = !(s.unmuted && t.want.load(Ordering::SeqCst) == w);
-                if let Err(e) = audio::mute(mute) {
-                    eprintln!("neochumby: the speaker's mute: {e}");
+                match audio::mute(mute) {
+                    Ok(()) => eprintln!(
+                        "neochumby: the speaker: {}, volume {:?}",
+                        if mute { "muted" } else { "unmuted" },
+                        s.volume
+                    ),
+                    Err(e) => eprintln!("neochumby: the speaker's mute: {e}"),
                 }
                 t.done.store(w, Ordering::SeqCst);
             }
