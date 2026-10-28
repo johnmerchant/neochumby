@@ -13,3 +13,8 @@ neochumby.workspace = true
 
 [build-dependencies]
 cc = "1"
+
+[package.metadata.neochumby]
+title = "DOOM"
+exec = "neochumby-doom"
+colour = "dc281e"

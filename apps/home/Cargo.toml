@@ -10,3 +10,6 @@ publish.workspace = true
 libc.workspace = true
 neochumby.workspace = true
 neochumby-proto.workspace = true
+
+[package.metadata.neochumby]
+home = "neochumby-home"

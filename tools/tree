@@ -5,18 +5,28 @@
 #   OUT/neochumby        the session
 #   OUT/userhook2        the boot hook, which pairing installs
 #   OUT/apps/home/       the home screen, always
-#   OUT/apps/<app>/      each APP asked for
+#   OUT/apps/<name>/     each APP asked for
 #
-# An app is the crate neochumby-<app> in apps/<app>/. Its manifest names its
-# binaries: exec, service and home are built for the Chumby, companion for
-# neochumbyd's host. apps/<app>/files/, if there is one, is copied as it is.
+# An app is a crate named neochumby-<name>, whose Cargo.toml has a
+# [package.metadata.neochumby] table naming its binaries (exec, service and
+# home are built for the Chumby, companion for neochumbyd's host); the
+# tree's manifest is made from it (neochumby-manifest). A files/ directory
+# beside its Cargo.toml, if it has one, is copied as it is. An APP is one
+# of:
+#
+#   doom                          apps/doom in this repository
+#   ./path, /path                 a crate on this machine
+#   git+URL[#REV]                 a crate at the root of a git repository,
+#                                 at commit REV (else the default branch's
+#                                 head, whose commit is printed to pin)
+#   crate:NAME[@VERSION]          a crate from crates.io (else its newest)
 #
 # Game data is never in the repo: with -d DATA, a tree of the same shape
 # holding your own copies (apps/doom/doom1.wad, apps/quake/id1/pak0.pak),
 # it is copied in on top.
 #
 #   tools/tree OUT [-d DATA] [APP ...]    e.g. tools/tree /tmp/t doom quake
-#                                         (zig on PATH)
+#                                         (zig, git and curl on PATH)
 set -eu
 out=${1:?usage: tools/tree OUT [-d DATA] [APP ...]}
 shift
@@ -26,34 +36,116 @@ if [ "${1:-}" = -d ]; then
   shift 2
 fi
 root=$(git rev-parse --show-toplevel)
-chumby=$root/target/armv5te-unknown-linux-musleabi/release
-server=$root/target/x86_64-unknown-linux-musl/release
 cd "$root"
+chumby_t=armv5te-unknown-linux-musleabi
+server_t=x86_64-unknown-linux-musl
+# Fetched apps: outside the repository, which cargo would otherwise take
+# for workspace members.
+sources=${XDG_CACHE_HOME:-$HOME/.cache}/neochumby/app-sources
+mkdir -p "$sources"
 
-field() { sed -n "s/^$2=//p" "apps/$1/manifest" | head -n 1; }
+# Outside this repository's workspace .cargo/config.toml does not apply:
+# the same toolchain, by environment.
+export CARGO_TARGET_ARMV5TE_UNKNOWN_LINUX_MUSLEABI_LINKER=$root/tools/zigcc
+export CARGO_TARGET_ARMV5TE_UNKNOWN_LINUX_MUSLEABI_RUSTFLAGS="-C link-self-contained=no -C target-cpu=arm926ej-s"
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=$root/tools/zigcc-x86_64
+export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C link-self-contained=no"
+export CC_armv5te_unknown_linux_musleabi=$root/tools/zigcc AR_armv5te_unknown_linux_musleabi=$root/tools/zigar
+export CC_x86_64_unknown_linux_musl=$root/tools/zigcc-x86_64 AR_x86_64_unknown_linux_musl=$root/tools/zigar
+
+field() { sed -n "s/^$2=//p" "$1" | head -n 1; }
+
+# The crate directory an APP names, fetched if need be.
+fetch() {
+  case $1 in
+    git+*)
+      url=${1#git+}
+      rev=
+      case $url in *'#'*)
+        rev=${url##*#}
+        url=${url%#*}
+        ;;
+      esac
+      dir=$sources/git-$(printf %s "$url" | cksum | cut -d' ' -f1)
+      [ -d "$dir/.git" ] || git clone --quiet "$url" "$dir"
+      git -C "$dir" fetch --quiet origin
+      if [ -z "$rev" ]; then
+        rev=$(git -C "$dir" rev-parse origin/HEAD)
+        echo "tools/tree: $url at $rev (add #$rev to pin it)" >&2
+      fi
+      git -C "$dir" checkout --quiet --detach "$rev"
+      echo "$dir"
+      ;;
+    crate:*)
+      name=${1#crate:}
+      version=
+      case $name in *@*)
+        version=${name#*@}
+        name=${name%@*}
+        ;;
+      esac
+      ua="neochumby tools/tree (https://github.com/johnmerchant/neochumby)"
+      if [ -z "$version" ]; then
+        version=$(curl -fsS -A "$ua" "https://crates.io/api/v1/crates/$name" |
+          sed -n 's/.*"max_stable_version":"\([^"]*\)".*/\1/p')
+        [ -n "$version" ] || {
+          echo "tools/tree: no such crate on crates.io: $name" >&2
+          exit 1
+        }
+      fi
+      dir=$sources/crate-$name-$version
+      if [ ! -d "$dir" ]; then
+        mkdir -p "$dir.tmp"
+        curl -fsSL -A "$ua" "https://crates.io/api/v1/crates/$name/$version/download" |
+          tar -xzf - -C "$dir.tmp" --strip-components 1
+        mv "$dir.tmp" "$dir"
+      fi
+      echo "$dir"
+      ;;
+    ./* | ../* | /*) (cd "$1" && pwd) ;;
+    *) echo "$root/apps/$1" ;;
+  esac
+}
 
 cargo chumby
+cargo build -q --release -p neochumby-manifest
 mkdir -p "$out"
-cp "$chumby/neochumby" boot/userhook2 "$out/"
+cp "target/$chumby_t/release/neochumby" boot/userhook2 "$out/"
+work=$(mktemp -d)
+trap 'rm -rf "$work"' EXIT
 
 for app in home "$@"; do
-  [ -f "apps/$app/manifest" ] || {
-    echo "tools/tree: no app $app (apps/$app/manifest)" >&2
+  src=$(fetch "$app")
+  [ -f "$src/Cargo.toml" ] || {
+    echo "tools/tree: $app: no Cargo.toml at $src" >&2
     exit 1
   }
-  dest=$out/apps/$app
+  # Checks the crate's name and metadata, and fails with what is wrong.
+  manifest=$work/manifest
+  target/release/neochumby-manifest "$src/Cargo.toml" > "$manifest"
+  crate=$(sed -n 's/^name *= *"\(neochumby-[a-z0-9_-]*\)".*/\1/p' "$src/Cargo.toml" | head -n 1)
+  name=${crate#neochumby-}
+  # This repository's apps build in its workspace; others in their own,
+  # beside it.
+  case $src in
+    "$root"/apps/*) bin=$root/target ;;
+    *) bin=$root/target/apps/$name ;;
+  esac
+  build() { cargo build --release --manifest-path "$src/Cargo.toml" --target-dir "$bin" "$@"; }
+
+  dest=$out/apps/$name
   mkdir -p "$dest"
-  cargo build --release --target armv5te-unknown-linux-musleabi -p "neochumby-$app"
+  build --target $chumby_t -p "$crate"
   for key in exec service home; do
-    f=$(field "$app" "$key")
-    [ -z "$f" ] || cp "$chumby/$f" "$dest/"
+    f=$(field "$manifest" "$key")
+    [ -z "$f" ] || cp "$bin/$chumby_t/release/$f" "$dest/"
   done
-  c=$(field "$app" companion)
+  c=$(field "$manifest" companion)
   if [ -n "$c" ]; then
-    cargo build --release --target x86_64-unknown-linux-musl -p "neochumby-$app" --bin "$c"
-    cp "$server/$c" "$dest/"
+    build --target $server_t -p "$crate" --bin "$c"
+    cp "$bin/$server_t/release/$c" "$dest/"
   fi
-  cp "apps/$app/manifest" "$dest/"
-  [ ! -d "apps/$app/files" ] || cp -R "apps/$app/files/." "$dest/"
+  cp "$manifest" "$dest/manifest"
+  [ ! -d "$src/files" ] || cp -R "$src/files/." "$dest/"
 done
 [ -z "$data" ] || cp -R "$data/." "$out/"

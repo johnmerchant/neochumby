@@ -26,3 +26,8 @@ neochumby-proto.workspace = true
 # Only the Chumby's half uses the device library.
 [target.'cfg(target_arch = "arm")'.dependencies]
 neochumby.workspace = true
+
+[package.metadata.neochumby]
+service = "neochumby-airplay"
+companion = "neochumby-airplay-companion"
+neochumbyd = "required"

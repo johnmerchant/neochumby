@@ -27,9 +27,9 @@ jobs:
       - run: cargo fmt --all --check
       # The crates that build for the host: the protocol, neochumbyd, and
       # AirPlay's companion.
-      - run: cargo clippy -p neochumby-proto -p neochumbyd -- -D warnings
+      - run: cargo clippy -p neochumby-proto -p neochumbyd -p neochumby-manifest -- -D warnings
       - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
-      - run: cargo test -p neochumby-proto -p neochumbyd
+      - run: cargo test -p neochumby-proto -p neochumbyd -p neochumby-manifest
       - run: cargo test -p neochumby-proto --features noise
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
 
