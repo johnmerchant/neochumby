@@ -4,10 +4,11 @@ static ARM binaries, unchanged, under qemu-arm user mode, chrooted in a fake
 root with the Chumby's paths and fake devices. It tests the session and the
 apps end to end without a Chumby. CONTRIBUTING.md says what it can't catch.
 
-Linux only. It needs root (it mounts, and makes namespaces), /dev/fuse, and
-qemu-user's binfmt handler for ARM, statically linked and registered with
-the F flag, as Debian and Ubuntu do (`apt install qemu-user-binfmt`, or
-`qemu-user-static` on older releases).
+Needs: Linux; root (it mounts, and makes namespaces); Python 3.9+; FUSE
+(/dev/fuse); util-linux's mount, and loop devices for a stick image;
+qemu-user's binfmt handler for ARM, statically linked and registered with the
+F flag, as Debian and Ubuntu do (`apt install qemu-user-binfmt`, or
+qemu-user-static on older releases); dosfstools for `mkstick`.
 
   sudo dev/emulate start [TREE]   boots TREE's session (a tools/tree OUT)
          [--stick IMG|DIR]        a FAT image loop-mounted at /mnt/usb, or a
@@ -33,16 +34,22 @@ the F flag, as Debian and Ubuntu do (`apt install qemu-user-binfmt`, or
   dev/emulate wait screen|exit [SECS]   until the screen settles, or the
   dev/emulate wait log REGEX [SECS]     session ends; or a log line matches
   dev/emulate status
-  dev/emulate stop
+  dev/emulate stop                (sudo, if the supervisor was killed)
   sudo dev/emulate exec [--for SECS] CMD [ARG ...]   runs CMD in the fake
                                   root (e.g. /mnt/neochumby/neochumby sensors)
   sudo dev/emulate selftest       checks the fake devices from this side
-  sudo dev/emulate mkstick IMG [--size MB] [TREE]   a FAT image, with TREE
-                                  as neochumby/ if given (as tools/stick)
+  sudo dev/emulate mkstick IMG [--size MB] [--force] [TREE]
+                                  a FAT image, a new regular file (--force
+                                  to overwrite one), with TREE as neochumby/
+                                  if given (as tools/stick)
 
---state DIR (or NEOCHUMBY_EMU) picks the emulator's directory; the default is
-target/emulate in this repository. Only `start`, `exec`, `selftest` and
-`mkstick` need root; the rest work as the user who ran sudo.
+The emulator's directory is --state DIR, else $NEOCHUMBY_EMU, else
+/var/tmp/neochumby-emulate-UID for the user who ran sudo. sudo drops
+NEOCHUMBY_EMU, so pass it on (`sudo --preserve-env=NEOCHUMBY_EMU`) or use
+--state. The directory is root's: root works in it only through a
+descriptor of it, checked, so a user can't redirect what root does there.
+Only `start`, `exec`, `selftest` and `mkstick` need root; the rest work as
+the user who ran sudo.
 
 The fake root, a tmpfs in a mount namespace of its own (so nothing is left
 mounted when it stops):
@@ -51,13 +58,14 @@ mounted when it stops):
   /mnt/usb            the stick, else an empty directory
   /psp                STATE/psp, kept from run to run, like the flash
   /tmp                a 32 MB tmpfs, as on the Chumby
-  /proc/sys/sense1    brightness and spkmute, in STATE/sense1
+  /proc/sys/sense1    brightness, dimlevel and spkmute, in STATE/sense1; the
+                      rest of /proc/sys is the PC's, read-only
   /dev/fb0            STATE/fb0, a 153,600-byte file; mmap(MAP_SHARED) of a
                       file works as it does on the device
   /dev/input/event0   the touchscreen: each open gets every event from then
                       on, as evdev does; writes are delivered as touches
   /dev/switch         the top button: each read returns its level, one byte;
-                      one open at a time ("Resource busy")
+                      one open at a time ("Resource busy"); writes fail
   /dev/dsp            a sink, paced to the rate set by its OSS ioctls; one
                       open at a time
 
@@ -68,8 +76,11 @@ whose level each read returns afresh.
 
 The session runs as on the Chumby: as root, in a UTS namespace whose host
 name is "chumby", with QEMU_CPU=arm926 so an instruction the ARM926 lacks
-faults here too. It shares the PC's network, so a neochumbyd on the PC can
-pair with it (--server 127.0.0.1). Its output goes to STATE/log.
+faults here too. It is root without the capabilities that would let it out
+(mounts, chroot, modules, raw devices, the clock, network setup) or into the
+PC's kernel settings, and parts of /proc are hidden as a container runtime
+hides them. It shares the PC's network, so a neochumbyd on the PC can pair
+with it (--server 127.0.0.1). Its output goes to STATE/log.
 """
 
 import ctypes
@@ -82,9 +93,11 @@ import select
 import shutil
 import signal
 import socket
+import stat
 import struct
 import subprocess
 import sys
+import tempfile
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -337,9 +350,9 @@ class Devices:
                 # As evdev: whole events, delivered to every reader.
                 self.touch(data[: len(data) // 16 * 16])
             elif h.node == SWITCH:
-                # The emulator's own: 0 (or "0") releases, anything else holds.
-                if data:
-                    self.level = 0 if data[0] in (0, 0x30) else 1
+                # As the driver: the button is read, not written. The
+                # emulator's control socket moves it.
+                return self.reply(unique, err=errno.EINVAL)
             elif h.node == DSP:
                 now = time.monotonic()
                 start = max(now, h.played_to)
@@ -423,20 +436,33 @@ class Devices:
         }
 
 
-def serve(fuse, state):
-    """The FUSE server and the control socket, until the supervisor ends it."""
+def serve(fuse, state, init_pipe):
+    """The FUSE server and the control socket, until the supervisor ends it.
+    The namespace's PID 1 comes over `init_pipe` from the supervisor that
+    started it, never from a file."""
     dev = Devices(fuse, state)
-    os.chdir(state)
+    init = None
     ctl = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    if os.path.exists("ctl"):
-        os.unlink("ctl")
-    ctl.bind("ctl")
-    os.chmod("ctl", 0o600)
-    give_back("ctl")
+    path = state.at("ctl")
+    try:
+        os.unlink(path)
+    except FileNotFoundError:
+        pass
+    ctl.bind(path)
+    # The socket alone is the user's, so the controls work without sudo.
+    os.chmod(path, 0o600)
+    uid, gid = invoker()
+    os.chown(path, uid, gid)
     ctl.listen(4)
+    watch = [fuse, ctl, init_pipe]
     while True:
         timeout = max(0.0, dev.timers[0][0] - time.monotonic()) if dev.timers else None
-        ready, _, _ = select.select([fuse, ctl], [], [], timeout)
+        ready, _, _ = select.select(watch, [], [], timeout)
+        if init_pipe in ready:
+            got = os.read(init_pipe, 32)
+            if got:
+                init = int(got)
+            watch.remove(init_pipe)
         if fuse in ready:
             try:
                 req = os.read(fuse, MAX_WRITE + 4096)
@@ -453,16 +479,16 @@ def serve(fuse, state):
                 conn.settimeout(2)
                 try:
                     words = conn.recv(256).decode().split()
-                    conn.sendall((command(dev, state, words) + "\n").encode())
+                    conn.sendall((command(dev, state, words, init) + "\n").encode())
                 except (OSError, ValueError, IndexError) as e:
                     conn.sendall(f"error {e}\n".encode())
         dev.fire_timers()
 
 
-def command(dev, state, words):
+def command(dev, state, words, init):
     if words[0] == "touch":
         x, y = int(words[1]), int(words[2])
-        dev.touch(touch_down(*raw_point(calibration(os.path.join(state, "psp")), x, y)))
+        dev.touch(touch_down(*raw_point(calibration(state.at("psp")), x, y)))
     elif words[0] == "release":
         dev.touch(touch_up())
     elif words[0] == "button":
@@ -470,38 +496,174 @@ def command(dev, state, words):
     elif words[0] == "status":
         return "ok " + json.dumps(dev.status())
     elif words[0] == "stop":
-        pid = read(state, "init-pid")
-        if pid:
-            os.kill(int(pid), signal.SIGKILL)
+        if init:
+            os.kill(init, signal.SIGKILL)
     else:
         raise ValueError(f"unknown command {words[0]}")
     return "ok"
+
+
+# The emulator's directory, and who may touch what in it.
+
+
+def invoker():
+    """The user who ran sudo (or this user): (uid, gid)."""
+    uid, gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
+    if uid and gid and uid.isdigit() and gid.isdigit():
+        return int(uid), int(gid)
+    return os.getuid(), os.getgid()
+
+
+class State:
+    """The emulator's directory (--state, else $NEOCHUMBY_EMU, else
+    /var/tmp/neochumby-emulate-UID, for the user who ran sudo).
+
+    Root uses it only through a descriptor, opened once and checked to be a
+    directory of root's that no one else can write: so nothing a user renames
+    or plants there changes what root reads, writes, mounts or signals. Each
+    namespace needs its own descriptor (a mount made through another
+    namespace's is refused), so `reopen` opens it again there and checks that
+    it's the same directory. Everything root writes in it stays root's; the
+    control socket alone is the user's."""
+
+    def __init__(self, path):
+        self.path = os.path.abspath(path)
+        self.fd = None
+        self.ident = None
+
+    def secure(self, create=False):
+        if create:
+            try:
+                os.mkdir(self.path, 0o755)
+            except FileExistsError:
+                pass
+        try:
+            fd = os.open(self.path, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        except OSError as e:
+            sys.exit(f"dev/emulate: {self.path}: {e.strerror}")
+        st = os.fstat(fd)
+        if st.st_uid != 0 or st.st_mode & 0o022:
+            os.close(fd)
+            sys.exit(f"dev/emulate: {self.path} must be root's and writable by no one else; give another --state")
+        if self.ident and (st.st_dev, st.st_ino) != self.ident:
+            sys.exit(f"dev/emulate: {self.path} was replaced")
+        if self.fd is not None:
+            os.close(self.fd)
+        self.fd, self.ident = fd, (st.st_dev, st.st_ino)
+
+    def reopen(self):
+        self.secure()
+
+    def at(self, name):
+        if self.fd is None:
+            return os.path.join(self.path, name)
+        return f"/proc/self/fd/{self.fd}/{name}"
+
+
+def read(state, name):
+    try:
+        fd = os.open(state.at(name), os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError:
+        return None
+    with os.fdopen(fd) as f:
+        return f.read().strip()
+
+
+def write(state, name, text, size=None):
+    """Writes a file of root's whole: a new file, renamed over the old."""
+    path = state.at(name)
+    try:
+        os.unlink(path + ".new")
+    except FileNotFoundError:
+        pass
+    fd = os.open(path + ".new", os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    with os.fdopen(fd, "w") as f:
+        f.write(text)
+        if size is not None:
+            f.truncate(size)
+    os.rename(path + ".new", path)
+
+
+def remove(state, name):
+    try:
+        os.unlink(state.at(name))
+    except FileNotFoundError:
+        pass
+
+
+def alive(pid):
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        pass
+    return True
+
+
+def is_ns_init(pid):
+    """Whether `pid` is PID 1 of a namespace below ours."""
+    try:
+        with open(f"/proc/{pid}/status") as f:
+            m = re.search(r"^NSpid:\s+(.*)$", f.read(), re.M)
+    except OSError:
+        return False
+    ids = m.group(1).split() if m else []
+    return len(ids) >= 2 and ids[-1] == "1"
+
+
+def running(state):
+    """"running", "stale" (the supervisor has gone, but the session's PID 1
+    hasn't: it was killed), or None."""
+    pid = read(state, "pid")
+    if pid and pid.isdigit() and alive(int(pid)):
+        return "running"
+    init = read(state, "init-pid")
+    if init and init.isdigit() and is_ns_init(int(init)):
+        return "stale"
+    return None
+
+
+def stale_init(state):
+    """The PID 1 a killed supervisor left, checked to be this emulator's: the
+    init of the PID namespace it recorded (in root's files). Root only."""
+    init, ns = read(state, "init-pid"), read(state, "init-ns")
+    if not (init and init.isdigit() and ns and is_ns_init(int(init))):
+        return None
+    try:
+        if str(os.stat(f"/proc/{init}/ns/pid").st_ino) != ns:
+            return None
+    except OSError:
+        return None
+    return int(init)
 
 
 # Starting: the supervisor builds the fake root in a mount namespace, starts
 # the FUSE server, and runs the session under an init of its own (PID 1 of a
 # PID namespace), so that stopping it ends everything it started.
 
-
-def read(state, name):
-    try:
-        with open(os.path.join(state, name)) as f:
-            return f.read().strip()
-    except OSError:
-        return None
+PT_INTERP = 3
 
 
-def write(state, name, text):
-    with open(os.path.join(state, name), "w") as f:
-        f.write(text)
-    give_back(os.path.join(state, name))
-
-
-def give_back(path):
-    """Leaves a file to the user who ran sudo, so the controls work without it."""
-    uid, gid = os.environ.get("SUDO_UID"), os.environ.get("SUDO_GID")
-    if uid and gid and os.geteuid() == 0:
-        os.chown(path, int(uid), int(gid))
+def is_static(path):
+    """Whether an ELF executable has no program interpreter: it runs in a
+    chroot with nothing of the host's beside it."""
+    with open(path, "rb") as f:
+        head = f.read(64)
+        if head[:4] != b"\x7fELF":
+            return False
+        if head[4] == 2:
+            phoff, = struct.unpack_from("<Q", head, 32)
+            phentsize, phnum = struct.unpack_from("<HH", head, 54)
+        else:
+            phoff, = struct.unpack_from("<I", head, 28)
+            phentsize, phnum = struct.unpack_from("<HH", head, 42)
+        for i in range(phnum):
+            f.seek(phoff + i * phentsize)
+            (ptype,) = struct.unpack("<I", f.read(4))
+            if ptype == PT_INTERP:
+                return False
+    return True
 
 
 def arm_handler():
@@ -513,7 +675,7 @@ def arm_handler():
                 lines = f.read().split("\n")
         except OSError:
             continue
-        info = dict(l.split(" ", 1) for l in lines if " " in l)
+        info = dict(line.split(" ", 1) for line in lines if " " in line)
         if lines[0] == "enabled" and info.get("magic") == ARM_MAGIC:
             return info.get("interpreter"), info.get("flags:", "")
     return None, ""
@@ -521,22 +683,21 @@ def arm_handler():
 
 def need_root(what):
     if sys.platform != "linux":
-        sys.exit("dev/emulate runs on Linux only (namespaces, FUSE and qemu-user); use a Linux VM, or CI")
+        sys.exit("dev/emulate runs on Linux only (namespaces, FUSE and qemu-user); see CONTRIBUTING.md for a Mac")
     if os.geteuid() != 0:
         sys.exit(f"dev/emulate {what}: needs root (sudo): it mounts, and makes namespaces")
 
 
-def running(state):
-    pid = read(state, "pid")
-    if not pid:
-        return None
+def open_regular(path, what):
+    """A user-given file root opens: a regular file, not a link to one, nor
+    a disk."""
     try:
-        os.kill(int(pid), 0)
-    except ProcessLookupError:
-        return None
-    except PermissionError:
-        pass
-    return int(pid)
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as e:
+        sys.exit(f"dev/emulate: {what} {path}: {e.strerror}")
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        sys.exit(f"dev/emulate: {what} {path}: not a regular file")
+    return fd
 
 
 def cmd_start(state, opts, tree):
@@ -544,46 +705,50 @@ def cmd_start(state, opts, tree):
     interp, flags = arm_handler()
     if not interp:
         sys.exit("dev/emulate: no binfmt_misc handler for ARM: install qemu-user-binfmt (or qemu-user-static)")
+    if not os.path.exists(interp) or not is_static(interp):
+        sys.exit(f"dev/emulate: qemu-arm ({interp}) must be statically linked, to run inside the chroot: "
+                 "install qemu-user-binfmt (or qemu-user-static) from Debian or Ubuntu")
     if not os.path.exists("/dev/fuse"):
         sys.exit("dev/emulate: no /dev/fuse (modprobe fuse)")
-    if running(state):
-        sys.exit(f"dev/emulate: already running ({state}); dev/emulate stop first")
     if tree and not os.path.isfile(os.path.join(tree, "neochumby")):
         sys.exit(f"dev/emulate: {tree}: no neochumby there (make one with tools/tree)")
     if not tree and not opts["stick"]:
         sys.exit("dev/emulate start: give a TREE, or a --stick holding one")
-    os.makedirs(state, exist_ok=True)
-    give_back(state)
+    stick_fd = None
+    if opts["stick"] and not os.path.isdir(opts["stick"]):
+        stick_fd = open_regular(opts["stick"], "--stick")
+    state.secure(create=True)
+    now = running(state)
+    if now == "running":
+        sys.exit(f"dev/emulate: already running ({state.path}); dev/emulate stop first")
+    if now == "stale":
+        sys.exit("dev/emulate: the last session is still running, though its supervisor was killed: "
+                 "sudo dev/emulate stop")
     for d in ("root", "devices", "sense1", "psp"):
-        os.makedirs(os.path.join(state, d), exist_ok=True)
+        os.makedirs(state.at(d), mode=0o755, exist_ok=True)
     if opts["psp"]:
-        shutil.rmtree(os.path.join(state, "psp"))
-        shutil.copytree(opts["psp"], os.path.join(state, "psp"))
-    # A fresh, black screen and the boot's speaker and backlight each start.
-    write(state, "fb0", "")
-    os.truncate(os.path.join(state, "fb0"), FB_BYTES)
-    for name, value in (("brightness", "65535"), ("spkmute", "1")):
-        with open(os.path.join(state, "sense1", name), "w") as f:
-            f.write(value + "\n")
-    for name in ("exit", "ready", "failed", "init-pid", "log"):
-        try:
-            os.unlink(os.path.join(state, name))
-        except FileNotFoundError:
-            pass
+        shutil.rmtree(state.at("psp"))
+        shutil.copytree(opts["psp"], state.at("psp"), symlinks=True)
+    # A fresh, black screen, and the boot's speaker and backlight, each start.
+    write(state, "fb0", "", size=FB_BYTES)
+    for name, value in (("brightness", "65535"), ("dimlevel", "0"), ("spkmute", "1")):
+        write(state, f"sense1/{name}", value + "\n")
+    for name in ("exit", "ready", "failed", "init-pid", "init-ns", "pid"):
+        remove(state, name)
     write(state, "log", "")
     write(state, "emulate.log", "")
 
     pid = os.fork()
     if pid == 0:
         os.setsid()
-        out = os.open(os.path.join(state, "emulate.log"), os.O_WRONLY | os.O_APPEND)
+        out = os.open(state.at("emulate.log"), os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
         null = os.open("/dev/null", os.O_RDONLY)
         os.dup2(null, 0)
         os.dup2(out, 1)
         os.dup2(out, 2)
         code = 1
         try:
-            supervise(state, opts, tree, interp, "F" in flags)
+            supervise(state, opts, tree, stick_fd, interp, "F" in flags)
             code = 0
         except BaseException as e:
             print(f"dev/emulate: {e!r}", flush=True)
@@ -595,7 +760,7 @@ def cmd_start(state, opts, tree):
     deadline = time.monotonic() + 30
     while time.monotonic() < deadline:
         if read(state, "ready") is not None:
-            print(f"dev/emulate: running ({state}); the session's output: dev/emulate log")
+            print(f"dev/emulate: running ({state.path}); the session's output: dev/emulate log")
             return
         if read(state, "failed") is not None or os.waitpid(pid, os.WNOHANG)[0]:
             break
@@ -607,45 +772,49 @@ def cmd_start(state, opts, tree):
 CHILDREN = []
 
 
-def supervise(state, opts, tree, interp, fixed):
+def supervise(state, opts, tree, stick_fd, interp, fixed):
     write(state, "pid", str(os.getpid()))
-    root = os.path.join(state, "root")
     unshare(CLONE_NEWNS | CLONE_NEWUTS)
     mount(None, "/", None, MS_REC | MS_PRIVATE)
+    state.reopen()
+    root = state.at("root")
     socket.sethostname("chumby")
     mount("tmpfs", root, "tmpfs", MS_NOSUID, "mode=755")
     for d in ("dev/input", "mnt/neochumby", "mnt/usb", "psp", "tmp", "proc", "etc", "usr/bin", "bin"):
         os.makedirs(os.path.join(root, d))
 
     fuse = os.open("/dev/fuse", os.O_RDWR)
-    devices = os.path.join(state, "devices")
-    mount("neochumby-emulate", devices, "fuse", MS_NOSUID | MS_NODEV,
+    mount("neochumby-emulate", state.at("devices"), "fuse", MS_NOSUID | MS_NODEV,
           f"fd={fuse},rootmode=40000,user_id=0,group_id=0,allow_other")
+    init_r, init_w = os.pipe()
     server = os.fork()
     if server == 0:
         try:
-            serve(fuse, state)
+            os.close(init_w)
+            serve(fuse, state, init_r)
         finally:
             os._exit(0)
     CHILDREN.append(server)
     os.close(fuse)
+    os.close(init_r)
     for name, path in (("event0", "dev/input/event0"), ("switch", "dev/switch"), ("dsp", "dev/dsp")):
-        bind_file(os.path.join(devices, name), os.path.join(root, path))
-    bind_file(os.path.join(state, "fb0"), os.path.join(root, "dev/fb0"))
+        bind_file(state.at(f"devices/{name}"), os.path.join(root, path))
+    bind_file(state.at("fb0"), os.path.join(root, "dev/fb0"))
     for name in ("null", "zero", "random", "urandom"):
         bind_file(f"/dev/{name}", os.path.join(root, "dev", name))
 
     if tree:
         bind(os.path.abspath(tree), os.path.join(root, "mnt/neochumby"), ro=True)
-    stick = opts["stick"]
-    if stick and os.path.isdir(stick):
-        bind(os.path.abspath(stick), os.path.join(root, "mnt/usb"))
-    elif stick:
-        r = subprocess.run(["mount", "-t", "vfat", "-o", "loop", stick, os.path.join(root, "mnt/usb")],
-                           capture_output=True, text=True)
+    if stick_fd is not None:
+        # The image root checked when it opened it, by its descriptor.
+        r = subprocess.run(["mount", "-t", "vfat", "-o", "loop", f"/proc/self/fd/{stick_fd}",
+                            os.path.join(root, "mnt/usb")], capture_output=True, text=True,
+                           pass_fds=(stick_fd, state.fd))
         if r.returncode:
-            raise OSError(f"can't loop-mount {stick}: {r.stderr.strip()} (give a directory as --stick instead)")
-    bind(os.path.join(state, "psp"), os.path.join(root, "psp"))
+            raise OSError(f"can't loop-mount {opts['stick']}: {r.stderr.strip()} (give a directory as --stick instead)")
+    elif opts["stick"]:
+        bind(os.path.abspath(opts["stick"]), os.path.join(root, "mnt/usb"))
+    bind(state.at("psp"), os.path.join(root, "psp"))
     mount("tmpfs", os.path.join(root, "tmp"), "tmpfs", MS_NOSUID | MS_NODEV, "size=32m,mode=1777")
     # Name lookups work as on the PC, for a neochumbyd given by name.
     for name in ("resolv.conf", "hosts"):
@@ -662,13 +831,9 @@ def supervise(state, opts, tree, interp, fixed):
 
     run = opts["run"] or ("/mnt/neochumby/neochumby" if tree else "/mnt/usb/neochumby/neochumby")
     server_addr, _, api_port = (opts["server"] or "").partition(":")
-    env = {
-        "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
-        "QEMU_CPU": "arm926",
-        # As the boot hook passes them on, empty when there's no neochumbyd.
-        "NEOCHUMBY_SERVER": server_addr,
-        "NEOCHUMBY_API_PORT": api_port,
-    }
+    env = dict(BASE_ENV)
+    # As the boot hook passes them on, empty when there's no neochumbyd.
+    env.update({"NEOCHUMBY_SERVER": server_addr, "NEOCHUMBY_API_PORT": api_port})
     env.update(opts["env"])
 
     unshare(CLONE_NEWPID)
@@ -679,15 +844,58 @@ def supervise(state, opts, tree, interp, fixed):
         finally:
             os._exit(127)
     CHILDREN.append(init)
+    os.write(init_w, str(init).encode())
+    os.close(init_w)
+    # For `exec`, and for a `stop` after this supervisor is killed.
     write(state, "init-pid", str(init))
+    write(state, "init-ns", str(os.stat(f"/proc/{init}/ns/pid").st_ino))
     write(state, "ready", "")
     _, status = os.waitpid(init, 0)
     code = os.waitstatus_to_exitcode(status)
     os.kill(server, signal.SIGTERM)
     os.waitpid(server, 0)
-    os.unlink(os.path.join(state, "pid"))
+    remove(state, "pid")
     # Last: once it's there, the emulator can be started again.
     write(state, "exit", f"exit {code}" if code >= 0 else f"signal {-code}")
+
+
+BASE_ENV = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "QEMU_CPU": "arm926"}
+
+# What the session runs without: root's ways out of a chroot and a mount
+# namespace, and into the PC (its devices, kernel, clock, network setup).
+# The Chumby's session, as root, needs only to signal its own processes and
+# write its files.
+CAP_DAC_READ_SEARCH, CAP_SETPCAP, CAP_LINUX_IMMUTABLE, CAP_NET_ADMIN = 2, 8, 9, 12
+DROPPED_CAPS = [CAP_DAC_READ_SEARCH, CAP_SETPCAP, CAP_LINUX_IMMUTABLE, CAP_NET_ADMIN] + list(range(16, 23)) + [
+    24, 25, 26, 27, 30, 31] + list(range(32, 41))
+PR_CAPBSET_DROP, PR_SET_NO_NEW_PRIVS = 24, 38
+LINUX_CAPABILITY_VERSION_3 = 0x20080522
+
+
+def drop_privileges():
+    """Before the execve of anything that runs in the fake root: the
+    capabilities above go from this process's sets and from its bounding set,
+    so the program it runs (root, but not all-powerful) can't get them back."""
+    for cap in DROPPED_CAPS:
+        # EINVAL: a capability this kernel hasn't got.
+        if libc.prctl(PR_CAPBSET_DROP, ctypes.c_ulong(cap), 0, 0, 0) != 0 and ctypes.get_errno() != errno.EINVAL:
+            _check(-1, "dropping capabilities")
+    header = (ctypes.c_uint32 * 2)(LINUX_CAPABILITY_VERSION_3, 0)
+    sets = (ctypes.c_uint32 * 6)()
+    _check(libc.capget(header, sets), "capget")
+    for cap in DROPPED_CAPS:
+        for k in range(3):  # effective, permitted, inheritable
+            sets[cap // 32 * 3 + k] &= ~(1 << cap % 32) & 0xFFFFFFFF
+    _check(libc.capset(header, sets), "capset")
+    _check(libc.prctl(PR_SET_NO_NEW_PRIVS, ctypes.c_ulong(1), 0, 0, 0), "no_new_privs")
+
+
+# Parts of /proc the PC's, not the Chumby's, as a container runtime hides
+# them: covered (files with /dev/null, directories with an empty tmpfs), or
+# read-only.
+PROC_MASKED = ("kcore", "keys", "latency_stats", "timer_list", "timer_stats", "sched_debug", "acpi", "asound",
+               "scsi")
+PROC_READ_ONLY = ("bus", "fs", "irq", "sysrq-trigger")
 
 
 def pid1(state, root, run, env):
@@ -696,15 +904,28 @@ def pid1(state, root, run, env):
     calls after the chroot: nothing of Python's own is reachable there."""
     proc = os.path.join(root, "proc")
     mount("proc", proc, "proc", MS_NOSUID | MS_NODEV | MS_NOEXEC)
+    for name in PROC_MASKED:
+        p = os.path.join(proc, name)
+        if os.path.isdir(p):
+            mount("tmpfs", p, "tmpfs", MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=555")
+        elif os.path.exists(p):
+            bind("/dev/null", p)
+    for name in PROC_READ_ONLY:
+        p = os.path.join(proc, name)
+        if os.path.exists(p):
+            bind(p, p, ro=True)
     # /proc/sys/sense1 is the Chumby's own: a tmpfs over /proc/sys holds it,
-    # with the PC's kernel, vm, fs and net (qemu reads vm) bound back in.
-    mount("tmpfs", os.path.join(proc, "sys"), "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=755")
+    # with the PC's kernel, vm, fs and net (qemu reads vm) bound back in,
+    # read-only.
+    sys_dir = os.path.join(proc, "sys")
+    mount("tmpfs", sys_dir, "tmpfs", MS_NOSUID | MS_NODEV | MS_NOEXEC, "mode=755")
     for d in ("kernel", "vm", "fs", "net"):
-        os.mkdir(os.path.join(proc, "sys", d))
-        bind(f"/proc/sys/{d}", os.path.join(proc, "sys", d))
-    os.mkdir(os.path.join(proc, "sys/sense1"))
-    bind(os.path.join(state, "sense1"), os.path.join(proc, "sys/sense1"))
-    log = os.open(os.path.join(state, "log"), os.O_WRONLY | os.O_APPEND)
+        os.mkdir(os.path.join(sys_dir, d))
+        bind(f"/proc/sys/{d}", os.path.join(sys_dir, d), ro=True)
+    os.mkdir(os.path.join(sys_dir, "sense1"))
+    bind(state.at("sense1"), os.path.join(sys_dir, "sense1"))
+    mount(None, sys_dir, None, MS_REMOUNT | MS_RDONLY | MS_NOSUID | MS_NODEV | MS_NOEXEC)
+    log = os.open(state.at("log"), os.O_WRONLY | os.O_APPEND | os.O_NOFOLLOW)
     null = os.open("/dev/null", os.O_RDWR)
     os.chroot(root)
     os.chdir("/")
@@ -714,6 +935,7 @@ def pid1(state, root, run, env):
         os.dup2(log, 1)
         os.dup2(log, 2)
         try:
+            drop_privileges()
             os.execve(run, [run], env)
         except OSError as e:
             os.write(2, f"dev/emulate: {run}: {e.strerror}\n".encode())
@@ -729,12 +951,12 @@ def pid1(state, root, run, env):
 
 
 def ask(state, words):
-    if not running(state):
+    if running(state) != "running":
         sys.exit("dev/emulate: not running")
     s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
     here = os.getcwd()
     # A relative path: a socket's path is limited to 107 bytes.
-    os.chdir(state)
+    os.chdir(state.path)
     try:
         s.connect("ctl")
     finally:
@@ -763,11 +985,11 @@ def cmd_button(state, how):
     elif how in ("down", "up"):
         ask(state, ["button", "1" if how == "down" else "0"])
     else:
-        sys.exit("dev/emulate button down|up|press")
+        sys.exit("usage: dev/emulate button down|up|press")
 
 
 def screen(state):
-    with open(os.path.join(state, "fb0"), "rb") as f:
+    with open(state.at("fb0"), "rb") as f:
         return f.read(FB_BYTES)
 
 
@@ -786,6 +1008,8 @@ def cmd_compare(state, files, least, secs, want):
         if len(data) != FB_BYTES:
             sys.exit(f"dev/emulate compare: {f}: not {FB_BYTES} bytes")
         pictures[os.path.basename(f)] = memoryview(data).cast("H")
+    if not pictures:
+        sys.exit("usage: dev/emulate compare [--min F] [--wait SECS] [--want RE] RAW ...")
     deadline = time.monotonic() + secs
     while True:
         now = memoryview(screen(state)).cast("H")
@@ -821,26 +1045,28 @@ def cmd_wait(state, what, arg, secs):
 
 
 def cmd_log(state, follow):
-    path = os.path.join(state, "log")
-    with open(path, "rb") as f:
+    with open(state.at("log"), "rb") as f:
         while True:
             chunk = f.read()
             if chunk:
                 sys.stdout.buffer.write(chunk)
                 sys.stdout.flush()
-            elif not follow or (not running(state) and read(state, "exit")):
+            elif not follow or (running(state) is None and read(state, "exit")):
                 return
             else:
                 time.sleep(0.2)
 
 
 def cmd_status(state):
-    if running(state):
+    now = running(state)
+    if now == "running":
         print("running")
         for k, v in json.loads(ask(state, ["status"])).items():
             print(f"  {k}: {v}")
-        for name in ("brightness", "spkmute"):
-            print(f"  {name}: {read(os.path.join(state, 'sense1'), name)}")
+        for name in ("brightness", "dimlevel", "spkmute"):
+            print(f"  {name}: {read(state, f'sense1/{name}')}")
+    elif now == "stale":
+        print("stale: the supervisor was killed, but the session's PID 1 still runs (sudo dev/emulate stop)")
     elif read(state, "exit"):
         print(f"stopped: the session ended ({read(state, 'exit')})")
     else:
@@ -848,8 +1074,15 @@ def cmd_status(state):
 
 
 def cmd_stop(state):
-    pid = running(state)
-    if not pid:
+    now = running(state)
+    if now == "stale":
+        need_root("stop")
+        state.secure()
+        init = stale_init(state)
+        if init:
+            os.kill(init, signal.SIGKILL)
+        return
+    if now != "running":
         return
     ask(state, ["stop"])
     deadline = time.monotonic() + 10
@@ -857,24 +1090,33 @@ def cmd_stop(state):
         time.sleep(0.1)
 
 
-def enter(state):
-    """Joins the running emulator's namespaces, as root, in the fake root."""
-    need_root("exec")
+def enter(state, what):
+    """Joins the running emulator's namespaces, as root; then `state` is
+    opened again there, and checked to be the same directory."""
+    need_root(what)
+    state.secure()
     init = read(state, "init-pid")
-    if not running(state) or not init:
+    if running(state) != "running" or not init or not is_ns_init(int(init)):
         sys.exit("dev/emulate: not running")
-    for ns, flag in (("mnt", CLONE_NEWNS), ("uts", CLONE_NEWUTS), ("pid", CLONE_NEWPID)):
-        setns(f"/proc/{init}/ns/{ns}", flag)
+    namespaces = [(os.open(f"/proc/{init}/ns/{ns}", os.O_RDONLY), flag)
+                  for ns, flag in (("mnt", CLONE_NEWNS), ("uts", CLONE_NEWUTS), ("pid", CLONE_NEWPID))]
+    for fd, flag in namespaces:
+        _check(libc.setns(fd, flag), "setns")
+        os.close(fd)
+    state.reopen()
 
 
 def cmd_exec(state, argv, secs):
-    enter(state)
-    os.chroot(os.path.join(state, "root"))
+    if not argv:
+        sys.exit("usage: sudo dev/emulate exec [--for SECS] CMD [ARG ...]")
+    enter(state, "exec")
+    os.chroot(state.at("root"))
     os.chdir("/")
-    env = {"PATH": "/usr/bin:/bin:/usr/sbin:/sbin", "QEMU_CPU": "arm926", "HOME": "/tmp"}
+    env = dict(BASE_ENV, HOME="/tmp")
     child = os.fork()
     if child == 0:
         try:
+            drop_privileges()
             os.execve(argv[0], argv, env)
         except OSError as e:
             os.write(2, f"dev/emulate exec: {argv[0]}: {e.strerror}\n".encode())
@@ -907,8 +1149,8 @@ def cmd_selftest(state):
     It touches (200, 20), where neochumby-home has nothing."""
     import fcntl
 
-    enter(state)
-    dev = os.path.join(state, "root", "dev")
+    enter(state, "selftest")
+    dev = state.at("root/dev")
     fails = []
 
     def check(ok, what):
@@ -928,13 +1170,13 @@ def cmd_selftest(state):
     ra, rb = os.read(a, 512), os.read(b, 512)
     check(len(ra) == 8 * 16 and ra == rb, "event0: every reader gets every event")
     _, _, ty, code, value = struct.unpack_from("<IIHHi", ra)
-    check((ty, code, value) == (EV_ABS, ABS_X, raw_point(calibration(os.path.join(state, "psp")), 200, 20)[0]),
+    check((ty, code, value) == (EV_ABS, ABS_X, raw_point(calibration(state.at("psp")), 200, 20)[0]),
           "event0: the touch is at the calibrated raw position")
     os.close(a)
     os.close(b)
 
     try:
-        s = os.open(f"{dev}/switch", os.O_RDONLY | os.O_NONBLOCK)
+        s = os.open(f"{dev}/switch", os.O_RDWR | os.O_NONBLOCK)
     except OSError as e:
         print(f"skip /dev/switch: {e.strerror} (the session has it)")
         s = None
@@ -948,6 +1190,11 @@ def cmd_selftest(state):
         check(os.read(s, 1) == b"\x01" and os.read(s, 1) == b"\x01", "switch: each read is the level, held")
         ask(state, ["button", "0"])
         check(os.read(s, 1) == b"\x00", "switch: released")
+        try:
+            os.write(s, b"\x01")
+            check(False, "switch: a write is refused (EINVAL)")
+        except OSError as e:
+            check(e.errno == errno.EINVAL, "switch: a write is refused (EINVAL)")
         os.close(s)
 
     try:
@@ -967,19 +1214,51 @@ def cmd_selftest(state):
         # The writer may run up to the buffer plus one write ahead of the sound.
         check(0.5 < took < 1.5, f"dsp: one second of sound takes about a second ({took:.2f} s)")
         os.close(d)
+
+    # Ways out that root, without its dropped capabilities, hasn't got.
+    probe = os.fork()
+    if probe == 0:
+        os.chroot(state.at("root"))
+        drop_privileges()
+        outcomes = []
+        for attempt in (lambda: os.chroot("/tmp"), lambda: mount("tmpfs", "/tmp", "tmpfs"),
+                        lambda: os.open("/proc/sys/vm/drop_caches", os.O_WRONLY)):
+            try:
+                attempt()
+                outcomes.append("allowed")
+            except OSError:
+                outcomes.append("refused")
+        os._exit(0 if outcomes == ["refused"] * 3 else 1)
+    _, status = os.waitpid(probe, 0)
+    check(os.waitstatus_to_exitcode(status) == 0,
+          "inside: chroot, mount and writes to /proc/sys are refused")
     if fails:
         sys.exit(f"{len(fails)} failed")
 
 
-def cmd_mkstick(img, size_mb, tree):
+def cmd_mkstick(img, size_mb, tree, force):
+    """A FAT image at IMG, a regular file: never a disk, nor through a link."""
     need_root("mkstick")
     mkfs = shutil.which("mkfs.vfat") or shutil.which("mkfs.fat")
     if not mkfs:
         sys.exit("dev/emulate mkstick: needs mkfs.vfat (dosfstools)")
-    with open(img, "wb") as f:
-        f.truncate(size_mb << 20)
-    subprocess.run([mkfs, "-n", "NEOCHUMBY", img], check=True, stdout=subprocess.DEVNULL)
-    give_back(img)
+    try:
+        st = os.lstat(img)
+    except FileNotFoundError:
+        st = None
+    if st and not stat.S_ISREG(st.st_mode):
+        sys.exit(f"dev/emulate mkstick: {img} isn't a regular file; refusing")
+    if st and not force:
+        sys.exit(f"dev/emulate mkstick: {img} exists; --force to overwrite it")
+    fd = os.open(img, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | (0 if st else os.O_EXCL), 0o644)
+    if not stat.S_ISREG(os.fstat(fd).st_mode):
+        sys.exit(f"dev/emulate mkstick: {img} isn't a regular file; refusing")
+    os.ftruncate(fd, 0)
+    os.ftruncate(fd, size_mb << 20)
+    # The user's own file, as if they had made it.
+    os.fchown(fd, *invoker())
+    path = f"/proc/self/fd/{fd}"
+    subprocess.run([mkfs, "-n", "NEOCHUMBY", path], check=True, stdout=subprocess.DEVNULL, pass_fds=(fd,))
     if not tree:
         return
     pid = os.fork()
@@ -988,9 +1267,8 @@ def cmd_mkstick(img, size_mb, tree):
         try:
             unshare(CLONE_NEWNS)
             mount(None, "/", None, MS_REC | MS_PRIVATE)
-            mnt = img + ".mnt"
-            os.makedirs(mnt, exist_ok=True)
-            subprocess.run(["mount", "-t", "vfat", "-o", "loop", img, mnt], check=True)
+            mnt = tempfile.mkdtemp(prefix="neochumby-stick.")
+            subprocess.run(["mount", "-t", "vfat", "-o", "loop", path, mnt], check=True, pass_fds=(fd,))
             # As tools/stick lays it out: the tree, and the hook at the top.
             subprocess.run(["cp", "-R", os.path.abspath(tree), os.path.join(mnt, "neochumby")], check=True)
             shutil.copy(os.path.join(tree, "userhook2"), os.path.join(mnt, "userhook2"))
@@ -1004,80 +1282,109 @@ def cmd_mkstick(img, size_mb, tree):
         sys.exit("dev/emulate mkstick: copying the tree failed")
 
 
+USAGE = "usage: dev/emulate [--state DIR] COMMAND ... (dev/emulate --help)"
+
+
 def main(argv):
-    state = os.environ.get("NEOCHUMBY_EMU") or os.path.join(REPO, "target", "emulate")
-    if "--state" in argv:
-        i = argv.index("--state")
-        state = argv[i + 1]
-        argv = argv[:i] + argv[i + 2:]
-    state = os.path.abspath(state)
+    def flag(args, name, default=None):
+        """The value after `name` in args, taken out of them."""
+        if name not in args:
+            return default
+        i = args.index(name)
+        if i + 1 >= len(args):
+            sys.exit(f"dev/emulate: {name} needs a value")
+        v = args[i + 1]
+        del args[i:i + 2]
+        return v
+
+    def number(v, kind=int):
+        try:
+            return kind(v)
+        except (TypeError, ValueError):
+            sys.exit(f"dev/emulate: not a number: {v}")
+
+    argv = list(argv)
+    uid, _ = invoker()
+    path = flag(argv, "--state") or os.environ.get("NEOCHUMBY_EMU") or f"/var/tmp/neochumby-emulate-{uid}"
+    state = State(path)
     if not argv or argv[0] in ("-h", "--help", "help"):
         print(__doc__)
         return
     cmd, args = argv[0], argv[1:]
 
-    def flag(name, default=None):
-        if name in args:
-            i = args.index(name)
-            v = args[i + 1]
-            del args[i:i + 2]
-            return v
-        return default
+    def operands(n, usage):
+        if len(args) < n:
+            sys.exit(f"usage: dev/emulate {usage}")
+        return args[:n]
 
     if cmd == "start":
-        stick = flag("--stick")
+        stick = flag(args, "--stick")
         opts = {
             "stick": stick and os.path.abspath(stick),
-            "server": flag("--server"),
-            "psp": flag("--psp"),
-            "run": flag("--run"),
+            "server": flag(args, "--server"),
+            "psp": flag(args, "--psp"),
+            "run": flag(args, "--run"),
         }
+        env = {}
+        while "--env" in args:
+            k, _, v = flag(args, "--env").partition("=")
+            env[k] = v
+        opts["env"] = env
         binds = []
         while "--bind" in args:
-            host, _, guest = flag("--bind").partition(":")
+            host, _, guest = flag(args, "--bind").partition(":")
             if not os.path.isdir(host) or not guest.startswith("/"):
                 sys.exit("dev/emulate start: --bind DIR:/PATH, DIR a directory")
             binds.append((os.path.abspath(host), guest))
         opts["binds"] = binds
-        env = {}
-        while "--env" in args:
-            k, _, v = flag("--env").partition("=")
-            env[k] = v
-        opts["env"] = env
         cmd_start(state, opts, args[0] if args else None)
     elif cmd == "tap":
-        hold = int(flag("--hold", "100"))
-        cmd_tap(state, int(args[0]), int(args[1]), hold)
+        hold = number(flag(args, "--hold", "100"))
+        x, y = operands(2, "tap X Y [--hold MS]")
+        cmd_tap(state, number(x), number(y), hold)
     elif cmd == "button":
         cmd_button(state, args[0] if args else "")
     elif cmd == "shot":
-        subprocess.run([sys.executable, "-I", os.path.join(REPO, "dev", "fb2png.py"), os.path.join(state, "fb0"),
-                        args[0]], check=True)
+        (out,) = operands(1, "shot OUT.png")
+        subprocess.run([sys.executable, "-I", os.path.join(REPO, "dev", "fb2png.py"), state.at("fb0"), out],
+                       check=True)
     elif cmd == "pixel":
-        cmd_pixel(state, int(args[0]), int(args[1]))
+        x, y = operands(2, "pixel X Y")
+        x, y = number(x), number(y)
+        if not (0 <= x < W and 0 <= y < H):
+            sys.exit(f"dev/emulate pixel: ({x}, {y}) is off the screen")
+        cmd_pixel(state, x, y)
     elif cmd == "compare":
-        least, secs, want = float(flag("--min", "0")), float(flag("--wait", "0")), flag("--want")
-        cmd_compare(state, args, least, secs, want)
+        least, secs = number(flag(args, "--min", "0"), float), number(flag(args, "--wait", "0"), float)
+        cmd_compare(state, args, least, secs, flag(args, "--want"))
     elif cmd == "log":
         cmd_log(state, "-f" in args)
     elif cmd == "wait":
-        what = args[0]
-        pattern = args.pop(1) if what == "log" else None
-        cmd_wait(state, what, pattern, float(args[1]) if len(args) > 1 else 30)
+        (what,) = operands(1, "wait screen|exit [SECS] | wait log REGEX [SECS]")
+        pattern = None
+        if what == "log":
+            _, pattern = operands(2, "wait log REGEX [SECS]")
+            del args[1]
+        elif what not in ("screen", "exit"):
+            sys.exit("usage: dev/emulate wait screen|exit [SECS] | wait log REGEX [SECS]")
+        cmd_wait(state, what, pattern, number(args[1], float) if len(args) > 1 else 30)
     elif cmd == "status":
         cmd_status(state)
     elif cmd == "stop":
         cmd_stop(state)
     elif cmd == "exec":
-        secs = float(flag("--for", "0"))
+        secs = number(flag(args, "--for", "0"), float)
         cmd_exec(state, args, secs)
     elif cmd == "selftest":
         cmd_selftest(state)
     elif cmd == "mkstick":
-        size = int(flag("--size", "64"))
-        cmd_mkstick(args[0], size, args[1] if len(args) > 1 else None)
+        size, force = number(flag(args, "--size", "64")), "--force" in args
+        args = [a for a in args if a != "--force"]
+        if not args:
+            sys.exit("usage: sudo dev/emulate mkstick IMG [--size MB] [--force] [TREE]")
+        cmd_mkstick(args[0], size, args[1] if len(args) > 1 else None, force)
     else:
-        sys.exit(f"dev/emulate: unknown command {cmd} (dev/emulate --help)")
+        sys.exit(f"dev/emulate: unknown command {cmd}\n{USAGE}")
 
 
 if __name__ == "__main__":

@@ -28,9 +28,21 @@ fail() {
   emu stop || true
   exit 1
 }
+count() { emu log | grep -c "$1" || true; }
+# Waits until the session has opened the home screen N times.
+opened_home() {
+  i=0
+  until [ "$(count 'neochumby: opening home')" -ge "$1" ]; do
+    i=$((i + 1))
+    [ "$i" -lt 300 ] || fail "$2"
+    sleep 0.1
+  done
+  emu wait screen 30 || fail "$2"
+}
 
-# neochumby-home's layout: rows of apps from y=44, 36 high with 4 between,
-# in name order, those with a title and exec; CHUMBY MODE along the bottom.
+# Where to tap: neochumby-home's layout, rows of apps from y=44, 36 high
+# with 4 between, in name order, those with a title and exec; CHUMBY MODE
+# along the bottom. What happened is read from the session's log.
 row=0
 found=
 for d in $(ls "$tree/apps"); do
@@ -44,9 +56,8 @@ doom_y=$((44 + row * 40 + 18))
 
 step "boot"
 emu start "$tree"
-emu wait screen 60 || fail "the home screen didn't draw"
+opened_home 1 "the home screen didn't open"
 emu shot "$out/1-home.png"
-[ "$(emu pixel 2 2)" = "#101021" ] || fail "not neochumby-home's background at (2, 2): $(emu pixel 2 2)"
 
 step "tap DOOM"
 emu tap 160 "$doom_y"
@@ -60,8 +71,7 @@ done
 emu shot "$out/2-doom.png"
 if emu log | grep -q 'neochumby-doom: no IWAD found'; then
   echo "Doom opened, and exited without game data"
-  emu wait screen 30 || fail "the home screen didn't come back"
-  [ "$(emu pixel 2 2)" = "#101021" ] || fail "not the home screen after Doom"
+  opened_home 2 "the home screen didn't come back after Doom"
 else
   echo "Doom is running"
 fi
@@ -70,10 +80,10 @@ step "the devices"
 emu selftest || fail "dev/emulate selftest"
 
 step "the corner hold (the escape hatch)"
+before=$(count 'neochumby: opening home')
 emu tap 5 5 --hold 3600
 emu wait log 'neochumby: escape: ending' 10 || fail "the corner hold didn't end the home screen"
-emu wait screen 30 || fail "the home screen didn't come back after the escape"
-[ "$(emu pixel 2 2)" = "#101021" ] || fail "not the home screen after the escape"
+opened_home $((before + 1)) "the home screen didn't come back after the escape"
 emu shot "$out/3-escaped.png"
 
 # A session that holds the top button itself (proposal 0002) keeps
@@ -106,10 +116,9 @@ emu wait exit 20 || fail "CHUMBY MODE didn't end the session"
 emu log > "$out/log.txt"
 
 step "boot from a stick"
-emu mkstick "$out/stick.img" "$tree"
+emu mkstick --force "$out/stick.img" "$tree"
 emu start --stick "$out/stick.img"
-emu wait screen 60 || fail "the home screen didn't draw from the stick"
-[ "$(emu pixel 2 2)" = "#101021" ] || fail "not the home screen, from the stick"
+opened_home 1 "the home screen didn't open from the stick"
 emu shot "$out/4-stick.png"
 emu tap 160 220
 emu wait exit 20 || fail "CHUMBY MODE didn't end the session from the stick"
