@@ -61,6 +61,25 @@ pub fn alive(pid: u32) -> bool {
     io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
+/// Whether our child `pid` has exited, without reaping it (waitid(2) with
+/// WNOWAIT). Until it's reaped (`Child::wait`), its pid, and the id of the
+/// process group it leads, can't be given to another process, so its group
+/// can still be signalled safely.
+pub fn exited(pid: u32) -> io::Result<bool> {
+    let pid = positive(pid)?;
+    // SAFETY: siginfo_t is plain data, for which all zeroes is valid.
+    let mut info: libc::siginfo_t = unsafe { std::mem::zeroed() };
+    let flags = libc::WEXITED | libc::WNOHANG | libc::WNOWAIT;
+    // SAFETY: `info` is a live siginfo_t the kernel writes into; the other
+    // arguments are integers.
+    if unsafe { libc::waitid(libc::P_PID, pid as libc::id_t, &mut info, flags) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // SAFETY: waitid filled in `info`; with WNOHANG and nothing to report,
+    // it left si_pid as the zero it was given.
+    Ok(unsafe { info.si_pid() } != 0)
+}
+
 fn positive(id: u32) -> io::Result<libc::pid_t> {
     match libc::pid_t::try_from(id) {
         Ok(p) if p > 0 => Ok(p),
@@ -120,5 +139,19 @@ mod tests {
         let pid = child.id();
         child.wait().unwrap();
         assert!(!alive(pid));
+    }
+
+    #[test]
+    fn exited_leaves_the_zombie_to_be_reaped() {
+        let mut child = std::process::Command::new("sh").args(["-c", "exit 3"]).spawn().unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !exited(child.id()).unwrap() {
+            assert!(std::time::Instant::now() < deadline, "never exited");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // Not reaped: its pid is still taken, and its status still there.
+        assert!(alive(child.id()));
+        assert_eq!(child.wait().unwrap().code(), Some(3));
+        assert!(exited(0).is_err());
     }
 }
