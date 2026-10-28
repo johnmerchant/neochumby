@@ -19,6 +19,12 @@
 # made-up data and placeholder artwork. No renderer lists apps yet, so a copy
 # of it gets one tap zone more, `app doom`, at the bottom left of Settings.
 set -eu
+# The pictures reach classic through /tmp/classic (--bind), which the
+# full-system machine can't be given yet: it has no network for a renderer.
+if [ "${NEOCHUMBY_EMU_MACHINE:-user}" != user ]; then
+  echo "dev/emulate-classic: skipped: user mode only for now (no way to give the full-system machine pictures)"
+  exit 77
+fi
 tree=${1:?usage: dev/emulate-classic TREE PICTURES OUT}
 pictures=${2:?usage: dev/emulate-classic TREE PICTURES OUT}
 out=${3:?usage: dev/emulate-classic TREE PICTURES OUT}

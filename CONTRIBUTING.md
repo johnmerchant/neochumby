@@ -158,9 +158,31 @@ set and flip `current`. A power cut mid-round can be approximated by
 `dev/emulate stop` (SIGKILL) during a large file. That shows the journal
 and resume logic, not FAT's behaviour.
 
-`dev/emulate --help` lists the fake devices and what each does. What it
-can't catch is what full-system emulation (the whole Chumby, its stock
-firmware included, still to come) and real devices are for:
+### The whole Chumby: --machine chumby-classic
+
+`--machine chumby-classic` (or `NEOCHUMBY_EMU_MACHINE=chumby-classic`)
+boots the stock 2.6.16 firmware on QEMU's chumby-classic machine
+(`emu/qemu/build`), with the tree in the NAND's Cache partition as a stick
+and a test boot hook in the settings. It needs no root and runs natively on
+a Mac. The firmware is your own device's (`--kernel`, `--nand`,
+`--factory-psp`, or `NEOCHUMBY_EMU_KERNEL`, `_NAND`, `_PSP`; see
+`emu/README.md`), and it stays on your machine: never in the repository,
+CI or an attachment (`docs/legal.md`). Without it, `start` and the
+scenarios exit 77, skipped.
+
+```sh
+export NEOCHUMBY_EMU_MACHINE=chumby-classic NEOCHUMBY_EMU_KERNEL=... NEOCHUMBY_EMU_NAND=... NEOCHUMBY_EMU_PSP=...
+dev/emulate-smoke /tmp/tree /tmp/smoke     # the same scenario, its user-mode steps skipped
+```
+
+Touches go over QMP (`input-send-event`), screenshots are `screendump`,
+and `log` is the console. The top button, `exec`, `selftest`, `--stick`
+and `--bind` are user mode's only, for now. `python3 dev/test_emulate.py`
+(run by CI) checks its images against `chumby-emu`'s and its control path
+against a stub QEMU.
+
+`dev/emulate --help` lists the fake devices and what each does. What user
+mode can't catch is what the full-system machine and real devices are for:
 
 - **The 2.6.16 kernel.** System calls go to the PC's kernel. Futex flags
   that kernel lacks, `nanosleep` failing with `EINVAL` on restart, and newer
