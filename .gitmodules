@@ -16,3 +16,9 @@
 [submodule "apps/top/third_party/procps"]
 	path = apps/top/third_party/procps
 	url = https://gitlab.com/procps-ng/procps.git
+[submodule "apps/cmatrix/third_party/cmatrix"]
+	path = apps/cmatrix/third_party/cmatrix
+	url = https://github.com/abishekvashok/cmatrix
+[submodule "apps/tty-clock/third_party/tty-clock"]
+	path = apps/tty-clock/third_party/tty-clock
+	url = https://github.com/xorg62/tty-clock

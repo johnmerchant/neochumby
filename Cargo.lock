@@ -376,6 +376,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-clock"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "neochumby",
+ "neochumby-ncurses",
+]
+
+[[package]]
+name = "neochumby-cmatrix"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "neochumby",
+ "neochumby-ncurses",
+]
+
+[[package]]
 name = "neochumby-doom"
 version = "0.1.0"
 dependencies = [
