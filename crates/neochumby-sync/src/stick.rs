@@ -1,7 +1,15 @@
 //! The stick's side: the two sets, their markers, writing the standby set,
 //! the flip and rollback. Every write is inside the stick's neochumby
 //! directory, to paths [`manifest::valid_path`] takes, through no symbolic
-//! link, and never to the live set or the one the Chumby is running from.
+//! link, and never to the live set or the one the Chumby is running from;
+//! and only while the stick is mounted, so a stick pulled mid-round never
+//! sends writes to the filesystem under its mount point.
+//!
+//! On the Chumby's 2.6.16 kernel, fsync on FAT syncs the whole device, FAT
+//! included. So files are written in batches: each is renamed into place
+//! unsynced, then one sync() covers the batch, then its journal lines are
+//! appended, then one more sync(). A journal line is never durable before
+//! its file.
 
 use std::collections::HashSet;
 use std::fs::{self, File, OpenOptions};
@@ -44,9 +52,16 @@ impl Set {
     }
 }
 
+/// A batch is synced once it holds this many files, or bytes.
+const BATCH_FILES: usize = 64;
+const BATCH_BYTES: u64 = 4 << 20;
+
 /// The stick's neochumby directory.
 pub struct Stick {
     pub dir: PathBuf,
+    /// Where the stick is mounted, if `dir` is on one: nothing is written
+    /// unless it is a different device from the directory it is in.
+    pub mount: Option<PathBuf>,
     /// The set the session runs from, if it runs from one: never written.
     pub running: Option<Set>,
     pub limits: Limits,
@@ -74,7 +89,25 @@ pub fn check_set(dir: &Path, limits: &Limits) -> io::Result<Vec<Entry>> {
 
 impl Stick {
     pub fn new(dir: impl Into<PathBuf>, running: Option<Set>) -> Stick {
-        Stick { dir: dir.into(), running, limits: LIMITS }
+        Stick { dir: dir.into(), mount: None, running, limits: LIMITS }
+    }
+
+    /// The stick mounted at `mount`, its neochumby directory `dir`.
+    pub fn mounted_at(mount: impl Into<PathBuf>, dir: impl Into<PathBuf>, running: Option<Set>) -> Stick {
+        Stick { mount: Some(mount.into()), ..Stick::new(dir, running) }
+    }
+
+    /// Whether the stick is there to write to: its mount point is another
+    /// device than its parent. Checked before every write that could create
+    /// something.
+    pub fn mounted(&self) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        let Some(m) = &self.mount else { return Ok(()) };
+        let parent = m.parent().unwrap_or(Path::new("/"));
+        match (fs::metadata(m), fs::metadata(parent)) {
+            (Ok(a), Ok(b)) if a.dev() != b.dev() => Ok(()),
+            _ => Err(io::Error::new(io::ErrorKind::NotFound, format!("no stick mounted at {}", m.display()))),
+        }
     }
 
     pub fn set_dir(&self, s: Set) -> PathBuf {
@@ -143,14 +176,19 @@ impl Stick {
     /// is written first, listing the files it keeps; then its marker goes,
     /// and from there on the set is incomplete. Then everything the tree
     /// does not name is removed: old files, a cut-short round's temporary
-    /// files, and anything that is not a plain file or directory.
+    /// files, and anything that is not a plain file or directory. Then the
+    /// stick must have room for what is still to come.
     pub fn begin(&self, s: Set, tree: &[Entry], have: &[Entry]) -> io::Result<Writer<'_>> {
         self.writable(s)?;
         manifest::validate(tree, &self.limits)?;
+        // Files kept on a journal's word, not a marker's, are hashed before
+        // the set is marked complete: see Writer::finish.
+        let from_journal = self.check(s).is_err();
+        self.mounted()?;
         real_dir(&self.dir)?;
         let have: HashSet<&Entry> = have.iter().collect();
-        let kept: String = tree.iter().filter(|e| have.contains(e)).map(line).collect();
-        write_whole(&self.dir, &self.journal(s), kept.as_bytes())?;
+        let kept: Vec<Entry> = tree.iter().filter(|e| have.contains(e)).cloned().collect();
+        write_whole(&self.dir, &self.journal(s), kept.iter().map(line).collect::<String>().as_bytes())?;
         remove_if_there(&self.dir.join(self.marker(s)))?;
         sync_dir(&self.dir)?;
 
@@ -162,14 +200,27 @@ impl Stick {
             .flat_map(|e| e.path.match_indices('/').map(|(i, _)| e.path[..i].to_ascii_lowercase()).collect::<Vec<_>>())
             .collect();
         prune(&dir, "", &files, &dirs)?;
+        room(&dir, tree, &have)?;
         let journal =
             OpenOptions::new().append(true).custom_flags(libc::O_NOFOLLOW).open(self.dir.join(self.journal(s)))?;
-        Ok(Writer { stick: self, set: s, dir, tree: tree.to_vec(), journal })
+        let unverified = if from_journal { kept.clone() } else { Vec::new() };
+        Ok(Writer {
+            stick: self,
+            set: s,
+            dir,
+            tree: tree.to_vec(),
+            journal,
+            listed: kept,
+            pending: Vec::new(),
+            pending_bytes: 0,
+            unverified,
+        })
     }
 
     /// Makes `to` live: checks it is complete, then rewrites `current`.
     pub fn flip(&self, to: Set) -> io::Result<()> {
         self.check(to)?;
+        self.mounted()?;
         write_whole(&self.dir, "current", format!("{}\n", to.name()).as_bytes())
     }
 
@@ -179,12 +230,14 @@ impl Stick {
         let (live, _) = self.live().ok_or_else(|| invalid("no complete set"))?;
         let to = live.other();
         self.check(to).map_err(|e| invalid(format!("set {} is not complete: {e}", to.name())))?;
+        self.mounted()?;
         write_whole(&self.dir, "hold", b"rolled back: syncing waits for `neochumby-sync resume`\n")?;
         self.flip(to)?;
         Ok(to)
     }
 
     pub fn resume(&self) -> io::Result<()> {
+        self.mounted()?;
         remove_if_there(&self.dir.join("hold"))?;
         sync_dir(&self.dir)
     }
@@ -229,16 +282,24 @@ pub struct Writer<'a> {
     dir: PathBuf,
     tree: Vec<Entry>,
     journal: File,
+    /// What the journal lists.
+    listed: Vec<Entry>,
+    /// Renamed into place, not yet synced or in the journal.
+    pending: Vec<Entry>,
+    pending_bytes: u64,
+    /// Kept on a journal's word: hashed before the marker.
+    unverified: Vec<Entry>,
 }
 
 impl Writer<'_> {
     /// Writes one file of the tree, its bytes coming from `next`: under a
-    /// temporary name, hashed as it streams, fsynced, renamed into place,
-    /// its directory fsynced, and then listed in the journal.
+    /// temporary name, hashed as it streams, then renamed into place. It is
+    /// listed in the journal with the rest of its batch, after a sync.
     pub fn receive(&mut self, e: &Entry, next: impl FnMut() -> io::Result<Vec<u8>>) -> io::Result<()> {
         if self.tree.binary_search_by(|t| t.path.cmp(&e.path)).ok().map(|i| &self.tree[i]) != Some(e) {
             return Err(invalid(format!("{}: not in the manifest", e.path)));
         }
+        self.stick.mounted()?;
         let parts: Vec<&str> = e.path.split('/').collect();
         let (name, parents) = parts.split_last().expect("a valid path");
         let mut d = self.dir.clone();
@@ -253,15 +314,54 @@ impl Writer<'_> {
             let _ = fs::remove_file(&tmp);
         }
         r?;
-        sync_dir(&d)?;
-        self.journal.write_all(line(e).as_bytes())?;
-        self.journal.sync_data()
+        self.pending.push(e.clone());
+        self.pending_bytes += e.size;
+        if self.pending.len() >= BATCH_FILES || self.pending_bytes >= BATCH_BYTES {
+            self.flush()?;
+        }
+        Ok(())
     }
 
-    /// Ends the set: every file is there at its size (those received were
-    /// hashed as they came; the rest were kept, as its marker or journal
-    /// said), so the marker is written, last.
-    pub fn finish(self) -> io::Result<()> {
+    /// The batch: one sync for its files and their directories, then its
+    /// journal lines, then one sync for those.
+    fn flush(&mut self) -> io::Result<()> {
+        if self.pending.is_empty() {
+            return Ok(());
+        }
+        durable();
+        let lines: String = self.pending.iter().map(line).collect();
+        self.journal.write_all(lines.as_bytes())?;
+        durable();
+        self.listed.append(&mut self.pending);
+        self.pending_bytes = 0;
+        Ok(())
+    }
+
+    /// Ends the set. Every file must be there at its size. Those received
+    /// were hashed as they came, and those a marker vouched for are taken
+    /// as they are; but those kept on a journal's word, from a round cut
+    /// short, are hashed now. A power cut can leave a renamed file sharing
+    /// its clusters with its temporary name, and a cheap stick can reorder
+    /// its own writes, so the sizes can match over the wrong bytes. A file
+    /// that fails is removed and dropped from the journal, for the next
+    /// round to send again. Then the marker is written, last.
+    pub fn finish(mut self) -> io::Result<()> {
+        self.flush()?;
+        let mut bad = Vec::new();
+        for e in &self.unverified {
+            if hash_file(&self.dir.join(&e.path))? != (e.size, e.sha256) {
+                bad.push(e.path.clone());
+            }
+        }
+        if !bad.is_empty() {
+            for p in &bad {
+                let _ = fs::remove_file(self.dir.join(p));
+            }
+            self.listed.retain(|e| !bad.contains(&e.path));
+            let st = self.stick;
+            write_whole(&st.dir, &st.journal(self.set), self.listed.iter().map(line).collect::<String>().as_bytes())?;
+            return Err(invalid(format!("{}: not the bytes the journal says; sent again next round", bad.join(", "))));
+        }
         for e in &self.tree {
             let m =
                 fs::symlink_metadata(self.dir.join(&e.path)).map_err(|err| invalid(format!("{}: {err}", e.path)))?;
@@ -270,7 +370,7 @@ impl Writer<'_> {
             }
         }
         let st = self.stick;
-        drop(self.journal);
+        st.mounted()?;
         write_whole(&st.dir, &st.marker(self.set), manifest::marker(&self.tree).as_bytes())?;
         remove_if_there(&st.dir.join(st.journal(self.set)))?;
         sync_dir(&st.dir)
@@ -293,7 +393,73 @@ fn write_hashed(tmp: &Path, e: &Entry, mut next: impl FnMut() -> io::Result<Vec<
     if h.finish().as_ref() != e.sha256 {
         return Err(invalid(format!("{}: its SHA-256 does not match", e.path)));
     }
-    f.sync_all()
+    Ok(())
+}
+
+/// A round that fails keeps what it wrote: the files received whole go in
+/// the journal, in the same order as ever, for the next round.
+impl Drop for Writer<'_> {
+    fn drop(&mut self) {
+        if self.stick.mounted().is_ok() {
+            let _ = self.flush();
+        }
+    }
+}
+
+/// A file's size and SHA-256, read in full.
+fn hash_file(p: &Path) -> io::Result<(u64, [u8; 32])> {
+    let mut f = OpenOptions::new().read(true).custom_flags(libc::O_NOFOLLOW).open(p)?;
+    let mut h = Context::new(&SHA256);
+    let mut buf = vec![0u8; 64 << 10];
+    let mut n = 0u64;
+    loop {
+        match f.read(&mut buf)? {
+            0 => break,
+            k => {
+                h.update(&buf[..k]);
+                n += k as u64;
+            }
+        }
+    }
+    Ok((n, h.finish().as_ref().try_into().expect("32 bytes")))
+}
+
+/// Whether the stick has room for what `tree` still needs, once `dir` holds
+/// only files the tree names. A file replaced keeps its old bytes until its
+/// new ones are renamed over it, so the largest of those is counted too.
+fn room(dir: &Path, tree: &[Entry], have: &HashSet<&Entry>) -> io::Result<()> {
+    let (mut need, mut freed, mut largest) = (0u64, 0u64, 0u64);
+    for e in tree.iter().filter(|e| !have.contains(e)) {
+        need += e.size;
+        if let Ok(m) = fs::symlink_metadata(dir.join(&e.path)) {
+            freed += m.len();
+            largest = largest.max(m.len());
+        }
+    }
+    let free = free_bytes(dir)?;
+    if free + freed < need + largest {
+        let short = need + largest - free - freed;
+        return Err(io::Error::new(io::ErrorKind::StorageFull, format!("the stick needs {short} more bytes free")));
+    }
+    Ok(())
+}
+
+/// What an unprivileged writer may still use on `p`'s filesystem.
+fn free_bytes(p: &Path) -> io::Result<u64> {
+    use std::os::unix::ffi::OsStrExt;
+    let c = std::ffi::CString::new(p.as_os_str().as_bytes()).map_err(|_| invalid("a NUL in a path"))?;
+    let mut v: libc::statvfs = unsafe { std::mem::zeroed() };
+    if unsafe { libc::statvfs(c.as_ptr(), &mut v) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    // The fields' widths differ between systems.
+    #[allow(clippy::unnecessary_cast)]
+    Ok(v.f_bavail as u64 * v.f_frsize as u64)
+}
+
+/// Everything written so far, on the stick.
+fn durable() {
+    unsafe { libc::sync() };
 }
 
 /// Removes what is in `rel` under `base` and not named: files not in
@@ -332,10 +498,8 @@ fn real_dir(p: &Path) -> io::Result<()> {
     match fs::symlink_metadata(p) {
         Ok(m) if m.is_dir() => Ok(()),
         Ok(_) => Err(io::Error::new(io::ErrorKind::AlreadyExists, format!("{}: not a directory", p.display()))),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {
-            fs::create_dir(p)?;
-            sync_dir(p.parent().unwrap_or(Path::new(".")))
-        }
+        // Made durable with the next sync, before anything in it is listed.
+        Err(e) if e.kind() == io::ErrorKind::NotFound => fs::create_dir(p),
         Err(e) => Err(e),
     }
 }
@@ -579,6 +743,60 @@ pub(crate) mod tests {
         std::os::unix::fs::symlink(&outside, root.join("neochumby/b")).unwrap();
         assert!(write_set(&st, Set::B, V1).is_err());
         assert!(fs::read_dir(&outside).unwrap().next().is_none());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn nothing_is_written_without_the_stick() {
+        let root = tempdir("unmounted");
+        // A "mount point" on the same device as its parent: no stick there.
+        fs::create_dir_all(root.join("usb")).unwrap();
+        let st = Stick::mounted_at(root.join("usb"), root.join("usb/neochumby"), None);
+        assert_eq!(st.mounted().unwrap_err().kind(), io::ErrorKind::NotFound);
+        assert!(write_set(&st, Set::A, V1).is_err());
+        assert!(st.flip(Set::A).is_err() && st.resume().is_err());
+        assert!(!root.join("usb/neochumby").exists(), "nothing made under the mount point");
+        // The stick goes mid-round: the next file is refused.
+        let ok = Stick::new(root.join("usb/neochumby"), None);
+        let tree: Vec<Entry> = V1.iter().map(|(p, d)| entry(p, d)).collect();
+        let mut w = ok.begin(Set::A, &tree, &[]).unwrap();
+        w.stick = &st;
+        assert!(w.receive(&tree[0], || Ok(V1[0].1.to_vec())).is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn files_kept_on_a_journals_word_are_hashed() {
+        let root = tempdir("rehash");
+        let st = Stick::new(root.join("neochumby"), None);
+        let tree: Vec<Entry> = V2.iter().map(|(p, d)| entry(p, d)).collect();
+        // A round cut short after the wad.
+        let mut w = st.begin(Set::A, &tree, &[]).unwrap();
+        w.receive(&tree[0], || Ok(b"IWAD".to_vec())).unwrap();
+        drop(w);
+        assert_eq!(st.have(Set::A), [tree[0].clone()]);
+        // Its bytes go bad, the size the same (a torn rename, a stick that
+        // reordered its writes).
+        fs::write(root.join("neochumby/a/apps/doom/doom1.wad"), b"IWAX").unwrap();
+        let e = write_set(&st, Set::A, V2).unwrap_err();
+        assert!(e.to_string().contains("doom1.wad"), "{e}");
+        assert!(st.check(Set::A).is_err(), "not marked complete");
+        assert!(st.have(Set::A).iter().all(|e| !e.path.ends_with("doom1.wad")), "dropped from the journal");
+        // The next round sends it again.
+        write_set(&st, Set::A, V2).unwrap();
+        assert_eq!(fs::read(root.join("neochumby/a/apps/doom/doom1.wad")).unwrap(), b"IWAD");
+        assert_eq!(st.check(Set::A).unwrap(), tree);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_full_stick_is_refused_before_writing() {
+        let root = tempdir("full");
+        let mut st = Stick::new(root.join("neochumby"), None);
+        st.limits = Limits { max_files: 10, max_file: u64::MAX, max_total: u64::MAX };
+        let huge = Entry { path: "neochumby".into(), size: 1 << 60, sha256: [0; 32] };
+        let e = st.begin(Set::A, &[huge], &[]).err().unwrap();
+        assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{e}");
         fs::remove_dir_all(&root).unwrap();
     }
 }

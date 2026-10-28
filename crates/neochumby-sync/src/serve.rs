@@ -1,13 +1,10 @@
 //! neochumbyd's side of a round: the tree a Chumby's set is made from, and
 //! what it is sent.
 //!
-//! The tree is made of layers, each a directory laid out like the tree
-//! (neochumbyd's are the shared tree, then the Chumby's own files). A file
-//! in a later layer takes the place of the same path in an earlier one.
-//! Names starting with '.' are left out, so a program writing a layer puts
-//! each file in under such a name and renames it into place: a file is
-//! then never sent half-written. Symbolic links, and names a Chumby could
-//! not take ([`manifest::valid_path`]), are left out and reported.
+//! The tree is a directory, laid out as the Chumby runs it. Names starting
+//! with '.' are left out silently (a tree can hold `.DS_Store` and the
+//! like). Symbolic links, and names a Chumby could not take
+//! ([`manifest::valid_path`]), are left out and reported.
 
 use std::collections::{BTreeMap, HashMap};
 use std::fs::{self, File};
@@ -20,11 +17,11 @@ use std::time::Duration;
 use neochumby_proto::{Msg, Session};
 use ring::digest::{Context, SHA256};
 
-use crate::{CHUNK, Entry, LIMITS, invalid, manifest, next, recv_manifest, unexpected};
+use crate::{CHUNK, Entry, LIMITS, Timing, invalid, manifest, next, recv_manifest, unexpected};
 
-/// How long neochumbyd waits on a Chumby mid-round: it may be writing a
-/// large file to a slow stick.
-const WAIT: Duration = Duration::from_secs(300);
+/// How long neochumbyd waits on a Chumby mid-round (it may be writing a
+/// large file to a slow stick), and for a whole round.
+const TIMING: Timing = Timing { step: Duration::from_secs(300), round: Duration::from_secs(2 * 3600) };
 
 /// A file of the tree, and where it is read from.
 #[derive(Debug, Clone)]
@@ -88,19 +85,14 @@ impl Hashes {
     }
 }
 
-/// The tree made of `layers`. The first must be there; the others may not
-/// be.
-pub fn scan(layers: &[PathBuf], hashes: &Hashes) -> io::Result<Tree> {
+/// The tree in `dir`, hashed.
+pub fn scan(dir: &Path, hashes: &Hashes) -> io::Result<Tree> {
     let mut files = BTreeMap::new();
     let mut left_out = Vec::new();
-    for (i, layer) in layers.iter().enumerate() {
-        match fs::symlink_metadata(layer) {
-            Ok(m) if m.is_dir() => walk(layer, "", &mut files, &mut left_out)?,
-            Err(e) if e.kind() == io::ErrorKind::NotFound && i > 0 => {}
-            Ok(_) => return Err(invalid(format!("{}: not a directory", layer.display()))),
-            Err(e) => return Err(e),
-        }
+    if !fs::symlink_metadata(dir)?.is_dir() {
+        return Err(invalid(format!("{}: not a directory", dir.display())));
     }
+    walk(dir, "", &mut files, &mut left_out)?;
     let files = files
         .into_iter()
         .map(|(path, file): (String, PathBuf)| {
@@ -137,22 +129,33 @@ fn walk(base: &Path, rel: &str, out: &mut BTreeMap<String, PathBuf>, left_out: &
 pub enum Served {
     /// The Chumby's live set is the tree.
     UpToDate,
+    /// The tree is one a Chumby would refuse; it was told why.
+    Refused(String),
     /// `files` sent, `bytes` in all, and what the Chumby said of it.
     Sent { files: usize, bytes: u64, ok: bool, detail: String },
 }
 
+/// Ends a round before it starts, telling the Chumby why.
+pub fn refuse(s: &mut Session, why: String) -> io::Result<Served> {
+    s.send(&Msg::SyncDone { ok: false, detail: why.chars().take(1000).collect() })?;
+    Ok(Served::Refused(why))
+}
+
 /// One round, the Chumby having sent `SyncHave { live }`. The tree is
 /// checked as the Chumby will check it first, so one it would refuse is
-/// never sent.
+/// never sent; the Chumby is told why instead.
 pub fn round(s: &mut Session, live: [u8; 32], tree: &Tree) -> io::Result<Served> {
+    let clock = TIMING.start();
     let entries = tree.manifest();
     if manifest::digest(&entries) == live {
         s.send(&Msg::SyncUpToDate)?;
         return Ok(Served::UpToDate);
     }
-    manifest::validate(&entries, &LIMITS)?;
+    if let Err(e) = manifest::validate(&entries, &LIMITS) {
+        return refuse(s, format!("a Chumby cannot take this tree: {e}"));
+    }
     s.send(&Msg::SyncWant)?;
-    let have = recv_manifest(s, WAIT, &LIMITS)?;
+    let have = recv_manifest(s, &clock, &LIMITS)?;
     let need = manifest::plan(&entries, &have);
     for m in manifest::messages(&entries) {
         s.send(&m)?;
@@ -164,7 +167,7 @@ pub fn round(s: &mut Session, live: [u8; 32], tree: &Tree) -> io::Result<Served>
         bytes += e.size;
     }
     s.send(&Msg::SyncEnd)?;
-    match next(s, WAIT)? {
+    match next(s, &clock)? {
         Msg::SyncDone { ok, detail } => Ok(Served::Sent { files: need.len(), bytes, ok, detail }),
         m => Err(unexpected(&m)),
     }

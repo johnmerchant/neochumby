@@ -13,8 +13,8 @@
 //!                                  sent to it when it next connects;
 //!                                  KEY= removes it; `delivery=sync`
 //!                                  keeps its tree on its stick
-//!   neochumbyd manifest NAME       the files a sync sends NAME: the tree
-//!                                  and its overlay (sync.rs)
+//!   neochumbyd manifest            what a sync sends: the tree's files,
+//!                                  and any a Chumby could not take
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -48,7 +48,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest NAME [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
     );
     std::process::exit(2)
 }
@@ -112,20 +112,17 @@ fn main() {
             let (key, value) = setting.split_once('=').unwrap_or_else(|| usage());
             state.set(&operand(), key, value).unwrap_or_else(|e| fail(e));
         }
-        "manifest" => manifest(&a, &operand()),
+        "manifest" => manifest(&a),
         _ => usage(),
     }
 }
 
-/// What a sync would send `name`, as its set's manifest, then what is left
-/// out of it and the manifest's digest.
-fn manifest(a: &Args, name: &str) {
-    if !neochumby_proto::valid_name(name) {
-        fail("not a Chumby's name");
-    }
+/// What a sync sends, as a set's manifest, then what is left out of it and
+/// the manifest's digest.
+fn manifest(a: &Args) {
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     let hashes = neochumby_sync::serve::Hashes::default();
-    let tree = neochumby_sync::serve::scan(&sync::layers(&tree, &a.state, name), &hashes).unwrap_or_else(|e| fail(e));
+    let tree = neochumby_sync::serve::scan(&tree, &hashes).unwrap_or_else(|e| fail(e));
     let m = tree.manifest();
     for e in &m {
         print!("{}", neochumby_sync::manifest::line(e));

@@ -6,6 +6,8 @@
 //!                         reads it too, and accepts only the characters
 //!                         [`valid_value`] does.
 //!   /psp/neochumby.key    this Chumby's private key (0600)
+//!   /psp/rfs1/userhook2   the boot hook, which pairing installs and the
+//!                         session keeps up to date ([`refresh_hook`])
 
 use std::io::{self, Write};
 use std::os::unix::fs::OpenOptionsExt;
@@ -13,6 +15,9 @@ use std::path::Path;
 
 pub const CONF: &str = "/psp/neochumby.conf";
 pub const KEY: &str = "/psp/neochumby.key";
+pub const HOOK: &str = "/psp/rfs1/userhook2";
+/// A stick's own tree, made by hand (tools/stick).
+const STICK_TREE: &str = "/mnt/usb/neochumby";
 
 /// What a value may hold: what an address, port, path or hex key needs.
 pub fn valid_value(s: &str) -> bool {
@@ -55,6 +60,27 @@ pub fn write_atomic(path: &Path, data: &[u8], mode: u32) -> io::Result<()> {
     f.write_all(data)?;
     f.sync_all()?;
     std::fs::rename(&tmp, path)
+}
+
+/// Brings the boot hook pairing installed up to date with the tree's copy,
+/// so a Chumby paired before the hook changed (to boot synced sets, say)
+/// boots the new way. Only a hook that is there is replaced, and only from
+/// a tree a neochumbyd delivered (over NFS, or synced to the stick), never
+/// from a stick made by hand, which may be older. True if it was replaced.
+pub fn refresh_hook(root: &Path) -> io::Result<bool> {
+    let hook = Path::new(HOOK);
+    if root == Path::new(STICK_TREE) || !hook.is_file() {
+        return Ok(false);
+    }
+    let new = std::fs::read(root.join("userhook2"))?;
+    if new.len() > 64 << 10 || !new.starts_with(b"#!/bin/sh\n") {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "the tree's userhook2 is not a hook"));
+    }
+    if std::fs::read(hook).is_ok_and(|old| old == new) {
+        return Ok(false);
+    }
+    write_atomic(hook, &new, 0o755)?;
+    Ok(true)
 }
 
 /// key=value lines from pairs whose values are all [`valid_value`].

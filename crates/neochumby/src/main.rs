@@ -151,6 +151,11 @@ fn run_home(home: &App, root: &Path, escape: &AtomicBool) -> Option<std::io::Res
 fn session() {
     let root = apps::root();
     let all = apps::all(&root);
+    match conf::refresh_hook(&root) {
+        Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
+        Ok(false) => {}
+        Err(e) => eprintln!("neochumby: {}: {e}", conf::HOOK),
+    }
 
     // Each app's service, where what it needs of a neochumbyd is here.
     let mut services: Vec<Child> = all

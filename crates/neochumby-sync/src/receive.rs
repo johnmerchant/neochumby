@@ -3,12 +3,11 @@
 
 use std::collections::HashMap;
 use std::io;
-use std::time::Duration;
 
 use neochumby_proto::{Msg, Session};
 
 use crate::stick::{Set, Stick};
-use crate::{Entry, invalid, manifest, next, recv_manifest, unexpected};
+use crate::{Clock, Entry, Timing, invalid, manifest, next, recv_manifest, unexpected};
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum Outcome {
@@ -29,8 +28,8 @@ pub enum Outcome {
 /// One round. On an error the live set is as it was, and the standby set
 /// is left incomplete for the next round to finish; neochumbyd is told why
 /// if the session still works.
-pub fn round(s: &mut Session, stick: &Stick, wait: Duration) -> io::Result<Outcome> {
-    let r = run(s, stick, wait);
+pub fn round(s: &mut Session, stick: &Stick, t: Timing) -> io::Result<Outcome> {
+    let r = run(s, stick, &t.start());
     if let Err(e) = &r {
         let mut detail = e.to_string();
         detail.truncate(1000);
@@ -39,10 +38,11 @@ pub fn round(s: &mut Session, stick: &Stick, wait: Duration) -> io::Result<Outco
     r
 }
 
-fn run(s: &mut Session, stick: &Stick, wait: Duration) -> io::Result<Outcome> {
+fn run(s: &mut Session, stick: &Stick, wait: &Clock) -> io::Result<Outcome> {
     if stick.held() {
         return Ok(Outcome::Held);
     }
+    stick.mounted()?;
     let live = stick.live();
     let target = match &live {
         Some((l, _)) => l.other(),
@@ -57,6 +57,7 @@ fn run(s: &mut Session, stick: &Stick, wait: Duration) -> io::Result<Outcome> {
         Msg::SyncUpToDate => return Ok(Outcome::UpToDate),
         Msg::Refused => return Ok(Outcome::Refused),
         Msg::SyncWant => {}
+        Msg::SyncDone { detail, .. } => return Err(invalid(format!("neochumbyd will not send its tree: {detail}"))),
         m => return Err(unexpected(&m)),
     }
 

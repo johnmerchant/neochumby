@@ -57,8 +57,10 @@ pub enum Msg {
     SyncData(Vec<u8>),
     /// neochumbyd: every file the standby set lacked has been sent.
     SyncEnd,
-    /// Chumby: how the round ended: `ok` once the set is live, and what
-    /// happened, for neochumbyd's log.
+    /// How a round ended. From the Chumby, at its end: `ok` once the set
+    /// is live, and what happened, for neochumbyd's log. From neochumbyd, in
+    /// place of `SyncUpToDate` or `SyncWant`: never `ok`, a tree it will not
+    /// send, and why.
     SyncDone { ok: bool, detail: String },
 }
 

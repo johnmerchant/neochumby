@@ -17,21 +17,25 @@
 //! A new live set runs from the next boot: what is running stays as it is.
 
 use std::io;
-use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::time::Duration;
 
 use neochumby::{apps, conf, settings};
+use neochumby_sync::Timing;
 use neochumby_sync::receive::{self, Outcome};
 use neochumby_sync::stick::{Set, Stick};
 
 /// Where the stock firmware mounts a USB stick, and the stick's neochumby
-/// directory: the only place this writes.
+/// directory: the only place this writes, and only while a stick is
+/// mounted there.
 const MOUNT: &str = "/mnt/usb";
 const DIR: &str = "/mnt/usb/neochumby";
 const EVERY: Duration = Duration::from_secs(60);
-/// How long a step of a round waits on neochumbyd.
-const WAIT: Duration = Duration::from_secs(120);
+/// The longest wait after failures that keep coming back.
+const MOST: Duration = Duration::from_secs(3600);
+/// How long a round waits on neochumbyd for each message, and in all: a
+/// whole set (512 MB at most) written at the stick's pace fits in the hour.
+const TIMING: Timing = Timing { step: Duration::from_secs(120), round: Duration::from_secs(3600) };
 
 /// The set the session runs from, if it runs from one on the stick.
 fn running() -> Option<Set> {
@@ -39,13 +43,8 @@ fn running() -> Option<Set> {
     [Set::A, Set::B].into_iter().find(|s| Path::new(DIR).join(s.name()).canonicalize().is_ok_and(|d| d == root))
 }
 
-/// Whether a stick is mounted: /mnt/usb is then on another device than
-/// /mnt.
-fn mounted() -> bool {
-    match (std::fs::metadata(MOUNT), std::fs::metadata("/mnt")) {
-        (Ok(usb), Ok(mnt)) => usb.dev() != mnt.dev(),
-        _ => false,
-    }
+fn stick() -> Stick {
+    Stick::mounted_at(MOUNT, DIR, running())
 }
 
 fn describe(o: &Outcome) -> String {
@@ -75,20 +74,21 @@ impl Log {
 
 /// Rounds over one session with neochumbyd: one now, then one every
 /// [`EVERY`] if `forever`, until something fails. None if this Chumby is
-/// not to sync: not paired, or its delivery is not sync.
-fn rounds(forever: bool, log: &mut Log) -> io::Result<Option<Outcome>> {
-    if !mounted() {
-        return Err(io::Error::new(io::ErrorKind::NotFound, format!("no stick at {MOUNT}")));
-    }
+/// not to sync: not paired, or its delivery is not sync. A round that goes
+/// through clears `failed`.
+fn rounds(forever: bool, log: &mut Log, failed: &mut Option<String>) -> io::Result<Option<Outcome>> {
+    let stick = stick();
+    stick.mounted()?;
     let Some(p) = conf::paired() else { return Ok(None) };
     let (mut s, settings) = settings::connect(&p)?;
     if settings::get(&settings, "delivery") != Some("sync") {
         return Ok(None);
     }
-    s.tcp().set_write_timeout(Some(WAIT))?;
-    let stick = Stick::new(DIR, running());
+    s.tcp().set_write_timeout(Some(TIMING.step))?;
     loop {
-        let o = receive::round(&mut s, &stick, WAIT)?;
+        // Each round checks the stick is still there before it writes.
+        let o = receive::round(&mut s, &stick, TIMING)?;
+        *failed = None;
         log.say(describe(&o));
         if !forever || o == Outcome::Refused {
             return Ok(Some(o));
@@ -101,15 +101,25 @@ fn run() {
     // Writing the stick competes with the screen for the one core.
     unsafe { libc::nice(19) };
     let mut log = Log::default();
+    let mut failed: Option<String> = None;
+    let mut wait = EVERY;
     loop {
-        match rounds(true, &mut log) {
+        match rounds(true, &mut log, &mut failed) {
             Ok(_) => {
                 eprintln!("neochumby-sync: not syncing: not paired, or delivery is not sync");
                 return;
             }
-            Err(e) => log.say(format!("{e}; trying again in a minute")),
+            Err(e) => {
+                // The same failure twice running (the same file for the same
+                // reason, a full stick) will most likely come again: wait
+                // twice as long each time it does, up to an hour.
+                let e = e.to_string();
+                wait = if failed.as_ref() == Some(&e) { (wait * 2).min(MOST) } else { EVERY };
+                log.say(format!("{e}; trying again in {} s", wait.as_secs()));
+                failed = Some(e);
+            }
         }
-        neochumby::sleep_ms(EVERY.as_millis() as u32);
+        neochumby::sleep_ms(wait.as_millis() as u32);
     }
 }
 
@@ -120,10 +130,9 @@ fn fail(e: impl std::fmt::Display) -> ! {
 
 fn main() {
     neochumby::debug::install("neochumby-sync");
-    let stick = || Stick::new(DIR, running());
     match std::env::args().nth(1).as_deref() {
         None => run(),
-        Some("once") => match rounds(false, &mut Log::default()) {
+        Some("once") => match rounds(false, &mut Log::default(), &mut None) {
             Ok(Some(Outcome::UpToDate | Outcome::Flipped { .. })) => {}
             Ok(Some(_)) => std::process::exit(1),
             Ok(None) => fail("not syncing: not paired, or delivery is not sync"),

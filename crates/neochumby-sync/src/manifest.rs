@@ -30,8 +30,10 @@ pub const SESSION: &str = "neochumby";
 /// most 16 deep and 240 bytes. Each component is 1 to 128 of A-Z a-z 0-9
 /// `.` `_` `+` `-`, neither starting nor ending with '.'. So never `.`,
 /// `..` or an absolute path; never a name FAT would change (it drops
-/// trailing dots); and never the receiver's own temporary names, which
-/// start with '.'.
+/// trailing dots); never the receiver's own temporary names, which start
+/// with '.'; and never a name the Chumby's vfat refuses: `aux`, `con`,
+/// `nul`, `prn`, `com1` to `com9` or `lpt1` to `lpt9` before the first '.',
+/// in any case (`con`, `Aux.txt`).
 pub fn valid_path(p: &str) -> bool {
     (1..=240).contains(&p.len())
         && p.split('/').count() <= 16
@@ -40,7 +42,18 @@ pub fn valid_path(p: &str) -> bool {
                 && !c.starts_with('.')
                 && !c.ends_with('.')
                 && c.bytes().all(|b| b.is_ascii_alphanumeric() || b"._+-".contains(&b))
+                && !reserved(c)
         })
+}
+
+/// A DOS device name, which 2.6.16's vfat_valid_longname refuses.
+fn reserved(c: &str) -> bool {
+    let stem = c.split('.').next().unwrap_or("").to_ascii_lowercase();
+    match stem.as_bytes() {
+        b"aux" | b"con" | b"nul" | b"prn" => true,
+        [b'c', b'o', b'm', d] | [b'l', b'p', b't', d] => (b'1'..=b'9').contains(d),
+        _ => false,
+    }
 }
 
 pub fn line(e: &Entry) -> String {
@@ -213,6 +226,12 @@ pub(crate) mod tests {
             "é",
         ] {
             assert!(!valid_path(bad), "{bad:?}");
+        }
+        for dos in ["con", "AUX", "nul.txt", "apps/Prn.raw", "com1", "LPT9.x.y", "a/com5/b"] {
+            assert!(!valid_path(dos), "{dos}");
+        }
+        for fine in ["com10", "com0", "console", "lpt", "auxv", "x.con", "nul_", "comx"] {
+            assert!(valid_path(fine), "{fine}");
         }
         assert!(valid_path(&"x".repeat(128)) && !valid_path(&"x".repeat(129)));
         assert!(!valid_path(&["a"; 17].join("/")));
