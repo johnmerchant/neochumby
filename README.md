@@ -189,13 +189,13 @@ against a pinned QEMU release); `emu/` builds it at a pinned commit and
 makes the images. [`emu/README.md`](emu/README.md) has the details.
 
 ```sh
-nix build ./emu/qemu                 # or, without Nix: emu/qemu/build
+emu/qemu/build                       # QEMU with the machine (deps: emu/README.md)
 (cd emu && cargo build --release)    # chumby-emu, the image tools
 emu/target/release/chumby-emu mkpsp PSPDIR psp.jffs2
 emu/target/release/chumby-emu mknand BACKUPDIR psp.jffs2 nand.img
 emu/qemu/run zImage nand.img         # console on stdio, QMP on qmp.sock
-chumby-ctl qmp.sock tap 160 120      # touch the screen at a pixel
-chumby-ctl qmp.sock shot screen.png  # screenshot
+emu/qemu/qemu-chumby/chumby-ctl qmp.sock tap 160 120      # touch at a pixel
+emu/qemu/qemu-chumby/chumby-ctl qmp.sock shot screen.png  # screenshot
 ```
 
 The NAND image is written as the Chumby writes its flash; add `-snapshot`

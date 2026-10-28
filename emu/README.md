@@ -27,24 +27,24 @@ the images the emulator boots.
 
 ## Building QEMU
 
-With Nix:
+Install QEMU's build dependencies, then run `emu/qemu/build`:
 
-    nix build ./emu/qemu
-    result/bin/qemu-system-arm -M chumby-classic ...
-
-`emu/qemu/flake.nix` pins qemu-chumby to a commit, and qemu-chumby's
-own lock file pins nixpkgs. The flake builds natively for Apple silicon
-and Intel Macs and for x86_64 and aarch64 Linux.
-
-Without Nix, install QEMU's build dependencies (listed in qemu-chumby's
-README: python3, ninja, pkg-config, glib, pixman, libpng, zlib), then:
+| System | Packages |
+| --- | --- |
+| macOS (Homebrew, with the Xcode command line tools) | `brew install python ninja pkg-config glib pixman libpng` |
+| Debian, Ubuntu | `sudo apt install build-essential git python3 python3-venv ninja-build pkg-config libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev curl xz-utils` |
+| Fedora | `sudo dnf install gcc git make python3 ninja-build pkgconf glib2-devel pixman-devel libpng-devel zlib-devel curl xz patch` |
 
     emu/qemu/build
 
 It fetches qemu-chumby at the commit pinned in the script (git checks the
 commit's hash), and qemu-chumby's own build script fetches QEMU 11.1.2,
 checks its SHA-256, applies the patches and builds only
-`qemu-system-arm`, into `emu/qemu/build/obj/qemu-system-arm`.
+`qemu-system-arm`, into `emu/qemu/build/obj/qemu-system-arm`. A rebuild
+reuses what is there. On macOS the window is Cocoa; on Linux, add the SDL
+or GTK development packages for one (VNC works either way).
+[qemu-chumby's README](https://github.com/johnmerchant/qemu-chumby#building)
+describes other ways to build it.
 
 ## Images
 
@@ -107,7 +107,7 @@ a minute.
 
 ### Touch, screenshots and the console
 
-`chumby-ctl` (in qemu-chumby, and in the Nix package's `bin`) sends
+`chumby-ctl` (`emu/qemu/qemu-chumby/chumby-ctl` once built) sends
 touches and takes screenshots over the QMP socket, in screen pixels:
 
     chumby-ctl qmp.sock tap 278 22          # press and release

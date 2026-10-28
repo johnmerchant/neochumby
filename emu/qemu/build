@@ -5,11 +5,11 @@
 # qemu-chumby is fetched into emu/qemu/qemu-chumby; git checks that the
 # checkout is the pinned commit by its hash. Its own build script then
 # fetches the QEMU release it pins, checks the tarball's SHA-256 and
-# applies the patches. Keep rev in step with flake.nix.
+# applies the patches.
 set -eu
 
 repo=https://github.com/johnmerchant/qemu-chumby
-rev=a872dff94227a8e5935f2a7ce93c23c248b7d4e4
+rev=f2a3a06a03c57cf5c21527ad4935bf226e626825
 
 here=$(cd "$(dirname "$0")" && pwd)
 src=$here/qemu-chumby

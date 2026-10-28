@@ -3,9 +3,8 @@
 # QEMU's chumby-classic machine, with the console on stdio (unless a
 # -serial option is given) and QMP on qmp.sock in the current directory.
 #
-# Uses $QEMU if set, else the binary emu/qemu/build made, else Nix's
-# result (in emu/qemu or the current directory), else qemu-system-arm
-# from PATH.
+# Uses $QEMU if set, else the binary emu/qemu/build made, else
+# qemu-system-arm from PATH if it has the chumby-classic machine.
 set -eu
 
 if [ $# -lt 2 ]; then
@@ -18,15 +17,16 @@ shift 2
 
 here=$(cd "$(dirname "$0")" && pwd)
 if [ -z "${QEMU:-}" ]; then
-    for q in "$here/build/obj/qemu-system-arm" "$here/result/bin/qemu-system-arm" \
-        "$PWD/result/bin/qemu-system-arm"; do
-        if [ -x "$q" ]; then
-            QEMU=$q
-            break
-        fi
-    done
+    if [ -x "$here/build/obj/qemu-system-arm" ]; then
+        QEMU=$here/build/obj/qemu-system-arm
+    elif command -v qemu-system-arm >/dev/null 2>&1 &&
+        qemu-system-arm -machine help 2>/dev/null | grep -q '^chumby-classic '; then
+        QEMU=qemu-system-arm
+    else
+        echo "$0: no QEMU with the chumby-classic machine; run $here/build first" >&2
+        exit 1
+    fi
 fi
-QEMU=${QEMU:-qemu-system-arm}
 
 serial="-serial stdio"
 for a in "$@"; do
