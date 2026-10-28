@@ -27,7 +27,7 @@
 //! Actions (tap zones): slideshow, screen NAME, chumby (exit: the session
 //! hands the Chumby back to its own software), music_toggle, station N,
 //! next_station, night, nightmode, pin, next_app, prev_app, secs_up,
-//! secs_down, and app NAME (open apps/NAME from the neochumby tree, through
+//! secs_down (next_app and prev_app step whole apps with pageapp), and app NAME (open apps/NAME from the neochumby tree, through
 //! a launch::Launcher, and come back when it is done).
 //!
 //! Control: lines appended to the control file run within 0.2 s:
@@ -43,6 +43,11 @@
 //! with numbers that make no sense are skipped (manifest.rs), no file may be
 //! bigger than the cache's budget, and the cache never grows past
 //! [`ceiling`] even for what is on screen.
+//!
+//! Live device values (values.rs: the WiFi bars, the IP address, uptime...)
+//! are read here, every 5 s while the view on screen uses one, and drawn as
+//! panes (VAR `wifi`) or `live` text boxes; only boxes whose text changed
+//! are redrawn.
 //!
 //! Pictures load lazily into a byte-budgeted cache (cache.rs): a page's or
 //! screen's files are read when it is shown, and the likely next ones are
@@ -65,9 +70,10 @@ use crate::draw::{KEY, add_light, sin};
 use crate::launch::{Launcher, Opened};
 use crate::loader::{self, Fail, Loader};
 use crate::logo::{self, FX_LOOP_GAP, FX_OUT_GAP, FX_SHINE, Logo};
-use crate::manifest::{self, FPS, H, Ix, MAXASSET, Manifest, NFX, Size, Slider, W, fx_parse};
+use crate::manifest::{self, Align, FPS, H, Ix, MAXASSET, Manifest, NFX, Size, Slider, Target, W, fx_parse};
 use crate::plat::{Plat, Touch, local_hms};
 use crate::scan::{atoi, scan};
+use crate::values::{self, Key};
 
 const WIPE_FRAMES: i32 = 10;
 const SCREEN_IDLE_MS: i64 = 60000;
@@ -81,6 +87,8 @@ const WIN_MS: i64 = 5000;
 /// tap as two.
 const TAP_ECHO_MS: i64 = 350;
 const N: usize = (W * H) as usize;
+/// How often device values are read while the view uses them.
+const VALUES_MS: i64 = 5000;
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Kind {
@@ -231,6 +239,12 @@ pub struct Engine<P: Plat> {
     inj_button: bool,
     want_reload: bool,
     pending_app: Option<String>,
+    /// The device values last read, by Key::index; None: missing.
+    vals: [Option<String>; values::KEYS.len()],
+    /// When they were last read, in ms.
+    vals_t: i64,
+    /// Each live box's text as drawn; None: not drawn yet.
+    live_shown: Vec<Option<String>>,
     ctl_path: Option<PathBuf>,
     stat_path: Option<PathBuf>,
     /// No usable manifest yet: the waiting screen is up.
@@ -401,6 +415,9 @@ impl<P: Plat> Engine<P> {
             inj_button: false,
             want_reload: false,
             pending_app: None,
+            vals: Default::default(),
+            vals_t: 0,
+            live_shown: Vec::new(),
             ctl_path: run_path("NEOCHUMBY_CLASSIC_CTL", "ctl"),
             stat_path: run_path("NEOCHUMBY_CLASSIC_STAT", "stat"),
             waiting: false,
@@ -607,8 +624,11 @@ impl<P: Plat> Engine<P> {
                 }
                 let id = id as usize;
                 a(Some(m.screens[id].bg));
-                for p in m.panes.iter().filter(|p| p.scr == id) {
+                for p in m.panes.iter().filter(|p| p.on == Target::Screen(id)) {
                     a(Some(p.px));
+                }
+                for l in m.lives.iter().filter(|l| l.on == Target::Screen(id)) {
+                    a(Some(m.fonts[l.font].px));
                 }
                 for s in m.sliders.iter().filter(|s| s.scr == id) {
                     a(Some(s.empty));
@@ -644,6 +664,13 @@ impl<P: Plat> Engine<P> {
                 }
                 if m.scroller.page == id {
                     a(m.scroller.px);
+                }
+                let on = self.page_target(id);
+                for p in m.panes.iter().filter(|p| p.on == on) {
+                    a(Some(p.px));
+                }
+                for l in m.lives.iter().filter(|l| l.on == on) {
+                    a(Some(m.fonts[l.font].px));
                 }
             }
         }
@@ -748,8 +775,8 @@ impl<P: Plat> Engine<P> {
                         self.pf_add(Kind::Screen, s);
                     }
                     "slideshow" => self.pf_add(Kind::Page, self.page),
-                    "next_app" => self.pf_add(Kind::Page, (self.page + 1) % n),
-                    "prev_app" => self.pf_add(Kind::Page, (self.page + n - 1) % n),
+                    "next_app" => self.pf_add(Kind::Page, self.app_step(1)),
+                    "prev_app" => self.pf_add(Kind::Page, self.app_step(-1)),
                     _ => {}
                 }
             }
@@ -1108,6 +1135,7 @@ impl<P: Plat> Engine<P> {
         old.clear();
         self.m = m;
         self.glow_runs = vec![None; self.m.glows.len()];
+        self.live_shown = vec![None; self.m.lives.len()];
         self.gsq_shown = vec![-1; self.m.gsqs.len()];
         // Derived data for the files that were kept.
         for i in 0..self.c.assets.len() {
@@ -1526,6 +1554,14 @@ impl<P: Plat> Engine<P> {
             a.shown_y = a.y;
             put_keyed(&mut self.back, self.c.px(Some(a.px)), a.w, a.h, a.shown_f, a.x, a.y, None);
         }
+        // Panes and live boxes on the page.
+        let on = self.page_target(self.page);
+        for p in 0..self.m.panes.len() {
+            if self.m.panes[p].on == on {
+                self.draw_pane(p);
+            }
+        }
+        self.draw_lives(on);
         let l0 = self.us();
         let was = self.fxs_cur.active;
         self.draw_logofx(t);
@@ -1593,6 +1629,11 @@ impl<P: Plat> Engine<P> {
             "nightmode" => self.nightmode,
             "pin" => self.pin,
             "page" => self.page,
+            "app" => match self.m.pages.get(self.page as usize) {
+                Some(p) if p.app >= 0 => p.app,
+                _ => self.page,
+            },
+            "wifi" | "wifi_pct" => values::number(self.value(Key::parse(v).expect("a key"))),
             "secs" => {
                 // 0 = auto, else 1 + the nearest option.
                 let o = &self.m.secs_opt;
@@ -1669,14 +1710,16 @@ impl<P: Plat> Engine<P> {
     fn compose_screen(&mut self) {
         let bg = self.m.screens[self.scr as usize].bg;
         self.back.copy_from_slice(bg_of(&self.c, &self.blank, Some(bg)));
+        let on = Target::Screen(self.scr as usize);
         for p in 0..self.m.panes.len() {
-            if self.m.panes[p].scr as i32 == self.scr {
+            if self.m.panes[p].on == on {
                 self.draw_pane(p);
             }
         }
         if let Some(s) = self.screen_slider() {
             self.draw_slider(&s);
         }
+        self.draw_lives(on);
     }
 
     /// Redraws the panes whose state changed.
@@ -1686,7 +1729,7 @@ impl<P: Plat> Engine<P> {
         }
         for p in 0..self.m.panes.len() {
             let pn = &self.m.panes[p];
-            if pn.scr as i32 == self.scr && self.pane_frame(p) != pn.shown {
+            if pn.on == Target::Screen(self.scr as usize) && self.pane_frame(p) != pn.shown {
                 self.draw_pane(p);
                 let pn = &self.m.panes[p];
                 let (x, y, w, h) = (pn.x, pn.y, pn.w, pn.h);
@@ -1762,6 +1805,7 @@ impl<P: Plat> Engine<P> {
         self.scr = -1;
         self.clock_left = W;
         self.need(Kind::Page, self.page);
+        self.read_values(t);
         self.compose_page(t);
         self.wipe = 1;
         self.plan_prefetch();
@@ -1778,6 +1822,8 @@ impl<P: Plat> Engine<P> {
         self.ss_page = -1;
         self.wipe = 0;
         self.need(Kind::Screen, s);
+        let t = self.ms();
+        self.read_values(t);
         self.compose_screen();
         self.blit(0, 0, W, H);
         self.plan_prefetch();
@@ -1922,8 +1968,8 @@ impl<P: Plat> Engine<P> {
             "pin" => self.pin = (self.pin == 0) as i32,
             "secs_up" => self.step_secs(1),
             "secs_down" => self.step_secs(-1),
-            "next_app" => self.set_page(self.page + 1, t),
-            "prev_app" => self.set_page(self.page - 1, t),
+            "next_app" => self.set_page(self.app_step(1), t),
+            "prev_app" => self.set_page(self.app_step(-1), t),
             "app" if !name.is_empty() => self.pending_app = Some(name),
             _ => {}
         }
@@ -2496,6 +2542,12 @@ impl<P: Plat> Engine<P> {
             }
             self.draw_ticker(t);
         }
+        if self.scr >= 0 || (self.wipe == 0 && !self.m.pages.is_empty()) {
+            if t - self.vals_t >= VALUES_MS {
+                self.read_values(t);
+            }
+            self.live_update();
+        }
 
         let more = self.plat.present();
         let f1 = self.us();
@@ -2515,6 +2567,172 @@ impl<P: Plat> Engine<P> {
             self.next = self.ms(); // fell behind: don't try to catch up
         }
         true
+    }
+}
+
+impl<P: Plat> Engine<P> {
+    // ------------------------------------------------------------ pageapp
+
+    /// Which app a page belongs to (pageapp); a page without one is an app
+    /// of its own.
+    fn app_of(&self, p: i32) -> i32 {
+        let a = self.m.pages[p as usize].app;
+        if a >= 0 { a } else { 1000 + p }
+    }
+
+    /// The first page of the next (1) or previous (-1) app.
+    fn app_step(&self, dir: i32) -> i32 {
+        let n = self.npages();
+        if n == 0 {
+            return 0;
+        }
+        let cur = self.app_of(self.page);
+        let mut i = self.page;
+        for _ in 0..n {
+            i = (i + dir + n) % n;
+            if self.app_of(i) != cur {
+                break;
+            }
+        }
+        if self.app_of(i) == cur {
+            return (self.page + dir + n) % n; // one app only
+        }
+        // Back to that app's first page.
+        let mut k = 0;
+        while k < n && self.app_of((i + n - 1) % n) == self.app_of(i) {
+            i = (i + n - 1) % n;
+            k += 1;
+        }
+        i
+    }
+
+    // ------------------------------------------------------------ live values
+
+    /// What page p's panes and live boxes are drawn for now: its pagenight
+    /// ones while it shows its night file, if it has any.
+    fn page_target(&self, p: i32) -> Target {
+        let p = p.max(0) as usize;
+        let night = Target::PageNight(p);
+        let has = self.m.panes.iter().any(|x| x.on == night) || self.m.lives.iter().any(|l| l.on == night);
+        if self.pnight(p as i32) && has { night } else { Target::Page(p) }
+    }
+
+    /// What the view on screen draws panes and boxes for.
+    fn view(&self) -> Option<Target> {
+        if self.scr >= 0 {
+            Some(Target::Screen(self.scr as usize))
+        } else if self.m.pages.is_empty() {
+            None
+        } else {
+            Some(self.page_target(self.page))
+        }
+    }
+
+    /// The device values the view uses.
+    fn view_keys(&self) -> Vec<Key> {
+        let Some(on) = self.view() else { return Vec::new() };
+        let mut k: Vec<Key> = self
+            .m
+            .panes
+            .iter()
+            .filter(|p| p.on == on)
+            .filter_map(|p| Key::parse(&p.var).filter(|k| k.numeric()))
+            .chain(self.m.lives.iter().filter(|l| l.on == on).map(|l| l.key))
+            .collect();
+        let mut seen = Vec::new();
+        k.retain(|x| {
+            let new = !seen.contains(x);
+            seen.push(*x);
+            new
+        });
+        k
+    }
+
+    /// Reads the values the view uses (none if it uses none).
+    fn read_values(&mut self, t: i64) {
+        self.vals_t = t;
+        for k in self.view_keys() {
+            self.vals[k.index()] = self.plat.device_value(k);
+        }
+    }
+
+    fn value(&self, k: Key) -> Option<&str> {
+        self.vals[k.index()].as_deref()
+    }
+
+    /// Redraws the panes and boxes in view whose device value changed.
+    fn live_update(&mut self) {
+        let Some(on) = self.view() else { return };
+        for p in 0..self.m.panes.len() {
+            let pn = &self.m.panes[p];
+            if pn.on == on && Key::parse(&pn.var).is_some_and(|k| k.numeric()) && self.pane_frame(p) != pn.shown {
+                self.draw_pane(p);
+                let pn = &self.m.panes[p];
+                let (x, y, w, h) = (pn.x, pn.y, pn.w, pn.h);
+                self.blit(x, y, w, h);
+            }
+        }
+        for i in 0..self.m.lives.len() {
+            let l = &self.m.lives[i];
+            if l.on == on && self.live_shown[i].as_deref() != Some(self.value(l.key).unwrap_or("?")) {
+                self.draw_live(i);
+                let l = &self.m.lives[i];
+                let (x, y, w, h) = (l.x, l.y, l.w, l.h);
+                self.blit(x, y, w, h);
+            }
+        }
+    }
+
+    fn draw_lives(&mut self, on: Target) {
+        for i in 0..self.m.lives.len() {
+            if self.m.lives[i].on == on {
+                self.draw_live(i);
+            }
+        }
+    }
+
+    /// One live box into the back buffer: cleared, then its text.
+    fn draw_live(&mut self, i: usize) {
+        let l = &self.m.lives[i];
+        let text = self.value(l.key).unwrap_or("?").to_string();
+        let bgi = match l.on {
+            Target::Screen(s) => Some(self.m.screens[s].bg),
+            Target::Page(p) | Target::PageNight(p) => self.page_bgi(p as i32),
+        };
+        let (x, y, w, h) = (l.x, l.y, l.w, l.h);
+        for r in y..y + h {
+            let o = (r * W + x) as usize;
+            let row = &mut self.back[o..o + w as usize];
+            match l.bg {
+                Some(c) => row.fill(c),
+                None => row.copy_from_slice(&bg_of(&self.c, &self.blank, bgi)[o..o + w as usize]),
+            }
+        }
+        let f = &self.m.fonts[l.font];
+        if let Some(strip) = self.c.px(Some(f.px)) {
+            let glyphs: Vec<usize> = text.chars().map(values::glyph).collect();
+            let tw: i32 = glyphs.iter().map(|&g| f.wd[g]).sum();
+            let mut pen = match l.align {
+                Align::Left => x,
+                Align::Right => x + w - tw,
+                Align::Center => x + (w - tw) / 2,
+            };
+            for g in glyphs {
+                let gw = f.wd[g];
+                for r in 0..f.ch.min(h) {
+                    let src = ((g as i32 * f.ch + r) * f.cw) as usize;
+                    for c in 0..gw {
+                        let xx = pen + c;
+                        let p = strip[src + c as usize];
+                        if xx >= x && xx < x + w && p != KEY {
+                            self.back[((y + r) * W + xx) as usize] = p;
+                        }
+                    }
+                }
+                pen += gw;
+            }
+        }
+        self.live_shown[i] = Some(text);
     }
 }
 
@@ -2683,6 +2901,140 @@ mod tests {
         }
         assert!(!e.waiting, "it starts once the pictures are there");
         assert!(e.plat.fb().iter().all(|&p| p == 0x7777));
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// A 2x2 font whose glyph g is solid colour g + 1, except a transparent
+    /// top-left pixel.
+    fn font() -> Vec<u8> {
+        let mut v = Vec::new();
+        for g in 0..values::NGLYPHS as u16 {
+            for k in 0..4 {
+                v.extend_from_slice(&(if k == 0 { KEY } else { g + 1 }).to_le_bytes());
+            }
+        }
+        v
+    }
+
+    fn px(e: &mut Engine<Host>, x: i32, y: i32) -> u16 {
+        e.plat.fb()[(y * W + x) as usize]
+    }
+
+    #[test]
+    fn live_values_drawn_and_redrawn() {
+        let d = std::env::temp_dir().join(format!("classic-live-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("p.raw"), vec![0x11u8; manifest::FRAME_BYTES]).unwrap();
+        std::fs::write(d.join("pn.raw"), vec![0x22u8; manifest::FRAME_BYTES]).unwrap();
+        std::fs::write(d.join("home.raw"), vec![0x33u8; manifest::FRAME_BYTES]).unwrap();
+        std::fs::write(d.join("f.raw"), font()).unwrap();
+        std::fs::write(d.join("short.raw"), &font()[..100]).unwrap();
+        // Five 1x1 frames: the bar count's own colour.
+        let bars: Vec<u8> = (0..5u16).flat_map(|f| (0x100 + f).to_le_bytes()).collect();
+        std::fs::write(d.join("bars.raw"), bars).unwrap();
+        std::fs::write(
+            d.join("manifest.txt"),
+            "page 0 p.raw 99 noclock noticker\npagenight 0 pn.raw\nscreen home home.raw\n\
+             livefont f f.raw 2 2\nlivefont s short.raw 2 2\n\
+             pane home bars.raw 1 1 300 0 wifi 5\n\
+             live home ip f 10 10 20 2 left bg\n\
+             live home ip f 10 20 20 2 right #ff0000\n\
+             live home uptime f 10 30 21 2 center bg\n\
+             live home ip s 10 40 20 2 left bg\n\
+             pane page:0 bars.raw 1 1 0 0 wifi 5\n\
+             live page:0 name f 0 10 8 2 left bg\n\
+             pane pagenight:0 bars.raw 1 1 5 5 wifi_pct 5\n",
+        )
+        .unwrap();
+        let mut h = Host::new("unused", vec![1 << 40], 1793150000, d.clone());
+        h.values.insert("ip".into(), "1.2".into());
+        h.values.insert("wifi".into(), "3".into());
+        h.values.insert("name".into(), "a?b-z".into());
+        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        e.start();
+        assert_eq!(e.m.fonts.len(), 1, "a strip of the wrong size is refused");
+        assert_eq!(e.m.lives.len(), 4);
+        // The page, by day: its page:0 pane and box.
+        for _ in 0..12 {
+            e.frame();
+        }
+        assert_eq!(px(&mut e, 0, 0), 0x103, "3 bars");
+        let g = |c: char| values::glyph(c) as u16 + 1;
+        assert_eq!(px(&mut e, 0, 10), 0x1111, "the glyph's transparent pixel shows the background");
+        assert_eq!(px(&mut e, 1, 10), g('a'));
+        assert_eq!(px(&mut e, 3, 11), g('?'));
+        assert_eq!(px(&mut e, 7, 11), g('-'), "the box cuts the text at its edge");
+        assert_eq!(px(&mut e, 8, 11), 0x1111);
+        assert_eq!(px(&mut e, 5, 5), 0x1111, "pagenight panes only at night");
+        e.ctl_line(b"show home", e.ms());
+        e.frame();
+        assert_eq!(px(&mut e, 300, 0), 0x103);
+        // Left: "1.2" from x=10; then the rest of the box is the background.
+        assert_eq!(
+            [px(&mut e, 11, 11), px(&mut e, 13, 11), px(&mut e, 15, 11), px(&mut e, 17, 11)],
+            [g('1'), g('.'), g('2'), 0x3333]
+        );
+        // Right: ends at x=29; the box is cleared to red.
+        assert_eq!([px(&mut e, 25, 21), px(&mut e, 29, 21), px(&mut e, 23, 21)], [g('1'), g('2'), 0xF800]);
+        // Centre, missing: "?" at 10 + (21 - 2) / 2 = 19.
+        assert_eq!([px(&mut e, 20, 31), px(&mut e, 18, 31)], [g('?'), 0x3333]);
+        // A box whose font was refused is skipped.
+        assert_eq!(px(&mut e, 11, 41), 0x3333);
+        // New values show within 5 s, and only the changed boxes redraw.
+        e.plat.values.insert("ip".into(), "9".into());
+        e.plat.values.insert("wifi".into(), "0".into());
+        e.plat.fb()[(30 * W + 18) as usize] = 0xBEEF;
+        for _ in 0..(VALUES_MS / 40 + 2) {
+            e.frame();
+        }
+        assert_eq!(px(&mut e, 300, 0), 0x100);
+        assert_eq!([px(&mut e, 11, 11), px(&mut e, 13, 11)], [g('9'), 0x3333], "the old text is cleared");
+        assert_eq!(px(&mut e, 29, 21), g('9'));
+        assert_eq!(px(&mut e, 18, 30), 0xBEEF, "an unchanged box isn't redrawn");
+        // At night the page has pagenight panes, so they replace its page ones.
+        e.ctl_line(b"night on", e.ms());
+        e.ctl_line(b"page 0", e.ms());
+        for _ in 0..12 {
+            e.frame();
+        }
+        assert_eq!(px(&mut e, 5, 5), 0x100, "wifi_pct missing: frame 0");
+        assert_eq!(px(&mut e, 0, 0), 0x2222);
+        assert_eq!(px(&mut e, 1, 10), 0x2222, "page:0's box isn't drawn at night");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn pageapp_steps_whole_apps() {
+        let d = std::env::temp_dir().join(format!("classic-apps-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        std::fs::write(d.join("p.raw"), vec![0x11u8; manifest::FRAME_BYTES]).unwrap();
+        // Pages 0-1 app 0, 2 its own, 3-5 app 2.
+        std::fs::write(
+            d.join("manifest.txt"),
+            "page 0 p.raw 9\npage 1 p.raw 9\npage 2 p.raw 9\npage 3 p.raw 9\npage 4 p.raw 9\npage 5 p.raw 9\n\
+             pageapp 0 0\npageapp 1 0\npageapp 3 2\npageapp 4 2\npageapp 5 2\n",
+        )
+        .unwrap();
+        let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+        let mut e = Engine::new(h, Box::new(crate::launch::Pretend), d.clone());
+        e.start();
+        let step = |e: &mut Engine<Host>, p: i32, dir: i32| {
+            e.page = p;
+            e.app_step(dir)
+        };
+        assert_eq!(step(&mut e, 0, 1), 2);
+        assert_eq!(step(&mut e, 1, 1), 2);
+        assert_eq!(step(&mut e, 2, 1), 3);
+        assert_eq!(step(&mut e, 4, 1), 0, "wraps to the first app");
+        assert_eq!(step(&mut e, 4, -1), 2);
+        assert_eq!(step(&mut e, 2, -1), 0, "the previous app's first page");
+        assert_eq!(step(&mut e, 0, -1), 3);
+        e.page = 4;
+        assert_eq!(e.var_value("app"), 2);
+        e.page = 2;
+        assert_eq!(e.var_value("app"), 2, "a page of its own: its index");
         std::fs::remove_dir_all(&d).unwrap();
     }
 

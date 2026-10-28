@@ -41,6 +41,8 @@ pub trait Plat {
     fn inputs(&mut self, ours: bool);
     /// A few lines of text on an otherwise blank screen (the waiting screen).
     fn message(&mut self, lines: &[&str]);
+    /// A live device value (values.rs); None if it is missing.
+    fn device_value(&mut self, key: crate::values::Key) -> Option<String>;
     /// Whether prefetching should finish everything it starts before the
     /// frame ends, for frames that are the same on every run (the host).
     fn sync_prefetch(&self) -> bool;

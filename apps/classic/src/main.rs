@@ -26,6 +26,7 @@ mod logo;
 mod manifest;
 mod plat;
 mod scan;
+mod values;
 
 /// Where the pictures are when neither the command line nor the
 /// environment says.

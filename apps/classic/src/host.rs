@@ -21,11 +21,14 @@
 //!   now. Local time is TZ's.
 //! - `--state`: where wx_music and so on are kept, default a temporary
 //!   directory.
+//! - `--values "wifi=3,ip=192.0.2.7,uptime=3d 4h"`: fake live device
+//!   values, by key; `--device-root DIR`: read the others from copies of
+//!   /proc, /etc and /psp files under DIR. Otherwise they are missing (`?`).
 //!
 //! Times are from the start, in ms. Prefetching finishes within its frame
 //! here, so what is drawn never depends on how fast the disk is.
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::io::Write;
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::PathBuf;
@@ -52,6 +55,10 @@ pub struct Host {
     ctl: VecDeque<(i64, String)>,
     ctl_path: PathBuf,
     state: PathBuf,
+    /// Fake device values (`--values`), by key name.
+    pub values: HashMap<String, String>,
+    /// A directory of /proc, /etc and /psp files to read the others from.
+    pub device_root: Option<PathBuf>,
 }
 
 impl Host {
@@ -69,6 +76,8 @@ impl Host {
             buttons: VecDeque::new(),
             pressed: false,
             ctl: VecDeque::new(),
+            values: HashMap::new(),
+            device_root: None,
             ctl_path: std::env::var_os("NEOCHUMBY_CLASSIC_CTL")
                 .map_or_else(|| PathBuf::from("/tmp/neochumby-classic/ctl"), PathBuf::from),
             state,
@@ -179,6 +188,13 @@ impl Plat for Host {
         eprintln!("[screen] {}", lines.join(" "));
     }
 
+    fn device_value(&mut self, key: crate::values::Key) -> Option<String> {
+        if let Some(v) = self.values.get(key.name()) {
+            return Some(v.clone());
+        }
+        crate::values::read(self.device_root.as_deref()?, key)
+    }
+
     fn sync_prefetch(&self) -> bool {
         true
     }
@@ -187,7 +203,7 @@ impl Plat for Host {
 fn usage() -> i32 {
     eprintln!(
         "usage: neochumby-classic render DIR PREFIX [--at MS,MS...] [--taps \"MS:X,Y MS:b\"] \
-         [--ctl \"MS:LINE;...\"] [--wall EPOCH] [--state DIR]"
+         [--ctl \"MS:LINE;...\"] [--wall EPOCH] [--state DIR] [--values \"KEY=VALUE,...\"] [--device-root DIR]"
     );
     2
 }
@@ -201,6 +217,7 @@ pub fn render(args: &[String]) -> i32 {
     let (Some(dir), Some(prefix)) = (args.first(), args.get(1)) else { return usage() };
     let mut at = "1000".to_string();
     let (mut taps, mut ctl, mut wall, mut state) = (String::new(), String::new(), None, None);
+    let (mut vals, mut root) = (String::new(), None);
     let mut i = 2;
     while i < args.len() {
         let Some(v) = args.get(i + 1).cloned() else { return usage() };
@@ -210,6 +227,8 @@ pub fn render(args: &[String]) -> i32 {
             "--ctl" => ctl = v,
             "--wall" => wall = v.parse().ok(),
             "--state" => state = Some(PathBuf::from(v)),
+            "--values" => vals = v,
+            "--device-root" => root = Some(PathBuf::from(v)),
             _ => return usage(),
         }
         i += 2;
@@ -218,6 +237,11 @@ pub fn render(args: &[String]) -> i32 {
     let state =
         state.unwrap_or_else(|| std::env::temp_dir().join(format!("neochumby-classic-state-{}", std::process::id())));
     let mut h = Host::new(prefix, snaps, wall.unwrap_or_else(wall_now), state);
+    h.device_root = root;
+    for kv in vals.split(',').filter(|s| !s.is_empty()) {
+        let Some((k, v)) = kv.split_once('=') else { return usage() };
+        h.values.insert(k.trim().to_string(), v.to_string());
+    }
     for item in taps.split_whitespace() {
         let Some((t, what)) = item.split_once(':') else { return usage() };
         let Some(t) = ms_of(t) else { return usage() };

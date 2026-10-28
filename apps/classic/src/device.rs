@@ -136,6 +136,10 @@ impl Plat for Device {
         }
     }
 
+    fn device_value(&mut self, key: crate::values::Key) -> Option<String> {
+        crate::values::read(Path::new("/"), key)
+    }
+
     fn sync_prefetch(&self) -> bool {
         false
     }

@@ -6,6 +6,8 @@
 //! page N FILE SECS [noclock] [noticker] [fullframe]
 //! pagenight N FILE          the page's dark theme, drawn instead at night
 //! pagetap N SCREEN          a tap on page N opens SCREEN (else: next page)
+//! pageapp N APP             page N belongs to app number APP (0, 1... in
+//!                           play order); Home's < > and NEXT step whole apps
 //! sprite PAGE FILE W H FRAMES X Y FPS
 //! actor PAGE FILE W H FRAMES FPS PATHFILE NPOINTS   path: int16 x,y per frame at 25 fps
 //! clock FILE CELLW CELLH RIGHT Y W0..W14            glyphs "0123456789: APM"
@@ -13,7 +15,7 @@
 //! ticker FILE W H Y SPEED
 //! tickernight FILE          the ticker strip for night pages
 //! screen NAME FILE
-//! pane SCREEN FILE W H X Y VAR FRAMES
+//! pane TARGET FILE W H X Y VAR FRAMES           TARGET: SCREEN, page:N, pagenight:N
 //! hot SCREEN X Y W H ACTION [ARG]
 //! slider SCREEN EMPTY FULL KNOB W H X Y T0 T1 KW KH
 //! station N ID URL
@@ -24,7 +26,15 @@
 //! bgscroll PAGE FILE W SPEED
 //! glow PAGE FILE W H Y SPEED [FADE_MS PHASE_MS SWAY_PX SWAY_MS [X0 [ON_MS]]]
 //! glowseq PAGE PREFIX NFRAMES FPS R G B BRIGHT     frames PREFIX_000.l8 ...
+//! livefont NAME FILE CELLW CELLH [W0..W78]       a glyph strip for live text
+//! live TARGET KEY FONT X Y W H ALIGN BG          a device value as text
 //! ```
+//!
+//! The live values (`live`, and `wifi`/`wifi_pct` as a pane's VAR) are
+//! specified exactly in the live-values spec the feeder works from;
+//! values.rs reads them. A page's `pagenight:N` panes and live boxes are
+//! drawn instead of its `page:N` ones while it shows its pagenight file,
+//! if it has any.
 //!
 //! A line that doesn't parse, or names a file that is missing or the wrong
 //! size, is skipped. Pages are numbered in the order they come; the N in
@@ -32,6 +42,7 @@
 //! screen must come before its panes, tap zones and slider.
 
 use crate::scan::{V, atoi, contains, lines, scan};
+use crate::values::{Key, NGLYPHS};
 
 pub const W: i32 = 320;
 pub const H: i32 = 240;
@@ -74,6 +85,54 @@ pub fn fx_parse(a: &str) -> i32 {
 /// An asset: an index into the cache.
 pub type Ix = Option<usize>;
 
+/// Where a pane or a live box is drawn.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Target {
+    Screen(usize),
+    /// A slideshow page, by its index.
+    Page(usize),
+    /// A slideshow page while it shows its pagenight file.
+    PageNight(usize),
+}
+
+pub const MAXFONT: usize = 16;
+pub const MAXLIVE: usize = 128;
+
+/// A `livefont`: a strip of the charset's glyphs (values::CHARSET).
+#[derive(Clone, Debug)]
+pub struct Font {
+    pub name: String,
+    pub px: usize,
+    pub cw: i32,
+    pub ch: i32,
+    /// Each glyph's width, in charset order (all CELLW if none were given).
+    pub wd: Vec<i32>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Align {
+    Left,
+    Right,
+    Center,
+}
+
+/// A `live` box: a device value drawn as text.
+#[derive(Clone, Debug)]
+pub struct Live {
+    pub on: Target,
+    pub key: Key,
+    /// An index into the manifest's fonts.
+    pub font: usize,
+    pub x: i32,
+    pub y: i32,
+    pub w: i32,
+    pub h: i32,
+    pub align: Align,
+    /// What the box is cleared to: a colour, or None for the target's own
+    /// background picture.
+    pub bg: Option<u16>,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Page {
     pub bg: Ix,
@@ -86,6 +145,8 @@ pub struct Page {
     pub pano_speed: i32,
     pub nbg: Ix,
     pub tap: String,
+    /// The app it belongs to (pageapp), or -1: an app of its own.
+    pub app: i32,
 }
 
 #[derive(Clone, Debug)]
@@ -126,7 +187,7 @@ pub struct Screen {
 
 #[derive(Clone, Debug)]
 pub struct Pane {
-    pub scr: usize,
+    pub on: Target,
     pub w: i32,
     pub h: i32,
     pub x: i32,
@@ -269,9 +330,27 @@ pub struct Manifest {
     pub scroller: Scroller,
     pub glows: Vec<Glow>,
     pub gsqs: Vec<GlowSeq>,
+    pub fonts: Vec<Font>,
+    pub lives: Vec<Live>,
 }
 
 impl Manifest {
+    /// A pane's or live box's target: a screen declared so far, or
+    /// `page:N` / `pagenight:N` for a page declared so far.
+    pub fn target(&self, s: &str) -> Option<Target> {
+        let page = |n: &str| {
+            let i: usize = n.parse().ok().filter(|_| n.bytes().all(|b| b.is_ascii_digit()))?;
+            (i < self.pages.len()).then_some(i)
+        };
+        if let Some(n) = s.strip_prefix("page:") {
+            return page(n).map(Target::Page);
+        }
+        if let Some(n) = s.strip_prefix("pagenight:") {
+            return page(n).map(Target::PageNight);
+        }
+        self.find_screen(s).map(Target::Screen)
+    }
+
     pub fn find_screen(&self, name: &str) -> Option<usize> {
         self.screens.iter().position(|s| s.name == name)
     }
@@ -367,12 +446,15 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 pano_speed: 0,
                 nbg: None,
                 tap: String::new(),
+                app: -1,
             };
             if p.bg.is_some() {
                 o.pages.push(p);
             }
         } else if let Some(v) = some(sc("pagenight %d %63s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
             o.pages[v[0].i() as usize].nbg = asset(v[1].s(), Size::Exactly(FRAME_BYTES));
+        } else if let Some(v) = some(sc("pageapp %d %d"), 2).filter(|v| idx(v[0].i(), o.pages.len()) && v[1].i() >= 0) {
+            o.pages[v[0].i() as usize].app = v[1].i();
         } else if let Some(v) = some(sc("pagetap %d %23s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
             o.pages[v[0].i() as usize].tap = v[1].s().to_string();
         } else if let Some(v) = some(sc("clocknight %63s"), 1).filter(|_| o.clock.px.is_some()) {
@@ -481,11 +563,11 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
             o.panes.len() < MAXPANE && v[2].i() > 0 && v[3].i() > 0 && v[7].i() > 0 && coords(v, &[2, 3, 4, 5])
         }) {
             let (w, h, frames) = (v[2].i(), v[3].i(), v[7].i());
-            if let Some(scr) = o.find_screen(v[0].s())
+            if let Some(on) = o.target(v[0].s())
                 && let Some(px) = asset(v[1].s(), bytes(&[w, h, frames, 2]))
             {
                 o.panes.push(Pane {
-                    scr,
+                    on,
                     w,
                     h,
                     x: v[4].i(),
@@ -630,6 +712,55 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
             if o.scroller.px.is_some() {
                 o.scroller =
                     Scroller { page: v[0].i(), px: o.scroller.px, w, h, y: v[4].i(), speed: v[5].i(), amp: v[6].i() };
+            }
+        } else if let Some(v) = some(sc("livefont %23s %63s %d %d"), 4)
+            .filter(|v| o.fonts.len() < MAXFONT && (1..=64).contains(&v[2].i()) && (1..=64).contains(&v[3].i()))
+        {
+            let (cw, ch) = (v[2].i(), v[3].i());
+            // The widths: none, or one per glyph; anything else skips it.
+            let rest: Vec<&[u8]> = line.split(|b| b.is_ascii_whitespace()).filter(|t| !t.is_empty()).skip(5).collect();
+            let wd: Option<Vec<i32>> = match rest.len() {
+                0 => Some(vec![cw; NGLYPHS]),
+                NGLYPHS => rest
+                    .iter()
+                    .map(|t| std::str::from_utf8(t).ok()?.parse::<i32>().ok().map(|w| w.clamp(0, cw)))
+                    .collect(),
+                _ => None,
+            };
+            if let Some(wd) = wd
+                && let Some(px) = asset(v[1].s(), bytes(&[cw, ch, NGLYPHS as i32, 2]))
+            {
+                o.fonts.push(Font { name: v[0].s().to_string(), px, cw, ch, wd });
+            }
+        } else if let Some(v) = some(sc("live %23s %15s %23s %d %d %d %d %7s %7s"), 9).filter(|v| {
+            let (x, y, w, h) = (v[3].i(), v[4].i(), v[5].i(), v[6].i());
+            o.lives.len() < MAXLIVE
+                && x >= 0
+                && y >= 0
+                && w >= 1
+                && h >= 1
+                && x as i64 + w as i64 <= W as i64
+                && y as i64 + h as i64 <= H as i64
+        }) {
+            let align = match v[7].s() {
+                "left" => Some(Align::Left),
+                "right" => Some(Align::Right),
+                "center" => Some(Align::Center),
+                _ => None,
+            };
+            let bg = match v[8].s() {
+                "bg" => Some(None),
+                c => c
+                    .strip_prefix('#')
+                    .filter(|h| h.len() == 6 && h.bytes().all(|b| b.is_ascii_hexdigit()))
+                    .and_then(|h| u32::from_str_radix(h, 16).ok())
+                    .map(|c| Some(crate::draw::rgb565((c >> 16) as i32, (c >> 8 & 255) as i32, (c & 255) as i32))),
+            };
+            let font = o.fonts.iter().rposition(|f| f.name == v[2].s());
+            if let (Some(on), Some(key), Some(font), Some(align), Some(bg)) =
+                (o.target(v[0].s()), Key::parse(v[1].s()), font, align, bg)
+            {
+                o.lives.push(Live { on, key, font, x: v[3].i(), y: v[4].i(), w: v[5].i(), h: v[6].i(), align, bg });
             }
         } else if let Some(v) = some(sc("sun %ld %ld"), 2).filter(|_| o.sun.len() < MAXSUN) {
             o.sun.push((v[0].l(), v[1].l()));
@@ -820,6 +951,55 @@ mod tests {
         assert_eq!(m.logo.force, -1, "an unknown intro is random");
         assert!(m.gsqs.is_empty(), "more than 25 fps");
         assert!(m.pages[0].pano.is_none(), "a panorama must be wider than the screen");
+    }
+
+    #[test]
+    fn live_values_and_page_panes() {
+        let w79 = vec!["5"; 79].join(" ");
+        let mut f = Files::new(&[]);
+        let m = f.parse(&format!(
+            "page 0 p.raw 12\npage 1 q.raw 12\npageapp 1 3\npageapp 7 1\nscreen home h.raw\n\
+             pane home bars.raw 24 16 290 4 wifi 5\n\
+             pane page:1 bars.raw 24 16 290 4 wifi 5\n\
+             pane pagenight:0 bars.raw 24 16 290 4 wifi 5\n\
+             pane page:2 bars.raw 24 16 290 4 wifi 5\n\
+             pane page:x bars.raw 24 16 290 4 wifi 5\n\
+             live home ip small 200 22 116 12 right bg\n\
+             livefont small font.raw 7 12\n\
+             livefont wide font2.raw 9 12 {w79}\n\
+             livefont bad font3.raw 9 12 5 5 5\n\
+             livefont big font4.raw 65 12\n\
+             live home ip small 200 22 116 12 right bg\n\
+             live page:0 uptime wide 4 226 80 12 center #0080ff\n\
+             live pagenight:1 name small 0 0 320 240 left #000000\n\
+             live home ip small 200 22 121 12 right bg\n\
+             live home ip small -1 22 10 12 right bg\n\
+             live home ip small 0 0 0 12 right bg\n\
+             live home nokey small 0 0 10 12 left bg\n\
+             live home ip nofont 0 0 10 12 left bg\n\
+             live home ip small 0 0 10 12 middle bg\n\
+             live home ip small 0 0 10 12 left #12345\n\
+             live home ip small 0 0 10 12 left #12345g\n\
+             live nowhere ip small 0 0 10 12 left bg\n"
+        ));
+        assert_eq!((m.pages[0].app, m.pages[1].app), (-1, 3), "pageapp for a page not declared is skipped");
+        let on: Vec<Target> = m.panes.iter().map(|p| p.on).collect();
+        assert_eq!(on, vec![Target::Screen(0), Target::Page(1), Target::PageNight(0)]);
+        assert_eq!(m.fonts.len(), 2, "a font with 3 widths, or cells over 64, is skipped");
+        assert_eq!(m.fonts[0].wd, vec![7; 79], "no widths: monospace");
+        assert_eq!(m.fonts[1].wd, vec![5; 79]);
+        assert_eq!(f.size("font.raw"), 7 * 12 * 79 * 2);
+        assert_eq!(m.lives.len(), 3, "a live box before its font, outside the screen or malformed is skipped");
+        let l = &m.lives[0];
+        assert_eq!(
+            (l.on, l.key, l.font, l.x, l.y, l.w, l.h, l.align, l.bg),
+            (Target::Screen(0), Key::Ip, 0, 200, 22, 116, 12, Align::Right, None)
+        );
+        assert_eq!(
+            (m.lives[1].key, m.lives[1].align, m.lives[1].bg),
+            (Key::Uptime, Align::Center, Some(crate::draw::rgb565(0, 0x80, 0xff)))
+        );
+        assert_eq!((m.lives[2].on, m.lives[2].key, m.lives[2].w), (Target::PageNight(1), Key::Name, 320));
     }
 
     #[test]
