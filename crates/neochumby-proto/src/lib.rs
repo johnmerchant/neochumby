@@ -202,9 +202,12 @@ mod tests {
         assert!(Msg::decode(&[0, 9, 0]).is_err());
         assert!(Msg::decode(&[9, 0, 1]).is_err());
         // Short, long, and a count with too few lines.
-        assert!(Msg::decode(&[14, 1, 64, 0]).is_err());
-        assert!(Msg::decode(&[12, 0]).is_err());
-        assert!(Msg::decode(&[11, 0, 2, 0, 1, b'x']).is_err());
+        assert!(Msg::decode(&[36, 1, 64, 0]).is_err());
+        assert!(Msg::decode(&[34, 0]).is_err());
+        assert!(Msg::decode(&[33, 0, 2, 0, 1, b'x']).is_err());
+        // The dev tags, where #10's sync messages don't reach.
+        assert_eq!(Msg::Dev.encode(), [32]);
+        assert_eq!(Msg::Shot.encode(), [35]);
     }
 
     #[test]

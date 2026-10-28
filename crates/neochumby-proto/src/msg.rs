@@ -1,5 +1,9 @@
 //! The messages, after the handshake. Each is a tag byte and its fields:
 //! strings as a u16 length and UTF-8, ports as u16, all big-endian.
+//!
+//! Tags taken: 0-9 the core (pairing, companions, settings); 10-18 sync
+//! (delivery=sync, #10), with 19-31 left for it and anything near it;
+//! 32-36 the developer link (crate::dev).
 
 use std::io;
 
@@ -90,18 +94,18 @@ impl Msg {
                     s(&mut b, v);
                 }
             }
-            Msg::Dev => b.push(10),
+            Msg::Dev => b.push(32),
             Msg::Log(lines) => {
-                b.push(11);
+                b.push(33);
                 b.extend_from_slice(&(lines.len() as u16).to_be_bytes());
                 for l in lines {
                     s(&mut b, l);
                 }
             }
-            Msg::Restart => b.push(12),
-            Msg::Shot => b.push(13),
+            Msg::Restart => b.push(34),
+            Msg::Shot => b.push(35),
             Msg::Screen { width, height } => {
-                b.push(14);
+                b.push(36);
                 b.extend_from_slice(&width.to_be_bytes());
                 b.extend_from_slice(&height.to_be_bytes());
             }
@@ -151,8 +155,8 @@ impl Msg {
                 }
                 Msg::Config(pairs)
             }
-            10 => Msg::Dev,
-            11 => {
+            32 => Msg::Dev,
+            33 => {
                 let n = u16_(&mut rest)?;
                 let mut lines = Vec::new();
                 for _ in 0..n {
@@ -160,9 +164,9 @@ impl Msg {
                 }
                 Msg::Log(lines)
             }
-            12 => Msg::Restart,
-            13 => Msg::Shot,
-            14 => {
+            34 => Msg::Restart,
+            35 => Msg::Shot,
+            36 => {
                 let width = u16_(&mut rest)?;
                 Msg::Screen { width, height: u16_(&mut rest)? }
             }
