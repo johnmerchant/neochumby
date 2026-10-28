@@ -16,6 +16,10 @@ use std::time::{Duration, Instant};
 
 use neochumby_proto::{Identity, Msg, Session};
 
+/// The setting that names a Chumby's home screen. Proposal 0002 may rename
+/// it; this test uses it only through this.
+const HOME: &str = "home";
+
 fn main() -> ExitCode {
     if std::env::var_os("NEOCHUMBY_ADMIN").is_some() {
         return as_daemon();
@@ -97,10 +101,10 @@ fn as_daemon() -> ExitCode {
         let token = wait_for(20, "the owner's token", || std::fs::read_to_string(home.join("typed")).ok());
         assert_eq!(admin.ask(&format!("check {token}")), ["ok"]);
         assert_eq!(admin.ask(&format!("approve {code} {token}")), ["ok kitchen"]);
-        assert_eq!(admin.ask("set kitchen home=wx"), ["ok"]);
+        assert_eq!(admin.ask(&format!("set kitchen {HOME}=wx")), ["ok"]);
         let paired = admin.ask("paired");
         assert_eq!(paired.len(), 2);
-        assert!(paired[0].starts_with("paired kitchen ") && paired[0].ends_with(" home=wx"), "{paired:?}");
+        assert!(paired[0].starts_with("paired kitchen ") && paired[0].ends_with(&format!(" {HOME}=wx")), "{paired:?}");
     });
     match result {
         Ok(()) => {
@@ -187,7 +191,7 @@ fn end_to_end() {
     let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby).unwrap();
     s.send(&Msg::Hello { name: "kitchen".into() }).unwrap();
     assert_eq!(s.recv().unwrap(), Msg::Welcome);
-    assert_eq!(s.recv().unwrap(), Msg::Config(vec![("home".into(), "wx".into())]));
+    assert_eq!(s.recv().unwrap(), Msg::Config(vec![(HOME.into(), "wx".into())]));
     drop(s);
 
     // The command line sees the same.
@@ -196,14 +200,15 @@ fn end_to_end() {
         .output()
         .unwrap();
     let out = String::from_utf8(out.stdout).unwrap();
-    assert!(out.starts_with("paired   kitchen  ") && out.trim_end().ends_with("home=wx"), "{out}");
+    assert!(out.starts_with("paired   kitchen  ") && out.trim_end().ends_with(&format!("{HOME}=wx")), "{out}");
 
     // The first run exited; neochumbyd started it again.
     let pid: libc::pid_t = wait_for(20, "the daemon to start again", || {
         std::fs::read_to_string(home.join("pid")).ok().and_then(|p| p.trim().parse().ok())
     });
     let mut admin = Admin::connect(&socket);
-    assert_eq!(admin.ask("forget kitchen"), ["ok"]);
+    assert_eq!(admin.ask("forget kitchen 0123"), ["error wrong token"]);
+    assert_eq!(admin.ask(&format!("forget kitchen {token}")), ["ok"]);
     assert_eq!(admin.ask("paired"), ["ok"]);
     drop(admin);
 

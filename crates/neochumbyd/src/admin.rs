@@ -20,17 +20,19 @@
 //!   approve CODE TOKEN ok NAME          pairs the Chumby showing CODE; TOKEN
 //!                                       is the owner's (`neochumbyd token`)
 //!   refuse CODE        ok
-//!   forget NAME        ok
+//!   forget NAME TOKEN  ok               unpairs NAME; TOKEN as above
 //!   set NAME KEY=VALUE ok               one of a Chumby's settings; KEY=
 //!                                       removes it
 //!   check TOKEN        ok               whether TOKEN is the owner's, for
 //!                                       the page's own login
 //!
-//! Approving is the one request that needs the owner's token. Comparing
-//! the code on both screens is what pairing's security rests on, so the
-//! person approving must be the owner, not just someone on the network who
-//! can reach the web page. A wrong token is answered after a second, to
-//! slow guessing through the page.
+//! Approving and forgetting need the owner's token. Comparing the code on
+//! both screens is what pairing's security rests on, so the person
+//! approving must be the owner, not just someone on the network who can
+//! reach the web page. Forgetting undoes a pairing, which only someone at
+//! the Chumby can make again, so a fault in the page must not be able to
+//! do it on its own. A wrong token is answered after a second, to slow
+//! guessing through the page.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::fd::AsRawFd;
@@ -186,7 +188,11 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             eprintln!("neochumbyd: admin: refused {code}");
             Ok("ok\n".into())
         }
-        ["forget", name] => {
+        ["forget", name, token] => {
+            if !state.is_owner_token(token) {
+                eprintln!("neochumbyd: admin: forgetting {name}: wrong token");
+                return Err(bad("wrong token"));
+            }
             state.forget(name)?;
             eprintln!("neochumbyd: admin: forgot {name}");
             Ok("ok\n".into())
@@ -208,6 +214,10 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
 mod tests {
     use super::*;
     use neochumby_proto::Identity;
+
+    /// The setting that names a Chumby's home screen. Proposal 0002 may
+    /// rename it; the tests and docs use it only through this.
+    const HOME: &str = "home";
 
     fn temp_state(what: &str) -> (std::path::PathBuf, State) {
         let dir = std::env::temp_dir().join(format!("neochumbyd-admin-{what}-{}", std::process::id()));
@@ -232,20 +242,23 @@ mod tests {
         assert_eq!(request(&st, &format!("approve 123456 {token}")), "error no such request\n");
         assert_eq!(request(&st, "pending"), "ok\n");
 
-        assert_eq!(request(&st, "set kitchen home=wx"), "ok\n");
+        assert_eq!(request(&st, &format!("set kitchen {HOME}=wx")), "ok\n");
         assert_eq!(request(&st, "set kitchen delivery=sync"), "ok\n");
-        assert_eq!(request(&st, "paired"), format!("paired kitchen {} home=wx delivery=sync\nok\n", hex(&key)));
+        assert_eq!(request(&st, "paired"), format!("paired kitchen {} {HOME}=wx delivery=sync\nok\n", hex(&key)));
         assert_eq!(request(&st, "set kitchen delivery="), "ok\n");
-        assert_eq!(request(&st, "set kitchen home"), "error set NAME KEY=VALUE\n");
-        assert!(request(&st, "set kitchen home=a/../b c").starts_with("error"));
-        assert!(request(&st, "set lounge home=wx").starts_with("error no Chumby"));
+        assert_eq!(request(&st, &format!("set kitchen {HOME}")), "error set NAME KEY=VALUE\n");
+        assert!(request(&st, &format!("set kitchen {HOME}=a/../b c")).starts_with("error"));
+        assert!(request(&st, &format!("set lounge {HOME}=wx")).starts_with("error no Chumby"));
 
         st.request("654321", "lounge", &key, "192.0.2.8:4000".parse().unwrap()).unwrap();
         assert_eq!(request(&st, "refuse 654321"), "ok\n");
         assert_eq!(request(&st, "refuse 12"), "error not a code\n");
         assert_eq!(request(&st, "pending"), "ok\n");
 
-        assert_eq!(request(&st, "forget kitchen"), "ok\n");
+        assert_eq!(request(&st, "forget kitchen"), "error forget: wrong number of words\n");
+        assert_eq!(request(&st, "forget kitchen nope"), "error wrong token\n");
+        assert!(request(&st, "paired").starts_with("paired kitchen "), "still paired");
+        assert_eq!(request(&st, &format!("forget kitchen {token}")), "ok\n");
         assert_eq!(request(&st, "paired"), "ok\n");
         assert_eq!(request(&st, ""), "error unknown command\n");
         assert_eq!(request(&st, "rm -rf /"), "error unknown command\n");

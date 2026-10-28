@@ -173,9 +173,9 @@ other's key on every connection.
 do what the commands above do: list the Chumbys paired and asking, approve
 or refuse a request, forget a Chumby, and set its settings
 (`neochumbyd set`). It's `admin.sock` in the state directory, answering
-only neochumbyd's own user and root. Approving through it needs the
-**owner's token**, which `neochumbyd token` prints: give it to the web
-page when it asks. `neochumbyd token new` replaces it. The protocol is
+only neochumbyd's own user and root. Approving or forgetting a Chumby
+through it needs the **owner's token**, which `neochumbyd token` prints:
+give it to the web page when it asks. `neochumbyd token new` replaces it. The protocol is
 described in `crates/neochumbyd/src/admin.rs`.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its

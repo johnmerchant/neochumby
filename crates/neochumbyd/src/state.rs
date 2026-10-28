@@ -8,8 +8,9 @@
 //!                     sent to it on every connection (`Msg::Config`). Kept
 //!                     by name, so a Chumby paired again under its name
 //!                     keeps them
-//!   owner-token       the owner's token (0600), which a daemon such as the
-//!                     household web page must pass to approve a pairing
+//!   owner-token       the owner's token (0640, the state directory's
+//!                     group), which a daemon such as the household web
+//!                     page must pass to approve or forget a pairing
 //!                     (admin.rs)
 //!   admin.sock        the admin socket, while the daemon runs (admin.rs)
 //!   apps/<app>        each app's own directory, for its companions and its
@@ -22,7 +23,7 @@
 
 use std::io::{self, Read};
 use std::net::SocketAddr;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use neochumby_proto::{Identity, PublicKey, hex, unhex_key, valid_name};
@@ -73,16 +74,24 @@ impl State {
 
     /// The owner's token, made on first use: 16 random bytes as hex. The
     /// owner reads it with `neochumbyd token` and gives it to the household
-    /// web page, which passes it on to approve a pairing.
+    /// web page, which passes it on to approve or forget a pairing.
     pub fn owner_token(&self) -> io::Result<String> {
         let path = self.dir.join("owner-token");
         match std::fs::read_to_string(&path) {
             Ok(s) => Ok(s.trim().to_string()),
             Err(e) if e.kind() == io::ErrorKind::NotFound => {
-                let token = random_token()?;
-                let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&path)?;
-                io::Write::write_all(&mut f, format!("{token}\n").as_bytes())?;
-                Ok(token)
+                let (tmp, token) = self.write_token()?;
+                // A link fails if the file is there: whoever made it first
+                // wins, and the other reads theirs.
+                let linked = std::fs::hard_link(&tmp, &path);
+                let _ = std::fs::remove_file(&tmp);
+                match linked {
+                    Ok(()) => Ok(token),
+                    Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
+                        Ok(std::fs::read_to_string(&path)?.trim().to_string())
+                    }
+                    Err(e) => Err(e),
+                }
             }
             Err(e) => Err(e),
         }
@@ -91,14 +100,40 @@ impl State {
     /// Replaces the owner's token, for when it may have leaked. The old one
     /// stops working at once: the token is read on every check.
     pub fn new_owner_token(&self) -> io::Result<String> {
-        let path = self.dir.join("owner-token");
-        let tmp = path.with_extension("new");
-        let _ = std::fs::remove_file(&tmp);
-        let token = random_token()?;
-        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
-        io::Write::write_all(&mut f, format!("{token}\n").as_bytes())?;
-        std::fs::rename(tmp, path)?;
+        let (tmp, token) = self.write_token()?;
+        std::fs::rename(&tmp, self.dir.join("owner-token")).inspect_err(|_| {
+            let _ = std::fs::remove_file(&tmp);
+        })?;
         Ok(token)
+    }
+
+    /// A new token, in a file of its own beside owner-token, ready to be
+    /// put in its place.
+    ///
+    /// Its mode is 0640 and its group the state directory's, whoever writes
+    /// it: neochumbyd often runs as a user of its own, while its admins,
+    /// in its group, run `neochumbyd token` as themselves. The daemon reads
+    /// a file an admin wrote through the group, and the admins read the
+    /// daemon's the same way. Both are set on the file before it takes the
+    /// name, so it is never there with a mode the daemon cannot read.
+    fn write_token(&self) -> io::Result<(PathBuf, String)> {
+        let token = random_token()?;
+        let tmp = self.dir.join(format!("owner-token.{}.new", std::process::id()));
+        let _ = std::fs::remove_file(&tmp);
+        let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+        let done = (|| {
+            let gid = std::fs::metadata(&self.dir)?.gid();
+            std::os::unix::fs::fchown(&f, None, Some(gid))?;
+            // Explicitly, as the umask may have taken the group's read.
+            f.set_permissions(std::fs::Permissions::from_mode(0o640))?;
+            io::Write::write_all(&mut f, format!("{token}\n").as_bytes())?;
+            f.sync_all()
+        })();
+        if let Err(e) = done {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e);
+        }
+        Ok((tmp, token))
     }
 
     /// Whether `token` is the owner's. Compared in constant time, so its
@@ -255,7 +290,6 @@ fn valid_setting(key: &str, value: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::os::unix::fs::PermissionsExt;
 
     #[test]
     fn settings() {
@@ -280,25 +314,51 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// The test runs as one user, so it checks what lets another member of
+    /// the state directory's group read the token: mode 0640 and the
+    /// directory's group, whatever the umask, from a first `token` and from
+    /// `token new` alike. Where this user is in a second group, the
+    /// directory is given that one, as a setgid directory of neochumbyd's
+    /// group would be for an admin whose own group differs.
     #[test]
     fn owner_token() {
         let dir = std::env::temp_dir().join(format!("neochumbyd-token-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let st = State::open(dir.clone()).unwrap();
+        let mut groups = vec![0 as libc::gid_t; 64];
+        let n = unsafe { libc::getgroups(groups.len() as libc::c_int, groups.as_mut_ptr()) };
+        let egid = unsafe { libc::getegid() };
+        if let Some(&other) = groups[..n.max(0) as usize].iter().find(|&&g| g != egid) {
+            std::os::unix::fs::chown(&dir, None, Some(other)).unwrap();
+        }
+        let group = std::fs::metadata(&dir).unwrap().gid();
+        let path = dir.join("owner-token");
+        let group_can_read = || {
+            let m = std::fs::metadata(&path).unwrap();
+            assert_eq!(m.permissions().mode() & 0o777, 0o640);
+            assert_eq!(m.gid(), group, "the state directory's group");
+        };
+        // An umask that would leave the group out.
+        let umask = unsafe { libc::umask(0o077) };
+
         assert!(!st.is_owner_token(""), "no token yet");
         let t = st.owner_token().unwrap();
         assert_eq!(t.len(), 32);
         assert_eq!(st.owner_token().unwrap(), t, "made once");
         assert!(st.is_owner_token(&t));
         assert!(!st.is_owner_token("") && !st.is_owner_token(&t[1..]) && !st.is_owner_token(&format!("{t}0")));
-        let mode = std::fs::metadata(dir.join("owner-token")).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        group_can_read();
 
+        // Replaced, even over a file its writer cannot write (as one
+        // another admin made would be), and with nothing left beside it.
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o440)).unwrap();
         let new = st.new_owner_token().unwrap();
         assert_ne!(new, t);
         assert!(st.is_owner_token(&new) && !st.is_owner_token(&t));
-        let mode = std::fs::metadata(dir.join("owner-token")).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        group_can_read();
+        unsafe { libc::umask(umask) };
+        let left: Vec<_> = std::fs::read_dir(&dir).unwrap().flatten().map(|e| e.file_name()).collect();
+        assert!(!left.iter().any(|f| f.to_string_lossy().ends_with(".new")), "{left:?}");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

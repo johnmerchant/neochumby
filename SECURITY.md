@@ -20,12 +20,29 @@
   pair Chumbys and change their settings. It is mode 0600, and neochumbyd
   checks every connection's user with the kernel (`SO_PEERCRED`): only its
   own user and root are answered.
-- **Approving a pairing through the admin socket needs the owner's
-  token** (`neochumbyd token`, kept 0600 in the state directory). Pairing
-  is only as safe as the person who compares the codes, so a web page must
-  not approve for anyone who can merely reach it: it asks for the token.
-  A wrong token is answered after a second. If the token may have leaked,
-  `neochumbyd token new` replaces it at once.
+- **Approving or forgetting a pairing through the admin socket needs the
+  owner's token** (`neochumbyd token`). Pairing is only as safe as the
+  person who compares the codes, so a web page must not approve for anyone
+  who can merely reach it: it asks for the token. Forgetting needs it too,
+  so a fault in the page can't unpair a Chumby. A wrong token is answered
+  after a second. If the token may have leaked, `neochumbyd token new`
+  replaces it at once.
+- **Who can reach the state directory can do everything neochumbyd
+  does.** We suggest a dedicated `neochumbyd` user and group, with the
+  people who administer it in that group:
+
+  ```sh
+  useradd --system --user-group --home-dir /var/lib/neochumbyd neochumbyd
+  install -d -o neochumbyd -g neochumbyd -m 2770 /var/lib/neochumbyd
+  usermod -aG neochumbyd alice        # an admin
+  ```
+
+  The directory is setgid (the 2 in 2770), so what an admin creates in it
+  belongs to the group. `owner-token` is 0640 in the directory's group,
+  whoever writes it. So an admin running `neochumbyd token` or
+  `neochumbyd token new` as themselves leaves a token the daemon can
+  still read. The daemon's key, `identity`, stays 0600, the daemon's
+  alone.
 - **neochumby never starts SSH.** The Chumby's stock SSH, with its
   well-known root password, stays off unless its owner turns it on.
 - **A neochumby stick runs code on any Chumby it's plugged into at boot,**

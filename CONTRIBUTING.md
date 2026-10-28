@@ -102,17 +102,16 @@ the app:
   five seconds later.
 - **Environment:** `NEOCHUMBY_STATE` (the app's own directory, shared with
   its companions, and the working directory), `NEOCHUMBY_ADMIN` (the admin
-  socket) and `NEOCHUMBY_TREE` (the app tree, to read other apps'
-  manifests, e.g. which can be a home screen). Its stdout and stderr go to
-  neochumbyd's log.
+  socket) and `NEOCHUMBY_TREE` (the app tree, to read the apps'
+  manifests). Its stdout and stderr go to neochumbyd's log.
 - **The admin socket:** lines of text. Send `paired`, `pending`,
-  `approve CODE TOKEN`, `refuse CODE`, `forget NAME` or
+  `approve CODE TOKEN`, `refuse CODE`, `forget NAME TOKEN` or
   `set NAME KEY=VALUE`; the answer is lines of data, then `ok` or
   `error MESSAGE`. `crates/neochumbyd/src/admin.rs` has the details.
-- **Approving needs the owner.** `approve` takes the owner's token
-  (`neochumbyd token`). A web page asks the person for it, and should
-  check it (`check TOKEN`) before it lets them change anything. Never
-  approve on a request from the network alone.
+- **Pairing and unpairing need the owner.** `approve` and `forget` take
+  the owner's token (`neochumbyd token`). A web page asks the person for
+  it, and should check it (`check TOKEN`) before it lets them change
+  anything. Never approve or forget on a request from the network alone.
 
 ## Pull requests
 
