@@ -16,6 +16,17 @@ changes easy to take.
 - **Nothing starts remote access by itself.** SSH on a Chumby is turned on
   by its owner, from its settings.
 
+## Unsafe code
+
+The workspace denies `unsafe` code. Every raw system call lives in
+`crates/neochumby-sys`, behind safe functions, each `unsafe` block with a
+`// SAFETY:` comment saying why it holds; anything else needing one adds a
+function there, and uses std instead wherever std does the job safely. The
+games (Doom, Quake) are allowed it as FFI to their C engines. We use libc
+rather than rustix: rustix calls the kernel directly and needs Linux 3.2,
+the Chumby runs 2.6.16, and its `ioctl` and `mmap` are `unsafe` too (see
+neochumby-sys's documentation).
+
 ## Building and checking
 
 ```sh
