@@ -7,3 +7,12 @@
 [submodule "apps/quake/third_party/quake"]
 	path = apps/quake/third_party/quake
 	url = https://github.com/id-Software/Quake
+[submodule "crates/neochumby-ncurses/third_party/ncurses"]
+	path = crates/neochumby-ncurses/third_party/ncurses
+	url = https://github.com/ThomasDickey/ncurses-snapshots
+[submodule "apps/htop/third_party/htop"]
+	path = apps/htop/third_party/htop
+	url = https://github.com/htop-dev/htop
+[submodule "apps/top/third_party/procps"]
+	path = apps/top/third_party/procps
+	url = https://gitlab.com/procps-ng/procps.git

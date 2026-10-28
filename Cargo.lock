@@ -403,6 +403,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-htop"
+version = "0.1.0"
+dependencies = [
+ "cc",
+ "neochumby",
+ "neochumby-ncurses",
+]
+
+[[package]]
 name = "neochumby-macros"
 version = "0.1.0"
 dependencies = [
@@ -414,6 +423,13 @@ name = "neochumby-manifest"
 version = "0.1.0"
 dependencies = [
  "toml",
+]
+
+[[package]]
+name = "neochumby-ncurses"
+version = "0.1.0"
+dependencies = [
+ "cc",
 ]
 
 [[package]]

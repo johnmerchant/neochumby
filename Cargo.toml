@@ -4,6 +4,7 @@ members = [
     "crates/neochumby",
     "crates/neochumby-macros",
     "crates/neochumby-manifest",
+    "crates/neochumby-ncurses",
     "crates/neochumby-proto",
     "crates/neochumby-softfloat",
     "crates/neochumby-sync",
@@ -13,6 +14,7 @@ members = [
     "apps/home",
     "apps/doom",
     "apps/fetch",
+    "apps/htop",
     "apps/quake",
 ]
 
@@ -25,6 +27,7 @@ publish = false
 libc = "0.2"
 neochumby = { path = "crates/neochumby" }
 neochumby-macros = { path = "crates/neochumby-macros" }
+neochumby-ncurses = { path = "crates/neochumby-ncurses" }
 neochumby-softfloat = { path = "crates/neochumby-softfloat" }
 neochumby-proto = { path = "crates/neochumby-proto" }
 neochumby-sync = { path = "crates/neochumby-sync" }
