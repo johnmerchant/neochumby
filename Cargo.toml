@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/neochumby",
+    "crates/neochumby-macros",
     "crates/neochumby-manifest",
     "crates/neochumby-proto",
     "crates/neochumby-softfloat",
@@ -22,10 +23,12 @@ publish = false
 [workspace.dependencies]
 libc = "0.2"
 neochumby = { path = "crates/neochumby" }
+neochumby-macros = { path = "crates/neochumby-macros" }
 neochumby-softfloat = { path = "crates/neochumby-softfloat" }
 neochumby-proto = { path = "crates/neochumby-proto" }
 neochumby-sync = { path = "crates/neochumby-sync" }
 neochumby-sys = { path = "crates/neochumby-sys" }
+toml = "0.8"
 
 # No unsafe code outside neochumby-sys (and the games, FFI to C engines):
 # see neochumby-sys and CONTRIBUTING.md. Deny, not forbid, so that those
