@@ -1,5 +1,6 @@
 //! Which apps in the tree may be a Chumby's start app: those whose
-//! manifest says `start=true` and has an `exec`. A Chumby refuses any
+//! manifest says `start=true` and has an `exec`, and doesn't take the top
+//! button (`button=true`). A Chumby refuses any
 //! other name as its `start` setting and opens `home` instead, so the
 //! settings suggest these (`neochumbyd set`, `neochumbyd pairing`).
 
@@ -24,7 +25,7 @@ fn is_start_app(dir: &Path) -> bool {
     let Ok(m) = std::fs::read_to_string(dir.join("manifest")) else { return false };
     let field =
         |key: &str| m.lines().filter_map(|l| l.split_once('=')).find(|(k, _)| k.trim() == key).map(|(_, v)| v.trim());
-    field("start") == Some("true") && field("exec").is_some_and(|e| !e.is_empty())
+    field("start") == Some("true") && field("exec").is_some_and(|e| !e.is_empty()) && field("button") != Some("true")
 }
 
 /// The start apps, as a line for a person.
@@ -69,6 +70,8 @@ mod tests {
             // Not start apps: says false, or has nothing to run.
             ("quake", "exec=neochumby-quake\nstart=false\n"),
             ("airplay", "service=neochumby-airplay\nstart=true\n"),
+            // Nor one that takes the button, which then couldn't bring it back.
+            ("arcade", "exec=neochumby-arcade\nstart=true\nbutton=true\n"),
         ] {
             std::fs::create_dir_all(tree.join("apps").join(app)).unwrap();
             std::fs::write(tree.join("apps").join(app).join("manifest"), manifest).unwrap();

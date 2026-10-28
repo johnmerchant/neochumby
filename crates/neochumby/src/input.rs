@@ -5,9 +5,16 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::Read;
+use std::os::fd::RawFd;
 use std::os::unix::fs::OpenOptionsExt;
 
+use neochumby_sys::fd;
+
 use crate::fb;
+
+/// The variable holding the top button's descriptor, which the session
+/// hands to an app whose manifest says `button = true`.
+pub const BUTTON_ENV: &str = "NEOCHUMBY_BUTTON";
 
 const EV_SYN: u16 = 0;
 const EV_KEY: u16 = 1;
@@ -130,14 +137,27 @@ impl Touchscreen {
 pub struct Squeeze(Option<File>);
 
 impl Squeeze {
+    /// The switch the session handed over ([`BUTTON_ENV`]), else
+    /// /dev/switch. Only one process at a time can have /dev/switch open,
+    /// and the session keeps it, so an app that wants it says `button =
+    /// true` in its manifest.
     pub fn open() -> Squeeze {
-        Squeeze(open_nonblock("/dev/switch"))
+        let var = std::env::var(BUTTON_ENV).ok();
+        Squeeze(handed_over(var.as_deref()).or_else(|| open_nonblock("/dev/switch")))
     }
 
     pub fn squeezed(&mut self) -> bool {
         let mut b = [0u8; 1];
         matches!(self.0.as_mut().map(|f| f.read(&mut b)), Some(Ok(1))) && b[0] != 0
     }
+}
+
+/// A copy of the switch's descriptor from the session (`var`, the value of
+/// [`BUTTON_ENV`]), so that opening it twice doesn't close it twice.
+/// Neither is passed on to programs this one runs.
+fn handed_over(var: Option<&str>) -> Option<File> {
+    let n: RawFd = var?.parse().ok()?;
+    fd::handed_over(n).map(File::from)
 }
 
 /// One accelerometer record: 14 little-endian u32s, the first a version (3),
@@ -159,5 +179,29 @@ impl Accel {
         }
         let word = |i: usize| u32::from_le_bytes([b[4 * i], b[4 * i + 1], b[4 * i + 2], b[4 * i + 3]]) as i32;
         Some([word(5) - 2048, word(6) - 2048, word(7) - 2048])
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::AsRawFd;
+
+    use super::*;
+
+    #[test]
+    fn squeeze_takes_the_button_it_was_handed() {
+        let switch = File::open("/dev/null").unwrap();
+        let var = switch.as_raw_fd().to_string();
+        let mut a = Squeeze(handed_over(Some(&var)));
+        let b = Squeeze(handed_over(Some(&var)));
+        let fd = |s: &Squeeze| s.0.as_ref().map(|f| f.as_raw_fd());
+        // Each a copy of it, not /dev/switch (which a host hasn't got).
+        assert!(fd(&a).is_some() && fd(&b).is_some() && fd(&a) != fd(&b));
+        assert!(!a.squeezed());
+        drop(a);
+        drop(b);
+        // Still open: the copies were closed, not the one handed over.
+        assert!(switch.metadata().is_ok());
+        assert!(handed_over(Some("x")).is_none() && handed_over(None).is_none());
     }
 }

@@ -66,6 +66,7 @@ companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
+button = true                        # it gets the top button while in front
 ```
 
 An app can use any of these keys:
@@ -100,6 +101,11 @@ An app can use any of these keys:
   service may open an app over the start app, and the start app's service
   over any app, unless the one in front says **`interrupt = false`**, as
   Doom and Quake do.
+- **`button`:** the session keeps the top button (`/dev/switch`, which only
+  one process can have open). A press returns to the start app, as on the
+  stock Chumby, unless the app in front says `button = true`: then it has
+  the button. Doom and Quake fire with it. With the start app in front, a
+  press is a `button` line on its pipe.
 
 ## Building
 
