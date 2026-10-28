@@ -11,3 +11,6 @@ proc-macro = true
 
 [dependencies]
 toml.workspace = true
+
+[lints]
+workspace = true

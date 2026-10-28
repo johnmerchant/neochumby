@@ -7,9 +7,12 @@ edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-libc.workspace = true
 neochumby.workspace = true
 neochumby-proto.workspace = true
+neochumby-sys.workspace = true
 
 [package.metadata.neochumby]
 home = "neochumby-home"
+
+[lints]
+workspace = true

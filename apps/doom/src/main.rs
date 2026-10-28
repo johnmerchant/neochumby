@@ -2,6 +2,11 @@
 //! touchscreen and squeeze switch. The IWAD is found beside the binary
 //! (freedoom1.wad, doom1.wad) unless NEOCHUMBY_WAD or -iwad says otherwise.
 
+// FFI to a C engine (GPL), so allowed unsafe code, as neochumby-sys is. Its
+// unsafe blocks follow the engine's contract and carry no SAFETY comments.
+#![allow(unsafe_code)]
+#![allow(clippy::undocumented_unsafe_blocks)]
+
 mod platform;
 
 use std::path::PathBuf;

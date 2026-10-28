@@ -295,15 +295,16 @@ dependencies = [
  "neochumby-macros",
  "neochumby-proto",
  "neochumby-softfloat",
+ "neochumby-sys",
 ]
 
 [[package]]
 name = "neochumby-airplay"
 version = "0.1.0"
 dependencies = [
- "libc",
  "neochumby",
  "neochumby-proto",
+ "neochumby-sys",
 ]
 
 [[package]]
@@ -319,9 +320,9 @@ dependencies = [
 name = "neochumby-home"
 version = "0.1.0"
 dependencies = [
- "libc",
  "neochumby",
  "neochumby-proto",
+ "neochumby-sys",
 ]
 
 [[package]]
@@ -364,12 +365,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-sys"
+version = "0.1.0"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "neochumbyd"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "libc",
  "neochumby-proto",
+ "neochumby-sys",
  "nfsserve",
  "tokio",
 ]
