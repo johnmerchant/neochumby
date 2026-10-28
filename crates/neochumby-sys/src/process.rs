@@ -1,6 +1,10 @@
-//! Signals to other processes, by pid or by process group.
+//! Signals to other processes, by pid or by process group, and the
+//! descriptors a child is given.
 
 use std::io;
+use std::os::fd::RawFd;
+use std::os::unix::process::CommandExt;
+use std::process::Command;
 
 /// A signal [`kill`] and [`kill_group`] can send.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -34,6 +38,15 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
 }
 
+/// Whether any process is left in the group `pgid` (kill(2) with signal
+/// 0, which sends nothing). False for an id [`kill_group`] would refuse.
+pub fn group_alive(pgid: u32) -> bool {
+    let Ok(p) = positive(pgid) else { return false };
+    // SAFETY: as in `send`; signal 0 only checks that the group exists and
+    // may be signalled.
+    unsafe { libc::kill(-p, 0) == 0 }
+}
+
 fn positive(id: u32) -> io::Result<libc::pid_t> {
     match libc::pid_t::try_from(id) {
         Ok(p) if p > 0 => Ok(p),
@@ -53,6 +66,25 @@ pub fn uid() -> u32 {
     unsafe { libc::getuid() }
 }
 
+/// Passes the descriptors `fds` on to the program `cmd` runs, though they
+/// are close-on-exec here: in the child, between fork and exec, each is
+/// marked not close-on-exec. Starting the program fails if one isn't open.
+pub fn pass_fds(cmd: &mut Command, fds: Vec<RawFd>) {
+    // SAFETY: the closure runs in the forked child, where only
+    // async-signal-safe calls are allowed: it calls fcntl(2), which is,
+    // reads a Vec allocated before the fork, and allocates nothing.
+    unsafe {
+        cmd.pre_exec(move || {
+            for &fd in &fds {
+                if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+            }
+            Ok(())
+        });
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -62,6 +94,7 @@ mod tests {
         for id in [0, u32::MAX, 1 << 31] {
             assert_eq!(kill(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
             assert_eq!(kill_group(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+            assert!(!group_alive(id));
         }
     }
 }
