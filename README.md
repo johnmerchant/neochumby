@@ -214,7 +214,7 @@ Sync works like an A/B update. The stick's `neochumby/` holds two whole
 sets, `a/` and `b/`, and `current` names the live one. While its settings
 say sync, the session runs `neochumby-sync` as a service of its own,
 restarted like the apps' services but never part of the interruption
-rules (it opens no app). It, once a minute:
+rules (it opens no app). Once a minute, it:
 
 1. sends neochumbyd the digest of its live set's manifest. If it matches
    the tree, nothing is written;
