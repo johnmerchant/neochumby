@@ -11,5 +11,7 @@ stick=${1:?usage: tools/stick STICK [-d DATA] [APP ...]}
 shift
 root=$(git rev-parse --show-toplevel)
 "$root/tools/tree" "$stick/neochumby" "$@"
+# Nothing syncs into a stick made by hand, so it carries no receiver.
+rm -f "$stick/neochumby/neochumby-sync"
 cp "$root/boot/userhook2" "$stick/userhook2"
 echo "neochumby stick ready: $stick"

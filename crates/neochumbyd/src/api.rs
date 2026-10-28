@@ -1,7 +1,8 @@
 //! The Chumbys' connections (neochumby-proto), one thread each.
 //!
 //! A paired Chumby says Hello and is welcomed, then may open an app's
-//! companion (companion.rs), or make this its developer link (dev.rs). An unknown one may ask to pair: its request
+//! companion (companion.rs), make this its developer link (dev.rs), or ask
+//! for sync rounds (sync.rs). An unknown one may ask to pair: its request
 //! waits in pending/ until approved or refused (`neochumbyd approve|refuse
 //! <code>`), or ten minutes pass.
 
@@ -13,9 +14,8 @@ use std::time::{Duration, Instant};
 
 use neochumby_proto::{Identity, Msg, Session, valid_name};
 
-use crate::companion;
-use crate::dev;
 use crate::state::State;
+use crate::{companion, dev, sync};
 
 pub struct Api {
     pub state: State,
@@ -25,6 +25,8 @@ pub struct Api {
     pub tree: PathBuf,
     /// neochumbyd's state directory, where companions keep theirs.
     pub state_dir: PathBuf,
+    /// The tree's hashes, for sync rounds.
+    pub hashes: neochumby_sync::serve::Hashes,
     /// The Chumbys' developer links.
     pub links: dev::Links,
 }
@@ -66,6 +68,7 @@ fn handle(api: &Api, tcp: TcpStream) -> io::Result<()> {
             s.send(&Msg::Config(api.state.config(&name)))?;
             match s.recv() {
                 Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &name, &app, s),
+                Ok(m @ Msg::SyncHave { .. }) => sync::serve(api, &name, s, m),
                 Ok(Msg::Dev) => dev::run(api, &name, s),
                 // A Chumby that came only for its settings hangs up.
                 Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),

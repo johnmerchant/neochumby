@@ -462,6 +462,7 @@ mod tests {
             nfs_port: 2049,
             tree: d.join("tree"),
             state_dir: d.clone(),
+            hashes: Default::default(),
             links: Links::default(),
         };
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
