@@ -67,6 +67,125 @@ an app writes to stdout or stderr ends up in that log, so print what
 you'd want to read there. The protocol is in `neochumby-proto`'s `dev`
 module.
 
+## Testing without a Chumby: dev/emulate
+
+`dev/emulate` runs a tree on a Linux PC as if it were a Chumby: the same
+static ARM binaries, unchanged, under qemu-arm user mode, chrooted in a fake
+root with the Chumby's paths. The screen is a file, and the touchscreen, top
+button and speaker are fakes you drive from outside. CI boots every pull
+request's tree with it (`dev/emulate-smoke`).
+
+It needs Linux, root, Python 3.9+, FUSE, util-linux's `mount` with loop
+devices, qemu-user's binfmt handler (static), and dosfstools for stick
+images. On a Mac, run it in a Linux VM.
+
+```sh
+sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
+tools/tree /tmp/tree doom
+sudo dev/emulate start /tmp/tree     # the tree at /mnt/neochumby, as over NFS
+dev/emulate shot home.png
+dev/emulate tap 160 102              # the second row of the home screen
+dev/emulate tap 5 5 --hold 3500      # the corner hold
+dev/emulate button press             # the top button
+dev/emulate log -f                   # what the session and its apps print
+dev/emulate stop
+```
+
+- **A stick:** `sudo dev/emulate mkstick /tmp/stick.img /tmp/tree` makes a
+  FAT image laid out as `tools/stick` does, and `start --stick
+  /tmp/stick.img` mounts it at `/mnt/usb` and boots from it. Given a tree
+  as well, the session runs from the tree and the stick starts as it is.
+- **A neochumbyd:** the emulator shares the PC's network, so a neochumbyd
+  running on the PC can pair with it (`start --server 127.0.0.1 ...`).
+- **Inside:** `sudo dev/emulate exec /mnt/neochumby/neochumby sensors` runs
+  a binary beside the session.
+- **Its directory** is `/var/tmp/neochumby-emulate-UID`, root's, with the
+  screen, the log and `/psp` (kept from run to run). `--state DIR` picks
+  another; sudo drops `NEOCHUMBY_EMU`, so pass it with `sudo
+  --preserve-env=NEOCHUMBY_EMU`.
+- **Pictures and the like:** `start --bind DIR:/tmp/classic` puts a host
+  directory in the fake root, read-only. `dev/emulate compare RAW ...` says
+  which 320x240 RGB565 picture the screen is most like.
+
+The session runs as root, as on the Chumby, but without the capabilities
+that would let it out of the fake root or into the PC's settings: no
+mounts, chroot, modules, raw devices or network setup, and `/proc/sys` is
+read-only.
+
+### Scenarios
+
+**neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; CI runs it
+once classic is a start app, #26). classic is the start app
+(`start=classic` in `/psp/neochumby.conf`), with pictures from
+neochumby-classic's offline smoke render, made with `NEOCHUMBY_TREE=TREE`
+so that its APPS screen lists the tree's apps: made-up data and placeholder
+artwork. The script checks that:
+- classic draws a slideshow page;
+- the top button toggles Home and back without restarting classic;
+- Home's APPS, then the DOOM tile, opens Doom through the session's pipe,
+  and classic comes back when Doom exits;
+- classic's service starts once, hears that Doom is in front, and keeps
+  running;
+- CHUMBY on Home ends the session with exit 0.
+
+Where it taps comes from the pictures' own tap zones.
+
+**Sync** (manual, not in CI). It needs a paired Chumby and neochumbyd's
+side of a round, so it waits until `delivery=sync` (#10) and the session
+PRs are both in `main`. Then, as root on one Linux PC (not yet run, so
+expect to adjust it):
+
+```sh
+tools/tree /tmp/tree doom && cargo neochumbyd
+B=target/x86_64-unknown-linux-musl/release/neochumbyd
+$B serve --state /tmp/nd --tree /tmp/tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049 &
+dev/emulate mkstick /tmp/stick.img            # an empty FAT stick
+dev/emulate start --stick /tmp/stick.img --server 127.0.0.1 /tmp/tree
+dev/emulate tap 80 220                        # PAIR, on neochumby-home
+$B pairing --state /tmp/nd                    # the same code as the screen
+$B approve CODE --state /tmp/nd
+$B set chumby delivery=sync --state /tmp/nd   # the emulator's name: chumby
+dev/emulate stop
+dev/emulate start --stick /tmp/stick.img /tmp/tree   # paired now: settings fetched
+dev/emulate wait log 'neochumby-sync' 120      # the receiver's first round
+```
+
+Then check, from the PC, with the stick image mounted read-only:
+- `neochumby/a/` (or `b/`) holds the tree;
+- its `.complete` marker is whole, and `current` names it;
+- `dev/emulate exec /mnt/usb/neochumby/neochumby check-set
+  /mnt/usb/neochumby/a` agrees.
+
+For the next boot, the boot hook won't run here: it needs BusyBox. Start
+the set `current` names in its place, with `--run`:
+
+```sh
+dev/emulate start --stick /tmp/stick.img --run /mnt/usb/neochumby/a/neochumby
+```
+
+Then change a file in `/tmp/tree` and wait for a round to write the other
+set and flip `current`. A power cut mid-round can be approximated by
+`dev/emulate stop` (SIGKILL) during a large file. That shows the journal
+and resume logic, not FAT's behaviour.
+
+`dev/emulate --help` lists the fake devices and what each does. What it
+can't catch is what full-system emulation (the whole Chumby, its stock
+firmware included, still to come) and real devices are for:
+
+- **The 2.6.16 kernel.** System calls go to the PC's kernel. Futex flags
+  that kernel lacks, `nanosleep` failing with `EINVAL` on restart, and newer
+  calls and flags all work here and fail there.
+- **Real FAT and USB.** The stick is the PC's vfat driver on a file in
+  memory, not the old driver on a slow stick. Its directory fsync, its
+  speed, a stick pulled out and a power cut aren't reproduced.
+- **Real input.** Taps are clean: no echo after a release, no brief releases
+  during a hold, and the button never bounces.
+- **Speed.** qemu on a PC isn't a 266 MHz ARM926, so frame rates and CPU
+  load mean nothing here. Only the speaker is paced, to the rate it's set to.
+- **The rest of the Chumby.** The boot hook doesn't run: the session is
+  started directly. There's no BusyBox, `btplay` or `chumby_set_volume`, no
+  accelerometer, and no overlay or backlight to see.
+
 ## Writing an app
 
 An app is a crate named `neochumby-<name>`. It lives in this repository
