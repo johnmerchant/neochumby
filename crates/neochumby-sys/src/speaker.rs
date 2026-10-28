@@ -80,7 +80,7 @@ impl Handover {
         for _ in 0..3 {
             let tmp = self.dir.join(format!(".{CLAIM}.{}", self.me));
             fs::write(&tmp, format!("{}\n", self.me))?;
-            let linked = fs::hard_link(&tmp, &claim);
+            let linked = crate::fs::hard_link(&tmp, &claim);
             let _ = fs::remove_file(&tmp);
             match linked {
                 Ok(()) => {

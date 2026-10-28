@@ -191,8 +191,13 @@ const BUSY_RETRY: Duration = Duration::from_secs(2);
 /// else's, or /dev/dsp can't be opened, what is written is dropped and the
 /// clock stands in for the speaker, so the game goes on as if it played.
 /// Writes never block: what /dev/dsp has no room for waits here for the next
-/// write or [`Stream::played`]. If the driver takes another rate, the stream
-/// is resampled to it.
+/// write or [`Stream::played`]. The speaker plays at least [`DEVICE_RATE`],
+/// and the stream is resampled to whatever rate the driver takes.
+///
+/// The Chumby's driver plays nothing of a fragment (8 KiB, whatever is
+/// asked) until it is full. So the bytes in the last, part-filled one count
+/// as played: the game mixes on past them, and the fragment fills. At
+/// DEVICE_RATE a fragment is under 50 ms of sound, which is what that costs.
 pub struct Stream {
     channels: u32,
     rate: u32,
@@ -209,7 +214,13 @@ pub struct Stream {
     retry: Option<Instant>,
     /// The speaker went to a newer player: it is taken back only once free.
     yielded: bool,
+    /// Bytes written to /dev/dsp since it was opened: where in a fragment
+    /// the next byte falls.
+    sent: u64,
 }
+
+/// The least rate the speaker plays a [`Stream`] at, in Hz.
+const DEVICE_RATE: u32 = 44100;
 
 impl Stream {
     /// A stream of `channels` channels at `rate` Hz, played at the master
@@ -226,6 +237,7 @@ impl Stream {
             resample: Resample::new(channels as usize),
             retry: None,
             yielded: false,
+            sent: 0,
         };
         s.poll();
         s
@@ -245,7 +257,10 @@ impl Stream {
         let device = self.speaker.as_ref().map(|sp| (sp.rate() as u64, sp.space()));
         if let Some((dev_rate, Ok(space))) = device {
             self.clock = None;
-            let waiting = (space.queued + self.pending.len()) as u64 / frame;
+            // What waits in a part-filled fragment won't play until it is
+            // full: it counts as played, so more is mixed to fill it.
+            let held = if space.fragment > 0 { (self.sent % space.fragment as u64) as usize } else { 0 };
+            let waiting = (space.queued.saturating_sub(held) + self.pending.len()) as u64 / frame;
             return self.written.saturating_sub(waiting * self.rate as u64 / dev_rate);
         }
         let (since, from) = *self.clock.get_or_insert((Instant::now(), self.written));
@@ -292,6 +307,7 @@ impl Stream {
             return;
         }
         self.pending.drain(..n);
+        self.sent += n as u64;
     }
 
     /// Yields the speaker if a newer player has asked for it, and takes it
@@ -312,9 +328,10 @@ impl Stream {
             return;
         }
         let first = self.retry.is_none();
-        match Speaker::open(self.channels, self.rate, self.volume) {
+        match Speaker::open(self.channels, self.rate.max(DEVICE_RATE), self.volume) {
             Ok(sp) if sp.channels() == self.channels => {
                 self.speaker = Some(sp);
+                self.sent = 0;
                 self.resample = Resample::new(self.channels as usize);
                 self.retry = None;
                 self.yielded = false;
