@@ -1,0 +1,9 @@
+# Who must approve changes to these paths. The ruleset on main requires a
+# code owner's review, so a change to the workflows, or to what CI runs
+# with, waits for the maintainer.
+/.github/          @johnmerchant
+/rust-toolchain*   @johnmerchant
+/.cargo/           @johnmerchant
+/tools/zigcc*      @johnmerchant
+/tools/zigar       @johnmerchant
+/SECURITY.md       @johnmerchant
