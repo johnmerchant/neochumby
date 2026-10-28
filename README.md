@@ -210,6 +210,23 @@ Chumby"), and the Chumby plays the audio. The host provides
 `NEOCHUMBY_AIRPLAY_PORT` (default 7350): RTSP from the base, UDP from
 base + 10. Each Chumby keeps the same ports.
 
+**Developing on a paired Chumby** needs no shell on it. Its session
+keeps a connection to neochumbyd, the developer link, over the same
+pinned-key session as everything else:
+
+```sh
+neochumbyd log den [-f]          # its log: the session's, its apps' and services' output
+neochumbyd restart den           # end its apps and start its session again from the tree
+neochumbyd shot den den.png      # its screen
+tools/deploy HOST doom --restart den    # deploy, then restart den on the new tree
+```
+
+neochumbyd keeps the last 2000 lines of each Chumby's log in its state
+directory (`logs/`), and limits what a Chumby may send. The commands work
+through the state directory as `approve` does, so they need no port of
+their own. A restart ends the app in front and the services as CHUMBY
+MODE does, then runs the tree's `neochumby` again in the same process.
+
 When a stick and a server are both available, the stick wins. The hook
 times out every step that could block, and returns to the stock boot if
 anything fails. To skip it, create `/psp/neochumby-off`, or put a file
