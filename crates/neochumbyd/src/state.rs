@@ -15,6 +15,7 @@
 //!   admin.sock        the admin socket, while the daemon runs (admin.rs)
 //!   apps/<app>        each app's own directory, for its companions and its
 //!                     daemon
+//!   logs/, dev/       what the developer link keeps and is asked (dev.rs)
 //!
 //! The daemon writes pending/; `neochumbyd approve <code>` (whoever is in
 //! the daemon's group), or a daemon through the admin socket, turns one

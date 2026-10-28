@@ -201,7 +201,8 @@ fn end_to_end() {
         .output()
         .unwrap();
     let out = String::from_utf8(out.stdout).unwrap();
-    assert!(out.starts_with("paired   kitchen  ") && out.trim_end().ends_with(&format!("{START}=wx")), "{out}");
+    let first = out.lines().next().unwrap_or_default();
+    assert!(first.starts_with("paired   kitchen  ") && first.ends_with(&format!("{START}=wx")), "{out}");
 
     // The first run exited; neochumbyd started it again.
     let pid: u32 = wait_for(20, "the daemon to start again", || {

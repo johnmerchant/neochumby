@@ -1,23 +1,29 @@
-//! neochumby's home screen, as an app (`home=` in its manifest): the
-//! installed apps as a list, tap one to open it; PAIR when booted with a
-//! neochumbyd this Chumby is not paired with; the time; and CHUMBY MODE,
-//! which exits cleanly so the session hands the Chumby back to its own
-//! software. The session falls back to it from any other home screen
-//! (holding the top-left corner).
+//! neochumby-home, the app list: the installed apps, tap one to open it;
+//! PAIR when booted with a neochumbyd this Chumby is not paired with; the
+//! time; and CHUMBY MODE, which hands the Chumby back to its own software.
+//! It's an ordinary app that may be the start app (`start = true`), and the
+//! start app when no other is chosen. The session also opens it from
+//! anything when the top-left corner is held.
+//!
+//! It opens apps and CHUMBY MODE by asking the session over its request
+//! pipe (neochumby::session), then exits: the session runs what it asked
+//! for, and opens the start app again when that exits. Opened for any
+//! reason (NEOCHUMBY_REASON), it shows its first page. The top button,
+//! pressed with it in front, arrives as a `button` line on its pipe: it
+//! goes back to the first page, leaving pairing if that's showing.
 //!
 //! An app that needs a neochumbyd this Chumby has not got is listed, greyed,
 //! and does not open.
 
 mod pair;
 
-use std::path::Path;
-use std::process::Command;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::{self, App};
 use neochumby::conf;
 use neochumby::fb::{self, Fb, rgb};
 use neochumby::input::{Touch, Touchscreen};
+use neochumby::session::{Notice, Pipe};
 
 const BG: u16 = rgb(16, 16, 32);
 const GREY: u16 = rgb(90, 90, 100);
@@ -45,6 +51,11 @@ struct Screen {
 }
 
 impl Screen {
+    /// The top button: back to the first page.
+    fn button(&mut self) {
+        self.page = 0;
+    }
+
     fn pages(&self) -> usize {
         if self.listed.len() <= ROWS { 1 } else { self.listed.len().div_ceil(ROWS - 1) }
     }
@@ -130,9 +141,29 @@ fn draw(fb: &mut Fb, all: &[App], s: &Screen, pressed: Option<Hit>) {
     }
 }
 
-fn launch(a: &App, exec: &Path, root: &Path) {
-    let status = Command::new(exec).current_dir(&a.dir).env("NEOCHUMBY_ROOT", root).env("HOME", "/tmp").status();
-    eprintln!("neochumby-home: {} exited: {status:?}", a.name);
+/// Asks the session for `what` and exits, leaving the screen black, or
+/// returns if there's no session to ask (run by hand).
+fn ask(fb: &mut Fb, pipe: Option<&mut Pipe>, what: &str, send: impl FnOnce(&mut Pipe) -> std::io::Result<()>) {
+    let Some(pipe) = pipe else {
+        eprintln!("neochumby-home: no session to ask for {what} (not run by neochumby)");
+        return;
+    };
+    if let Err(e) = send(pipe) {
+        eprintln!("neochumby-home: asking for {what}: {e}");
+        return;
+    }
+    fb.clear(rgb(0, 0, 0));
+    std::process::exit(0);
+}
+
+/// Whether the top button was pressed: a `button` line on the pipe since
+/// the last look. Never waits.
+fn button_pressed(pipe: Option<&mut Pipe>) -> bool {
+    pipe.is_some_and(|p| has_button(&p.receive().lines))
+}
+
+fn has_button(lines: &[String]) -> bool {
+    lines.iter().any(|l| Notice::parse(l) == Some(Notice::Button))
 }
 
 /// A neochumbyd the boot hook found but this Chumby is not paired with.
@@ -149,6 +180,7 @@ fn pairing_offer() -> Option<(String, u16)> {
 fn main() {
     neochumby::debug::install("neochumby-home");
     let mut fb = Fb::open().expect("/dev/fb0");
+    let mut pipe = Pipe::from_env();
     let mut touch = Touchscreen::open();
     let root = apps::root();
     let all = apps::all(&root);
@@ -173,22 +205,23 @@ fn main() {
                 }
                 Touch::Up => {
                     match pressed.take() {
-                        Some(Hit::ChumbyMode) => {
-                            fb.clear(rgb(0, 0, 0));
-                            return;
-                        }
+                        Some(Hit::ChumbyMode) => ask(&mut fb, pipe.as_mut(), "CHUMBY MODE", |p| p.chumby_mode()),
                         Some(Hit::App(i)) => {
-                            if let (true, Some(exec)) = (all[i].runnable(), &all[i].exec) {
-                                launch(&all[i], exec, &root);
+                            if all[i].runnable() {
+                                ask(&mut fb, pipe.as_mut(), &all[i].name, |p| p.open(&all[i].name));
                             }
                         }
                         Some(Hit::More) => screen.page = (screen.page + 1) % screen.pages(),
                         Some(Hit::Pair) => {
                             if let Some((server, port)) = screen.pairing.clone()
-                                && pair::run(&mut fb, &mut touch, &server, port, &root)
+                                && pair::run(&mut fb, &mut touch, &server, port, &root, || {
+                                    button_pressed(pipe.as_mut())
+                                })
                             {
                                 screen.pairing = None;
                             }
+                            // Back from pairing, by the button or not: the first page.
+                            screen.page = 0;
                         }
                         None => {}
                     }
@@ -198,10 +231,30 @@ fn main() {
                 }
             }
         }
+        if button_pressed(pipe.as_mut()) {
+            screen.button();
+            pressed = None;
+            draw(&mut fb, &all, &screen, None);
+        }
         if last_clock.elapsed() >= Duration::from_secs(1) {
             draw_clock(&mut fb);
             last_clock = Instant::now();
         }
         neochumby::sleep_ms(30);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_button_goes_back_to_the_first_page() {
+        let mut s = Screen { listed: (0..10).collect(), page: 2, pairing: None };
+        assert!(s.pages() > 2);
+        s.button();
+        assert_eq!(s.page, 0);
+        assert!(has_button(&["front wx".into(), "button".into()]));
+        assert!(!has_button(&["front wx".into(), "buttons".into()]));
     }
 }

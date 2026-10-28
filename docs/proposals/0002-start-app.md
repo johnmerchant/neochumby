@@ -39,9 +39,10 @@ What a Chumby actually needs is smaller.
      `start=doom` can't trap someone in Doom. The session refuses any other
      name, logs why, and opens `home`.
    - Declaring it is a promise: the app opens other apps through the
-     session, offers CHUMBY MODE and a way to the owner's settings, shows its
-     own main screen on `NEOCHUMBY_REASON=button`, and doesn't take the
-     button (`button = true`).
+     session, offers CHUMBY MODE and a way to the owner's settings, handles
+     the top button (a `button` line on its pipe, or
+     `NEOCHUMBY_REASON=button`) by showing its own main screen, and doesn't
+     take the button (`button = true`).
    - **The server's settings suggest such an app as the start app** when it
      is added to the tree (in `neochumbyd set` and the web page).
    - `neochumby-home` and wx declare it.
@@ -108,6 +109,14 @@ and decides who gets each press:
 - **For any other app, a press returns to the start app,** which is told why
   (`NEOCHUMBY_REASON=button`), so it can show its own main screen. This is
   the stock Chumby's behaviour.
+- **With the start app itself in front, a press is a `button` line** on its
+  pipe, so it can show its main screen without starting again (the session
+  writes to the front app's pipe, not only to services'). The write never
+  waits; if it fails (the pipe is closed or full), the session ends the
+  start app and opens it again with `NEOCHUMBY_REASON=button`, so a wedged
+  start app still recovers. An app that doesn't read its pipe simply
+  ignores the press; `neochumby-home` goes back to its first page, leaving
+  pairing if that's showing.
 - **There's no hold gesture on the button,** since games hold it to fire.
   The corner hold is the way out of anything.
 - **On `chumby-mode`, the session closes it,** so the stock software can open
