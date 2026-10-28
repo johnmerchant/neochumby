@@ -34,6 +34,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
+| `emu/` | chumby-emu: a Chumby Classic emulator that boots the stock firmware from your own flash backup; a host tool, built apart from the workspace | MIT |
 
 Everything we write is MIT, except in `apps/doom` and `apps/quake`. Doom
 and Quake link GPL engines, so each of those crates, our Rust in it
