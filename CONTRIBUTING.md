@@ -6,7 +6,8 @@ changes easy to take.
 ## Ground rules
 
 - **Rust** for everything we write. Third-party C (Doom's doomgeneric,
-  Quake's engine, fetch's fastfetch) is a git submodule, pinned to an
+  Quake's engine, fetch's fastfetch, htop, procps, ncurses) is a git
+  submodule, pinned to an
   upstream commit and left unchanged, and linked from a Rust crate. Where
   an app needs it to do otherwise, its `build.rs` builds that file with a
   function renamed, so that the app's own takes its place, and says why
@@ -35,7 +36,7 @@ The workspace denies `unsafe` code. Every raw system call lives in
 `crates/neochumby-sys`, behind safe functions, each `unsafe` block with a
 `// SAFETY:` comment saying why it holds; anything else needing one adds a
 function there, and uses std instead wherever std does the job safely. The
-games (Doom, Quake) and fetch are allowed it as FFI to their C. We use libc
+games (Doom, Quake), fetch, htop and top are allowed it as FFI to their C. We use libc
 rather than rustix: rustix calls the kernel directly and needs Linux 3.2,
 the Chumby runs 2.6.16, and its `ioctl` and `mmap` are `unsafe` too (see
 neochumby-sys's documentation).
@@ -43,13 +44,13 @@ neochumby-sys's documentation).
 ## Building and checking
 
 ```sh
-git submodule update --init   # the third-party C: Doom, Quake, fastfetch
+git submodule update --init   # the third-party C: Doom, Quake, fastfetch, htop, procps, ncurses
 rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # zig 0.17 on PATH (the C compiler, linker and musl): https://ziglang.org
 # CMake 3.21 or later, for fetch
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
-tools/tree /tmp/tree doom quake airplay fetch   # a whole tree, with apps
+tools/tree /tmp/tree doom quake airplay fetch htop top   # a whole tree, with apps
 ```
 
 CI runs the same checks on every pull request. To run them yourself:
@@ -283,7 +284,11 @@ Binaries named by `exec` and `service` are built for the Chumby
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
 crash reports (`debug`), the request pipe (`session`) and a terminal for a
-program written for one (`term::run`, which `apps/fetch` uses). The screen
+program written for one (`term::run`, which `apps/fetch` uses; the
+touchscreen is its mouse, and `term::run_tapping` makes a tap type a key,
+as `apps/top` quits). A C program that uses curses depends on
+`neochumby-ncurses` and builds against `DEP_NCURSESW_INCLUDE`
+(`apps/htop/build.rs`). The screen
 is 320x240 RGB565, so prerender what you can, and keep in mind that the CPU
 is a 266 MHz ARM926 with no FPU.
 

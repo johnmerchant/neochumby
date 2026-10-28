@@ -153,6 +153,11 @@ fn block_glyph(ch: char) -> Option<[u8; CELL_H]> {
         '▝' => quads(false, true, false, false),
         '▞' => quads(false, true, true, false),
         '▟' => quads(false, true, true, true),
+        // Not blocks, but no less wanted: htop's sort order.
+        '▲' => [0, 0, 0x20, 0x70, 0xf8, 0, 0, 0],
+        '△' => [0, 0, 0x20, 0x50, 0xf8, 0, 0, 0],
+        '▼' => [0, 0, 0xf8, 0x70, 0x20, 0, 0, 0],
+        '▽' => [0, 0, 0xf8, 0x50, 0x20, 0, 0, 0],
         _ => return None,
     })
 }
