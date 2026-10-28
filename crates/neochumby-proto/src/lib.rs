@@ -180,11 +180,14 @@ mod tests {
             Msg::Open { app: "airplay".into() },
             Msg::Data(vec![1, 2, 3]),
             Msg::Closed,
+            Msg::Config(vec![]),
+            Msg::Config(vec![("start".into(), "wx".into()), ("delivery".into(), "nfs".into())]),
         ] {
             assert_eq!(Msg::decode(&m.encode()).unwrap(), m);
         }
         assert!(Msg::decode(&[200]).is_err());
         assert!(Msg::decode(&[0, 9, 0]).is_err());
+        assert!(Msg::decode(&[9, 0, 1]).is_err());
     }
 
     #[test]
