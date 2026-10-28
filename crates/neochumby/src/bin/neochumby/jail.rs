@@ -1,0 +1,181 @@
+//! Where the session runs apps: each in a jail of its own
+//! (neochumby_sys::jail), holding what its manifest's `access` lists and
+//! nothing else, as a user of its own.
+//!
+//! The jail of an app, whether its `exec` (in front) or its service:
+//!
+//!   /mnt/neochumby/apps/<name>/   its directory, bound from the tree, read-
+//!                                 only (the tree is); NEOCHUMBY_ROOT and its
+//!                                 working directory
+//!   /tmp                          its own tmpfs (nosuid, nodev), HOME
+//!   /dev/null zero random urandom
+//!
+//! and, as its `access` lists:
+//!
+//!   screen    /dev/fb0                     (its exec only)
+//!   touch     /dev/input/event0, and the calibration, /psp/ts_settings,
+//!             read-only                    (its exec only)
+//!   speaker   /dev/dsp, and /tmp/neochumby, where processes hand the
+//!             speaker over (neochumby::audio), shared by every app that
+//!             lists it; the mute and the volume are the session's
+//!   accel     /dev/accel
+//!   system    /proc, /sys and /etc
+//!
+//! Each app runs as its own uid (from FIRST_UID, in the tree's name order:
+//! an app's exec and its service share one), with a group of the same id
+//! and, if it lists `speaker`, SPEAKER_GID beside it. Its devices are made
+//! anew in its jail, its own; the host's /dev is left as it is. It may have
+//! PROCESSES processes, FILES descriptors and no core dumps.
+//!
+//! `access = ["root"]` (home) and the session's own services
+//! (neochumby-sync) run as before: root, unjailed.
+//!
+//! Jails need root and the mounts it can make. dev/emulate (user-mode
+//! QEMU) allows neither, so it sets NEOCHUMBY_JAIL=off, and the session
+//! then runs every app as root, saying so once.
+
+use std::ffi::OsStr;
+use std::io;
+use std::os::fd::RawFd;
+use std::os::unix::fs::{PermissionsExt, chown};
+use std::path::Path;
+use std::sync::OnceLock;
+
+use neochumby::apps::App;
+use neochumby::input;
+use neochumby_sys::jail::{Jail, Limit, Process, User};
+
+/// Where each jail's root is mounted, in its own mount namespace.
+const MOUNT_POINT: &str = "/tmp/neochumby-jail";
+/// The first app's uid.
+const FIRST_UID: u32 = 20000;
+/// The group that may hand the speaker over.
+const SPEAKER_GID: u32 = 19999;
+/// The variable that turns jails off, for dev/emulate.
+pub const OFF_ENV: &str = "NEOCHUMBY_JAIL";
+
+const PROCESSES: u32 = 64;
+const FILES: u32 = 256;
+/// The jail's root and the app's /tmp, in KiB.
+const ROOT_KIB: u32 = 256;
+const TMP_KIB: u32 = 4096;
+
+/// What an app is started as: its exec, in front, or its service.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Role {
+    Front,
+    Service,
+}
+
+/// The apps' names, in the tree's order, which gives their uids.
+static JAILS: OnceLock<Vec<String>> = OnceLock::new();
+
+/// Turns jails on for `apps` (the tree's, in name order), unless they
+/// can't be: not root, or NEOCHUMBY_JAIL=off. Once, as the session starts;
+/// until then, and in tests, nothing is jailed.
+pub fn init(apps: &[App]) {
+    if std::env::var(OFF_ENV).as_deref() == Ok("off") {
+        eprintln!("neochumby: {OFF_ENV}=off: every app runs as root, unjailed");
+        return;
+    }
+    if !neochumby_sys::process::is_root() {
+        eprintln!("neochumby: not root: apps run as this user, unjailed");
+        return;
+    }
+    // Jails stay on even so: an app's own start fails, and says why.
+    if let Err(e) = prepare() {
+        eprintln!("neochumby: preparing jails: {e}");
+    }
+    let _ = JAILS.set(apps.iter().map(|a| a.name.clone()).collect());
+}
+
+/// The mount point, and /tmp/neochumby for the speaker's handover: the
+/// session's, and SPEAKER_GID's.
+fn prepare() -> io::Result<()> {
+    std::fs::create_dir_all(MOUNT_POINT)?;
+    std::fs::set_permissions(MOUNT_POINT, std::fs::Permissions::from_mode(0o700))?;
+    let speaker = neochumby_sys::speaker::DIR;
+    std::fs::create_dir_all(speaker)?;
+    chown(speaker, Some(0), Some(SPEAKER_GID))?;
+    std::fs::set_permissions(speaker, std::fs::Permissions::from_mode(0o770))
+}
+
+/// Whether `app` runs jailed.
+pub fn jailed(app: &App) -> bool {
+    JAILS.get().is_some() && !app.access.root
+}
+
+/// The uid `app` runs as, jailed.
+fn uid(app: &App) -> io::Result<u32> {
+    let names = JAILS.get().ok_or_else(|| io::Error::other("jails are off"))?;
+    let i = names.iter().position(|n| *n == app.name).ok_or_else(|| io::Error::other("not in the tree"))?;
+    Ok(FIRST_UID + i as u32)
+}
+
+/// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
+/// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment and the
+/// descriptors in `keep`.
+pub fn start(
+    app: &App,
+    exe: &Path,
+    role: Role,
+    root: &Path,
+    mut env: Vec<(String, String)>,
+    keep: &[RawFd],
+) -> io::Result<Process> {
+    let uid = uid(app)?;
+    let a = app.access;
+    let front = role == Role::Front;
+    let path = |p: &Path| {
+        p.to_str().map(str::to_string).ok_or_else(|| io::Error::other(format!("{}: not UTF-8", p.display())))
+    };
+    let dir = path(&app.dir)?;
+    let exe = path(exe)?;
+
+    let mut j = Jail::new(Path::new(MOUNT_POINT), ROOT_KIB)?;
+    j.bind(&app.dir, &dir)?;
+    j.tmpfs("/tmp", TMP_KIB, 0o700, uid, uid)?;
+    for d in ["null", "zero", "random", "urandom"] {
+        let p = format!("/dev/{d}");
+        j.device(&p, Path::new(&p), 0o666, 0, 0)?;
+    }
+    if a.screen && front {
+        j.device("/dev/fb0", Path::new("/dev/fb0"), 0o600, uid, uid)?;
+    }
+    if a.touch && front {
+        j.device(input::TOUCHSCREEN, Path::new(input::TOUCHSCREEN), 0o600, uid, uid)?;
+        if let Ok(c) = std::fs::read(input::CALIBRATION) {
+            j.file(input::CALIBRATION, c, 0o444, 0, 0)?;
+        }
+    }
+    let mut groups = Vec::new();
+    if a.speaker {
+        j.device("/dev/dsp", Path::new("/dev/dsp"), 0o600, uid, uid)?;
+        let handover = neochumby_sys::speaker::DIR;
+        j.bind(Path::new(handover), handover)?;
+        groups.push(SPEAKER_GID);
+    }
+    if a.accel {
+        j.device("/dev/accel", Path::new("/dev/accel"), 0o600, uid, uid)?;
+    }
+    if a.system {
+        j.kernel_fs("proc", "/proc")?;
+        j.kernel_fs("sysfs", "/sys")?;
+        j.bind(Path::new("/etc"), "/etc")?;
+    }
+    j.limit(Limit::Processes(PROCESSES)).limit(Limit::Files(FILES)).limit(Limit::Core(0));
+
+    env.push(("NEOCHUMBY_ROOT".into(), path(root)?));
+    env.push(("HOME".into(), "/tmp".into()));
+    env.push(("PATH".into(), dir.clone()));
+    // What the boot hook gave the session for its apps (the server, say),
+    // and the time zone.
+    for (k, v) in std::env::vars() {
+        if (k.starts_with("NEOCHUMBY_") && k != OFF_ENV && !env.iter().any(|(e, _)| *e == k)) || k == "TZ" {
+            env.push((k, v));
+        }
+    }
+    let user = User { uid, gid: uid, groups };
+    let args: [&OsStr; 0] = [];
+    j.spawn(&exe, &args, &env, &dir, &user, keep)
+}

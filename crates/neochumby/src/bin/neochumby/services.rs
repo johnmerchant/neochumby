@@ -19,15 +19,16 @@
 //! interruption rules never come into it.
 
 use std::path::Path;
-use std::process::Child;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
 use neochumby::session::{Notice, Pipe, Request};
 
+use neochumby_sys::jail::Process;
 use neochumby_sys::process::{Signal, exited, kill_group};
 
 use crate::child;
+use crate::jail::Role;
 
 /// The waits between a service's runs.
 #[derive(Clone, Copy)]
@@ -54,7 +55,7 @@ impl Backoff {
 }
 
 struct Running {
-    child: Child,
+    child: Process,
     pipe: Pipe,
     since: Instant,
     /// The app in front, if this service hasn't been told yet: its pipe
@@ -174,7 +175,7 @@ impl<'a> Services<'a> {
 
 impl Service<'_> {
     fn start(&mut self, root: &Path, front: &str) {
-        match child::spawn(child::command(self.exe, &self.app.dir, root), &[]) {
+        match child::launch(self.app, self.exe, Role::Service, root).spawn() {
             Ok((child, pipe)) => {
                 eprintln!("neochumby: service {} started", self.app.name);
                 let mut r = Running { child, pipe, since: Instant::now(), untold: None };

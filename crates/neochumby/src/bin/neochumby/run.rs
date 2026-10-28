@@ -46,16 +46,18 @@
 
 use std::os::fd::RawFd;
 use std::path::Path;
-use std::process::{Child, ExitStatus};
+use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
 use neochumby::session::{Notice, Pipe, Request};
 
+use neochumby_sys::jail::Process;
 use neochumby_sys::process::exited;
 
 use crate::button::Edges;
 use crate::child;
+use crate::jail::Role;
 use crate::services::{Backoff, Services};
 use crate::start;
 
@@ -144,7 +146,7 @@ enum Next<'a> {
 /// The app in front.
 struct Front<'a> {
     app: &'a App,
-    child: Child,
+    child: Process,
     pipe: Pipe,
     /// What it asked for, and when it first asked.
     asked: Option<(Next<'a>, Instant)>,
@@ -254,19 +256,17 @@ impl<'a, D: Device> Session<'a, D> {
 
     fn open(&mut self, app: &'a App, reason: Option<&'static str>) -> std::io::Result<Front<'a>> {
         let exe = app.exec.as_ref().ok_or_else(|| std::io::Error::other("no exec"))?;
-        let mut cmd = child::command(exe, &app.dir, self.root);
+        let mut launch = child::launch(app, exe, Role::Front, self.root);
         if let Some(r) = reason {
-            cmd.env(neochumby::session::REASON_ENV, r);
+            launch.env(neochumby::session::REASON_ENV, r);
         }
         eprintln!("neochumby: opening {}{}", app.name, reason.map(|r| format!(" ({r})")).unwrap_or_default());
-        let mut inherit = Vec::new();
         if app.button
             && let Some(fd) = self.device.button_fd()
         {
-            cmd.env(neochumby::input::BUTTON_ENV, fd.to_string());
-            inherit.push(fd);
+            launch.env(neochumby::input::BUTTON_ENV, fd.to_string()).keep(fd);
         }
-        let (child, pipe) = child::spawn(cmd, &inherit)?;
+        let (child, pipe) = launch.spawn()?;
         self.services.front(&app.name);
         Ok(Front { app, child, pipe, asked: None, unknown: 0 })
     }
@@ -866,6 +866,9 @@ mod tests {
             neochumby::sleep_ms(100);
             down.store(false, Ordering::SeqCst);
             wait_for(&r, "game");
+            // Up for a few of the session's ticks first, so that it sees the
+            // release whenever the game opened.
+            neochumby::sleep_ms(100);
             press(&down);
         });
         run_on(&root, &[("settings", "wx")], fake);

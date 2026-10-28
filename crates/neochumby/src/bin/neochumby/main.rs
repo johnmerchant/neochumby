@@ -39,6 +39,7 @@
 mod button;
 mod child;
 mod devlink;
+mod jail;
 mod run;
 mod services;
 mod start;
@@ -249,6 +250,7 @@ fn session() {
     let link = devlink::Link::start();
     let root = apps::root();
     let all = apps::all(&root);
+    jail::init(&all);
     match conf::refresh_hook(&root) {
         Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
         Ok(false) => {}

@@ -39,6 +39,12 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
 }
 
+/// Whether this process runs as root (its effective uid is 0).
+pub fn is_root() -> bool {
+    // SAFETY: geteuid(2) takes nothing and cannot fail.
+    unsafe { libc::geteuid() == 0 }
+}
+
 /// Lowers this process's priority by `by` (nice(2)); 19 is the lowest. A
 /// process may always lower its own, so nothing is reported.
 pub fn lower_priority(by: u8) {
