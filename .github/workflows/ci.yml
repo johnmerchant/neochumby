@@ -25,13 +25,13 @@ jobs:
         with:
           components: rustfmt, clippy
       - run: cargo fmt --all --check
-      # The crates that build for the host: the protocol, neochumbyd,
-      # AirPlay's companion, and neochumby-classic's engine (its host build
-      # renders frames to files).
-      - run: cargo clippy -p neochumby-proto -p neochumbyd -p neochumby-manifest -- -D warnings
-      - run: cargo clippy -p neochumby-classic --all-targets -- -D warnings
+      # The crates that build for the host: the protocol, neochumbyd, the
+      # manifest tool, the system calls, the macros, AirPlay's companion,
+      # and neochumby-classic's engine (its host build renders frames to
+      # files).
+      - run: cargo clippy --all-targets -p neochumby-proto -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -- -D warnings
       - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
-      - run: cargo test -p neochumby-proto -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-classic
+      - run: cargo test -p neochumby-proto -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic
       - run: cargo test -p neochumby-proto --features noise
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
 

@@ -1,4 +1,5 @@
-//! Signals to other processes, by pid or by process group.
+//! Signals to other processes, by pid or by process group, and whether a
+//! process is alive.
 
 use std::io;
 
@@ -34,6 +35,20 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
 }
 
+/// Whether the process `pid` exists (a zombie, not yet reaped, counts), as
+/// kill(2) with no signal says: it does unless the kernel finds no such
+/// process. 0, or a value too large for a pid_t, is not a process.
+pub fn alive(pid: u32) -> bool {
+    let Ok(pid) = positive(pid) else { return false };
+    // SAFETY: kill(2) takes plain integers and touches no memory of ours;
+    // signal 0 sends nothing, and `pid` is a single process.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    // EPERM: it exists, but is another user's.
+    io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
+}
+
 fn positive(id: u32) -> io::Result<libc::pid_t> {
     match libc::pid_t::try_from(id) {
         Ok(p) if p > 0 => Ok(p),
@@ -62,6 +77,16 @@ mod tests {
         for id in [0, u32::MAX, 1 << 31] {
             assert_eq!(kill(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
             assert_eq!(kill_group(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+            assert!(!alive(id));
         }
+    }
+
+    #[test]
+    fn alive_until_reaped() {
+        assert!(alive(std::process::id()));
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!alive(pid));
     }
 }

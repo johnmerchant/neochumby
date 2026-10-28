@@ -69,7 +69,9 @@ An app can use any of these keys:
 - **`companion`:** an app with a server half ships it as a second binary.
   neochumbyd runs it for each Chumby that asks, and relays frames between
   the two halves over the paired connection. neochumbyd knows no app by
-  name.
+  name. An app with a companion sets `neochumbyd` too, and its Chumby half
+  opens it with `neochumby::companion!()`, which fails the build if the
+  app's `Cargo.toml` declares no companion.
 - **`home`:** the session (`neochumby`) runs the app named by `start=<app>`
   in this Chumby's settings from its neochumbyd (`neochumbyd set NAME
   start=<app>`, kept in `/psp/neochumby.settings`), else in
