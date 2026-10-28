@@ -51,9 +51,12 @@ crates), and `cargo test -p neochumby-proto -p neochumbyd`.
 `dev/emulate` runs a tree on a Linux PC as if it were a Chumby: the same
 static ARM binaries, unchanged, under qemu-arm user mode, chrooted in a fake
 root with the Chumby's paths. The screen is a file, and the touchscreen, top
-button and speaker are fakes you drive from outside. It needs Linux, root,
-FUSE, and qemu-user with its binfmt handler; on a Mac, use a Linux VM. CI
-boots every pull request's tree with it (`dev/emulate-smoke`).
+button and speaker are fakes you drive from outside. CI boots every pull
+request's tree with it (`dev/emulate-smoke`).
+
+It needs Linux, root, Python 3.9+, FUSE, util-linux's `mount` with loop
+devices, qemu-user's binfmt handler (static), and dosfstools for stick
+images. On a Mac, run it in a Linux VM.
 
 ```sh
 sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
@@ -74,12 +77,80 @@ dev/emulate stop
 - **A neochumbyd:** the emulator shares the PC's network, so a neochumbyd
   running on the PC can pair with it (`start --server 127.0.0.1 ...`).
 - **Inside:** `sudo dev/emulate exec /mnt/neochumby/neochumby sensors` runs
-  a binary beside the session. `/psp` is kept from run to run in
-  `target/emulate/psp`.
+  a binary beside the session.
+- **Its directory** is `/var/tmp/neochumby-emulate-UID`, root's, with the
+  screen, the log and `/psp` (kept from run to run). `--state DIR` picks
+  another; sudo drops `NEOCHUMBY_EMU`, so pass it with `sudo
+  --preserve-env=NEOCHUMBY_EMU`.
+- **Pictures and the like:** `start --bind DIR:/tmp/classic` puts a host
+  directory in the fake root, read-only. `dev/emulate compare RAW ...` says
+  which 320x240 RGB565 picture the screen is most like.
+
+The session runs as root, as on the Chumby, but without the capabilities
+that would let it out of the fake root or into the PC's settings: no
+mounts, chroot, modules, raw devices or network setup, and `/proc/sys` is
+read-only.
+
+### Scenarios
+
+**neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; CI runs it
+once classic is a start app, #26).
+classic is the start app (`start=classic` in `/psp/neochumby.conf`), with
+pictures from neochumby-classic's offline smoke render (`python3
+tests/smoke.py --out PICTURES` in that repository): made-up data and
+placeholder artwork. The script checks that:
+- classic draws a slideshow page;
+- the top button toggles Home and back without restarting classic;
+- a tap zone's `app doom` opens Doom through the session's pipe, and
+  classic comes back when Doom exits;
+- classic's service starts once, hears that Doom is in front, and keeps
+  running;
+- CHUMBY on Home ends the session with exit 0.
+
+No renderer lists apps yet, so the script adds one `app doom` tap zone to
+its copy of Settings.
+
+**Sync** (manual, not in CI). It needs a paired Chumby and neochumbyd's
+side of a round, so it waits until `delivery=sync` (#10) and the session
+PRs are both in `main`. Then, as root on one Linux PC (not yet run, so
+expect to adjust it):
+
+```sh
+tools/tree /tmp/tree doom && cargo neochumbyd
+B=target/x86_64-unknown-linux-musl/release/neochumbyd
+$B serve --state /tmp/nd --tree /tmp/tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049 &
+dev/emulate mkstick /tmp/stick.img            # an empty FAT stick
+dev/emulate start --stick /tmp/stick.img --server 127.0.0.1 /tmp/tree
+dev/emulate tap 80 220                        # PAIR, on neochumby-home
+$B pairing --state /tmp/nd                    # the same code as the screen
+$B approve CODE --state /tmp/nd
+$B set chumby delivery=sync --state /tmp/nd   # the emulator's name: chumby
+dev/emulate stop
+dev/emulate start --stick /tmp/stick.img /tmp/tree   # paired now: settings fetched
+dev/emulate wait log 'neochumby-sync' 120      # the receiver's first round
+```
+
+Then check, from the PC, with the stick image mounted read-only:
+- `neochumby/a/` (or `b/`) holds the tree;
+- its `.complete` marker is whole, and `current` names it;
+- `dev/emulate exec /mnt/usb/neochumby/neochumby check-set
+  /mnt/usb/neochumby/a` agrees.
+
+For the next boot, the boot hook won't run here: it needs BusyBox. Start
+the set `current` names in its place, with `--run`:
+
+```sh
+dev/emulate start --stick /tmp/stick.img --run /mnt/usb/neochumby/a/neochumby
+```
+
+Then change a file in `/tmp/tree` and wait for a round to write the other
+set and flip `current`. A power cut mid-round can be approximated by
+`dev/emulate stop` (SIGKILL) during a large file. That shows the journal
+and resume logic, not FAT's behaviour.
 
 `dev/emulate --help` lists the fake devices and what each does. What it
-can't catch is what the full-system emulator (`emu/`, #19: the whole
-Chumby, stock firmware included) and real devices are for:
+can't catch is what full-system emulation (the whole Chumby, its stock
+firmware included, still to come) and real devices are for:
 
 - **The 2.6.16 kernel.** System calls go to the PC's kernel. Futex flags
   that kernel lacks, `nanosleep` failing with `EINVAL` on restart, and newer
