@@ -72,9 +72,12 @@ fn handle(api: &Api, tcp: TcpStream) -> io::Result<()> {
                 return s.send(&Msg::Unpaired);
             };
             s.send(&Msg::Welcome)?;
-            match s.recv()? {
-                Msg::Open { app } => companion::run(&api.tree, &api.state_dir, &name, &app, s),
-                _ => Ok(()),
+            s.send(&Msg::Config(api.state.config(&name)))?;
+            match s.recv() {
+                Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &name, &app, s),
+                // A Chumby that came only for its settings hangs up.
+                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+                r => r.map(|_| ()),
             }
         }
         Msg::Pair { name } if valid_name(&name) => {

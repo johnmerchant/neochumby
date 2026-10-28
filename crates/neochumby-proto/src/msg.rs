@@ -26,6 +26,10 @@ pub enum Msg {
     Data(Vec<u8>),
     /// neochumbyd: the companion has gone (or the app has none).
     Closed,
+    /// neochumbyd, right after `Welcome`: this Chumby's settings as its
+    /// owner chose them on the server, as key/value pairs (`home` names the
+    /// home screen). A Chumby that has no use for them reads past them.
+    Config(Vec<(String, String)>),
 }
 
 impl Msg {
@@ -61,6 +65,14 @@ impl Msg {
                 b.extend_from_slice(d);
             }
             Msg::Closed => b.push(8),
+            Msg::Config(pairs) => {
+                b.push(9);
+                b.extend_from_slice(&(pairs.len() as u16).to_be_bytes());
+                for (k, v) in pairs {
+                    s(&mut b, k);
+                    s(&mut b, v);
+                }
+            }
         }
         b
     }
@@ -98,6 +110,15 @@ impl Msg {
                 Msg::Data(d)
             }
             8 => Msg::Closed,
+            9 => {
+                let n = u16_(&mut rest)?;
+                let mut pairs = Vec::new();
+                for _ in 0..n {
+                    let k = string(&mut rest)?;
+                    pairs.push((k, string(&mut rest)?));
+                }
+                Msg::Config(pairs)
+            }
             _ => return Err(invalid("unknown message")),
         };
         if !rest.is_empty() {

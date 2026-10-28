@@ -5,7 +5,9 @@
 //! carries on with the Chumby's own software.
 //!
 //! The home screen is an app whose manifest has `home=`: the one named by
-//! `home=<app>` in /psp/neochumby.conf, else neochumby-home (apps/home).
+//! `home=<app>` in this Chumby's settings from its neochumbyd
+//! (neochumby::settings, kept in /psp for boots without it), else in
+//! /psp/neochumby.conf, else neochumby-home (apps/home).
 //! Holding the top-left corner of the screen for three seconds, whatever
 //! is running, ends the home screen and whatever it started, and brings up
 //! neochumby-home: the way back from a home screen that has gone wrong. A
@@ -30,6 +32,7 @@ use neochumby::apps::{self, App};
 use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
+use neochumby::settings;
 
 /// The built-in home screen, apps/<this>: the fallback.
 const DEFAULT_HOME: &str = "home";
@@ -153,7 +156,12 @@ fn session() {
 
     let is_home = |name: &str| all.iter().find(|a| a.name == name && a.home.is_some());
     let fallback = is_home(DEFAULT_HOME);
-    let chosen = conf::get(conf::CONF, "home").and_then(|n| is_home(&n)).or(fallback);
+    let settings = settings::load();
+    let chosen = settings::get(&settings, "home")
+        .map(String::from)
+        .or_else(|| conf::get(conf::CONF, "home"))
+        .and_then(|n| is_home(&n))
+        .or(fallback);
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
