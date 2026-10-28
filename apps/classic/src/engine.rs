@@ -269,8 +269,7 @@ fn run_path(var: &str, name: &str) -> Option<PathBuf> {
     let _ = std::fs::DirBuilder::new().mode(0o700).create(d);
     let ok = std::fs::symlink_metadata(d).is_ok_and(|m| {
         use std::os::unix::fs::MetadataExt;
-        // SAFETY: getuid() only returns the user id.
-        m.is_dir() && m.uid() == unsafe { libc::getuid() }
+        m.is_dir() && m.uid() == neochumby_sys::process::uid()
     });
     if !ok || std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).is_err() {
         eprintln!("{RUN_DIR} isn't a directory of ours: no {name} file");
@@ -1457,12 +1456,12 @@ impl<P: Plat> Engine<P> {
                 continue;
             }
             let q = &self.m.gsqs[g];
-            let Some(d) = self.c.bytes(q.frames[self.gsq_shown[g] as usize]) else { continue };
-            let sz = d.len();
+            let Some((d, sz)) = self.c.bytes(q.frames[self.gsq_shown[g] as usize]) else { continue };
             if sz < 4 {
                 continue;
             }
-            let word = |o: usize| u32::from_le_bytes([d[o], d[o + 1], d[o + 2], d[o + 3]]);
+            let b = |o: usize| cache::byte(d, o);
+            let word = |o: usize| u32::from_le_bytes([b(o), b(o + 1), b(o + 2), b(o + 3)]);
             let cnt = word(0);
             let mut off = 4;
             let mut k = 0;
@@ -1475,7 +1474,7 @@ impl<P: Plat> Engine<P> {
                     break;
                 }
                 for j in 0..len {
-                    let v = d[off + j];
+                    let v = b(off + j);
                     if v != 0 {
                         add_light(&mut self.back[start + j], q.lut[v as usize], 8);
                     }
@@ -2052,7 +2051,8 @@ impl<P: Plat> Engine<P> {
              fx_last_work_us_avg={}\nfx_last_work_us_max={}\nfx_last_fps_x10={}\nfx_last_logo_us_avg={}\n\
              fx_last_logo_us_max={}\nfx_hold_logo_us={}\n",
             std::process::id(),
-            self.loader.as_ref().map_or(-1, Loader::tid),
+            // The loader is a thread of this process.
+            if self.loader.is_some() { std::process::id() as i64 } else { -1 },
             self.plat.wall(),
             if self.scr >= 0 { "screen" } else { "slideshow" },
             if self.scr >= 0 { self.m.screens[self.scr as usize].name.as_str() } else { "-" },

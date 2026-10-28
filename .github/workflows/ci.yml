@@ -31,7 +31,7 @@ jobs:
       - run: cargo clippy -p neochumby-proto -p neochumbyd -p neochumby-manifest -- -D warnings
       - run: cargo clippy -p neochumby-classic --all-targets -- -D warnings
       - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
-      - run: cargo test -p neochumby-proto -p neochumbyd -p neochumby-manifest -p neochumby-classic
+      - run: cargo test -p neochumby-proto -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-classic
       - run: cargo test -p neochumby-proto --features noise
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
 

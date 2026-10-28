@@ -16,16 +16,6 @@ use crate::plat::{Plat, Touch, wall_now};
 /// /proc/sys/sense1/brightness, 0..65535; 12000 already looks very dark.
 const NIGHT_BRIGHTNESS: u32 = 9000;
 
-/// CLOCK_MONOTONIC in microseconds.
-// The casts matter: time_t and long are 32 or 64 bits, by target and libc.
-#[allow(clippy::unnecessary_cast)]
-fn monotonic_us() -> i64 {
-    let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };
-    // SAFETY: writes only t.
-    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut t) };
-    t.tv_sec as i64 * 1_000_000 + t.tv_nsec as i64 / 1000
-}
-
 pub struct Device {
     fb: Fb,
     touch: Touchscreen,
@@ -34,6 +24,8 @@ pub struct Device {
     events: VecDeque<Touch>,
     polled: bool,
     last: (i32, i32),
+    /// The monotonic clock's origin.
+    t0: std::time::Instant,
 }
 
 /// Runs a command line through sh in the background, its arguments as
@@ -105,7 +97,9 @@ impl Plat for Device {
     }
 
     fn now_us(&self) -> i64 {
-        monotonic_us()
+        // Monotonic (std's Instant is CLOCK_MONOTONIC), from an origin
+        // far enough back that times are never negative.
+        self.t0.elapsed().as_micros() as i64 + 1_000_000_000
     }
 
     fn wall(&self) -> i64 {
@@ -163,6 +157,7 @@ pub fn run(dir: PathBuf) -> i32 {
         events: VecDeque::new(),
         polled: false,
         last: (0, 0),
+        t0: std::time::Instant::now(),
     };
     let mut e = Engine::new(d, Box::new(DirectExec), dir);
     e.start();

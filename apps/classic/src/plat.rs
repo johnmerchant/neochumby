@@ -47,18 +47,12 @@ pub trait Plat {
 }
 
 /// The hour, minute and second at `t` in the local time zone (TZ).
-// libc marks musl's 32-bit time_t deprecated (it becomes 64-bit with musl
-// 1.2); either width holds the time until 2038.
-#[allow(deprecated)]
 pub fn local_hms(t: i64) -> (i32, i32, i32) {
-    let now = t as libc::time_t;
-    // SAFETY: localtime_r writes only the tm it is given.
-    let mut tm: libc::tm = unsafe { std::mem::zeroed() };
-    unsafe { libc::localtime_r(&now, &mut tm) };
-    (tm.tm_hour, tm.tm_min, tm.tm_sec)
+    let l = neochumby_sys::time::local_time_at(t);
+    (l.hour as i32, l.minute as i32, l.second as i32)
 }
 
+/// The wall clock, in seconds since the epoch.
 pub fn wall_now() -> i64 {
-    // SAFETY: time(NULL) only returns the time.
-    unsafe { libc::time(std::ptr::null_mut()) as i64 }
+    std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_secs() as i64)
 }

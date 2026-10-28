@@ -32,6 +32,8 @@
 
 #![allow(unsafe_code)]
 
+pub mod chan;
+pub mod fs;
 pub mod net;
 pub mod process;
 pub mod time;

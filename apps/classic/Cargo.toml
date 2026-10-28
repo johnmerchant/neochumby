@@ -8,6 +8,7 @@ publish.workspace = true
 
 [dependencies]
 libc.workspace = true
+neochumby-sys.workspace = true
 
 # Only the Chumby's build uses the device library. On the host the binary
 # renders frames to files (`neochumby-classic render`), so the engine is checked
@@ -21,3 +22,6 @@ neochumby.workspace = true
 # session's side has landed.
 [package.metadata.neochumby]
 exec = "neochumby-classic"
+
+[lints]
+workspace = true

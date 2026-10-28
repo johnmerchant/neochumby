@@ -60,21 +60,31 @@ pub fn alloc(size: usize) -> Option<Vec<u16>> {
     Some(v)
 }
 
-/// The bytes of a word buffer, in memory order (little-endian here, as the
-/// files are).
-pub fn as_bytes(w: &[u16]) -> &[u8] {
-    // SAFETY: u8 has no alignment or validity requirements, and the length
-    // covers exactly the words' memory.
-    unsafe { std::slice::from_raw_parts(w.as_ptr().cast(), w.len() * 2) }
+/// Byte `k` of the file held in words (little-endian pairs).
+#[inline]
+pub fn byte(w: &[u16], k: usize) -> u8 {
+    (w[k / 2] >> (8 * (k & 1))) as u8
 }
 
-pub fn as_bytes_mut(w: &mut [u16]) -> &mut [u8] {
-    // SAFETY: as above; every byte pattern is a valid u16.
-    unsafe { std::slice::from_raw_parts_mut(w.as_mut_ptr().cast(), w.len() * 2) }
+/// Puts `src`, the file's bytes from offset `at`, into its words.
+pub fn put_bytes(w: &mut [u16], mut at: usize, mut src: &[u8]) {
+    if at % 2 == 1
+        && let Some((&b, rest)) = src.split_first()
+    {
+        w[at / 2] = (w[at / 2] & 0x00FF) | (b as u16) << 8;
+        at += 1;
+        src = rest;
+    }
+    let pairs = src.chunks_exact(2);
+    let odd = pairs.remainder().first().copied();
+    for (d, p) in w[at / 2..].iter_mut().zip(pairs) {
+        *d = u16::from_le_bytes([p[0], p[1]]);
+    }
+    if let Some(b) = odd {
+        let i = (at + src.len()) / 2;
+        w[i] = (w[i] & 0xFF00) | b as u16;
+    }
 }
-
-#[cfg(target_endian = "big")]
-compile_error!("the pictures are little-endian RGB565, read straight into memory");
 
 impl Cache {
     pub fn new(budget: usize) -> Cache {
@@ -87,13 +97,14 @@ impl Cache {
         if a.state == State::Ready { a.data.as_deref() } else { None }
     }
 
-    /// The asset's bytes (exactly its size), if it is in memory and good.
-    pub fn bytes(&self, i: Option<usize>) -> Option<&[u8]> {
+    /// The asset's words and its size in bytes (see [`byte`]), if it is in
+    /// memory and good.
+    pub fn bytes(&self, i: Option<usize>) -> Option<(&[u16], usize)> {
         let a = self.assets.get(i?)?;
         if a.state != State::Ready {
             return None;
         }
-        Some(&as_bytes(a.data.as_deref()?)[..a.size])
+        Some((a.data.as_deref()?, a.size))
     }
 
     pub fn state(&self, i: usize) -> State {
@@ -254,7 +265,7 @@ mod tests {
         load(&mut c, 0, 1);
         load(&mut c, 1, 2);
         assert_eq!(c.bytes, 151);
-        assert_eq!(c.bytes(Some(1)).unwrap().len(), 51);
+        assert_eq!(c.bytes(Some(1)).unwrap().1, 51);
         assert_eq!(c.ready(), 2);
         c.evict(0);
         assert_eq!(c.bytes, 51);
@@ -305,6 +316,16 @@ mod tests {
         c.protect(1);
         assert!(c.make_room(100, false, &mut ev));
         assert_eq!(ev, vec![0]);
+    }
+
+    #[test]
+    fn bytes_into_words() {
+        let mut w = vec![0u16; 4];
+        put_bytes(&mut w, 0, &[1, 2, 3]);
+        put_bytes(&mut w, 3, &[4, 5]);
+        put_bytes(&mut w, 5, &[6, 7]);
+        assert_eq!(w, vec![0x0201, 0x0403, 0x0605, 0x0007]);
+        assert_eq!((0..7).map(|k| byte(&w, k)).collect::<Vec<_>>(), vec![1, 2, 3, 4, 5, 6, 7]);
     }
 
     #[test]
