@@ -182,8 +182,17 @@ pub fn may_interrupt(from: &str, start: &str, front: &App, suppressed: bool) -> 
 }
 
 impl<'a, D: Device> Session<'a, D> {
-    pub fn new(apps: &'a [App], root: &'a Path, start: &'a App, device: D, timing: Timing) -> Session<'a, D> {
-        let services = Services::new(apps, root, timing.service_backoff);
+    /// `core` are the session's own services (services.rs), beside the
+    /// apps'.
+    pub fn new(
+        apps: &'a [App],
+        core: &'a [App],
+        root: &'a Path,
+        start: &'a App,
+        device: D,
+        timing: Timing,
+    ) -> Session<'a, D> {
+        let services = Services::new(apps, core, root, timing.service_backoff);
         Session {
             apps,
             root,
@@ -615,7 +624,7 @@ mod tests {
     fn run_timed(root: &Path, choices: &[(&str, &str)], fake: Fake, timing: Timing) -> Ended {
         let all = apps::all(root);
         let start = start::choose(&all, choices.first().copied()).expect("a start app");
-        Session::new(&all, root, start, fake, timing).run()
+        Session::new(&all, &[], root, start, fake, timing).run()
     }
 
     /// Waits for the process whose pid is in `pid_file` to be gone.
@@ -1062,6 +1071,38 @@ mod tests {
         assert!((4..=9).contains(&runs), "{runs} runs");
         // One for each exit, and one as the session ends.
         assert!(resets.load(Ordering::SeqCst) >= runs, "{runs} runs, {resets:?} resets");
+    }
+
+    /// The session's own service (neochumby-sync): restarted like an app's,
+    /// never told what is in front, and nothing it asks for is done.
+    #[test]
+    fn a_core_service_is_restarted_and_never_heard() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree("core", &[("wx", "start=true\n", "sleep 1\nask chumby-mode"), ("game", "", "exit 0")]);
+        script(
+            &root.join("core"),
+            "core",
+            "if [ $runs = 1 ]; then ask 'open game'; ask chumby-mode; exit 1; fi\n\
+             while read -r line <&\"$NEOCHUMBY_SESSION\"; do echo \"core-heard $line\" >> \"$log\"; done",
+        );
+        let core = [App {
+            dir: root.clone(),
+            name: "core".into(),
+            title: None,
+            exec: None,
+            colour: 0,
+            service: Some(root.join("core")),
+            needs: apps::Needs::Required,
+            start: false,
+            interrupt: false,
+            button: false,
+        }];
+        let all = apps::all(&root);
+        let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");
+        Session::new(&all, &core, &root, start, Fake::default(), timing()).run();
+        assert_eq!(apps_log(&root).into_iter().filter(|l| !l.starts_with("core")).collect::<Vec<_>>(), ["wx"]);
+        assert!(log(&root).iter().filter(|l| *l == "core").count() >= 2, "restarted: {:?}", log(&root));
+        assert!(!log(&root).iter().any(|l| l.starts_with("core-heard")), "told: {:?}", log(&root));
     }
 
     #[test]

@@ -6,11 +6,13 @@ members = [
     "crates/neochumby-manifest",
     "crates/neochumby-proto",
     "crates/neochumby-softfloat",
+    "crates/neochumby-sync",
     "crates/neochumby-sys",
     "crates/neochumbyd",
     "apps/airplay",
     "apps/home",
     "apps/doom",
+    "apps/fetch",
     "apps/quake",
 ]
 
@@ -25,6 +27,7 @@ neochumby = { path = "crates/neochumby" }
 neochumby-macros = { path = "crates/neochumby-macros" }
 neochumby-softfloat = { path = "crates/neochumby-softfloat" }
 neochumby-proto = { path = "crates/neochumby-proto" }
+neochumby-sync = { path = "crates/neochumby-sync" }
 neochumby-sys = { path = "crates/neochumby-sys" }
 toml = "0.8"
 
