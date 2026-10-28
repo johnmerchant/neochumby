@@ -15,15 +15,13 @@
 //! connection goes.
 
 use std::io::{self, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
 use neochumby::audio::{self, Speaker};
-use neochumby::conf::{self, Paired};
-use neochumby_proto::{Identity, Msg, Session, unhex_key};
+use neochumby::companion;
+use neochumby::conf;
+use neochumby_proto::{Identity, Msg, Session};
 
-/// This app, as neochumbyd knows it: its directory in the tree.
-const APP: &str = "airplay";
 // The companion's frames.
 const AUDIO: u8 = 0;
 const END: u8 = 1;
@@ -36,29 +34,6 @@ const PLAY_VOLUME: u32 = 90;
 /// The speaker for AirPlay's stream: 16-bit stereo at 44.1 kHz.
 fn open_speaker() -> io::Result<Speaker> {
     Speaker::open(2, 44100, PLAY_VOLUME)
-}
-
-fn session(p: &Paired, me: &Identity) -> io::Result<Session> {
-    let server_key = unhex_key(&p.server_key)?;
-    let addr = (p.server.as_str(), p.api_port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address"))?;
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(10))?;
-    let mut s = Session::connect(tcp, me)?;
-    if s.peer() != &server_key {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"));
-    }
-    s.send(&Msg::Hello { name: conf::name() })?;
-    match s.recv()? {
-        Msg::Welcome => {}
-        Msg::Unpaired => {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "neochumbyd no longer pairs with this Chumby"));
-        }
-        m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
-    }
-    s.send(&Msg::Open { app: APP.into() })?;
-    Ok(s)
 }
 
 /// Having asked for the speaker, or given it up: when to look again. Soon,
@@ -142,7 +117,7 @@ fn main() {
     let mut backoff = 2;
     loop {
         let started = Instant::now();
-        let r = session(&p, &me).and_then(play);
+        let r = companion::open(neochumby::companion!(), &p, &me).and_then(play);
         // The stream has gone with the connection: so has any wish for the
         // speaker.
         audio::withdraw();
