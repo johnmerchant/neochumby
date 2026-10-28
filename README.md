@@ -1,15 +1,20 @@
 # neochumby
 
-New software for the original Chumby (the Chumby Classic, 2008): a home
-screen and apps in Rust, booted from a stick or over the network, with the
-Chumby's own firmware left as it is.
+New software for the original Chumby (the Chumby Classic, 2008): apps in
+Rust, booted from a stick or over the network, with the Chumby's own
+firmware left as it is.
 
 Nothing is flashed. The stock boot script runs a hook from a stick or from
 the Chumby's writable settings partition, and the hook runs neochumby from
-the stick or from an NFS export. **CHUMBY MODE** on the home screen hands
+the stick or from an NFS export. **CHUMBY MODE** in the app list hands
 the Chumby back to its stock software, and a reboot brings neochumby back.
 Every binary is paged in as it runs, so apps cost the Chumby nothing until
 opened.
+
+An independent project, not affiliated with or endorsed by Chumby
+Industries, Blue Octy or anyone holding rights in Chumby; "Chumby" is a
+trademark of its owner. None of the Chumby's own software is distributed
+here: see [docs/legal.md](docs/legal.md).
 
 ## The hardware
 
@@ -23,11 +28,11 @@ binaries are static (musl), so they don't depend on its userland.
 
 | Path | What | Licence |
 | --- | --- | --- |
-| `crates/neochumby` | The session (`neochumby`): runs the home screen and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, the apps' manifests, crash reports and a profiler | MIT |
+| `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, or Noise as a build option | MIT |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS, pairing, and the apps' server halves | MIT |
-| `apps/home` | neochumby-home, the home screen: the installed apps, pairing, the time, CHUMBY MODE | MIT |
+| `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, vendored) with a Rust platform layer | GPL-2.0 |
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer, made fast on the ARM926 (below) | GPL-2.0-or-later |
@@ -46,20 +51,22 @@ they're linked into.
 
 ## Apps
 
-Everything you see is an app, home screen included. An app is one crate,
+Everything you see is an app, the app list included. An app is one crate,
 `neochumby-<name>`, which installs as a directory `apps/<name>/` in the
 tree, holding its binaries and a `manifest`. The manifest comes from the
 crate's `Cargo.toml`:
 
 ```toml
 [package.metadata.neochumby]
-title = "QUAKE"                      # listed on the home screen; runs exec
-exec = "neochumby-quake"             # binaries, by name
+title = "QUAKE"                      # listed in app lists
+exec = "neochumby-quake"             # binaries, by name; exec runs in front
 colour = "8c5a28"                    # optional
-service = "neochumby-airplay"        # runs in the background
+service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
-home = "neochumby-home"              # this app can be the home screen
+start = true                         # it may be the start app
+interrupt = false                    # no service may replace it in front
+button = true                        # it gets the top button while in front
 ```
 
 An app can use any of these keys:
@@ -72,13 +79,33 @@ An app can use any of these keys:
   name. An app with a companion sets `neochumbyd` too, and its Chumby half
   opens it with `neochumby::companion!()`, which fails the build if the
   app's `Cargo.toml` declares no companion.
-- **`home`:** the session (`neochumby`) runs the app named by `start=<app>`
-  in this Chumby's settings from its neochumbyd (`neochumbyd set NAME
-  start=<app>`, kept in `/psp/neochumby.settings`), else in
-  `/psp/neochumby.conf`, or else `neochumby-home`. **Holding the
-  top-left corner of the screen for 3 seconds** always brings back
-  `neochumby-home`, ending whatever was running. That's the way out of a
-  home screen or app gone wrong.
+- **`exec`:** what runs, full-screen, when the app is opened. The session
+  (`neochumby`) runs one app at a time in front. An app opens another, or
+  CHUMBY MODE, by asking the session over its request pipe
+  (`NEOCHUMBY_SESSION`) and exiting. When an app exits, the session goes
+  back to the start app. [CONTRIBUTING](CONTRIBUTING.md#the-app-contract)
+  has the details.
+- **`start`:** the start app is the one a Chumby opens first and comes back
+  to. It's named by `start=<app>` in this Chumby's settings from its
+  neochumbyd (`neochumbyd set NAME start=<app>`, kept in
+  `/psp/neochumby.settings`), else in `/psp/neochumby.conf`, or else it's
+  `home` (neochumby-home). Only an app with `start = true` may be the start
+  app; the session refuses any other, logs why, and uses `home`. `neochumbyd pairing`
+  names the start apps in the tree, and suggests one to a Chumby whose
+  `start` isn't set; `neochumbyd set NAME start=<app>` warns about a name
+  that isn't one. **Holding the top-left
+  corner of the screen for 3 seconds** always opens `neochumby-home`,
+  ending whatever was in front. That's the way out of an app gone wrong.
+- **`service`:** runs in the background for as long as neochumby does, and
+  is started again if it exits. It's told which app is in front. Any
+  service may open an app over the start app, and the start app's service
+  over any app, unless the one in front says **`interrupt = false`**, as
+  Doom and Quake do.
+- **`button`:** the session keeps the top button (`/dev/switch`, which only
+  one process can have open). A press returns to the start app, as on the
+  stock Chumby, unless the app in front says `button = true`: then it has
+  the button. Doom and Quake fire with it. With the start app in front, a
+  press is a `button` line on its pipe.
 
 ## Building
 
@@ -110,7 +137,7 @@ apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manif
 ```
 
 `tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes
-the session and the home screen, plus the apps you name, from wherever
+the session and neochumby-home, plus the apps you name, from wherever
 they are:
 
 | APP | From |
@@ -156,7 +183,7 @@ the mount hangs.
 
 1. Put a `neochumby.conf` holding `server=<neochumbyd's address>` on a
    neochumby stick, and boot the Chumby from it.
-2. The home screen shows **PAIR**. Tap it: the Chumby shows a 6-digit code.
+2. The app list shows **PAIR**. Tap it: the Chumby shows a 6-digit code.
 3. On the server, `neochumbyd pairing` lists the request with the same
    code. If it matches, run `neochumbyd approve <code>`.
 4. The Chumby writes its key, the server's key and the boot hook to

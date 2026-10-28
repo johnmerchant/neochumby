@@ -84,6 +84,11 @@ pub fn free() -> bool {
     Handover::new().free()
 }
 
+/// The live process holding the speaker, if another one does.
+pub fn holder() -> Option<u32> {
+    Handover::new().holder()
+}
+
 /// Withdraws this process's request for the speaker, if it has one: for a
 /// newcomer that no longer wants it.
 pub fn withdraw() {

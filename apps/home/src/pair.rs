@@ -1,4 +1,4 @@
-//! Pairing, from the home screen's PAIR button: this Chumby asks the
+//! Pairing, from neochumby-home's PAIR button: this Chumby asks the
 //! neochumbyd it was booted with to pair, and shows the code the two derive
 //! from their connection. Someone runs `neochumbyd approve <code>` on the
 //! server, having seen the same code there. Only then does anything get
@@ -79,9 +79,16 @@ fn screen(fb: &mut Fb, lines: &[(&str, usize, u16)], cancel: bool) {
     }
 }
 
-/// Runs the pairing screen until paired, refused or cancelled; true if
-/// paired.
-pub fn run(fb: &mut Fb, touch: &mut Touchscreen, server: &str, api_port: u16, root: &Path) -> bool {
+/// Runs the pairing screen until paired, refused or cancelled (CANCEL, or
+/// `cancel` returning true: the top button); true if paired.
+pub fn run(
+    fb: &mut Fb,
+    touch: &mut Touchscreen,
+    server: &str,
+    api_port: u16,
+    root: &Path,
+    mut cancel: impl FnMut() -> bool,
+) -> bool {
     let white = rgb(230, 230, 230);
     screen(fb, &[("PAIRING", 3, rgb(255, 200, 120)), (server, 2, white), ("connecting...", 2, white)], true);
 
@@ -134,6 +141,10 @@ pub fn run(fb: &mut Fb, touch: &mut Touchscreen, server: &str, api_port: u16, ro
                 }
                 Touch::Up => {}
             }
+        }
+        if cancel() {
+            cancelled.store(true, Ordering::SeqCst);
+            return false;
         }
         neochumby::sleep_ms(50);
     }

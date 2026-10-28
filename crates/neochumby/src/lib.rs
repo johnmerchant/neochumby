@@ -9,6 +9,7 @@ pub mod conf;
 pub mod debug;
 pub mod fb;
 pub mod input;
+pub mod session;
 pub mod settings;
 
 /// `companion!()`: the compiling app's companion, for [`companion::open`];
