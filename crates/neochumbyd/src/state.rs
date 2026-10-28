@@ -4,6 +4,10 @@
 //!   paired/<key>      a paired Chumby: file named for its public key (hex),
 //!                     holding its name
 //!   pending/<code>    a Chumby asking to pair: "name key address"
+//!   config/<name>     a Chumby's settings, key=value lines (`start=<app>`),
+//!                     sent to it on every connection (`Msg::Config`). Kept
+//!                     by name, so a Chumby paired again under its name
+//!                     keeps them
 //!
 //! The daemon writes pending/; `neochumbyd approve <code>` (whoever is in
 //! the daemon's group) turns one into paired/, which the daemon, waiting on
@@ -40,6 +44,7 @@ impl State {
     pub fn open(dir: PathBuf) -> io::Result<State> {
         std::fs::create_dir_all(dir.join("paired"))?;
         std::fs::create_dir_all(dir.join("pending"))?;
+        std::fs::create_dir_all(dir.join("config"))?;
         Ok(State { dir })
     }
 
@@ -149,5 +154,75 @@ impl State {
             }
         }
         Ok(())
+    }
+
+    /// `name`'s settings, in the order they were set.
+    pub fn config(&self, name: &str) -> Vec<(String, String)> {
+        if !valid_name(name) {
+            return Vec::new();
+        }
+        let s = std::fs::read_to_string(self.dir.join("config").join(name)).unwrap_or_default();
+        s.lines()
+            .filter_map(|l| l.split_once('='))
+            .filter(|(k, v)| valid_setting(k, v))
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect()
+    }
+
+    /// Sets one of a paired Chumby's settings; an empty value removes it.
+    pub fn set(&self, name: &str, key: &str, value: &str) -> io::Result<()> {
+        if !self.pairs()?.iter().any(|(n, _)| n == name) {
+            return Err(bad("no Chumby paired under that name"));
+        }
+        if !(value.is_empty() && valid_setting(key, "x")) && !valid_setting(key, value) {
+            return Err(bad("bad setting: keys are a-z and _, values A-Z a-z 0-9 . : / _ -"));
+        }
+        let mut c = self.config(name);
+        c.retain(|(k, _)| k != key);
+        if !value.is_empty() {
+            c.push((key.into(), value.into()));
+        }
+        let body: String = c.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+        let path = self.dir.join("config").join(name);
+        let tmp = path.with_extension("new");
+        std::fs::write(&tmp, body)?;
+        std::fs::rename(tmp, path)
+    }
+}
+
+/// A setting the Chumby will take: a short lower-case key, and a value of
+/// the characters its /psp files accept (neochumby::conf::valid_value).
+fn valid_setting(key: &str, value: &str) -> bool {
+    (1..=32).contains(&key.len())
+        && key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
+        && (1..=128).contains(&value.len())
+        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b".:/_-".contains(&b))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings() {
+        let dir = std::env::temp_dir().join(format!("neochumbyd-state-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = State::open(dir.clone()).unwrap();
+        let key = Identity::generate().unwrap().public();
+        assert!(st.set("kitchen", "start", "wx").is_err(), "not paired");
+        std::fs::write(dir.join("paired").join(hex(&key)), "kitchen\n").unwrap();
+
+        st.set("kitchen", "start", "wx").unwrap();
+        st.set("kitchen", "delivery", "sync").unwrap();
+        st.set("kitchen", "start", "home").unwrap();
+        assert_eq!(st.config("kitchen"), [("delivery".into(), "sync".into()), ("start".into(), "home".into())]);
+        st.set("kitchen", "delivery", "").unwrap();
+        assert_eq!(st.config("kitchen"), [("start".to_string(), "home".to_string())]);
+
+        assert!(st.set("kitchen", "Home", "wx").is_err());
+        assert!(st.set("kitchen", "start", "w x").is_err());
+        assert!(st.set("kitchen", "start", "a\nb=c").is_err());
+        assert!(st.config("../kitchen").is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
     }
 }

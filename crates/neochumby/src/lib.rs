@@ -6,6 +6,7 @@ pub mod conf;
 pub mod debug;
 pub mod fb;
 pub mod input;
+pub mod settings;
 
 // Linked for its symbols: see neochumby-softfloat.
 #[cfg(feature = "softfloat")]

@@ -8,6 +8,9 @@
 //!   neochumbyd approve CODE       pair the Chumby showing CODE
 //!   neochumbyd refuse CODE
 //!   neochumbyd forget NAME
+//!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
+//!                                  sent to it when it next connects;
+//!                                  KEY= removes it
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -31,6 +34,7 @@ use state::State;
 struct Args {
     command: String,
     operand: Option<String>,
+    setting: Option<String>,
     state: PathBuf,
     tree: Option<PathBuf>,
     nfs: String,
@@ -39,7 +43,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
     );
     std::process::exit(2)
 }
@@ -48,6 +52,7 @@ fn args() -> Args {
     let mut a = Args {
         command: String::new(),
         operand: None,
+        setting: None,
         state: "/var/lib/neochumbyd".into(),
         tree: None,
         nfs: "0.0.0.0:2049".into(),
@@ -64,6 +69,7 @@ fn args() -> Args {
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
             _ if a.operand.is_none() => a.operand = Some(arg),
+            _ if a.command == "set" && a.setting.is_none() => a.setting = Some(arg),
             _ => usage(),
         }
     }
@@ -83,7 +89,8 @@ fn main() {
         "serve" => serve(&a, state),
         "pairing" => {
             for (name, key) in state.pairs().unwrap_or_else(|e| fail(e)) {
-                println!("paired   {name}  {key}");
+                let settings: Vec<String> = state.config(&name).iter().map(|(k, v)| format!("{k}={v}")).collect();
+                println!("paired   {name}  {key}  {}", settings.join(" "));
             }
             for p in state.pending().unwrap_or_else(|e| fail(e)) {
                 println!("asking   {}  code {}  from {}  {}", p.name, p.code, p.addr, neochumby_proto::hex(&p.key));
@@ -95,6 +102,11 @@ fn main() {
         }
         "refuse" => state.refuse(&operand()).unwrap_or_else(|e| fail(e)),
         "forget" => state.forget(&operand()).unwrap_or_else(|e| fail(e)),
+        "set" => {
+            let setting = a.setting.clone().unwrap_or_else(|| usage());
+            let (key, value) = setting.split_once('=').unwrap_or_else(|| usage());
+            state.set(&operand(), key, value).unwrap_or_else(|e| fail(e));
+        }
         _ => usage(),
     }
 }
