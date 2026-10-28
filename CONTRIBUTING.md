@@ -76,16 +76,9 @@ claude mcp add neochumby -- ssh -o BatchMode=yes HOST neochumbyd mcp
 
 That adds it for you, in this project only (Claude Code's `local` scope),
 and nothing is committed; `claude mcp list` or `/mcp` in Claude Code shows
-it connected. The SSH user needs what the `neochumbyd` command does on
-that server, usually membership of its group. Its tools:
-
-| Tool | What it does |
-| --- | --- |
-| `chumbys` | The paired Chumbys and their settings, those asking to pair, and the tree's start apps. Start here for the names. |
-| `log` | The end of a Chumby's log (`lines`, default a screenful): the session, its apps and services, and `-- neochumbyd:` notes. |
-| `restart` | Ends its apps and services and starts its session again from the tree, after a deploy. |
-| `screenshot` | Its screen, as a PNG Claude can look at. |
-| `set` | One of its settings, such as `start` or `delivery`. |
+it connected, with its tools and what each does. The SSH user needs what
+the `neochumbyd` command does on that server, usually membership of its
+group.
 
 A loop that works well: deploy (`tools/deploy HOST APP --restart NAME`),
 then ask Claude to read the log and look at the screen and say what's
