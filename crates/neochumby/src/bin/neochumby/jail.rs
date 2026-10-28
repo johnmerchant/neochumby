@@ -7,7 +7,7 @@
 //!   /mnt/neochumby/apps/<name>/   its directory, bound from the tree, read-
 //!                                 only (the tree is); NEOCHUMBY_ROOT and its
 //!                                 working directory
-//!   /tmp                          its own tmpfs (nosuid, nodev), HOME
+//!   /tmp                          its own tmpfs (nosuid, nodev, noexec), HOME
 //!   /dev/null zero random urandom
 //!
 //! and, as its `access` lists:
@@ -17,7 +17,8 @@
 //!             read-only                    (its exec only)
 //!   speaker   /dev/dsp, and /tmp/neochumby, where processes hand the
 //!             speaker over (neochumby::audio), shared by every app that
-//!             lists it; the mute and the volume are the session's
+//!             lists it (a nosuid, nodev, noexec tmpfs); the mute and the
+//!             volume are the session's
 //!   accel     /dev/accel
 //!   system    /proc, /sys and /etc
 //!   network   copies of /etc/resolv.conf and /etc/hosts (with `system`,
@@ -42,7 +43,7 @@
 use std::ffi::OsStr;
 use std::io;
 use std::os::fd::RawFd;
-use std::os::unix::fs::{PermissionsExt, chown};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, chown};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -77,6 +78,9 @@ pub enum Role {
 
 /// The apps' names, in the tree's order, which gives their uids.
 static JAILS: OnceLock<Vec<String>> = OnceLock::new();
+/// Whether [`prepare`] succeeded. When it hasn't, [`start`] refuses every
+/// app rather than running one unjailed.
+static READY: OnceLock<bool> = OnceLock::new();
 
 /// Turns jails on for `apps` (the tree's, in name order), unless they
 /// can't be: not root, or NEOCHUMBY_JAIL=off. Once, as the session starts;
@@ -91,19 +95,33 @@ pub fn init(apps: &[App]) {
         return;
     }
     // Jails stay on even so: an app's own start fails, and says why.
-    if let Err(e) = prepare() {
-        eprintln!("neochumby: preparing jails: {e}");
-    }
+    let ready = match prepare() {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("neochumby: preparing jails: {e}");
+            false
+        }
+    };
+    let _ = READY.set(ready);
     let _ = JAILS.set(apps.iter().map(|a| a.name.clone()).collect());
 }
 
 /// The mount point, and /tmp/neochumby for the speaker's handover: the
-/// session's, and SPEAKER_GID's.
+/// session's, and SPEAKER_GID's. The handover is a tmpfs of its own,
+/// `nosuid,nodev,noexec`: it is the one host path a speaker app may write,
+/// so nothing executable may be put there.
 fn prepare() -> io::Result<()> {
     std::fs::create_dir_all(MOUNT_POINT)?;
     std::fs::set_permissions(MOUNT_POINT, std::fs::Permissions::from_mode(0o700))?;
     let speaker = neochumby_sys::speaker::DIR;
     std::fs::create_dir_all(speaker)?;
+    // A fresh tmpfs on /tmp/neochumby. If the session is restarted, the
+    // directory is already one of ours: its st_dev differs from /tmp's.
+    let tmp = std::fs::metadata("/tmp")?;
+    let handover = std::fs::metadata(speaker)?;
+    if tmp.dev() == handover.dev() {
+        neochumby_sys::jail::mount_tmpfs(Path::new(speaker), 64, 0o770, 0, SPEAKER_GID, true)?;
+    }
     chown(speaker, Some(0), Some(SPEAKER_GID))?;
     std::fs::set_permissions(speaker, std::fs::Permissions::from_mode(0o770))
 }
@@ -137,6 +155,14 @@ pub fn start(
     mut env: Vec<(String, String)>,
     keep: &[RawFd],
 ) -> io::Result<Process> {
+    if !READY.get().copied().unwrap_or(false) {
+        return Err(io::Error::other("the jail couldn't be prepared"));
+    }
+    // The ELF loader maps a PT_LOAD at vaddr 0 even though the ARM mmap
+    // path refuses MAP_FIXED below PAGE_SIZE. Refuse such a file before
+    // exec, wherever it hides in the app's directory.
+    neochumby_sys::elf::check(exe)?;
+    neochumby_sys::elf::check_app_dir(&app.dir)?;
     let uid = number(app)?;
     let a = app.access;
     let front = role == Role::Front;

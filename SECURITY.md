@@ -11,6 +11,12 @@
   on processes and open files. Its companion is opened for it by the
   session, so it reaches only its own. `home` alone runs as root, as it
   pairs the Chumby.
+- **The jail refuses page-zero ELFs.** A static ARM ELF with a `PT_LOAD`
+  below `0x1000`, or one that needs an interpreter, is refused, as is one
+  hidden among the app directory's executable files. An app's `/tmp` and
+  the speaker handover are `noexec`. That closes one NULL-pointer family
+  (the ARM ELF loader can map page zero even though `mmap` refuses it); it
+  does not fix the 2.6.16 kernel.
 - **That stops apps that are buggy or careless, not ones written to
   attack.** The stock kernel (Linux 2.6.16, from 2006) has no user, pid
   or network namespaces, no seccomp, no cgroups and no netfilter, and it
