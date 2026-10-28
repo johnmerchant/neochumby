@@ -820,6 +820,8 @@ def cmd_start(state, opts, tree):
     if opts["psp"]:
         shutil.rmtree(state.at("psp"))
         shutil.copytree(opts["psp"], state.at("psp"), symlinks=True)
+    # The settings partition's own directory, where pairing puts the hook.
+    os.makedirs(state.at("psp/rfs1"), mode=0o755, exist_ok=True)
     # A fresh, black screen, and the boot's speaker and backlight, each start.
     write(state, "fb0", "", size=FB_BYTES)
     for name, value in (("brightness", "65535"), ("dimlevel", "0"), ("spkmute", "1")):
