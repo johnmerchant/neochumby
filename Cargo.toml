@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/neochumby",
+    "crates/neochumby-macros",
     "crates/neochumby-manifest",
     "crates/neochumby-proto",
     "crates/neochumby-softfloat",
@@ -20,8 +21,10 @@ publish = false
 [workspace.dependencies]
 libc = "0.2"
 neochumby = { path = "crates/neochumby" }
+neochumby-macros = { path = "crates/neochumby-macros" }
 neochumby-softfloat = { path = "crates/neochumby-softfloat" }
 neochumby-proto = { path = "crates/neochumby-proto" }
+toml = "0.8"
 
 [profile.release]
 opt-level = 2

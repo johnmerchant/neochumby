@@ -57,8 +57,10 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
-(`neochumby-manifest`). A `files/` directory beside `Cargo.toml`, optional,
-is copied into the app's directory as it is (icons, configuration).
+(`neochumby-manifest`). An app with a `companion` must also say
+`neochumbyd = "required"` or `"optional"`: it is never inferred. A
+`files/` directory beside `Cargo.toml`, optional, is copied into the app's
+directory as it is (icons, configuration).
 
 Binaries named by `exec`, `service` and `home` are built for the Chumby
 (`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
@@ -79,8 +81,12 @@ Things your app can rely on:
 **Companions.** An app with a server half ships it as a second binary,
 named by `companion`. neochumbyd runs it for each paired Chumby that opens
 the app:
-- **Opening:** the Chumby side sends `Msg::Open { app: "<name>" }` over a
-  `neochumby_proto::Session`.
+- **Opening:** the Chumby side calls
+  `neochumby::companion::open(neochumby::companion!(), &paired, &identity)`,
+  which connects to the paired neochumbyd and returns the
+  `neochumby_proto::Session` to its companion. `companion!()` reads the
+  app's `Cargo.toml` as it compiles: an app without a `companion`, or
+  without `neochumbyd`, does not compile.
 - **Frames:** after that, frames go both ways as `Msg::Data`. On the
   companion's side they arrive on stdin and leave on stdout, a u32
   big-endian length then the bytes (`neochumby_proto::frame`).

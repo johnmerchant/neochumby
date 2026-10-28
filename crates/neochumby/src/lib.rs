@@ -2,11 +2,16 @@
 //! the apps (stock 2.6.16 kernel, static musl, ARM926).
 
 pub mod apps;
+pub mod companion;
 pub mod conf;
 pub mod debug;
 pub mod fb;
 pub mod input;
 pub mod settings;
+
+/// `companion!()`: the compiling app's companion, for [`companion::open`];
+/// an app whose Cargo.toml declares none does not compile.
+pub use neochumby_macros::companion;
 
 // Linked for its symbols: see neochumby-softfloat.
 #[cfg(feature = "softfloat")]

@@ -1,0 +1,13 @@
+[package]
+name = "neochumby-macros"
+description = "neochumby's macros: an app's companion, checked against its Cargo.toml as it compiles"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[lib]
+proc-macro = true
+
+[dependencies]
+toml.workspace = true
