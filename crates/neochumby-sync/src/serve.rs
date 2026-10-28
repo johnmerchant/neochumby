@@ -14,10 +14,10 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::Duration;
 
-use neochumby_proto::{Msg, Session};
+use neochumby_proto::Msg;
 use ring::digest::{Context, SHA256};
 
-use crate::{CHUNK, Entry, LIMITS, Timing, invalid, manifest, next, recv_manifest, unexpected};
+use crate::{CHUNK, Entry, LIMITS, Link, Timing, invalid, manifest, next, recv_manifest, unexpected};
 
 /// How long neochumbyd waits on a Chumby mid-round (it may be writing a
 /// large file to a slow stick), and for a whole round.
@@ -136,7 +136,7 @@ pub enum Served {
 }
 
 /// Ends a round before it starts, telling the Chumby why.
-pub fn refuse(s: &mut Session, why: String) -> io::Result<Served> {
+pub fn refuse(s: &mut dyn Link, why: String) -> io::Result<Served> {
     s.send(&Msg::SyncDone { ok: false, detail: why.chars().take(1000).collect() })?;
     Ok(Served::Refused(why))
 }
@@ -144,7 +144,7 @@ pub fn refuse(s: &mut Session, why: String) -> io::Result<Served> {
 /// One round, the Chumby having sent `SyncHave { live }`. The tree is
 /// checked as the Chumby will check it first, so one it would refuse is
 /// never sent; the Chumby is told why instead.
-pub fn round(s: &mut Session, live: [u8; 32], tree: &Tree) -> io::Result<Served> {
+pub fn round(s: &mut dyn Link, live: [u8; 32], tree: &Tree) -> io::Result<Served> {
     let clock = TIMING.start();
     let entries = tree.manifest();
     if manifest::digest(&entries) == live {
@@ -180,7 +180,7 @@ pub fn round(s: &mut Session, live: [u8; 32], tree: &Tree) -> io::Result<Served>
 
 /// `e` from `file`, checked against its hash as it goes: a file that
 /// changed since it was hashed fails the round, at both ends.
-fn send_file(s: &mut Session, e: &Entry, file: &Path) -> io::Result<()> {
+fn send_file(s: &mut dyn Link, e: &Entry, file: &Path) -> io::Result<()> {
     let mut f = File::open(file)?;
     s.send(&Msg::SyncFile(e.clone()))?;
     let mut c = Context::new(&SHA256);
