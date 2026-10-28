@@ -1,0 +1,12 @@
+[package]
+name = "neochumby-home"
+description = "neochumby's home screen: the installed apps, pairing, the time, and back to the Chumby"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc.workspace = true
+neochumby.workspace = true
+neochumby-proto.workspace = true

@@ -1,0 +1,28 @@
+[package]
+name = "neochumby-airplay"
+description = "AirPlay for neochumby: a receiver per Chumby on its neochumbyd, played on the Chumby's speaker"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Both halves, so AirPlay comes and goes as this one crate:
+#   neochumby-airplay            the Chumby's: a background service playing
+#                                the stream (the manifest's service=)
+#   neochumby-airplay-companion  neochumbyd's: an AirPlay receiver for the
+#                                Chumby (the manifest's companion=)
+[[bin]]
+name = "neochumby-airplay"
+path = "src/main.rs"
+
+[[bin]]
+name = "neochumby-airplay-companion"
+path = "src/companion.rs"
+
+[dependencies]
+libc.workspace = true
+neochumby-proto.workspace = true
+
+# Only the Chumby's half uses the device library.
+[target.'cfg(target_arch = "arm")'.dependencies]
+neochumby.workspace = true

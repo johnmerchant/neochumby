@@ -1,0 +1,15 @@
+#!/bin/sh
+# Makes a neochumby stick: any FAT-formatted USB stick, mounted at STICK.
+# Plugged into a Chumby at power-on, it boots neochumby with its own apps;
+# nothing on the Chumby is changed, and without the stick it boots as it
+# always did. A neochumby.conf beside it (server=...) offers pairing with a
+# neochumbyd, for apps that need one.
+#
+#   tools/stick STICK [-d DATA] [APP ...]    (as tools/tree)
+set -eu
+stick=${1:?usage: tools/stick STICK [-d DATA] [APP ...]}
+shift
+root=$(git rev-parse --show-toplevel)
+"$root/tools/tree" "$stick/neochumby" "$@"
+cp "$root/boot/userhook2" "$stick/userhook2"
+echo "neochumby stick ready: $stick"

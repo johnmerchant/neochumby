@@ -1,0 +1,108 @@
+#!/bin/sh
+# neochumby's boot hook. The same script goes in two places, and the stock
+# boot (/etc/init.d/rcS) runs both, in this order, once the network is up
+# and before the Chumby's own software starts:
+#
+#   /mnt/usb/userhook2     on a neochumby stick: nothing on the Chumby changes
+#   /psp/rfs1/userhook2    on a paired Chumby (pairing writes it)
+#
+# The first to run starts neochumby; the other sees that and returns. Apps
+# come from the stick's neochumby/ tree if it has one, otherwise from the
+# paired neochumbyd over NFS. The neochumbyd (the stick's neochumby.conf,
+# else /psp/neochumby.conf) is passed on to the apps either way, for its
+# services. CHUMBY MODE, or any failure, returns and the stock boot carries
+# on.
+#
+# Never blocks for long: a hook that hangs stops the boot. Skipped if
+# /psp/neochumby-off exists, or the stick holds neochumby-off.
+
+LOG=/tmp/neochumby.log
+RAN=/tmp/neochumby.ran
+STICK=/mnt/usb
+MNT=/mnt/neochumby
+
+exec >>"$LOG" 2>&1
+echo "neochumby hook $0: $(date)"
+
+[ -e "$RAN" ] && {
+  echo "neochumby already ran this boot"
+  exit 0
+}
+[ -e /psp/neochumby-off ] || [ -e "$STICK/neochumby-off" ] && {
+  echo "disabled"
+  exit 0
+}
+
+# Runs a command with a deadline in seconds: kills it and fails if it is
+# still running then. Everything that can block goes through this.
+deadline() {
+  secs=$1
+  shift
+  "$@" &
+  pid=$!
+  n=0
+  while kill -0 "$pid" 2>/dev/null; do
+    n=$((n + 1))
+    [ "$n" -gt "$secs" ] && {
+      kill "$pid"
+      echo "timed out: $*"
+      return 1
+    }
+    sleep 1
+  done
+  wait "$pid"
+}
+
+# One value from a conf file of key=value lines. Never run as shell: the
+# /psp one is written from what a neochumbyd sent. Only characters an
+# address, port or path needs are accepted.
+conf_get() {
+  sed -n "s/^$2=\([A-Za-z0-9._:/-]*\)\$/\1/p" "$1" | head -n 1
+}
+
+conf=
+for c in "$STICK/neochumby.conf" /psp/neochumby.conf; do
+  [ -f "$c" ] && {
+    conf=$c
+    break
+  }
+done
+server=
+if [ -n "$conf" ]; then
+  server=$(conf_get "$conf" server)
+  nfs_port=$(conf_get "$conf" nfs_port)
+  mount_port=$(conf_get "$conf" mount_port)
+  path=$(conf_get "$conf" path)
+  api_port=$(conf_get "$conf" api_port)
+  echo "neochumbyd: ${server:-none} (from $conf)"
+fi
+
+if [ -x "$STICK/neochumby/neochumby" ]; then
+  root=$STICK/neochumby
+  echo "apps from the stick"
+elif [ -n "$server" ]; then
+  deadline 20 sh -c "until ping -c 1 $server >/dev/null 2>&1; do sleep 1; done" || exit 0
+  mkdir -p "$MNT"
+  # No port mapper (ports given), no lock manager (nolock), TCP; soft with
+  # short timeouts so a lost network fails reads instead of hanging.
+  deadline 15 mount -t nfs \
+    -o "ro,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0" \
+    "$server:${path:-/}" "$MNT" || {
+    echo "mount failed"
+    exit 0
+  }
+  root=$MNT
+  echo "apps from $server"
+else
+  echo "no apps: no stick tree, and not paired"
+  exit 0
+fi
+
+touch "$RAN"
+# The launcher owns the screen and inputs until it exits.
+NEOCHUMBY_SERVER=$server NEOCHUMBY_API_PORT=$api_port "$root/neochumby"
+echo "neochumby exited: $?"
+
+cd /
+[ "$root" = "$MNT" ] && umount "$MNT"
+exit 0

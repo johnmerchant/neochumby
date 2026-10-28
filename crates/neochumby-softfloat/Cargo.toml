@@ -1,0 +1,12 @@
+[package]
+name = "neochumby-softfloat"
+description = "libgcc's hand-written ARM soft-float routines, for the Chumby Classic's FPU-less ARM926"
+# libgcc's code: the GCC Runtime Library Exception lets it link into
+# programs under any licence.
+license = "GPL-3.0-or-later WITH GCC-exception-3.1"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[build-dependencies]
+cc = "1"

@@ -1,0 +1,23 @@
+[package]
+name = "neochumby-proto"
+description = "How a Chumby and its neochumbyd talk: TLS 1.3 (or Noise) over TCP"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[features]
+# Noise_XX in place of TLS 1.3, for the whole build: both ends must be built
+# alike (cargo chumby / cargo neochumbyd --features neochumby-proto/noise).
+noise = ["dep:snow"]
+
+[dependencies]
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+# Pure Rust (no ring), so it builds for the Chumby as for servers.
+snow = { version = "0.10", optional = true, default-features = false, features = [
+    "use-curve25519",
+    "use-chacha20poly1305",
+    "use-blake2",
+    "use-getrandom",
+] }

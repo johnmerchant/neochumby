@@ -1,0 +1,23 @@
+# Two kinds of binary, each static musl through zig (tools/zigcc):
+#
+#   cargo chumby       the session and the home screen, for the Chumby's ARM926
+#   cargo neochumbyd   the server, for x86_64 Linux
+#
+# Other apps are built as they are added to a tree (tools/tree).
+[alias]
+chumby = "build --release --target armv5te-unknown-linux-musleabi -p neochumby -p neochumby-home"
+neochumbyd = "build --release --target x86_64-unknown-linux-musl -p neochumbyd"
+
+[target.armv5te-unknown-linux-musleabi]
+linker = "tools/zigcc"
+rustflags = ["-C", "link-self-contained=no", "-C", "target-cpu=arm926ej-s"]
+
+[target.x86_64-unknown-linux-musl]
+linker = "tools/zigcc-x86_64"
+rustflags = ["-C", "link-self-contained=no"]
+
+[env]
+CC_armv5te_unknown_linux_musleabi = { value = "tools/zigcc", relative = true }
+AR_armv5te_unknown_linux_musleabi = { value = "tools/zigar", relative = true }
+CC_x86_64_unknown_linux_musl = { value = "tools/zigcc-x86_64", relative = true }
+AR_x86_64_unknown_linux_musl = { value = "tools/zigar", relative = true }

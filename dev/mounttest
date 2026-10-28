@@ -1,0 +1,25 @@
+#!/bin/sh
+# On a Chumby: mounts a neochumbyd's tree the way userhook2 does, with a
+# 15 s watchdog, lists it, and leaves it mounted at /mnt/neochumby.
+#
+#   mounttest SERVER [PORT] [PATH]    (PORT default 2049: NFS and MOUNT; PATH /)
+server=${1:?usage: mounttest SERVER [PORT] [PATH]}
+port=${2:-2049}
+path=${3:-/}
+MNT=/mnt/neochumby
+mkdir -p "$MNT"
+grep -q " $MNT " /proc/mounts && { echo "already mounted"; ls -l "$MNT" "$MNT/apps"; exit 0; }
+mount -t nfs -o "ro,nolock,tcp,nfsvers=3,port=$port,mountport=$port,soft,timeo=30,retrans=2,retry=0" \
+  "$server:$path" "$MNT" &
+pid=$!
+i=0
+while kill -0 $pid 2>/dev/null; do
+  i=$((i + 1))
+  [ $i -ge 15 ] && { kill $pid; echo "mount hung, killed"; netstat -tn | grep "$server"; exit 1; }
+  sleep 1
+done
+wait $pid
+rc=$?
+echo "mount exit $rc after ${i}s"
+[ $rc -eq 0 ] && ls -l "$MNT" "$MNT/apps"
+exit $rc

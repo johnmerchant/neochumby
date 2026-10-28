@@ -1,0 +1,25 @@
+#!/bin/sh
+# Runs on the Chumby: Quake's timedemo demo1 from the NFS export, with
+# nothing else drawing or busy (the stock UI and its alarm daemon, which
+# restarts it, stopped; the launcher paused). Prints the result, or the log
+# on failure. $1: extra Quake arguments.
+/usr/chumby/scripts/stop_control_panel >/dev/null 2>&1
+killall chumbalarmd 2>/dev/null
+L=$(pidof neochumby)
+[ -n "$L" ] && kill -STOP $L
+cd /mnt/neochumby/apps/quake || exit 1
+[ -n "$PROF" ] && export NEOCHUMBY_PROF=/tmp/quake.prof
+./neochumby-quake -mem 10 $1 +timedemo demo1 > /tmp/quake.log 2>&1 &
+Q=$!
+i=0
+while [ $i -lt 900 ]; do
+  grep -q "seconds" /tmp/quake.log && break
+  kill -0 $Q 2>/dev/null || break
+  [ $i = 40 ] && cat /dev/fb0 > /tmp/quake-shot.raw
+  i=$((i + 1))
+  sleep 1
+done
+kill $Q 2>/dev/null
+echo "--- after ${i}s"
+grep -E "frames|seconds|Error|signal" /tmp/quake.log || tail -5 /tmp/quake.log
+[ -n "$L" ] && kill -CONT $L; true

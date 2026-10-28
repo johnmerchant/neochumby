@@ -1,0 +1,34 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/neochumby",
+    "crates/neochumby-proto",
+    "crates/neochumby-softfloat",
+    "crates/neochumbyd",
+    "apps/airplay",
+    "apps/home",
+    "apps/doom",
+    "apps/quake",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace.dependencies]
+libc = "0.2"
+neochumby = { path = "crates/neochumby" }
+neochumby-softfloat = { path = "crates/neochumby-softfloat" }
+neochumby-proto = { path = "crates/neochumby-proto" }
+
+[profile.release]
+opt-level = 2
+lto = true
+panic = "abort"
+codegen-units = 1
+# Symbols and line tables stay: crash addresses and profiles are looked up
+# against them. They cost nothing on the device, where binaries are paged in
+# over NFS and the debug sections are never read.
+strip = false
+debug = "line-tables-only"

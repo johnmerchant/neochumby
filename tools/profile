@@ -1,0 +1,33 @@
+#!/bin/sh
+# Turns an app's profile from the device (NEOCHUMBY_PROF: u32 pc,lr pairs,
+# see neochumby::debug) into two per-function histograms, against the
+# unstripped binary it came from: where the time was spent, and which
+# functions the soft-float routines' time was spent for (their lr, as they
+# are leaves).
+#
+#   tools/profile samples.prof APP [top]    (APP: e.g. neochumby-quake)
+set -eu
+prof=$1
+bin=$(git rev-parse --show-toplevel)/target/armv5te-unknown-linux-musleabi/release/$2
+top=${3:-30}
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+od -An -v -tx4 "$prof" | tr -s ' ' '\n' | grep -v '^$' | sed 's/^/0x/' > "$tmp/words"
+awk 'NR % 2 == 1' "$tmp/words" > "$tmp/pc"
+awk 'NR % 2 == 0' "$tmp/words" > "$tmp/lr"
+sym() { llvm-symbolizer --obj="$bin" --output-style=GNU --no-inlines < "$1" | awk 'NR % 2 == 1'; }
+sym "$tmp/pc" > "$tmp/pcf"
+sym "$tmp/lr" > "$tmp/lrf"
+total=$(wc -l < "$tmp/pc" | tr -d ' ')
+
+echo "== self"
+sort "$tmp/pcf" | uniq -c | sort -rn | head -n "$top" |
+  awk -v t="$total" '{ printf "%5.1f%%  %6d  %s\n", 100 * $1 / t, $1, $2 }'
+
+echo "== soft float, by caller"
+paste -d ' ' "$tmp/pcf" "$tmp/lrf" |
+  awk '$1 ~ /^__(aeabi_[dfcl]|[a-z]+[sd]f[0-9]?|fix|float|extend|trunc)/ { print $2 }' |
+  sort | uniq -c | sort -rn | head -n "$top" |
+  awk -v t="$total" '{ printf "%5.1f%%  %6d  %s\n", 100 * $1 / t, $1, $2 }'
+echo "$total samples"

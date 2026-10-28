@@ -1,0 +1,27 @@
+#!/bin/sh
+# Builds the tree (tools/tree, with the APPs given) and installs it in a
+# neochumbyd's state directory on HOST, with neochumbyd itself beside it.
+# What is already there and not in this tree (game data, other apps) is
+# left alone. rsync puts each file in under a temporary name and renames
+# them all at the end; a Chumby running a replaced binary is told its file
+# went stale, so stop what it runs first.
+#
+#   tools/deploy HOST [APP ...]    NEOCHUMBYD_DIR: default /var/lib/neochumbyd
+#                                  (zig on PATH)
+set -eu
+host=${1:?usage: tools/deploy HOST [APP ...]}
+shift
+dir=${NEOCHUMBYD_DIR:-/var/lib/neochumbyd}
+root=$(git rev-parse --show-toplevel)
+cd "$root"
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+tools/tree "$tmp/tree" "$@"
+cargo neochumbyd
+# Keeping its time: an unchanged binary is then not sent, nor the daemon
+# restarted.
+cp -p target/x86_64-unknown-linux-musl/release/neochumbyd "$tmp/"
+
+rsync -rlpt --delay-updates "$tmp/tree/" "$host:$dir/tree/"
+rsync -pt --delay-updates "$tmp/neochumbyd" "$host:$dir/neochumbyd"

@@ -1,0 +1,15 @@
+[package]
+name = "neochumby-doom"
+description = "Doom (doomgeneric) on the Chumby Classic, as a neochumby app"
+# doomgeneric is GPL-2.0, and this binary links it.
+license = "GPL-2.0-only"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc.workspace = true
+neochumby.workspace = true
+
+[build-dependencies]
+cc = "1"

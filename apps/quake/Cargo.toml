@@ -1,0 +1,16 @@
+[package]
+name = "neochumby-quake"
+description = "Quake (id's WinQuake software renderer) on the Chumby Classic, as a neochumby app"
+# The engine is id Software's, under the GPL (v2 or later), and this binary
+# links it.
+license = "GPL-2.0-or-later"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+libc.workspace = true
+neochumby.workspace = true
+
+[build-dependencies]
+cc = "1"

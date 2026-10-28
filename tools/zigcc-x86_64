@@ -1,0 +1,3 @@
+#!/bin/sh
+# tools/zigcc for x86_64 Linux, static musl: neochumbyd's servers.
+ZIGCC_TARGET=x86_64-linux-musl exec "$(dirname "$0")/zigcc" "$@"

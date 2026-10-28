@@ -1,0 +1,22 @@
+#!/bin/sh
+# zig cc as the C compiler for build.rs and as rustc's linker, for static
+# musl binaries: by default for the Chumby Classic (ARM926EJ-S, soft float),
+# or for ZIGCC_TARGET (tools/zigcc-x86_64, for neochumbyd). rustc's musl
+# targets link their own crt and libc unless told not to
+# (link-self-contained=no, in .cargo/config.toml); zig supplies them
+# instead, and its libunwind for std's unwinder. Drops the arguments zig has
+# no use for.
+ZIG=${ZIG:-zig}
+case "${ZIGCC_TARGET:=arm-linux-musleabi}" in
+  arm-*) cpu=-mcpu=arm926ej_s ;;
+  *) cpu= ;;
+esac
+args=
+for a in "$@"; do
+  case "$a" in
+    -lgcc_s) args="$args -lunwind" ;;
+    -lgcc | --target=* | -Wl,--eh-frame-hdr | -Wl,-O1) ;;
+    *) args="$args '$(printf %s "$a" | sed "s/'/'\\\\''/g")'" ;;
+  esac
+done
+eval exec "$ZIG" cc -target "$ZIGCC_TARGET" $cpu "$args"

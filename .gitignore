@@ -1,0 +1,10 @@
+/target
+# Game data is never committed: Doom and Quake WADs/PAKs are fetched onto
+# the server by hand (see README).
+*.wad
+*.WAD
+*.pak
+*.PAK
+# Captures and profiles from the device.
+*.raw
+*.prof

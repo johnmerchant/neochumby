@@ -1,0 +1,33 @@
+//! Doom as a neochumby app: doomgeneric (C, GPL-2.0) on the Chumby's screen,
+//! touchscreen and squeeze switch. The IWAD is found beside the binary
+//! (freedoom1.wad, doom1.wad) unless NEOCHUMBY_WAD or -iwad says otherwise.
+
+mod platform;
+
+use std::path::PathBuf;
+
+fn iwad() -> Option<PathBuf> {
+    let dir = std::env::current_exe().ok()?.parent()?.to_path_buf();
+    std::env::var_os("NEOCHUMBY_WAD")
+        .map(PathBuf::from)
+        .into_iter()
+        .chain(["freedoom1.wad", "doom1.wad"].map(|w| dir.join(w)))
+        .find(|p| p.exists())
+}
+
+fn main() {
+    neochumby::debug::install("neochumby-doom");
+    let mut args: Vec<String> = std::env::args().skip(1).collect();
+    if !args.iter().any(|a| a == "-iwad") {
+        let Some(w) = iwad() else {
+            eprintln!("neochumby-doom: no IWAD found (set NEOCHUMBY_WAD)");
+            std::process::exit(1);
+        };
+        args.splice(0..0, ["-iwad".to_string(), w.display().to_string()]);
+    }
+    // doomgeneric keeps its config and saves in the working directory; the
+    // app's own is the read-only export.
+    let home = std::env::var_os("HOME").unwrap_or_else(|| "/tmp".into());
+    let _ = std::env::set_current_dir(home);
+    platform::run(&args)
+}
