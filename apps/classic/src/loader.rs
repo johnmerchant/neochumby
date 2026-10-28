@@ -104,7 +104,7 @@ impl Loader {
         let tid = Arc::new(AtomicI32::new(-1));
         let t = tid.clone();
         std::thread::Builder::new()
-            .name("wxloader".into())
+            .name("classicloader".into())
             .spawn(move || {
                 #[cfg(target_os = "linux")]
                 t.store(unsafe { libc::syscall(libc::SYS_gettid) } as i32, Ordering::Relaxed);
@@ -123,7 +123,7 @@ impl Loader {
         Some(Loader { req: req_w, rep: rep_r, tid })
     }
 
-    /// The thread's id, for /tmp/wxstat; -1 where there's none to give.
+    /// The thread's id, for the stats file; -1 where there's none to give.
     pub fn tid(&self) -> i32 {
         self.tid.load(Ordering::Relaxed)
     }

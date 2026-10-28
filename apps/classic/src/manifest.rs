@@ -54,7 +54,7 @@ pub const MAXGLOW: usize = 16;
 pub const MAXGSQ: usize = 4;
 pub const MAXGSQ_FRAMES: i32 = 1000;
 
-/// The logo intros, in the order the manifest, `fx N` and /tmp/wxstat number them.
+/// The logo intros, in the order the manifest, `fx N` and the stats file number them.
 pub const FX_NAMES: [&str; 10] =
     ["fly", "print", "wobble", "zoom", "drop", "dissolve", "raster", "decrunch", "spin", "octopus"];
 pub const NFX: i32 = FX_NAMES.len() as i32;

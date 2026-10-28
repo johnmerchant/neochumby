@@ -148,11 +148,11 @@ impl Plat for Device {
 }
 
 pub fn run(dir: PathBuf) -> i32 {
-    neochumby::debug::install("neochumby-wx");
+    neochumby::debug::install("neochumby-classic");
     let fb = match Fb::open() {
         Ok(f) => f,
         Err(e) => {
-            eprintln!("neochumby-wx: /dev/fb0: {e}");
+            eprintln!("neochumby-classic: /dev/fb0: {e}");
             return 1;
         }
     };

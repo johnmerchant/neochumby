@@ -1,7 +1,7 @@
 //! Opening another app from the tree (the `app NAME` action). Kept behind
 //! one small trait while proposal 0002 (johnmerchant/neochumby#8) lands:
 //! there, an app asks the session to open another (`open NAME` on
-//! NEOCHUMBY_SESSION) and exits. Until the session's side is in, wx runs
+//! NEOCHUMBY_SESSION) and exits. Until the session's side is in, classic runs
 //! the app itself and waits, as neochumby-home does.
 
 /// What opening an app did.
@@ -66,7 +66,7 @@ impl Launcher for DirectExec {
             .env("NEOCHUMBY_ROOT", &root)
             .env("HOME", "/tmp")
             .status();
-        eprintln!("neochumby-wx: {name} exited: {status:?}");
+        eprintln!("neochumby-classic: {name} exited: {status:?}");
         Opened::Ran
     }
 }

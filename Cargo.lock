@@ -306,6 +306,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-classic"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "neochumby",
+]
+
+[[package]]
 name = "neochumby-doom"
 version = "0.1.0"
 dependencies = [
@@ -353,14 +361,6 @@ name = "neochumby-softfloat"
 version = "0.1.0"
 dependencies = [
  "cc",
-]
-
-[[package]]
-name = "neochumby-wx"
-version = "0.1.0"
-dependencies = [
- "libc",
- "neochumby",
 ]
 
 [[package]]

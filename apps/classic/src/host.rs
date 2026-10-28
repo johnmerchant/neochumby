@@ -1,11 +1,11 @@
-//! `neochumby-wx render`: the engine without a Chumby. It runs the real
+//! `neochumby-classic render`: the engine without a Chumby. It runs the real
 //! frame loop on a virtual clock (time moves only when a frame sleeps, 40
 //! ms a frame) and writes the screen at the times asked for, so the same
 //! feeder output and script always give the same pictures. For checking
 //! designs and the engine itself on any computer:
 //!
 //! ```text
-//! neochumby-wx render DIR PREFIX [--at MS,MS...] [--taps "MS:X,Y MS:b ..."]
+//! neochumby-classic render DIR PREFIX [--at MS,MS...] [--taps "MS:X,Y MS:b ..."]
 //!     [--ctl "MS:LINE;MS:LINE..."] [--wall EPOCH] [--state DIR]
 //! ```
 //!
@@ -14,8 +14,8 @@
 //!   at or after each time, then stop. Default 1000.
 //! - `--taps`: at MS, a tap at X,Y (pressed and released in one frame), or
 //!   `b` for the top button.
-//! - `--ctl`: at MS, a line written to the control file (NEOCHUMBY_WX_CTL,
-//!   else /tmp/neochumby-wx/ctl; read every
+//! - `--ctl`: at MS, a line written to the control file (NEOCHUMBY_CLASSIC_CTL,
+//!   else /tmp/neochumby-classic/ctl; read every
 //!   5th frame), e.g. `3000:show home;5000:night on`.
 //! - `--wall`: the wall clock at the start (the clock, night mode), default
 //!   now. Local time is TZ's.
@@ -69,8 +69,8 @@ impl Host {
             buttons: VecDeque::new(),
             pressed: false,
             ctl: VecDeque::new(),
-            ctl_path: std::env::var_os("NEOCHUMBY_WX_CTL")
-                .map_or_else(|| PathBuf::from("/tmp/neochumby-wx/ctl"), PathBuf::from),
+            ctl_path: std::env::var_os("NEOCHUMBY_CLASSIC_CTL")
+                .map_or_else(|| PathBuf::from("/tmp/neochumby-classic/ctl"), PathBuf::from),
             state,
         }
     }
@@ -186,7 +186,7 @@ impl Plat for Host {
 
 fn usage() -> i32 {
     eprintln!(
-        "usage: neochumby-wx render DIR PREFIX [--at MS,MS...] [--taps \"MS:X,Y MS:b\"] \
+        "usage: neochumby-classic render DIR PREFIX [--at MS,MS...] [--taps \"MS:X,Y MS:b\"] \
          [--ctl \"MS:LINE;...\"] [--wall EPOCH] [--state DIR]"
     );
     2
@@ -216,7 +216,7 @@ pub fn render(args: &[String]) -> i32 {
     }
     let snaps: Vec<i64> = at.split(',').filter_map(ms_of).collect();
     let state =
-        state.unwrap_or_else(|| std::env::temp_dir().join(format!("neochumby-wx-state-{}", std::process::id())));
+        state.unwrap_or_else(|| std::env::temp_dir().join(format!("neochumby-classic-state-{}", std::process::id())));
     let mut h = Host::new(prefix, snaps, wall.unwrap_or_else(wall_now), state);
     for item in taps.split_whitespace() {
         let Some((t, what)) = item.split_once(':') else { return usage() };

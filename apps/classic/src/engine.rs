@@ -21,7 +21,8 @@
 //!
 //! State variables (for panes): music, station, night, nightmode, pin,
 //! page, secs. music, station, night, nightmode, the volume and the
-//! slideshow timing persist (wx_music and so on, in /psp on the Chumby).
+//! slideshow timing persist (wx_music and so on, in /psp on the Chumby;
+//! the names the C engine used, so a Chumby keeps its settings).
 //!
 //! Actions (tap zones): slideshow, screen NAME, chumby (exit: the session
 //! hands the Chumby back to its own software), music_toggle, station N,
@@ -34,8 +35,8 @@
 //! nightmode auto|on|off|next | tap X Y | button | stats | bench on|off |
 //! reload | drop [all] | fx N|NAME|next|random | fx loop on|all|off | app NAME.
 //! stats (and every 5 s while bench is on) writes the stats file. Both are
-//! in a private directory, /tmp/neochumby-wx/ (`ctl`, `stat`), unless
-//! NEOCHUMBY_WX_CTL or NEOCHUMBY_WX_STAT name others. NEOCHUMBY_WX_CACHE_KB
+//! in a private directory, /tmp/neochumby-classic/ (`ctl`, `stat`), unless
+//! NEOCHUMBY_CLASSIC_CTL or NEOCHUMBY_CLASSIC_STAT name others. NEOCHUMBY_CLASSIC_CACHE_KB
 //! sets the cache's budget.
 //!
 //! The manifest and pictures come from a server and are not trusted: lines
@@ -250,7 +251,7 @@ pub struct Engine<P: Plat> {
 }
 
 /// The private directory for the default control and stats files.
-const RUN_DIR: &str = "/tmp/neochumby-wx";
+const RUN_DIR: &str = "/tmp/neochumby-classic";
 
 /// The most memory the cache may hold, whatever is on screen: twice its
 /// budget, and at least 8 MB (the aurora page alone is about 2 MB).
@@ -343,7 +344,7 @@ impl<P: Plat> Engine<P> {
     pub fn new(plat: P, launcher: Box<dyn Launcher>, base_dir: PathBuf) -> Engine<P> {
         // At most 1 GB: far more than the Chumby has, and it keeps every
         // picture's offsets inside 32 bits.
-        let budget = std::env::var("NEOCHUMBY_WX_CACHE_KB")
+        let budget = std::env::var("NEOCHUMBY_CLASSIC_CACHE_KB")
             .ok()
             .map(|v| atoi(v.as_bytes()))
             .filter(|&k| (512..=1 << 20).contains(&k))
@@ -401,8 +402,8 @@ impl<P: Plat> Engine<P> {
             inj_button: false,
             want_reload: false,
             pending_app: None,
-            ctl_path: run_path("NEOCHUMBY_WX_CTL", "ctl"),
-            stat_path: run_path("NEOCHUMBY_WX_STAT", "stat"),
+            ctl_path: run_path("NEOCHUMBY_CLASSIC_CTL", "ctl"),
+            stat_path: run_path("NEOCHUMBY_CLASSIC_STAT", "stat"),
             waiting: false,
             tx: 0,
             ty: 0,
@@ -2034,7 +2035,7 @@ impl<P: Plat> Engine<P> {
         s.find("VmRSS:").map_or(-1, |p| atoi(&s.as_bytes()[p + 6..]) as i64)
     }
 
-    /// /tmp/wxstat: key=value lines, replaced whole.
+    /// The stats file: key=value lines, replaced whole.
     fn write_stats(&self, why: &str) {
         let lw = &self.lastwin;
         let span = if lw.start != 0 { WIN_MS } else { 0 };
