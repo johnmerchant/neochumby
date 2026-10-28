@@ -60,7 +60,8 @@ what it and its apps wrote (`neochumbyd log NAME -f`) and capture its
 screen (`neochumbyd shot NAME OUT.png`), all on the server. Everything
 an app writes to stdout or stderr ends up in that log, so print what
 you'd want to read there. The protocol is in `neochumby-proto`'s `dev`
-module.
+module. To let Claude Code do the same, add `neochumbyd mcp` as an MCP
+server (`claude mcp add neochumby -- ssh HOST neochumbyd mcp`).
 
 To drive it as a scenario drives the emulators, turn on input for it
 first: `neochumbyd set NAME dev=on` (and `dev=` to turn it off again). It

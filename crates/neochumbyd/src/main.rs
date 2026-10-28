@@ -31,6 +31,9 @@
 //!                                  its top button: down, up, or both.
 //!                                  Both of these only once its owner has
 //!                                  run `neochumbyd set NAME dev=on`
+//!   neochumbyd mcp                 log, restart, shot, set and pairing's
+//!                                  list as an MCP server on stdio, for
+//!                                  Claude Code and the like (mcp.rs)
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -41,6 +44,7 @@
 mod api;
 mod companion;
 mod dev;
+mod mcp;
 mod nfs;
 mod png;
 mod state;
@@ -83,7 +87,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|tap NAME X Y [--hold MS]|button NAME press|release|tap [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
     );
     std::process::exit(2)
 }
@@ -197,6 +201,10 @@ fn main() {
             let out = a.setting.clone().unwrap_or_else(|| usage());
             dev::shot(&a.state, &name, out.as_ref(), LINK_WAIT).unwrap_or_else(|e| fail(e));
             println!("{out}");
+        }
+        "mcp" => {
+            let server = mcp::Server { state, state_dir: a.state.clone(), tree: tree_dir, wait: LINK_WAIT };
+            mcp::run(&server, std::io::stdin().lock(), std::io::stdout().lock()).unwrap_or_else(|e| fail(e));
         }
         "tap" | "button" => {
             let name = paired(&state, &operand());
