@@ -8,7 +8,9 @@
 //! Prints the manifest, or fails with what is wrong: a crate not named
 //! neochumby-<name>, no metadata, an unknown key, or a value that is not a
 //! plain word. Values are strings; `shells` may also be a list, written
-//! space-separated.
+//! space-separated. `neochumbyd` is `required` or `optional` (absent: the
+//! app never needs one), and an app with a `companion` must set it: only a
+//! neochumbyd runs companions. It is stated, not inferred from `companion`.
 
 use std::process::ExitCode;
 
@@ -55,6 +57,13 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
     }
     if let Some(unknown) = meta.keys().find(|k| !KEYS.contains(&k.as_str())) {
         return Err(format!("unknown key {unknown} (known: {})", KEYS.join(", ")));
+    }
+    match meta.get("neochumbyd").and_then(Value::as_str) {
+        None | Some("required" | "optional") => {}
+        Some(v) => return Err(format!(r#"neochumbyd: {v:?} is not "required" or "optional" (or leave it out)"#)),
+    }
+    if meta.contains_key("companion") && !meta.contains_key("neochumbyd") {
+        return Err(r#"companion: only a neochumbyd runs it; set neochumbyd = "required" or "optional""#.into());
     }
     if out.is_empty() {
         return Err("[package.metadata.neochumby] sets nothing".into());
@@ -109,11 +118,33 @@ mod tests {
 
     #[test]
     fn refuses_what_a_chumby_could_not_read() {
-        let wrap = |meta: &str| format!("[package]\nname = \"neochumby-x\"\n[package.metadata.neochumby]\n{meta}\n");
         assert!(manifest("[package]\nname = \"doom\"\n[package.metadata.neochumby]\ntitle = \"D\"").is_err());
         assert!(manifest("[package]\nname = \"neochumby-x\"").is_err());
         assert!(manifest(&wrap("titel = \"X\"")).is_err());
         assert!(manifest(&wrap("title = \"two\\nlines\"")).is_err());
         assert!(manifest(&wrap("title = 3")).is_err());
+    }
+
+    fn wrap(meta: &str) -> String {
+        format!("[package]\nname = \"neochumby-x\"\n[package.metadata.neochumby]\n{meta}\n")
+    }
+
+    #[test]
+    fn neochumbyd_is_required_optional_or_absent() {
+        assert_eq!(manifest(&wrap(r#"neochumbyd = "required""#)).unwrap(), "neochumbyd=required\n");
+        assert_eq!(manifest(&wrap(r#"neochumbyd = "optional""#)).unwrap(), "neochumbyd=optional\n");
+        let e = manifest(&wrap(r#"neochumbyd = "yes""#)).unwrap_err();
+        assert!(e.contains(r#"not "required" or "optional""#), "{e}");
+    }
+
+    #[test]
+    fn a_companion_needs_neochumbyd() {
+        let c = "service = \"neochumby-x\"\ncompanion = \"neochumby-x-companion\"";
+        let e = manifest(&wrap(c)).unwrap_err();
+        assert!(e.starts_with("companion:"), "{e}");
+        for needs in ["required", "optional"] {
+            let m = manifest(&wrap(&format!("{c}\nneochumbyd = \"{needs}\""))).unwrap();
+            assert!(m.ends_with(&format!("companion=neochumby-x-companion\nneochumbyd={needs}\n")), "{m}");
+        }
     }
 }

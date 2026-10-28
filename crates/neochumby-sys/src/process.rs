@@ -1,5 +1,5 @@
-//! Signals to other processes, by pid or by process group, and what a
-//! child is started with.
+//! Signals to other processes, by pid or by process group, whether a
+//! process is alive, and what a child is started with.
 
 use std::io;
 use std::process::Command;
@@ -36,13 +36,18 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
 }
 
-/// Whether the process `pid` is there (not yet reaped), and ours to
-/// signal: kill(2) with no signal, which only checks.
-pub fn exists(pid: u32) -> bool {
-    let Ok(p) = positive(pid) else { return false };
+/// Whether the process `pid` exists (a zombie, not yet reaped, counts), as
+/// kill(2) with no signal says: it does unless the kernel finds no such
+/// process. 0, or a value too large for a pid_t, is not a process.
+pub fn alive(pid: u32) -> bool {
+    let Ok(pid) = positive(pid) else { return false };
     // SAFETY: kill(2) takes plain integers and touches no memory of ours;
-    // signal 0 sends nothing, and `p` is a single process.
-    unsafe { libc::kill(p, 0) == 0 }
+    // signal 0 sends nothing, and `pid` is a single process.
+    if unsafe { libc::kill(pid, 0) } == 0 {
+        return true;
+    }
+    // EPERM: it exists, but is another user's.
+    io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
 /// Has the kernel send the child `cmd` starts SIGTERM when the thread that
@@ -91,19 +96,28 @@ mod tests {
         for id in [0, u32::MAX, 1 << 31] {
             assert_eq!(kill(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
             assert_eq!(kill_group(id, Signal::Term).unwrap_err().kind(), io::ErrorKind::InvalidInput);
-            assert!(!exists(id));
+            assert!(!alive(id));
         }
     }
 
     #[test]
-    fn exists_while_running() {
+    fn alive_until_reaped() {
+        assert!(alive(std::process::id()));
+        let mut child = std::process::Command::new("true").spawn().unwrap();
+        let pid = child.id();
+        child.wait().unwrap();
+        assert!(!alive(pid));
+    }
+
+    #[test]
+    fn term_with_parent_still_runs() {
         let mut cmd = Command::new("sleep");
         cmd.arg("30");
         term_with_parent(&mut cmd);
         let mut child = cmd.spawn().unwrap();
-        assert!(exists(child.id()));
+        assert!(alive(child.id()));
         kill(child.id(), Signal::Term).unwrap();
         child.wait().unwrap();
-        assert!(!exists(child.id()));
+        assert!(!alive(child.id()));
     }
 }

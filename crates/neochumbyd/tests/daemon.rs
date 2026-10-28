@@ -217,6 +217,6 @@ fn end_to_end() {
     process::kill(d.child.id(), Signal::Term).unwrap();
     let status = wait_for(20, "neochumbyd to stop", || d.child.try_wait().unwrap());
     assert!(status.success(), "{status}");
-    assert!(!process::exists(pid), "the daemon is still running");
+    assert!(!process::alive(pid), "the daemon is still running");
     assert!(!socket.exists(), "the admin socket is still there");
 }

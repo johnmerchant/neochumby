@@ -70,7 +70,9 @@ An app can use any of these keys:
 - **`companion`:** an app with a server half ships it as a second binary.
   neochumbyd runs it for each Chumby that asks, and relays frames between
   the two halves over the paired connection. neochumbyd knows no app by
-  name.
+  name. An app with a companion sets `neochumbyd` too, and its Chumby half
+  opens it with `neochumby::companion!()`, which fails the build if the
+  app's `Cargo.toml` declares no companion.
 - **`daemon`:** a server half that runs once per server rather than once
   per Chumby, such as a household web page. neochumbyd starts it when it
   starts, starts it again if it exits, and stops it when neochumbyd stops.

@@ -302,6 +302,7 @@ version = "0.1.0"
 dependencies = [
  "font8x8",
  "libc",
+ "neochumby-macros",
  "neochumby-proto",
  "neochumby-softfloat",
  "neochumby-sys",
@@ -332,6 +333,13 @@ dependencies = [
  "neochumby",
  "neochumby-proto",
  "neochumby-sys",
+]
+
+[[package]]
+name = "neochumby-macros"
+version = "0.1.0"
+dependencies = [
+ "toml",
 ]
 
 [[package]]

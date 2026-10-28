@@ -192,7 +192,7 @@ mod tests {
         std::thread::sleep(Duration::from_millis(100));
         let pid: u32 = std::fs::read_to_string(home.join("pid")).unwrap().trim().parse().unwrap();
         d.stop();
-        assert!(!process::exists(pid), "still running");
+        assert!(!process::alive(pid), "still running");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
