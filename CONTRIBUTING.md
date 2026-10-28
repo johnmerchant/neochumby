@@ -71,8 +71,31 @@ what it and its apps wrote (`neochumbyd log NAME -f`) and capture its
 screen (`neochumbyd shot NAME OUT.png`), all on the server. Everything
 an app writes to stdout or stderr ends up in that log, so print what
 you'd want to read there. The protocol is in `neochumby-proto`'s `dev`
-module. To let Claude Code do the same, add `neochumbyd mcp` as an MCP
-server (`claude mcp add neochumby -- ssh HOST neochumbyd mcp`).
+module.
+
+### With Claude Code (MCP)
+
+`neochumbyd mcp` serves the same as an [MCP](https://modelcontextprotocol.io)
+server on stdin and stdout, so Claude Code (or any MCP client) can read a
+Chumby's log, restart it and look at its screen while you work on an app
+together. Add it once, from your checkout, running it on the server over
+SSH:
+
+```sh
+claude mcp add neochumby -- ssh -o BatchMode=yes HOST neochumbyd mcp
+```
+
+That adds it for you, in this project only (Claude Code's `local` scope),
+and nothing is committed; `claude mcp list` or `/mcp` in Claude Code shows
+it connected, with its tools and what each does. The SSH user needs what
+the `neochumbyd` command does on that server, usually membership of its
+group.
+
+A loop that works well: deploy (`tools/deploy HOST APP --restart NAME`),
+then ask Claude to read the log and look at the screen and say what's
+wrong. Pairing stays with a person (`neochumbyd pairing`, `approve`), and
+so does turning on remote input (`dev=on`): don't let a tool do that for
+you.
 
 To drive it as a scenario drives the emulators, turn on input for it
 first: `neochumbyd set NAME dev=on` (and `dev=` to turn it off again). It
