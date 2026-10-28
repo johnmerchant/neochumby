@@ -2,6 +2,7 @@
 resolver = "3"
 members = [
     "crates/neochumby",
+    "crates/neochumby-manifest",
     "crates/neochumby-proto",
     "crates/neochumby-softfloat",
     "crates/neochumbyd",

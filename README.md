@@ -35,9 +35,12 @@ binaries are static (musl), so they don't depend on its userland.
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
 
-Everything we write is MIT. Doom and Quake link GPL engines, so each of
-those binaries is GPL and lives in its own directory with its upstream
-licence. Nothing links an app: each runs as a separate program. The
+Everything we write is MIT, except in `apps/doom` and `apps/quake`. Doom
+and Quake link GPL engines, so each of those crates, our Rust in it
+included, is GPL and lives in its own directory with its upstream licence
+(`apps/quake/src/span.rs` is a port of the engine's span drawer, so it
+could be nothing else). Nothing links an app: each runs as a separate
+program. The
 soft-float routines' runtime exception puts no conditions on the programs
 they're linked into.
 
@@ -45,16 +48,18 @@ they're linked into.
 
 Everything you see is an app, home screen included. An app is one crate,
 `neochumby-<name>`, which installs as a directory `apps/<name>/` in the
-tree, holding its binaries and a `manifest`:
+tree, holding its binaries and a `manifest`. The manifest comes from the
+crate's `Cargo.toml`:
 
-```
-title=QUAKE                          # listed on the home screen; runs exec
-exec=neochumby-quake                 # file names: in the app's directory
-colour=8c5a28                        # optional
-service=neochumby-airplay            # runs in the background
-companion=neochumby-airplay-companion   # its server half, run by neochumbyd
-neochumbyd=required                  # or optional; absent: never needed
-home=neochumby-home                  # this app can be the home screen
+```toml
+[package.metadata.neochumby]
+title = "QUAKE"                      # listed on the home screen; runs exec
+exec = "neochumby-quake"             # binaries, by name
+colour = "8c5a28"                    # optional
+service = "neochumby-airplay"        # runs in the background
+companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
+neochumbyd = "required"              # or "optional"; absent: never needed
+home = "neochumby-home"              # this app can be the home screen
 ```
 
 An app can use any of these keys:
@@ -101,11 +106,21 @@ apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manif
 ```
 
 `tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes
-the session and the home screen, plus the apps you name, for example
-`tools/tree OUT doom quake airplay`. Each app is the crate in `apps/<app>/`:
-its manifest names its binaries, and its `files/` directory, if it has one,
-is copied as it is. Game data is added from `DATA`, your own copies laid
-out the same way. The tree can come from a stick or from a server.
+the session and the home screen, plus the apps you name, from wherever
+they are:
+
+| APP | From |
+| --- | --- |
+| `doom` | `apps/doom` in this repository |
+| `./path`, `/path` | a crate on this machine |
+| `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it prints the commit to pin) |
+| `crate:neochumby-x@1.0.0` | crates.io (unversioned, the newest) |
+
+Each app's binaries are built for the Chumby, and its companion for the
+server, with the toolchain above. Its manifest is made from its
+`Cargo.toml`, and its `files/` directory, if it has one, is copied as it
+is. Game data is added from `DATA`, your own copies laid out the same way.
+The tree can come from a stick or from a server.
 
 ### From a stick
 
