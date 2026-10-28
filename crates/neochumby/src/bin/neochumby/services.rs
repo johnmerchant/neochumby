@@ -20,7 +20,7 @@ use std::time::{Duration, Instant};
 use neochumby::apps::App;
 use neochumby::session::{Notice, Pipe, Request};
 
-use neochumby_sys::process::{Signal, kill_group};
+use neochumby_sys::process::{Signal, exited, kill_group};
 
 use crate::child;
 
@@ -69,8 +69,8 @@ struct Service<'a> {
 /// What happened to the services since the last look.
 #[derive(Default)]
 pub struct Events<'a> {
-    /// The apps whose services exited.
-    pub died: Vec<&'a App>,
+    /// The apps whose services exited, with each one's pid.
+    pub died: Vec<(&'a App, u32)>,
     /// What each service asked for, in order.
     pub requests: Vec<(&'a App, Request)>,
 }
@@ -108,28 +108,32 @@ impl<'a> Services<'a> {
                 }
                 continue;
             };
+            // The rest of a line its pipe had no room for, then a notice
+            // that waited.
+            r.pipe.flush();
             if let Some(front) = r.untold.take() {
                 r.tell(s.app, &front);
             }
-            let exited = r.child.try_wait();
+            // Exited, but not reaped yet, so its group can still be ended
+            // safely (child.rs).
+            let gone = exited(r.child.id());
             for line in r.pipe.receive().lines {
                 match Request::parse(&line) {
                     Some(req) => ev.requests.push((s.app, req)),
                     None => eprintln!("neochumby: service {}: ignoring {line:?}", s.app.name),
                 }
             }
-            let status = match exited {
-                Ok(None) => continue,
-                Ok(Some(status)) => Ok(status),
-                Err(e) => Err(e),
-            };
+            if let Ok(false) = gone {
+                continue;
+            }
             let mut r = s.running.take().expect("running");
+            let pid = r.child.id();
             // What it started goes with it.
-            child::end(&mut r.child, Duration::ZERO);
+            let status = child::end(&mut r.child, Duration::ZERO);
             let wait = s.backoff.after(r.since.elapsed());
             eprintln!("neochumby: service {} exited ({status:?}); again in {} ms", s.app.name, wait.as_millis());
             s.due = Instant::now() + wait;
-            ev.died.push(s.app);
+            ev.died.push((s.app, pid));
         }
         ev
     }
@@ -151,11 +155,11 @@ impl<'a> Services<'a> {
             let _ = kill_group(r.child.id(), Signal::Term);
         }
         let deadline = Instant::now() + patience;
-        while running.iter_mut().any(|r| matches!(r.child.try_wait(), Ok(None))) && Instant::now() < deadline {
+        while running.iter().any(|r| matches!(exited(r.child.id()), Ok(false))) && Instant::now() < deadline {
             neochumby::sleep_ms(50);
         }
         for r in &mut running {
-            child::end(&mut r.child, Duration::ZERO);
+            let _ = child::end(&mut r.child, Duration::ZERO);
         }
     }
 }

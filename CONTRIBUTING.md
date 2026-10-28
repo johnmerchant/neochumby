@@ -205,13 +205,13 @@ neochumbyd starts on a paired Chumby only, and pairing asks for a restart.
 Anything else is ignored and logged, and so is an `open` for the app
 already in front.
 
-**The speaker.** When any service exits, the session mutes the speaker
-and puts back the master volume the Chumby booted with (`/psp/volume`),
+**The speaker.** When a service exits, the session mutes the speaker and
+puts back the master volume the Chumby booted with (`/psp/volume`),
 through `neochumby::audio`, so a service that dies while playing can't
-leave it on. The session can't tell whether another service is playing at
-that moment, so that one is muted too. Hold an `audio::Unmuted` or
-`audio::Speaker` only while you play, and take a new one each time you
-start, so a reset never leaves you silent for long.
+leave it on. If another live process holds the speaker (the handover's
+claim, which `audio::Unmuted` and `audio::Speaker` make), it's left alone.
+As the session ends, it does the same, waiting up to 3 seconds for the
+volume.
 
 In Rust, a service reads its notices with `Pipe::receive`, which doesn't
 wait, and `Notice::parse`.
