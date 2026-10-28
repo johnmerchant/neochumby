@@ -34,6 +34,12 @@ fail() {
   exit 1
 }
 count() { emu log | grep -c "$1" || true; }
+# classic, like neochumby-home, takes a press within ~350 ms of the last
+# for the touchscreen's echo (docs/hardware.md), so taps are spaced.
+tap() {
+  sleep 0.6
+  emu tap "$@"
+}
 
 [ -x "$tree/apps/classic/neochumby-classic" ] || fail "the tree has no classic"
 [ -f "$pictures/manifest.txt" ] || fail "$pictures: no manifest.txt"
@@ -78,9 +84,9 @@ slideshow
 step "Settings, then app doom: Doom through the pipe, and back"
 emu button press
 showing '^home' 0.5
-emu tap 228 198 # Home's Settings
+tap 228 198 # Home's Settings
 showing '^settings' 0.5
-emu tap 36 220 # the added `app doom`
+tap 36 220 # the added `app doom`
 emu wait log 'neochumby: classic asks: open doom' 10 || fail "classic didn't ask to open doom"
 emu wait log 'neochumby: opening doom' 10 || fail "the session didn't open doom"
 emu wait log 'neochumby-classic-service: doom in front' 10 || fail "the service wasn't told Doom is in front"
@@ -101,9 +107,9 @@ emu shot "$out/3-back.png"
 step "CHUMBY on Home"
 emu button press
 showing '^home' 0.5
-emu tap 148 214 # Home's CHUMBY
+tap 148 214 # Home's CHUMBY
 showing '^confirm' 0.5
-emu tap 219 152 # yes
+tap 219 152 # yes
 emu wait log 'neochumby: classic asks: chumby-mode' 10 || fail "classic didn't ask for CHUMBY MODE"
 emu wait exit 20 || fail "the session didn't end"
 [ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
