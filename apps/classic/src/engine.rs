@@ -62,8 +62,7 @@
 //! shows and the directory is looked at again every second.
 
 use std::collections::VecDeque;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::cache::{self, Asset, Cache, State};
 use crate::draw::{KEY, add_light, sin};
@@ -272,32 +271,22 @@ pub struct Engine<P: Plat> {
     last_sec: i64,
 }
 
-/// The private directory for the default control and stats files.
-const RUN_DIR: &str = "/tmp/neochumby-classic";
-
 /// The most memory the cache may hold, whatever is on screen: twice its
 /// budget, and at least 8 MB (the aurora page alone is about 2 MB).
 pub fn ceiling(budget: usize) -> usize {
     (budget * 2).max(8 << 20)
 }
 
-/// A file named by `var`, else `name` in [`RUN_DIR`], which is made (or
-/// kept) a real directory of ours, mode 0700. None if it can't be.
+/// A file named by `var`, else `name` in state::RUN_DIR (state::run_dir).
 fn run_path(var: &str, name: &str) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os(var) {
         return Some(PathBuf::from(p));
     }
-    let d = Path::new(RUN_DIR);
-    let _ = std::fs::DirBuilder::new().mode(0o700).create(d);
-    let ok = std::fs::symlink_metadata(d).is_ok_and(|m| {
-        use std::os::unix::fs::MetadataExt;
-        m.is_dir() && m.uid() == neochumby_sys::process::uid()
-    });
-    if !ok || std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).is_err() {
-        eprintln!("{RUN_DIR} isn't a directory of ours: no {name} file");
-        return None;
+    let d = state::run_dir();
+    if d.is_none() {
+        eprintln!("{} isn't a directory of ours: no {name} file", state::RUN_DIR);
     }
-    Some(d.join(name))
+    Some(d?.join(name))
 }
 
 impl<P: Plat> Engine<P> {
@@ -2714,6 +2703,7 @@ mod tests {
     use super::*;
     use crate::host::Host;
     use std::cell::RefCell;
+    use std::path::Path;
     use std::rc::Rc;
 
     /// An engine on `manifest` and files of the given sizes (filled with a

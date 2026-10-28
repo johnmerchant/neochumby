@@ -71,6 +71,23 @@ pub fn resolve_dir(base: &Path) -> PathBuf {
     base.to_path_buf()
 }
 
+/// The private directory for the control and stats files, and the
+/// service's record of what it plays.
+pub const RUN_DIR: &str = "/tmp/neochumby-classic";
+
+/// [`RUN_DIR`], made (or kept) a real directory of ours, mode 0700; None if
+/// it can't be (another user's, or a link).
+pub fn run_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let d = Path::new(RUN_DIR);
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(d);
+    let ok = std::fs::symlink_metadata(d).is_ok_and(|m| m.is_dir() && m.uid() == neochumby_sys::process::uid());
+    if !ok || std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).is_err() {
+        return None;
+    }
+    Some(d.to_path_buf())
+}
+
 /// A setting that is a time (seconds since the epoch); 0 if unset.
 pub fn read_time(path: &Path) -> i64 {
     read_nofollow(path, 64).and_then(|b| std::str::from_utf8(&b).ok()?.trim().parse().ok()).unwrap_or(0)
