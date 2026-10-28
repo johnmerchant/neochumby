@@ -156,11 +156,13 @@ fn session() {
 
     let is_home = |name: &str| all.iter().find(|a| a.name == name && a.home.is_some());
     let fallback = is_home(DEFAULT_HOME);
+    // The server's choice is a name, trusted only as far as the tree goes:
+    // it runs only if that app is here and has `home=`. Otherwise the local
+    // choice, then the built-in home screen.
     let settings = settings::load();
     let chosen = settings::get(&settings, "home")
-        .map(String::from)
-        .or_else(|| conf::get(conf::CONF, "home"))
-        .and_then(|n| is_home(&n))
+        .and_then(is_home)
+        .or_else(|| conf::get(conf::CONF, "home").and_then(|n| is_home(&n)))
         .or(fallback);
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
