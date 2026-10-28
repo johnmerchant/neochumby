@@ -7,7 +7,6 @@
 
 use std::io;
 use std::net::{TcpListener, TcpStream};
-use std::os::fd::AsRawFd;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -45,19 +44,8 @@ pub fn serve(listener: TcpListener, api: Arc<Api>) {
 /// is noticed within about 25 s even when nothing is being sent, and what
 /// was running for it stops.
 fn keepalive(tcp: &TcpStream) {
-    let fd = tcp.as_raw_fd();
-    let set = |level, opt, v: libc::c_int| unsafe {
-        libc::setsockopt(fd, level, opt, (&v as *const libc::c_int).cast(), size_of::<libc::c_int>() as libc::socklen_t)
-    };
-    set(libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1);
-    // Linux's names for the timings (neochumbyd's hosts); elsewhere, the
-    // system's.
-    #[cfg(target_os = "linux")]
-    {
-        set(libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, 10);
-        set(libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, 5);
-        set(libc::IPPROTO_TCP, libc::TCP_KEEPCNT, 3);
-    }
+    // The timings apply on Linux; elsewhere, the system's.
+    neochumby_sys::net::keepalive(tcp, 10, 5, 3);
 }
 
 fn handle(api: &Api, tcp: TcpStream) -> io::Result<()> {

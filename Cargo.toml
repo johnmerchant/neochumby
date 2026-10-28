@@ -6,6 +6,7 @@ members = [
     "crates/neochumby-proto",
     "crates/neochumby-softfloat",
     "crates/neochumby-sync",
+    "crates/neochumby-sys",
     "crates/neochumbyd",
     "apps/airplay",
     "apps/home",
@@ -24,6 +25,16 @@ neochumby = { path = "crates/neochumby" }
 neochumby-softfloat = { path = "crates/neochumby-softfloat" }
 neochumby-proto = { path = "crates/neochumby-proto" }
 neochumby-sync = { path = "crates/neochumby-sync" }
+neochumby-sys = { path = "crates/neochumby-sys" }
+
+# No unsafe code outside neochumby-sys (and the games, FFI to C engines):
+# see neochumby-sys and CONTRIBUTING.md. Deny, not forbid, so that those
+# crates can allow it.
+[workspace.lints.rust]
+unsafe_code = "deny"
+
+[workspace.lints.clippy]
+undocumented_unsafe_blocks = "deny"
 
 [profile.release]
 opt-level = 2

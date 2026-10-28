@@ -10,6 +10,7 @@ publish.workspace = true
 libc.workspace = true
 neochumby-proto.workspace = true
 neochumby-sync.workspace = true
+neochumby-sys.workspace = true
 font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
 neochumby-softfloat = { workspace = true, optional = true }
 
@@ -18,3 +19,6 @@ default = ["softfloat"]
 # libgcc's ARM soft float for every app's float arithmetic (GPL-3.0 with the
 # GCC Runtime Library Exception: no obligations on the programs it is in).
 softfloat = ["dep:neochumby-softfloat"]
+
+[lints]
+workspace = true
