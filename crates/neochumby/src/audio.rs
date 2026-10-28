@@ -5,6 +5,10 @@
 //! /dev/dsp can be open in only one process at a time: while another has
 //! it, opening it fails, and a service should drop its audio until it is
 //! free rather than wait for it.
+//!
+//! [`Unmuted`] is the volume and the mute alone, for a process that has
+//! another program play (the stock btplay, which opens /dev/dsp itself);
+//! [`Speaker`] is that plus /dev/dsp, for one that writes PCM itself.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Write};
@@ -42,13 +46,40 @@ pub fn set_volume(v: u32) -> io::Result<()> {
     Command::new(SET_VOLUME).arg("--master_volume").arg(v.to_string()).output().map(|_| ())
 }
 
-/// The speaker, held: /dev/dsp set for 16-bit little-endian PCM, unmuted
-/// and at the volume asked for while open; dropping it mutes the speaker and
-/// puts the volume back. Only a drop restores them, so a process killed
-/// while holding it leaves the speaker unmuted and at its volume.
-pub struct Speaker {
-    dsp: File,
+/// The speaker unmuted and at a volume while held; dropping it mutes the
+/// speaker and puts the volume back. Only a drop restores them, so a process
+/// killed while holding it leaves the speaker unmuted and at its volume.
+pub struct Unmuted {
     volume_before: Option<u32>,
+}
+
+impl Unmuted {
+    /// Sets the master volume to `volume` and unmutes, remembering the
+    /// volume to put back.
+    pub fn at(volume: u32) -> Unmuted {
+        let volume_before = self::volume();
+        report(SET_VOLUME, set_volume(volume));
+        report(SPEAKER_MUTE, mute(false));
+        Unmuted { volume_before }
+    }
+}
+
+impl Drop for Unmuted {
+    fn drop(&mut self) {
+        report(SPEAKER_MUTE, mute(true));
+        if let Some(v) = self.volume_before {
+            report(SET_VOLUME, set_volume(v));
+        }
+    }
+}
+
+/// The speaker, held: /dev/dsp set for 16-bit little-endian PCM, and
+/// [`Unmuted`] while open. Dropping it restores the speaker, then closes
+/// /dev/dsp.
+pub struct Speaker {
+    // Dropped first: the speaker is muted before /dev/dsp closes.
+    _unmuted: Unmuted,
+    dsp: File,
 }
 
 impl Speaker {
@@ -67,10 +98,7 @@ impl Speaker {
                 return Err(io::Error::last_os_error());
             }
         }
-        let volume_before = self::volume();
-        report(SET_VOLUME, set_volume(volume));
-        report(SPEAKER_MUTE, mute(false));
-        Ok(Speaker { dsp, volume_before })
+        Ok(Speaker { _unmuted: Unmuted::at(volume), dsp })
     }
 }
 
@@ -81,15 +109,6 @@ impl Write for Speaker {
 
     fn flush(&mut self) -> io::Result<()> {
         self.dsp.flush()
-    }
-}
-
-impl Drop for Speaker {
-    fn drop(&mut self) {
-        report(SPEAKER_MUTE, mute(true));
-        if let Some(v) = self.volume_before {
-            report(SET_VOLUME, set_volume(v));
-        }
     }
 }
 
