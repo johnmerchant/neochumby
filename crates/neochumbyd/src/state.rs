@@ -8,6 +8,7 @@
 //!                     sent to it on every connection (`Msg::Config`). Kept
 //!                     by name, so a Chumby paired again under its name
 //!                     keeps them
+//!   logs/, dev/       what the developer link keeps and is asked (dev.rs)
 //!
 //! The daemon writes pending/; `neochumbyd approve <code>` (whoever is in
 //! the daemon's group) turns one into paired/, which the daemon, waiting on

@@ -1,6 +1,10 @@
 //! The messages, after the handshake. Each is a tag byte and its fields:
 //! strings as a u16 length and UTF-8, ports as u16, sizes as u64, hashes as
 //! their 32 bytes, all big-endian.
+//!
+//! Tags taken: 0-9 the core (pairing, companions, settings); 10-18 sync
+//! (delivery=sync, #10), with 19-31 left for it and anything near it;
+//! 32-36 the developer link (crate::dev).
 
 use std::io;
 
@@ -66,6 +70,23 @@ pub enum Msg {
     /// files kept from a round cut short), `done` of `total` bytes. Each
     /// one restarts neochumbyd's wait.
     SyncProgress { done: u64, total: u64 },
+    /// Chumby, after `Config`, in place of `Open`: this connection is the
+    /// developer link ([`crate::dev`]). The Chumby streams its log on it,
+    /// and neochumbyd may ask for a restart or a screenshot.
+    Dev,
+    /// Chumby, on the developer link: lines of its log, oldest first, each
+    /// without its newline. neochumbyd keeps the last few thousand.
+    Log(Vec<String>),
+    /// neochumbyd, on the developer link: end the apps and services and
+    /// start the session again from the tree (`neochumbyd restart NAME`).
+    Restart,
+    /// neochumbyd, on the developer link: send the screen
+    /// (`neochumbyd shot NAME OUT.png`).
+    Shot,
+    /// Chumby, answering `Shot`: the screen is this size, and follows as
+    /// `Data`, width x height RGB565 pixels, little-endian, row by row, in
+    /// as many messages as it takes. A width or height of 0: no screen.
+    Screen { width: u16, height: u16 },
 }
 
 impl Msg {
@@ -146,6 +167,21 @@ impl Msg {
                 b.push(18);
                 b.extend_from_slice(&done.to_be_bytes());
                 b.extend_from_slice(&total.to_be_bytes());
+            }
+            Msg::Dev => b.push(32),
+            Msg::Log(lines) => {
+                b.push(33);
+                b.extend_from_slice(&(lines.len() as u16).to_be_bytes());
+                for l in lines {
+                    s(&mut b, l);
+                }
+            }
+            Msg::Restart => b.push(34),
+            Msg::Shot => b.push(35),
+            Msg::Screen { width, height } => {
+                b.push(36);
+                b.extend_from_slice(&width.to_be_bytes());
+                b.extend_from_slice(&height.to_be_bytes());
             }
         }
         b
@@ -238,6 +274,21 @@ impl Msg {
                 let done = u64::from_be_bytes(take(&mut rest, 8)?.try_into().expect("8 bytes"));
                 let total = u64::from_be_bytes(take(&mut rest, 8)?.try_into().expect("8 bytes"));
                 Msg::SyncProgress { done, total }
+            }
+            32 => Msg::Dev,
+            33 => {
+                let n = u16_(&mut rest)?;
+                let mut lines = Vec::new();
+                for _ in 0..n {
+                    lines.push(string(&mut rest)?);
+                }
+                Msg::Log(lines)
+            }
+            34 => Msg::Restart,
+            35 => Msg::Shot,
+            36 => {
+                let width = u16_(&mut rest)?;
+                Msg::Screen { width, height: u16_(&mut rest)? }
             }
             _ => return Err(invalid("unknown message")),
         };

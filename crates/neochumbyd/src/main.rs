@@ -18,6 +18,11 @@
 //!                                  Chumby's stick
 //!   neochumbyd manifest            what a sync sends: the tree's files,
 //!                                  and any a Chumby could not take
+//!   neochumbyd log NAME [-f]       a paired Chumby's log, as its session
+//!                                  sent it; -f follows it (dev.rs)
+//!   neochumbyd restart NAME        its session ends its apps and starts
+//!                                  again from the tree
+//!   neochumbyd shot NAME OUT.png   its screen
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -27,7 +32,9 @@
 
 mod api;
 mod companion;
+mod dev;
 mod nfs;
+mod png;
 mod state;
 mod sync;
 mod tree;
@@ -35,15 +42,22 @@ mod tree;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use nfsserve::tcp::{NFSTcp, NFSTcpListener};
 
 use state::State;
 
+/// How long `restart` and `shot` wait for the Chumby's developer link: long
+/// enough for it to come back after the daemon itself restarted (a new
+/// binary deployed), as its session reconnects within a few seconds.
+const LINK_WAIT: Duration = Duration::from_secs(15);
+
 struct Args {
     command: String,
     operand: Option<String>,
     setting: Option<String>,
+    follow: bool,
     state: PathBuf,
     tree: Option<PathBuf>,
     nfs: String,
@@ -52,7 +66,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
     );
     std::process::exit(2)
 }
@@ -62,6 +76,7 @@ fn args() -> Args {
         command: String::new(),
         operand: None,
         setting: None,
+        follow: false,
         state: "/var/lib/neochumbyd".into(),
         tree: None,
         nfs: "0.0.0.0:2049".into(),
@@ -75,10 +90,11 @@ fn args() -> Args {
             "--tree" => a.tree = Some(value().into()),
             "--nfs" => a.nfs = value(),
             "--api" => a.api = value(),
+            "-f" | "--follow" => a.follow = true,
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
             _ if a.operand.is_none() => a.operand = Some(arg),
-            _ if a.command == "set" && a.setting.is_none() => a.setting = Some(arg),
+            _ if matches!(a.command.as_str(), "set" | "shot") && a.setting.is_none() => a.setting = Some(arg),
             _ => usage(),
         }
     }
@@ -132,6 +148,27 @@ fn main() {
             }
         }
         "manifest" => manifest(&a),
+        "log" => {
+            let name = paired(&state, &operand());
+            let mut out = std::io::stdout().lock();
+            let r = if a.follow {
+                dev::follow(&a.state, &name, &mut out, || false)
+            } else {
+                dev::read_log(&a.state, &name).and_then(|b| std::io::Write::write_all(&mut out, &b))
+            };
+            r.unwrap_or_else(|e| fail(format!("{name}: {e}")));
+        }
+        "restart" => {
+            let name = paired(&state, &operand());
+            dev::restart(&a.state, &name, LINK_WAIT).unwrap_or_else(|e| fail(e));
+            println!("{name}: restarting");
+        }
+        "shot" => {
+            let name = paired(&state, &operand());
+            let out = a.setting.clone().unwrap_or_else(|| usage());
+            dev::shot(&a.state, &name, out.as_ref(), LINK_WAIT).unwrap_or_else(|e| fail(e));
+            println!("{out}");
+        }
         _ => usage(),
     }
 }
@@ -155,6 +192,14 @@ fn manifest(a: &Args) {
     eprintln!("digest {}", neochumby_proto::hex(&neochumby_sync::manifest::digest(&m)));
 }
 
+/// `name`, if a Chumby is paired under it.
+fn paired(state: &State, name: &str) -> String {
+    if !state.pairs().unwrap_or_else(|e| fail(e)).iter().any(|(n, _)| n == name) {
+        fail(format!("no Chumby paired as {name}"));
+    }
+    name.to_string()
+}
+
 fn serve(a: &Args, state: State) {
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
@@ -168,9 +213,15 @@ fn serve(a: &Args, state: State) {
     );
 
     let listener = TcpListener::bind(&a.api).unwrap_or_else(|e| fail(format!("{}: {e}", a.api)));
-    let hashes = neochumby_sync::serve::Hashes::default();
-    let state_dir = a.state.clone();
-    let api = Arc::new(api::Api { state, identity, nfs_port, tree: tree.clone(), state_dir, hashes });
+    let api = Arc::new(api::Api {
+        state,
+        identity,
+        nfs_port,
+        tree: tree.clone(),
+        state_dir: a.state.clone(),
+        hashes: neochumby_sync::serve::Hashes::default(),
+        links: Default::default(),
+    });
     std::thread::spawn(move || api::serve(listener, api));
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));

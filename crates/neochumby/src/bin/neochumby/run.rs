@@ -38,6 +38,11 @@
 //! volume the Chumby booted with (neochumby::audio), so a service that dies
 //! while playing can't leave it on; unless another live process holds the
 //! speaker (the handover's claim), whose playing is left alone.
+//!
+//! A restart asked by neochumbyd (devlink.rs) ends whatever is in front as
+//! the escape hatch does, closes the button, stops the services and puts
+//! the speaker back as CHUMBY MODE does, and the loop returns for the
+//! session to start again.
 
 use std::os::fd::RawFd;
 use std::path::Path;
@@ -71,6 +76,18 @@ pub trait Device {
     fn button_fd(&self) -> Option<RawFd>;
     /// Closes the top button, for the Chumby's own software.
     fn close_button(&mut self);
+
+    /// Whether a restart was asked for since the last call.
+    fn restart(&mut self) -> bool {
+        false
+    }
+}
+
+/// Why the loop ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ended {
+    ChumbyMode,
+    Restart,
 }
 
 pub struct Timing {
@@ -121,6 +138,7 @@ enum Next<'a> {
     /// Opens the app, telling it why (NEOCHUMBY_REASON) if there's a reason.
     Open(&'a App, Option<&'static str>),
     ChumbyMode,
+    Restart,
 }
 
 /// The app in front.
@@ -189,10 +207,23 @@ impl<'a, D: Device> Session<'a, D> {
         }
     }
 
-    /// Runs apps, and the services, until CHUMBY MODE.
-    pub fn run(mut self) {
+    /// Runs apps, and the services, until CHUMBY MODE or a restart. Either
+    /// way, the button is closed, the services stopped and the speaker put
+    /// back first.
+    pub fn run(mut self) -> Ended {
         let mut next = Next::Open(self.start, None);
-        while let Next::Open(app, reason) = next {
+        loop {
+            let (app, reason) = match next {
+                Next::Open(app, reason) => (app, reason),
+                Next::ChumbyMode => {
+                    eprintln!("neochumby: CHUMBY MODE");
+                    return self.end(Ended::ChumbyMode);
+                }
+                Next::Restart => {
+                    eprintln!("neochumby: restarting");
+                    return self.end(Ended::Restart);
+                }
+            };
             if let Some(gap) = self.last_open.and_then(|t| self.timing.min_gap.checked_sub(t.elapsed())) {
                 neochumby::sleep_ms(gap.as_millis() as u32);
             }
@@ -205,14 +236,20 @@ impl<'a, D: Device> Session<'a, D> {
                 }
             };
         }
-        eprintln!("neochumby: CHUMBY MODE");
+    }
+
+    /// Closes the button, stops the services and, everything that could
+    /// play having stopped, puts the speaker back: before the Chumby's own
+    /// software runs, or before the session starts again.
+    fn end(mut self, why: Ended) -> Ended {
         // Every way out of watch() has ended the app in front and its whole
         // process group (child::end), so no copy of the button is left.
+        // Closed for the Chumby's own software, or before the session
+        // replaces itself and opens it again.
         self.device.close_button();
         self.services.stop(self.timing.service_patience);
-        // Everything that could play has stopped: put the speaker back
-        // before the Chumby's own software runs.
         self.device.reset_speaker(SPEAKER_WAIT);
+        why
     }
 
     fn open(&mut self, app: &'a App, reason: Option<&'static str>) -> std::io::Result<Front<'a>> {
@@ -243,6 +280,11 @@ impl<'a, D: Device> Session<'a, D> {
                 let _ = child::end(&mut f.child, self.timing.patience);
                 self.suppressed = true;
                 return Next::Open(start::home(self.apps).unwrap_or(self.start), None);
+            }
+            if self.device.restart() {
+                eprintln!("neochumby: restart: ending {} and what it started", f.app.name);
+                let _ = child::end(&mut f.child, self.timing.patience);
+                return Next::Restart;
             }
             if f.app.button {
                 self.button.forget();
@@ -450,6 +492,7 @@ mod tests {
         gone_at_close: Option<PathBuf>,
         /// Who the speaker's holder is said to be.
         holder: Option<u32>,
+        restart: Arc<AtomicBool>,
     }
 
     impl Device for Fake {
@@ -463,6 +506,10 @@ mod tests {
 
         fn speaker_holder(&self) -> Option<u32> {
             self.holder
+        }
+
+        fn restart(&mut self) -> bool {
+            self.restart.swap(false, Ordering::SeqCst)
         }
 
         fn button(&mut self) -> Option<bool> {
@@ -574,10 +621,10 @@ mod tests {
         run_timed(root, choices, fake, timing());
     }
 
-    fn run_timed(root: &Path, choices: &[(&str, &str)], fake: Fake, timing: Timing) {
+    fn run_timed(root: &Path, choices: &[(&str, &str)], fake: Fake, timing: Timing) -> Ended {
         let all = apps::all(root);
         let start = start::choose(&all, choices.first().copied()).expect("a start app");
-        Session::new(&all, &[], root, start, fake, timing).run();
+        Session::new(&all, &[], root, start, fake, timing).run()
     }
 
     /// Waits for the process whose pid is in `pid_file` to be gone.
@@ -1082,5 +1129,34 @@ mod tests {
         );
         run(&root, &[("settings", "wx")], Arc::default());
         gone(&root.join("pid"));
+    }
+
+    #[test]
+    fn a_restart_ends_the_front_app_and_the_services_and_closes_the_button() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree_with(
+            "devrestart",
+            &[("home", "start=true\n", "sleep 30 &\necho $! > \"$NEOCHUMBY_ROOT/pid\"\nwait")],
+            &[("home", "sleep 30 &\necho $! > \"$NEOCHUMBY_ROOT/svc-pid\"\nwait")],
+        );
+        // The button is held by the session: closed as the loop ends, once
+        // what the app started is gone, as for CHUMBY MODE.
+        let fake = Fake { gone_at_close: Some(root.join("pid")), ..with_button() };
+        let (flag, resets, closed) = (fake.restart.clone(), fake.resets.clone(), fake.closed.clone());
+        let (pid_file, svc_pid) = (root.join("pid"), root.join("svc-pid"));
+        std::thread::spawn(move || {
+            while !pid_file.exists() || !svc_pid.exists() {
+                neochumby::sleep_ms(10);
+            }
+            flag.store(true, Ordering::SeqCst);
+        });
+        assert_eq!(run_timed(&root, &[], fake, timing()), Ended::Restart);
+        assert_eq!(apps_log(&root), ["home"]);
+        // The app, its service, and what each started: all gone, the button
+        // closed, and the speaker put back, as for CHUMBY MODE.
+        gone(&root.join("pid"));
+        gone(&root.join("svc-pid"));
+        assert!(closed.load(Ordering::SeqCst), "the button wasn't closed at the restart");
+        assert_eq!(resets.load(Ordering::SeqCst), 1);
     }
 }

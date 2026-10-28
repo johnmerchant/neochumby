@@ -22,10 +22,16 @@
 //! A Chumby with `delivery=sync` keeps a copy of its tree on its stick, in
 //! step with neochumbyd, through the `Sync*` messages (neochumby-sync has
 //! the rounds they make up).
+//!
+//! A paired Chumby's session also keeps a connection of its own, the
+//! developer link ([`dev`]): it sends [`Msg::Dev`], streams its log as
+//! [`Msg::Log`], and answers [`Msg::Restart`] and [`Msg::Shot`], so that
+//! working on a Chumby needs no shell on it.
 
 use std::fmt::Write as _;
 use std::io;
 
+pub mod dev;
 mod msg;
 pub use msg::{Msg, SyncEntry};
 
@@ -202,6 +208,13 @@ mod tests {
             Msg::SyncEnd,
             Msg::SyncDone { ok: false, detail: "no space".into() },
             Msg::SyncProgress { done: 1 << 20, total: 512 << 20 },
+            Msg::Dev,
+            Msg::Log(vec![]),
+            Msg::Log(vec!["neochumby: opening home".into(), String::new(), "ünïcode".into()]),
+            Msg::Restart,
+            Msg::Shot,
+            Msg::Screen { width: 320, height: 240 },
+            Msg::Screen { width: 0, height: 0 },
         ] {
             assert_eq!(Msg::decode(&m.encode()).unwrap(), m);
         }
@@ -212,6 +225,13 @@ mod tests {
         assert!(Msg::decode(&[13, 2, 0, 0]).is_err(), "a flag is 0 or 1");
         assert!(Msg::decode(&[16, 0]).is_err());
         assert!(Msg::decode(&[18, 0, 0, 0, 0, 0, 0, 0, 1]).is_err(), "short");
+        // Short, long, and a count with too few lines.
+        assert!(Msg::decode(&[36, 1, 64, 0]).is_err());
+        assert!(Msg::decode(&[34, 0]).is_err());
+        assert!(Msg::decode(&[33, 0, 2, 0, 1, b'x']).is_err());
+        // The dev tags, where #10's sync messages don't reach.
+        assert_eq!(Msg::Dev.encode(), [32]);
+        assert_eq!(Msg::Shot.encode(), [35]);
     }
 
     #[test]

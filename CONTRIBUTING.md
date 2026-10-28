@@ -52,6 +52,16 @@ builds on the host, so CI can test it there. `neochumby-sync` is one: its
 tests run whole sync rounds over a real session on loopback, with a
 temporary directory standing in for the stick.
 
+### On a Chumby
+
+A paired Chumby can be worked on without SSH. Deploy a tree and restart
+its session on it (`tools/deploy HOST [APP ...] --restart NAME`), read
+what it and its apps wrote (`neochumbyd log NAME -f`) and capture its
+screen (`neochumbyd shot NAME OUT.png`), all on the server. Everything
+an app writes to stdout or stderr ends up in that log, so print what
+you'd want to read there. The protocol is in `neochumby-proto`'s `dev`
+module.
+
 ## Writing an app
 
 An app is a crate named `neochumby-<name>`. It lives in this repository
