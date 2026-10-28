@@ -9,11 +9,11 @@
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::{Child, Command};
+use std::process::{Child, Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use neochumby::session::{self, Pipe};
-use neochumby_sys::process::{Signal, group_alive, kill_group, pass_fds};
+use neochumby_sys::process::{Signal, exited, group_alive, kill_group, pass_fds};
 
 /// How long what's left of a process group has, after SIGTERM, once its
 /// leader has gone.
@@ -42,28 +42,33 @@ pub fn spawn(mut cmd: Command, inherit: &[RawFd]) -> std::io::Result<(Child, Pip
     Ok((child, pipe))
 }
 
-/// Ends `child` and the rest of its process group, whether or not `child`
-/// has exited already: SIGTERM to the group; SIGKILL if `child` hasn't
-/// exited after `patience`, or if anything else in the group is left
-/// [`LINGER`] after that. So no helper an app started keeps the screen,
-/// the speaker or the button into the next app.
-pub fn end(child: &mut Child, patience: Duration) {
+/// Ends `child` and the rest of its process group, and reaps `child`;
+/// its exit. It works whether or not `child` has exited already, so no
+/// helper an app started keeps the screen, the speaker or the button into
+/// the next app.
+///
+/// The group gets SIGTERM, and SIGKILL if `child` hasn't exited after
+/// `patience`, while `child` is still unreaped: its pid holds the group's
+/// id, so no other process can have it. Once `child` is reaped, anything
+/// left in the group still holds the id; it gets [`LINGER`], then SIGKILL.
+pub fn end(child: &mut Child, patience: Duration) -> std::io::Result<ExitStatus> {
     let group = child.id();
-    if kill_group(group, Signal::Term).is_err() {
-        // Nothing left in the group.
-        let _ = child.wait();
-        return;
-    }
+    let _ = kill_group(group, Signal::Term);
+    let gone = || exited(group).unwrap_or(true);
     let deadline = Instant::now() + patience;
-    while matches!(child.try_wait(), Ok(None)) && Instant::now() < deadline {
+    while !gone() && Instant::now() < deadline {
         neochumby::sleep_ms(20);
     }
+    if !gone() {
+        let _ = kill_group(group, Signal::Kill);
+    }
+    let status = child.wait();
     let deadline = Instant::now() + LINGER;
-    while group_alive(group) && matches!(child.try_wait(), Ok(Some(_))) && Instant::now() < deadline {
+    while group_alive(group) && Instant::now() < deadline {
         neochumby::sleep_ms(20);
     }
     if group_alive(group) {
         let _ = kill_group(group, Signal::Kill);
     }
-    let _ = child.wait();
+    status
 }

@@ -20,7 +20,10 @@ pub fn set_cloexec(fd: BorrowedFd<'_>, on: bool) -> io::Result<()> {
 
 /// A copy of the descriptor numbered `fd` that this process was handed
 /// (in an environment variable, say), owned by the caller, or None if no
-/// descriptor has that number. Both are marked close-on-exec, so neither
+/// descriptor has that number. Give it only a number this process was told
+/// about (NEOCHUMBY_SESSION, NEOCHUMBY_BUTTON): it copies whatever is open
+/// under that number, so the caller checks it's what was meant (a socket,
+/// say). Both are marked close-on-exec, so neither
 /// passes on to programs this one runs. Taking a copy means that taking it
 /// twice doesn't close it twice.
 pub fn handed_over(fd: RawFd) -> Option<OwnedFd> {
@@ -65,7 +68,10 @@ mod tests {
         assert_eq!(recv_nowait(copy.as_fd(), &mut buf).unwrap_err().kind(), io::ErrorKind::WouldBlock);
         a.write_all(b"hi").unwrap();
         assert_eq!(recv_nowait(copy.as_fd(), &mut buf).unwrap(), 2);
-        drop(a);
+        // The other end done writing (shutdown, not drop: on macOS a child
+        // another test forks can inherit a copy of `a` before it's marked
+        // close-on-exec).
+        a.shutdown(std::net::Shutdown::Write).unwrap();
         assert_eq!(recv_nowait(b.as_fd(), &mut buf).unwrap(), 0);
         assert!(handed_over(-1).is_none());
         set_cloexec(copy.as_fd(), false).unwrap();

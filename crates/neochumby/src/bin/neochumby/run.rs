@@ -36,9 +36,8 @@
 //!
 //! When a service exits, the session mutes the speaker and puts back the
 //! volume the Chumby booted with (neochumby::audio), so a service that dies
-//! while playing can't leave it on. It can't tell whether another service
-//! is playing at that moment (the library keeps no record of who holds the
-//! speaker), so that one is muted too, until it next unmutes.
+//! while playing can't leave it on; unless another live process holds the
+//! speaker (the handover's claim), whose playing is left alone.
 
 use std::os::fd::RawFd;
 use std::path::Path;
@@ -47,6 +46,8 @@ use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
 use neochumby::session::{Notice, Pipe, Request};
+
+use neochumby_sys::process::exited;
 
 use crate::button::Edges;
 use crate::child;
@@ -57,8 +58,12 @@ use crate::start;
 pub trait Device {
     /// Whether the escape hatch was used since the last call.
     fn escaped(&mut self) -> bool;
-    /// Mutes the speaker and puts back the volume the Chumby booted with.
-    fn reset_speaker(&mut self);
+    /// Mutes the speaker and puts back the volume the Chumby booted with,
+    /// waiting up to `wait` for the volume to be set.
+    fn reset_speaker(&mut self, wait: Duration);
+    /// The live process holding the speaker (neochumby::audio), if one
+    /// does.
+    fn speaker_holder(&self) -> Option<u32>;
     /// Whether the top button is down now; None if the session hasn't got
     /// it.
     fn button(&mut self) -> Option<bool>;
@@ -99,6 +104,9 @@ impl Default for Timing {
         }
     }
 }
+
+/// How long putting the volume back may take as the session ends.
+const SPEAKER_WAIT: Duration = Duration::from_secs(3);
 
 /// Five failures of the start app within this long: it can't start.
 const FAILURES: usize = 5;
@@ -193,7 +201,9 @@ impl<'a, D: Device> Session<'a, D> {
         // process group (child::end), so no copy of the button is left.
         self.device.close_button();
         self.services.stop(self.timing.service_patience);
-        self.device.reset_speaker();
+        // Everything that could play has stopped: put the speaker back
+        // before the Chumby's own software runs.
+        self.device.reset_speaker(SPEAKER_WAIT);
     }
 
     fn open(&mut self, app: &'a App, reason: Option<&'static str>) -> std::io::Result<Front<'a>> {
@@ -221,7 +231,7 @@ impl<'a, D: Device> Session<'a, D> {
             neochumby::sleep_ms(self.timing.tick_ms);
             if self.device.escaped() {
                 eprintln!("neochumby: escape: ending {} and what it started", f.app.name);
-                child::end(&mut f.child, self.timing.patience);
+                let _ = child::end(&mut f.child, self.timing.patience);
                 self.suppressed = true;
                 return Next::Open(start::home(self.apps).unwrap_or(self.start), None);
             }
@@ -236,7 +246,7 @@ impl<'a, D: Device> Session<'a, D> {
                     eprintln!("neochumby: the top button: told {}", f.app.name);
                 } else {
                     eprintln!("neochumby: the top button: ending {}, opening {}", f.app.name, self.start.name);
-                    child::end(&mut f.child, self.timing.patience);
+                    let _ = child::end(&mut f.child, self.timing.patience);
                     return Next::Open(self.start, Some("button"));
                 }
             }
@@ -245,7 +255,12 @@ impl<'a, D: Device> Session<'a, D> {
             self.read(&mut f);
             let ev = self.services.poll(&f.app.name);
             if !ev.died.is_empty() {
-                self.device.reset_speaker();
+                // The dead service, or something it started, may have held
+                // the speaker; a live player that holds it is left alone.
+                match self.device.speaker_holder() {
+                    Some(pid) => eprintln!("neochumby: process {pid} holds the speaker; leaving it as it is"),
+                    None => self.device.reset_speaker(Duration::ZERO),
+                }
             }
             for (from, req) in ev.requests {
                 if f.asked.is_some() {
@@ -259,28 +274,22 @@ impl<'a, D: Device> Session<'a, D> {
                 }
                 if let Some(next) = self.interrupting(&f, from, req) {
                     eprintln!("neochumby: service {} replaces {}", from.name, f.app.name);
-                    child::end(&mut f.child, self.timing.patience);
+                    let _ = child::end(&mut f.child, self.timing.patience);
                     return next;
                 }
             }
-            let status = match f.child.try_wait() {
-                Ok(None) => match f.asked {
+            // Exited, but not reaped yet (process::exited), so its group
+            // can still be ended safely: child::end does, and reaps it.
+            let status = match exited(f.child.id()) {
+                Ok(false) => match f.asked {
                     Some((_, at)) if at.elapsed() >= self.timing.grace => {
                         eprintln!("neochumby: {} asked, but hasn't exited; ending it", f.app.name);
-                        child::end(&mut f.child, self.timing.patience);
-                        continue;
+                        child::end(&mut f.child, self.timing.patience)
                     }
                     _ => continue,
                 },
-                Ok(Some(s)) => {
-                    // Anything it started goes with it.
-                    child::end(&mut f.child, self.timing.patience);
-                    Ok(s)
-                }
-                Err(e) => {
-                    child::end(&mut f.child, self.timing.patience);
-                    Err(e)
-                }
+                // Anything it started goes with it.
+                Ok(true) | Err(_) => child::end(&mut f.child, self.timing.patience),
             };
             // What it wrote just before it exited.
             self.read(&mut f);
@@ -430,6 +439,8 @@ mod tests {
         closed: Arc<AtomicBool>,
         /// A pid file, whose process must be gone when the button closes.
         gone_at_close: Option<PathBuf>,
+        /// Who the speaker's holder is said to be.
+        holder: Option<u32>,
     }
 
     impl Device for Fake {
@@ -437,8 +448,12 @@ mod tests {
             self.escape.swap(false, Ordering::SeqCst)
         }
 
-        fn reset_speaker(&mut self) {
+        fn reset_speaker(&mut self, _wait: Duration) {
             self.resets.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn speaker_holder(&self) -> Option<u32> {
+            self.holder
         }
 
         fn button(&mut self) -> Option<bool> {
@@ -1000,6 +1015,18 @@ mod tests {
         assert!((4..=9).contains(&runs), "{runs} runs");
         // One for each exit, and one as the session ends.
         assert!(resets.load(Ordering::SeqCst) >= runs, "{runs} runs, {resets:?} resets");
+    }
+
+    #[test]
+    fn a_dead_service_leaves_another_player_alone() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree_with("holder", &[("wx", "start=true\n", "sleep 1\nask chumby-mode")], &[("wx", "exit 1")]);
+        let fake = Fake { holder: Some(1), ..Fake::default() };
+        let resets = fake.resets.clone();
+        run_on(&root, &[("settings", "wx")], fake);
+        assert!(log(&root).iter().filter(|l| l.starts_with("wx-svc")).count() >= 2);
+        // Only as the session ends.
+        assert_eq!(resets.load(Ordering::SeqCst), 1);
     }
 
     #[test]
