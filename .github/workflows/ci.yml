@@ -77,5 +77,5 @@ jobs:
         timeout-minutes: 5
         run: |
           sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends qemu-user-static dosfstools
+          sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
           sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"

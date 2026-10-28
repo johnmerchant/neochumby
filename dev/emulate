@@ -5,8 +5,9 @@ root with the Chumby's paths and fake devices. It tests the session and the
 apps end to end without a Chumby. CONTRIBUTING.md says what it can't catch.
 
 Linux only. It needs root (it mounts, and makes namespaces), /dev/fuse, and
-qemu-user-static's binfmt handler for ARM (Debian and Ubuntu:
-`apt install qemu-user-static`), with the F flag, as those register it.
+qemu-user's binfmt handler for ARM, statically linked and registered with
+the F flag, as Debian and Ubuntu do (`apt install qemu-user-binfmt`, or
+`qemu-user-static` on older releases).
 
   sudo dev/emulate start [TREE]   boots TREE's session (a tools/tree OUT)
          [--stick IMG|DIR]        a FAT image loop-mounted at /mnt/usb, or a
@@ -533,7 +534,7 @@ def cmd_start(state, opts, tree):
     need_root("start")
     interp, flags = arm_handler()
     if not interp:
-        sys.exit("dev/emulate: no binfmt_misc handler for ARM: install qemu-user-static")
+        sys.exit("dev/emulate: no binfmt_misc handler for ARM: install qemu-user-binfmt (or qemu-user-static)")
     if not os.path.exists("/dev/fuse"):
         sys.exit("dev/emulate: no /dev/fuse (modprobe fuse)")
     if running(state):
@@ -669,10 +670,11 @@ def supervise(state, opts, tree, interp, fixed):
     write(state, "ready", "")
     _, status = os.waitpid(init, 0)
     code = os.waitstatus_to_exitcode(status)
-    write(state, "exit", f"exit {code}" if code >= 0 else f"signal {-code}")
     os.kill(server, signal.SIGTERM)
     os.waitpid(server, 0)
     os.unlink(os.path.join(state, "pid"))
+    # Last: once it's there, the emulator can be started again.
+    write(state, "exit", f"exit {code}" if code >= 0 else f"signal {-code}")
 
 
 def pid1(state, root, run, env):
@@ -988,7 +990,8 @@ def main(argv):
         return default
 
     if cmd == "start":
-        opts = {"stick": flag("--stick"), "server": flag("--server"), "psp": flag("--psp"), "run": flag("--run")}
+        stick = flag("--stick")
+        opts = {"stick": stick and os.path.abspath(stick), "server": flag("--server"), "psp": flag("--psp"), "run": flag("--run")}
         env = {}
         while "--env" in args:
             k, _, v = flag("--env").partition("=")

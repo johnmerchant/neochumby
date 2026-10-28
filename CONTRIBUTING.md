@@ -48,11 +48,11 @@ crates), and `cargo test -p neochumby-proto -p neochumbyd`.
 static ARM binaries, unchanged, under qemu-arm user mode, chrooted in a fake
 root with the Chumby's paths. The screen is a file, and the touchscreen, top
 button and speaker are fakes you drive from outside. It needs Linux, root,
-FUSE and qemu-user-static; on a Mac, use a Linux VM. CI boots every pull
-request's tree with it (`dev/emulate-smoke`).
+FUSE, and qemu-user with its binfmt handler; on a Mac, use a Linux VM. CI
+boots every pull request's tree with it (`dev/emulate-smoke`).
 
 ```sh
-sudo apt install qemu-user-static dosfstools    # Debian, Ubuntu
+sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
 tools/tree /tmp/tree doom
 sudo dev/emulate start /tmp/tree     # the tree at /mnt/neochumby, as over NFS
 dev/emulate shot home.png
