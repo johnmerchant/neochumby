@@ -1096,6 +1096,7 @@ mod tests {
             start: false,
             interrupt: false,
             button: false,
+            access: Default::default(),
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");

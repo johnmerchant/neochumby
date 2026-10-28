@@ -70,6 +70,7 @@ pub mod tests {
             start,
             interrupt: true,
             button: false,
+            access: Default::default(),
         }
     }
 

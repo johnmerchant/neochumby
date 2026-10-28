@@ -333,6 +333,8 @@ fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
         start: false,
         interrupt: false,
         button: false,
+        // It mounts the stick.
+        access: neochumby::apps::Access { root: true, ..Default::default() },
     }]
 }
 
