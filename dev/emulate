@@ -21,6 +21,10 @@ qemu-user-static on older releases); dosfstools for `mkstick`.
                                   session
          [--bind DIR:PATH]        DIR, read-only, at PATH in the fake root
                                   (e.g. pictures at /tmp/classic)
+         [--boot]                 runs the boot hooks as the stock boot does
+                                  (the stick's userhook2, then /psp/rfs1's),
+                                  under the PC's static busybox, instead of
+                                  the session; their log is STATE/log
   dev/emulate tap X Y [--hold MS] a touch at screen pixel (X, Y)
   dev/emulate button down|up|press  the top button (/dev/switch)
   dev/emulate shot OUT.png        the screen (dev/fb2png.py)
@@ -35,6 +39,11 @@ qemu-user-static on older releases); dosfstools for `mkstick`.
   dev/emulate wait log REGEX [SECS]     session ends; or a log line matches
   dev/emulate status
   dev/emulate stop                (sudo, if the supervisor was killed)
+  sudo dev/emulate powercut [--force] OUT.img   the power cut: the session
+                                  frozen, the --stick image copied to OUT as
+                                  it stands (unflushed writes lost), then
+                                  killed; boot OUT next. With --device, a
+                                  prompt to pull the plug; 77 elsewhere
   sudo dev/emulate exec [--for SECS] CMD [ARG ...]   runs CMD in the fake
                                   root (e.g. /mnt/neochumby/neochumby sensors)
   sudo dev/emulate selftest       checks the fake devices from this side
@@ -792,8 +801,10 @@ def cmd_start(state, opts, tree):
         sys.exit("dev/emulate: no /dev/fuse (modprobe fuse)")
     if tree and not os.path.isfile(os.path.join(tree, "neochumby")):
         sys.exit(f"dev/emulate: {tree}: no neochumby there (make one with tools/tree)")
-    if not tree and not opts["stick"]:
+    if not tree and not opts["stick"] and not opts["boot"]:
         sys.exit("dev/emulate start: give a TREE, or a --stick holding one")
+    if opts["boot"]:
+        opts["busybox"] = static_busybox()
     stick_fd = None
     if opts["stick"] and not os.path.isdir(opts["stick"]):
         stick_fd = open_regular(opts["stick"], "--stick")
@@ -817,6 +828,13 @@ def cmd_start(state, opts, tree):
         remove(state, name)
     write(state, "log", "")
     write(state, "emulate.log", "")
+    # Which image the stick is, for `powercut`.
+    remove(state, "stick-image")
+    remove(state, "stick-ident")
+    if stick_fd is not None:
+        st = os.fstat(stick_fd)
+        write(state, "stick-image", opts["stick"])
+        write(state, "stick-ident", f"{st.st_dev}:{st.st_ino}")
 
     pid = os.fork()
     if pid == 0:
@@ -904,12 +922,23 @@ def supervise(state, opts, tree, stick_fd, interp, fixed):
         target = os.path.join(root, guest.lstrip("/"))
         os.makedirs(target, exist_ok=True)
         bind(host, target, ro=True)
+    if opts["boot"]:
+        # The boot hooks run under BusyBox, as on the Chumby (a newer one,
+        # the PC's), and write the Chumby's /tmp/neochumby.log: STATE/log.
+        bind_file(opts["busybox"], os.path.join(root, "bin", "busybox"))
+        listed = subprocess.run([opts["busybox"], "--list"], capture_output=True, text=True).stdout.split()
+        for applet in listed:
+            link = os.path.join(root, "bin", applet)
+            if applet != "busybox" and not os.path.lexists(link):
+                os.symlink("busybox", link)
+        bind_file(state.at("log"), os.path.join(root, "tmp", "neochumby.log"))
     # Without the F flag, the kernel looks for qemu inside the chroot.
     if not fixed:
         os.makedirs(os.path.join(root, os.path.dirname(interp).lstrip("/")), exist_ok=True)
         bind_file(interp, os.path.join(root, interp.lstrip("/")))
 
     run = opts["run"] or ("/mnt/neochumby/neochumby" if tree else "/mnt/usb/neochumby/neochumby")
+    argv = ["/bin/sh", "-c", BOOT_HOOKS] if opts["boot"] else [run]
     server_addr, _, api_port = (opts["server"] or "").partition(":")
     env = dict(BASE_ENV)
     # As the boot hook passes them on, empty when there's no neochumbyd.
@@ -920,7 +949,7 @@ def supervise(state, opts, tree, stick_fd, interp, fixed):
     init = os.fork()
     if init == 0:
         try:
-            pid1(state, root, run, env)
+            pid1(state, root, argv, env)
         finally:
             os._exit(127)
     CHILDREN.append(init)
@@ -978,7 +1007,20 @@ PROC_MASKED = ("kcore", "keys", "latency_stats", "timer_list", "timer_stats", "s
 PROC_READ_ONLY = ("bus", "fs", "irq", "sysrq-trigger")
 
 
-def pid1(state, root, run, env):
+# What the stock boot (/etc/init.d/rcS) does for neochumby: the stick's
+# hook, then the settings partition's.
+BOOT_HOOKS = ('for h in /mnt/usb/userhook2 /psp/rfs1/userhook2; do [ -f "$h" ] && sh "$h"; done; '
+              'echo "dev/emulate: the boot hooks returned"')
+
+
+def static_busybox():
+    for b in (shutil.which("busybox"), "/bin/busybox", "/usr/bin/busybox"):
+        if b and os.path.exists(b) and is_static(b):
+            return b
+    sys.exit("dev/emulate start --boot: needs a static busybox (Debian, Ubuntu: busybox-static)")
+
+
+def pid1(state, root, argv, env):
     """PID 1 of the session's namespace: mounts /proc there, then runs the
     session, reaping whatever is orphaned, until the session exits. Only os
     calls after the chroot: nothing of Python's own is reachable there."""
@@ -1016,9 +1058,9 @@ def pid1(state, root, run, env):
         os.dup2(log, 2)
         try:
             drop_privileges()
-            os.execve(run, [run], env)
+            os.execve(argv[0], argv, env)
         except OSError as e:
-            os.write(2, f"dev/emulate: {run}: {e.strerror}\n".encode())
+            os.write(2, f"dev/emulate: {argv[0]}: {e.strerror}\n".encode())
         os._exit(127)
     while True:
         pid, status = os.wait()
@@ -1178,6 +1220,56 @@ def cmd_status(state):
         print(f"stopped: the session ended ({read(state, 'exit')})")
     else:
         print("not running")
+
+
+def cmd_powercut(state, out, force):
+    """The Chumby's power, cut mid-whatever: in user mode, every process of
+    the session stopped where it is (nothing more written, nothing flushed),
+    the stick image copied to OUT as it stands, then everything killed.
+    What the PC's kernel still held for the stick and hadn't written is
+    lost, as a stick loses what never reached it. OUT is the stick to boot
+    next. With --device, the person beside the Chumby pulls the plug."""
+    m = machine_of(state)
+    if m == device.MACHINE:
+        device.prompt("Pull the Chumby's power now, wait five seconds, and plug it back in.")
+        return
+    if m:
+        print(f"dev/emulate powercut: skipped: --machine {m} has no stick yet (qemu-chumby has no USB)")
+        sys.exit(device.SKIPPED)
+    need_root("powercut")
+    state.secure()
+    if running(state) != "running":
+        sys.exit("dev/emulate: not running")
+    image, ident, ns, init = (read(state, n) for n in ("stick-image", "stick-ident", "init-ns", "init-pid"))
+    if not image:
+        sys.exit("dev/emulate powercut: the session has no stick image (start --stick IMG)")
+    for _ in range(3):
+        for p in os.listdir("/proc"):
+            try:
+                if p.isdigit() and str(os.stat(f"/proc/{p}/ns/pid").st_ino) == ns:
+                    os.kill(int(p), signal.SIGSTOP)
+            except OSError:
+                pass
+    src = open_regular(image, "the stick")
+    st = os.fstat(src)
+    if f"{st.st_dev}:{st.st_ino}" != ident:
+        sys.exit(f"dev/emulate powercut: {image} isn't the image the session has")
+    try:
+        if force and stat.S_ISREG(os.lstat(out).st_mode):
+            os.unlink(out)
+    except FileNotFoundError:
+        pass
+    dst = os.open(out, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o644)
+    while os.sendfile(dst, src, None, 1 << 24):
+        pass
+    os.fchown(dst, *invoker())
+    os.close(dst)
+    os.close(src)
+    os.kill(int(init), signal.SIGKILL)
+    deadline = time.monotonic() + 10
+    while running(state) and time.monotonic() < deadline:
+        time.sleep(0.1)
+    print(f"dev/emulate: the power was cut; the stick as it stood: {out}")
 
 
 def cmd_stop(state):
@@ -1448,10 +1540,11 @@ def main(argv):
             "factory_psp": flag(args, "--factory-psp"),
             "qemu": flag(args, "--qemu"),
             "fast": "--fast" in args,
+            "boot": "--boot" in args,
             "device": chumby,
             "host": host,
         }
-        args = [a for a in args if a != "--fast"]
+        args = [a for a in args if a not in ("--fast", "--boot")]
         env = {}
         while "--env" in args:
             k, _, v = flag(args, "--env").partition("=")
@@ -1515,6 +1608,11 @@ def main(argv):
         cmd_wait(state, what, pattern, number(args[1], float) if len(args) > 1 else 30)
     elif cmd == "status":
         cmd_status(state)
+    elif cmd == "powercut":
+        force = "--force" in args
+        args = [a for a in args if a != "--force"]
+        (out,) = operands(1, "powercut [--force] OUT.img")
+        cmd_powercut(state, out, force)
     elif cmd == "stop":
         cmd_stop(state)
     elif cmd == "exec":

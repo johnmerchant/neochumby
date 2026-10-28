@@ -125,6 +125,21 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
+**A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
+OUT`, run by CI). The emulated Chumby pairs with a neochumbyd on the PC
+through neochumby-home's PAIR, syncs its tree to a FAT stick image
+(`delivery=sync`), then boots through the real boot hook (`start --boot`,
+under a static busybox) while a second round writes the other set. `sudo
+dev/emulate powercut OUT.img` then cuts the power: the session is frozen
+where it is, the stick image copied as it stands (whatever the PC's kernel
+hadn't written to it is lost), and everything killed. Booting that copy,
+the log must show the hook running a complete set, `check-set` agreeing,
+and the next round making the new set live, which one more boot runs. A
+cut that came too late is tried again, sooner. With `--device` the person
+beside the Chumby is asked to pull the plug; the full-system machine skips
+it until qemu-chumby has USB. (Every cut point of a round, on the host, is
+neochumby-sync's own crash test.)
+
 **Sync** (manual, not in CI). It needs a paired Chumby and neochumbyd's
 side of a round, so it waits until `delivery=sync` (#10) and the session
 PRs are both in `main`. Then, as root on one Linux PC (not yet run, so
