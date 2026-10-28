@@ -4,7 +4,8 @@
 //!
 //! A Unix socket, `<state>/admin.sock`, mode 0600. neochumbyd also checks
 //! each connection's peer: only its own user and root are answered. Daemons
-//! run as neochumbyd's user, so they can connect; nobody else can.
+//! run as neochumbyd's user, so they can connect; nobody else can. Who is
+//! answered is decided in one place, [`Access`].
 //!
 //! The protocol is lines of text. A request is a command and its words,
 //! separated by spaces, ending in a newline, at most 1024 bytes. The answer
@@ -48,7 +49,44 @@ use crate::state::State;
 /// The longest request line.
 const MAX_LINE: usize = 1024;
 
-/// Binds the socket at `path`, mode 0600, in place of one left by a
+/// Who the socket answers, and the socket's mode to match. Only
+/// neochumbyd's own user and root, for now. `Group` would also let in
+/// whoever's group (as the kernel reports it, so their primary group) is
+/// neochumbyd's, for a web page that runs as a user of its own: setting
+/// ACCESS to it is the whole change.
+// Only one of the two is used, whichever ACCESS names.
+#[allow(dead_code)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Access {
+    User,
+    Group,
+}
+
+const ACCESS: Access = Access::User;
+
+/// The user and group at the other end of a connection, as the kernel
+/// says.
+#[derive(Clone, Copy)]
+struct Peer {
+    uid: libc::uid_t,
+    gid: libc::gid_t,
+}
+
+impl Access {
+    fn mode(self) -> u32 {
+        match self {
+            Access::User => 0o600,
+            Access::Group => 0o660,
+        }
+    }
+
+    fn allows(self, p: Peer) -> bool {
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        p.uid == 0 || p.uid == uid || (self == Access::Group && p.gid == gid)
+    }
+}
+
+/// Binds the socket at `path`, with ACCESS's mode, in place of one left by a
 /// neochumbyd that has gone. Fails if one is still answering there.
 pub fn listen(path: &Path) -> io::Result<UnixListener> {
     if UnixStream::connect(path).is_ok() {
@@ -61,14 +99,14 @@ pub fn listen(path: &Path) -> io::Result<UnixListener> {
     let l = UnixListener::bind(path)?;
     // Between bind and this, the socket has the umask's mode; the peer
     // check below holds either way.
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    std::fs::set_permissions(path, std::fs::Permissions::from_mode(ACCESS.mode()))?;
     Ok(l)
 }
 
 pub fn serve(listener: UnixListener, state: State) {
     for conn in listener.incoming().flatten() {
-        match peer_uid(&conn) {
-            Ok(uid) if allowed(uid) => {
+        match peer(&conn) {
+            Ok(p) if ACCESS.allows(p) => {
                 let state = state.clone();
                 std::thread::spawn(move || {
                     if let Err(e) = handle(&state, conn) {
@@ -76,20 +114,14 @@ pub fn serve(listener: UnixListener, state: State) {
                     }
                 });
             }
-            Ok(uid) => eprintln!("neochumbyd: admin: refused a connection from uid {uid}"),
+            Ok(p) => eprintln!("neochumbyd: admin: refused a connection from uid {} gid {}", p.uid, p.gid),
             Err(e) => eprintln!("neochumbyd: admin: {e}"),
         }
     }
 }
 
-/// neochumbyd's own user, and root.
-fn allowed(uid: libc::uid_t) -> bool {
-    uid == 0 || uid == unsafe { libc::geteuid() }
-}
-
-/// The user at the other end of the connection, as the kernel says.
 #[cfg(any(target_os = "linux", target_os = "android"))]
-fn peer_uid(s: &UnixStream) -> io::Result<libc::uid_t> {
+fn peer(s: &UnixStream) -> io::Result<Peer> {
     let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
     let mut len = size_of::<libc::ucred>() as libc::socklen_t;
     let r = unsafe {
@@ -104,17 +136,16 @@ fn peer_uid(s: &UnixStream) -> io::Result<libc::uid_t> {
     if r != 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(cred.uid)
+    Ok(Peer { uid: cred.uid, gid: cred.gid })
 }
 
-/// The user at the other end of the connection, as the kernel says.
 #[cfg(not(any(target_os = "linux", target_os = "android")))]
-fn peer_uid(s: &UnixStream) -> io::Result<libc::uid_t> {
+fn peer(s: &UnixStream) -> io::Result<Peer> {
     let (mut uid, mut gid) = (0, 0);
     if unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    Ok(uid)
+    Ok(Peer { uid, gid })
 }
 
 fn handle(state: &State, conn: UnixStream) -> io::Result<()> {
@@ -215,9 +246,9 @@ mod tests {
     use super::*;
     use neochumby_proto::Identity;
 
-    /// The setting that names a Chumby's home screen. Proposal 0002 may
-    /// rename it; the tests and docs use it only through this.
-    const HOME: &str = "home";
+    /// The setting that names the app a Chumby starts with. The tests use
+    /// it only through this, so a rename is one line.
+    const START: &str = "start";
 
     fn temp_state(what: &str) -> (std::path::PathBuf, State) {
         let dir = std::env::temp_dir().join(format!("neochumbyd-admin-{what}-{}", std::process::id()));
@@ -242,13 +273,13 @@ mod tests {
         assert_eq!(request(&st, &format!("approve 123456 {token}")), "error no such request\n");
         assert_eq!(request(&st, "pending"), "ok\n");
 
-        assert_eq!(request(&st, &format!("set kitchen {HOME}=wx")), "ok\n");
+        assert_eq!(request(&st, &format!("set kitchen {START}=wx")), "ok\n");
         assert_eq!(request(&st, "set kitchen delivery=sync"), "ok\n");
-        assert_eq!(request(&st, "paired"), format!("paired kitchen {} {HOME}=wx delivery=sync\nok\n", hex(&key)));
+        assert_eq!(request(&st, "paired"), format!("paired kitchen {} {START}=wx delivery=sync\nok\n", hex(&key)));
         assert_eq!(request(&st, "set kitchen delivery="), "ok\n");
-        assert_eq!(request(&st, &format!("set kitchen {HOME}")), "error set NAME KEY=VALUE\n");
-        assert!(request(&st, &format!("set kitchen {HOME}=a/../b c")).starts_with("error"));
-        assert!(request(&st, &format!("set lounge {HOME}=wx")).starts_with("error no Chumby"));
+        assert_eq!(request(&st, &format!("set kitchen {START}")), "error set NAME KEY=VALUE\n");
+        assert!(request(&st, &format!("set kitchen {START}=a/../b c")).starts_with("error"));
+        assert!(request(&st, &format!("set lounge {START}=wx")).starts_with("error no Chumby"));
 
         st.request("654321", "lounge", &key, "192.0.2.8:4000".parse().unwrap()).unwrap();
         assert_eq!(request(&st, "refuse 654321"), "ok\n");
@@ -265,19 +296,34 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
+    /// Root and neochumbyd's user always; its group only with
+    /// Access::Group; nobody else.
+    #[test]
+    fn access() {
+        let (uid, gid) = unsafe { (libc::geteuid(), libc::getegid()) };
+        let stranger = uid.wrapping_add(4242);
+        for a in [Access::User, Access::Group] {
+            assert!(a.allows(Peer { uid: 0, gid: 4242 }));
+            assert!(a.allows(Peer { uid, gid: 4242 }));
+            assert!(!a.allows(Peer { uid: stranger, gid: gid.wrapping_add(1) }));
+            assert_eq!(a.allows(Peer { uid: stranger, gid }), a == Access::Group);
+        }
+        assert_eq!((Access::User.mode(), Access::Group.mode()), (0o600, 0o660));
+    }
+
     #[test]
     fn socket() {
         let (dir, st) = temp_state("socket");
         let path = dir.join("admin.sock");
         let l = listen(&path).unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, 0o600);
+        assert_eq!(mode, ACCESS.mode());
         std::thread::spawn(move || serve(l, st));
         assert!(listen(&path).is_err(), "one neochumbyd per socket");
 
         // Our own user is let in, and may send several requests.
         let c = UnixStream::connect(&path).unwrap();
-        assert!(allowed(peer_uid(&c).unwrap()));
+        assert!(ACCESS.allows(peer(&c).unwrap()));
         let mut r = BufReader::new(c.try_clone().unwrap());
         let mut w = c;
         let mut line = String::new();
