@@ -4,16 +4,25 @@ members = [
     "crates/neochumby",
     "crates/neochumby-macros",
     "crates/neochumby-manifest",
+    "crates/neochumby-ncurses",
     "crates/neochumby-proto",
     "crates/neochumby-softfloat",
     "crates/neochumby-sync",
     "crates/neochumby-sys",
     "crates/neochumbyd",
     "apps/airplay",
+    "apps/bonsai",
+    "apps/aquarium",
     "apps/home",
     "apps/doom",
     "apps/fetch",
+    "apps/genact",
+    "apps/htop",
+    "apps/cmatrix",
+    "apps/clock",
+    "apps/pipes",
     "apps/quake",
+    "apps/top",
 ]
 
 [workspace.package]
@@ -25,6 +34,7 @@ publish = false
 libc = "0.2"
 neochumby = { path = "crates/neochumby" }
 neochumby-macros = { path = "crates/neochumby-macros" }
+neochumby-ncurses = { path = "crates/neochumby-ncurses" }
 neochumby-softfloat = { path = "crates/neochumby-softfloat" }
 neochumby-proto = { path = "crates/neochumby-proto" }
 neochumby-sync = { path = "crates/neochumby-sync" }

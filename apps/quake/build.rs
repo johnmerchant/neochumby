@@ -1,6 +1,6 @@
 // Builds the Quake engine (third_party/quake/WinQuake, id's, a submodule,
 // unchanged: software renderer, the C paths rather than id's x86 assembly)
-// and csrc/glue.c into the binary. Where the Chumby needs the engine to do
+// and csrc/varargs.c into the binary. Where the Chumby needs the engine to do
 // otherwise, a file is built with a function renamed, so that ours takes
 // its place.
 
@@ -10,7 +10,8 @@ const ENGINE: &[&str] = &[
     "d_zpoint", "host", "host_cmd", "keys", "menu", "mathlib", "model", "net_dgrm", "net_loop", "net_main", "net_vcr",
     "net_bsd", "nonintel", "pr_cmds", "pr_edict", "pr_exec", "r_aclip", "r_alias", "r_bsp", "r_light", "r_draw",
     "r_efrag", "r_edge", "r_misc", "r_main", "r_sky", "r_sprite", "r_surf", "r_part", "r_vars", "screen", "sbar",
-    "sv_main", "sv_phys", "sv_move", "sv_user", "zone", "view", "wad", "world", "cd_null", "snd_null",
+    "sv_main", "sv_phys", "sv_move", "sv_user", "zone", "view", "wad", "world", "cd_null", "snd_dma", "snd_mem",
+    "snd_mix",
 ];
 
 /// Engine files built with names defined to others.
@@ -18,7 +19,7 @@ const RENAMED: &[(&str, &[(&str, &str)])] = &[
     // The span drawers are src/span.rs (fixed point, no soft float in the
     // loop); the engine's own go unused.
     ("d_scan", &[("D_DrawSpans8", "D_DrawSpans8_c"), ("D_DrawZSpans", "D_DrawZSpans_c")]),
-    // Its own address, from its host name: csrc/glue.c's lookup doesn't
+    // Its own address, from its host name: src/net.rs's lookup doesn't
     // fail on a Chumby whose name isn't in DNS, which crashed the engine.
     ("net_udp", &[("gethostbyname", "chum_gethostbyname")]),
 ];
@@ -55,7 +56,7 @@ fn main() {
         }
         build.objects(b.file(format!("{DIR}/{f}.c")).compile_intermediates());
     }
-    build.file("csrc/glue.c").compile("quake");
+    build.file("csrc/varargs.c").compile("quake");
     println!("cargo:rerun-if-changed={DIR}");
     println!("cargo:rerun-if-changed=csrc");
 }

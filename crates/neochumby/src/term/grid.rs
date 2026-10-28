@@ -48,6 +48,32 @@ struct Pen {
 
 const PEN: Pen = Pen { fg: Colour::Default, bg: Colour::Default, bold: false, reverse: false, underline: false };
 
+/// What of a touch the program asked to see, by xterm's mouse reporting.
+#[derive(Clone, Copy, Default, PartialEq, Eq)]
+pub struct Mouse {
+    /// 9 (presses), 1000 (and releases), 1002 (and drags) or 1003 (and any
+    /// motion, which a touch only has while pressed); 0, none.
+    pub mode: u16,
+    /// 1006: SGR's encoding, else X10's.
+    pub sgr: bool,
+}
+
+/// A touch, as the mouse it is to the program: its left button.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum Button {
+    Press,
+    Drag,
+    Release,
+}
+
+/// DEC's special graphics (G0 after "ESC ( 0", as curses' line drawing is
+/// for xterm), '`' to '~': what has no character of its own here is the
+/// nearest that has.
+const GRAPHICS: [char; 31] = [
+    '*', '▒', ' ', ' ', ' ', ' ', '°', '±', ' ', ' ', '┘', '┐', '┌', '└', '┼', '-', '-', '─', '_', '_', '├', '┤', '┴',
+    '┬', '│', '≤', '≥', 'π', '≠', '£', '·',
+];
+
 /// xterm's 256 colours: its 16, a 6x6x6 cube, then 24 greys.
 fn palette(n: u8) -> u16 {
     const BASIC: [(u8, u8, u8); 16] = [
@@ -100,6 +126,14 @@ pub struct Grid {
     autowrap: bool,
     pub(super) cursor_shown: bool,
     drawn_cursor: Option<usize>,
+    /// The last character printed, which REP repeats.
+    last: char,
+    /// G0 is DEC's special graphics.
+    graphics: bool,
+    /// On the alternate screen: the main screen's cells and cursor, which
+    /// leaving it restores.
+    main: Option<(Vec<Cell>, (usize, usize, Pen))>,
+    pub mouse: Mouse,
     /// Answers to the program's queries (cursor position, device
     /// attributes), for the caller to write back to it.
     pub replies: Vec<u8>,
@@ -121,6 +155,10 @@ impl Grid {
             autowrap: true,
             cursor_shown: true,
             drawn_cursor: None,
+            last: ' ',
+            graphics: false,
+            main: None,
+            mouse: Mouse::default(),
             replies: Vec::new(),
         }
     }
@@ -252,6 +290,51 @@ impl Grid {
         }
     }
 
+    /// To the alternate screen (`on`), blank, or back to the main one as it
+    /// was; with the cursor saved and restored too, for 1049.
+    fn alternate(&mut self, on: bool, cursor: bool) {
+        match (on, self.main.take()) {
+            (true, None) => {
+                let saved = if cursor { (self.x, self.y, self.pen) } else { self.saved };
+                self.main = Some((self.cells.clone(), saved));
+                self.erase(0, COLS * ROWS);
+            }
+            (false, Some((cells, saved))) => {
+                for (i, c) in cells.into_iter().enumerate() {
+                    self.set(i, c);
+                }
+                if cursor {
+                    let (x, y, pen) = saved;
+                    self.pen = pen;
+                    self.goto(x, y);
+                }
+            }
+            (_, main) => self.main = main,
+        }
+    }
+
+    /// What the program is sent for a touch on cell (`col`, `row`), if it
+    /// asked for touches like it.
+    pub fn report(&self, button: Button, col: usize, row: usize) -> Option<Vec<u8>> {
+        let wanted = match button {
+            Button::Press => self.mouse.mode != 0,
+            Button::Release => self.mouse.mode >= 1000,
+            Button::Drag => self.mouse.mode >= 1002,
+        };
+        if !wanted {
+            return None;
+        }
+        let code = if button == Button::Drag { 32 } else { 0 };
+        let (col, row) = (col.min(COLS - 1) + 1, row.min(ROWS - 1) + 1);
+        Some(if self.mouse.sgr {
+            let end = if button == Button::Release { 'm' } else { 'M' };
+            format!("\x1b[<{code};{col};{row}{end}").into_bytes()
+        } else {
+            let code = if button == Button::Release { 3 } else { code };
+            vec![0x1b, b'[', b'M', 32 + code, 32 + col as u8, 32 + row as u8]
+        })
+    }
+
     fn reverse_index(&mut self) {
         if self.y == self.top {
             self.scroll_down(self.top, self.bottom, 1);
@@ -323,6 +406,11 @@ impl vte::Perform for Grid {
             self.x = 0;
             self.linefeed();
         }
+        let ch = match ch {
+            '`'..='~' if self.graphics => GRAPHICS[ch as usize - '`' as usize],
+            _ => ch,
+        };
+        self.last = ch;
         let c = self.cell(ch);
         self.set(self.y * COLS + self.x, c);
         if self.x + 1 < COLS {
@@ -402,6 +490,13 @@ impl vte::Perform for Grid {
             (false, 'M') if (self.top..=self.bottom).contains(&y) => self.scroll_up(y, self.bottom, arg(0, 1)),
             (false, 'S') => self.scroll_up(self.top, self.bottom, arg(0, 1)),
             (false, 'T') => self.scroll_down(self.top, self.bottom, arg(0, 1)),
+            (false, 'I') => self.goto((x / 8 + arg(0, 1)) * 8, y),
+            (false, 'Z') => self.goto(x.div_ceil(8).saturating_sub(arg(0, 1)) * 8, y),
+            (false, 'b') => {
+                for _ in 0..arg(0, 1).min(COLS * ROWS) {
+                    self.print(self.last);
+                }
+            }
             (false, 'm') => self.sgr(params),
             (false, 'r') => {
                 let (top, bottom) = (arg(0, 1) - 1, arg(1, ROWS).min(ROWS) - 1);
@@ -417,6 +512,10 @@ impl vte::Perform for Grid {
                     match mode {
                         7 => self.autowrap = on,
                         25 => self.cursor_shown = on,
+                        47 | 1047 => self.alternate(on, false),
+                        1049 => self.alternate(on, true),
+                        9 | 1000 | 1002 | 1003 => self.mouse.mode = if on { mode as u16 } else { 0 },
+                        1006 => self.mouse.sgr = on,
                         _ => {}
                     }
                 }
@@ -439,6 +538,10 @@ impl vte::Perform for Grid {
     }
 
     fn esc_dispatch(&mut self, intermediates: &[u8], _ignore: bool, byte: u8) {
+        if intermediates == b"(" {
+            self.graphics = byte == b'0';
+            return;
+        }
         if !intermediates.is_empty() {
             return;
         }
