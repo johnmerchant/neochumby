@@ -1327,7 +1327,11 @@ def on_mac(argv):
 
 
 def main(argv):
-    if sys.platform == "darwin" and argv[:1] not in (["-h"], ["--help"], ["help"]):
+    # The full-system machine (--machine, from #36) is plain QEMU, native on a
+    # Mac; only user mode goes to the VM.
+    given = argv[argv.index("--machine") + 1] if "--machine" in argv[:-1] else None
+    native = (given or os.environ.get("NEOCHUMBY_EMU_MACHINE") or "user") != "user"
+    if sys.platform == "darwin" and not native and argv[:1] not in (["-h"], ["--help"], ["help"]):
         on_mac(argv)
     def flag(args, name, default=None):
         """The value after `name` in args, taken out of them."""
