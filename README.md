@@ -271,11 +271,31 @@ neochumbyd shot den den.png      # its screen
 tools/deploy HOST doom --restart den    # deploy, then restart den on the new tree
 ```
 
+Once its owner allows it (`neochumbyd set den dev=on`; off by default),
+the same link also takes input, so the scenarios that drive the emulators
+can drive a real Chumby:
+
+```sh
+neochumbyd tap den 160 120 [--hold MS]     # touch the screen there (pixels)
+neochumbyd button den press|release|tap    # the top button
+```
+
 neochumbyd keeps the last 2000 lines of each Chumby's log in its state
 directory (`logs/`), and limits what a Chumby may send. The commands work
 through the state directory as `approve` does, so they need no port of
 their own. A restart ends the app in front and the services as CHUMBY
 MODE does, then runs the tree's `neochumby` again in the same process.
+
+`neochumbyd mcp` serves the same as an [MCP](https://modelcontextprotocol.io)
+server on stdin and stdout, so Claude Code (or any MCP client) can read a
+Chumby's log, restart it and look at its screen while working on an app.
+Its tools are `chumbys` (the pairing list and settings), `log`, `restart`,
+`screenshot` and `set`. Pairing itself is left to a person. Run it on the
+server, over SSH from wherever the client is:
+
+```sh
+claude mcp add neochumby -- ssh HOST neochumbyd mcp
+```
 
 When a stick and a server are both available, the stick wins. The hook
 times out every step that could block, and returns to the stock boot if

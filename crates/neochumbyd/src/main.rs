@@ -23,6 +23,17 @@
 //!   neochumbyd restart NAME        its session ends its apps and starts
 //!                                  again from the tree
 //!   neochumbyd shot NAME OUT.png   its screen
+//!   neochumbyd tap NAME X Y [--hold MS]
+//!                                  touches its screen at (X, Y), in
+//!                                  pixels, for MS (default 100, at most
+//!                                  10000), as a finger would
+//!   neochumbyd button NAME press|release|tap
+//!                                  its top button: down, up, or both.
+//!                                  Both of these only once its owner has
+//!                                  run `neochumbyd set NAME dev=on`
+//!   neochumbyd mcp                 log, restart, shot, set and pairing's
+//!                                  list as an MCP server on stdio, for
+//!                                  Claude Code and the like (mcp.rs)
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -33,6 +44,7 @@
 mod api;
 mod companion;
 mod dev;
+mod mcp;
 mod nfs;
 mod png;
 mod state;
@@ -46,18 +58,27 @@ use std::time::Duration;
 
 use nfsserve::tcp::{NFSTcp, NFSTcpListener};
 
+use neochumby_proto::Msg;
+use neochumby_proto::dev::{BUTTON_TAP_MS, INPUT_KEY, MAX_HOLD_MS, accepts_input};
+
 use state::State;
 
-/// How long `restart` and `shot` wait for the Chumby's developer link: long
-/// enough for it to come back after the daemon itself restarted (a new
-/// binary deployed), as its session reconnects within a few seconds.
+/// How long `restart`, `shot`, `tap` and `button` wait for the Chumby's
+/// developer link: long enough for it to come back after the daemon itself
+/// restarted (a new binary deployed), as its session reconnects within a
+/// few seconds.
 const LINK_WAIT: Duration = Duration::from_secs(15);
+/// How long `tap` holds without --hold.
+const TAP_MS: u16 = 100;
 
 struct Args {
     command: String,
     operand: Option<String>,
     setting: Option<String>,
     follow: bool,
+    /// The operands after NAME, for `tap` and `button`.
+    rest: Vec<String>,
+    hold: Option<String>,
     state: PathBuf,
     tree: Option<PathBuf>,
     nfs: String,
@@ -66,7 +87,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
     );
     std::process::exit(2)
 }
@@ -77,6 +98,8 @@ fn args() -> Args {
         operand: None,
         setting: None,
         follow: false,
+        rest: Vec::new(),
+        hold: None,
         state: "/var/lib/neochumbyd".into(),
         tree: None,
         nfs: "0.0.0.0:2049".into(),
@@ -91,10 +114,12 @@ fn args() -> Args {
             "--nfs" => a.nfs = value(),
             "--api" => a.api = value(),
             "-f" | "--follow" => a.follow = true,
+            "--hold" => a.hold = Some(value()),
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
             _ if a.operand.is_none() => a.operand = Some(arg),
             _ if matches!(a.command.as_str(), "set" | "shot") && a.setting.is_none() => a.setting = Some(arg),
+            _ if matches!(a.command.as_str(), "tap" | "button") => a.rest.push(arg),
             _ => usage(),
         }
     }
@@ -146,6 +171,14 @@ fn main() {
                 }
                 println!("{}", tree::hint(&starts));
             }
+            if key == INPUT_KEY {
+                let name = operand();
+                if accepts_input(&state.config(&name)) {
+                    println!("{name} now takes taps and button presses from here (`neochumbyd tap`, `button`)");
+                } else {
+                    println!("{name} takes no taps or button presses from here");
+                }
+            }
         }
         "manifest" => manifest(&a),
         "log" => {
@@ -169,6 +202,50 @@ fn main() {
             dev::shot(&a.state, &name, out.as_ref(), LINK_WAIT).unwrap_or_else(|e| fail(e));
             println!("{out}");
         }
+        "mcp" => {
+            let server = mcp::Server { state, state_dir: a.state.clone(), tree: tree_dir, wait: LINK_WAIT };
+            mcp::run(&server, std::io::stdin().lock(), std::io::stdout().lock()).unwrap_or_else(|e| fail(e));
+        }
+        "tap" | "button" => {
+            let name = paired(&state, &operand());
+            let msgs = input(&a).unwrap_or_else(|e| fail(e));
+            if !accepts_input(&state.config(&name)) {
+                fail(dev::input_off(&name));
+            }
+            for (i, m) in msgs.iter().enumerate() {
+                if i > 0 {
+                    std::thread::sleep(Duration::from_millis(BUTTON_TAP_MS));
+                }
+                dev::input(&a.state, &name, m, LINK_WAIT).unwrap_or_else(|e| fail(e));
+            }
+            println!("{name}: {}", a.rest.join(" "));
+        }
+        _ => usage(),
+    }
+}
+
+/// What `tap` or `button` asks of the Chumby, in order.
+fn input(a: &Args) -> Result<Vec<Msg>, String> {
+    let n = |s: &str, most: u16, what: &str| match s.parse::<u16>() {
+        Ok(v) if v <= most => Ok(v),
+        _ => Err(format!("{what} is 0 to {most}, not {s}")),
+    };
+    // The Chumby Classic's screen; a Chumby refuses what's off its own.
+    let (w, h) = (320, 240);
+    match (a.command.as_str(), &a.rest[..]) {
+        ("tap", [x, y]) => {
+            let hold_ms = match &a.hold {
+                Some(ms) => n(ms, MAX_HOLD_MS, "--hold")?,
+                None => TAP_MS,
+            };
+            Ok(vec![Msg::Tap { x: n(x, w - 1, "X")?, y: n(y, h - 1, "Y")?, hold_ms }])
+        }
+        ("button", [b]) if a.hold.is_none() => match b.as_str() {
+            "press" => Ok(vec![Msg::Button { down: true }]),
+            "release" => Ok(vec![Msg::Button { down: false }]),
+            "tap" => Ok(vec![Msg::Button { down: true }, Msg::Button { down: false }]),
+            _ => usage(),
+        },
         _ => usage(),
     }
 }
