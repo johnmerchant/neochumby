@@ -9,7 +9,9 @@
 //!
 //! Holding the top-left corner of the screen for three seconds, whatever
 //! is running, ends the app in front and whatever it started, and opens
-//! neochumby-home: the way back from an app that has gone wrong.
+//! neochumby-home: the way back from an app that has gone wrong. The top
+//! button is the session's, to hand over or to return to the start app
+//! (button.rs).
 //!
 //!   neochumby           the session
 //!   neochumby sensors   prints the touchscreen, squeeze and accelerometer
@@ -18,11 +20,16 @@
 //! binary, paged in over NFS only when run. What it runs is described in
 //! child.rs.
 
+mod button;
 mod child;
 mod run;
 mod services;
 mod start;
 
+use std::fs::{File, OpenOptions};
+use std::io::Read;
+use std::os::fd::{AsFd, AsRawFd, RawFd};
+use std::os::unix::fs::OpenOptionsExt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -101,12 +108,41 @@ fn watch_escape(flag: Arc<AtomicBool>) {
     });
 }
 
+/// How often the session tries /dev/switch again while it hasn't got it
+/// (another process had it at boot, say).
+const BUTTON_RETRY: Duration = Duration::from_secs(5);
+
+/// The top button, opened once for the whole session (button.rs); `again`
+/// when retrying, which logs only success.
+fn open_button(again: bool) -> Option<File> {
+    let open = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open("/dev/switch");
+    // Passed on only to an app with `button = true`.
+    match open.and_then(|f| neochumby_sys::fd::set_cloexec(f.as_fd(), true).map(|()| f)) {
+        Ok(f) => {
+            if again {
+                eprintln!("neochumby: /dev/switch: open now");
+            }
+            Some(f)
+        }
+        Err(e) => {
+            if !again {
+                eprintln!("neochumby: /dev/switch: {e}; trying again every {} s", BUTTON_RETRY.as_secs());
+            }
+            None
+        }
+    }
+}
+
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
     boot_volume: Option<u32>,
     /// A thread is putting the volume back.
     restoring: Arc<AtomicBool>,
+    button: Option<File>,
+    /// When the session last tried to open the button, while it hasn't got
+    /// it; None once it has closed it for good.
+    button_tried: Option<Instant>,
 }
 
 impl run::Device for Chumby {
@@ -142,6 +178,30 @@ impl run::Device for Chumby {
     fn speaker_holder(&self) -> Option<u32> {
         audio::holder()
     }
+
+    fn button(&mut self) -> Option<bool> {
+        if self.button.is_none()
+            && let Some(t) = self.button_tried
+            && t.elapsed() >= BUTTON_RETRY
+        {
+            self.button = open_button(true);
+            self.button_tried = Some(Instant::now());
+        }
+        let mut b = [0u8; 1];
+        match self.button.as_mut()?.read(&mut b) {
+            Ok(1) => Some(b[0] != 0),
+            _ => None,
+        }
+    }
+
+    fn button_fd(&self) -> Option<RawFd> {
+        self.button.as_ref().map(|f| f.as_raw_fd())
+    }
+
+    fn close_button(&mut self) {
+        self.button = None;
+        self.button_tried = None;
+    }
 }
 
 fn session() {
@@ -165,7 +225,13 @@ fn session() {
     match start::choose(&all, choice) {
         None => eprintln!("neochumby: no start app (not even {})", start::HOME),
         Some(first) => {
-            let chumby = Chumby { escape, boot_volume, restoring: Arc::default() };
+            let chumby = Chumby {
+                escape,
+                boot_volume,
+                restoring: Arc::default(),
+                button: open_button(false),
+                button_tried: Some(Instant::now()),
+            };
             run::Session::new(&all, &root, first, chumby, run::Timing::default()).run()
         }
     }

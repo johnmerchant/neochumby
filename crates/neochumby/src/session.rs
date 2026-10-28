@@ -27,8 +27,16 @@
 //!
 //!   front <app>    that app is now in front (also as the service starts)
 //!
-//! NEOCHUMBY_REASON, when set, says why the session opened the app. An app
-//! ignores values it doesn't know.
+//! What the session tells the start app, while it's in front:
+//!
+//!   button         the top button was pressed (show your main screen)
+//!
+//! A start app that doesn't read its pipe can ignore it. If the line can't
+//! be written (the pipe is closed or full), the session opens the start
+//! app again with NEOCHUMBY_REASON=button instead.
+//!
+//! NEOCHUMBY_REASON, when set, says why the session opened the app:
+//! `button` when the top button did. An app ignores values it doesn't know.
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -75,11 +83,13 @@ impl Request {
     }
 }
 
-/// What the session tells a service.
+/// What the session tells a service, or the start app in front.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Notice {
-    /// This app is now in front.
+    /// To services: this app is now in front.
     Front(String),
+    /// To the start app in front: the top button was pressed.
+    Button,
 }
 
 impl Notice {
@@ -87,6 +97,7 @@ impl Notice {
     pub fn parse(line: &str) -> Option<Notice> {
         match line.split_once(' ') {
             Some(("front", app)) if valid_name(app) => Some(Notice::Front(app.to_string())),
+            None if line == "button" => Some(Notice::Button),
             _ => None,
         }
     }
@@ -95,6 +106,7 @@ impl Notice {
     pub fn line(&self) -> String {
         match self {
             Notice::Front(app) => format!("front {app}\n"),
+            Notice::Button => "button\n".into(),
         }
     }
 }
@@ -285,6 +297,9 @@ mod tests {
             assert_eq!(Notice::parse(unknown), None, "{unknown:?}");
         }
         assert_eq!(Notice::Front("wx".into()).line(), "front wx\n");
+        assert_eq!(Notice::parse("button"), Some(Notice::Button));
+        assert_eq!(Notice::parse("button now"), None);
+        assert_eq!(Notice::Button.line(), "button\n");
     }
 
     #[test]
