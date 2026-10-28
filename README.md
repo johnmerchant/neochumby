@@ -26,7 +26,8 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby` | The session (`neochumby`): runs the home screen and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, the apps' manifests, crash reports and a profiler | MIT |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, or Noise as a build option | MIT |
-| `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS, pairing, and the apps' server halves | MIT |
+| `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
+| `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the home screen: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, vendored) with a Rust platform layer | GPL-2.0 |
@@ -100,6 +101,7 @@ A Chumby runs neochumby from a tree of the session and its apps:
 
 ```
 neochumby                  the session
+neochumby-sync             the receiver for delivery=sync (not on a stick made by hand)
 userhook2                  the boot hook, which pairing installs
 apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
@@ -170,6 +172,68 @@ Chumby"), and the Chumby plays the audio. The host provides
 `shairport-sync` on `PATH`, avahi, and the base of eighty ports as
 `NEOCHUMBY_AIRPLAY_PORT` (default 7350): RTSP from the base, UDP from
 base + 10. Each Chumby keeps the same ports.
+
+### Delivery: NFS or sync
+
+Each paired Chumby gets its tree one of two ways, chosen on the server:
+
+```sh
+neochumbyd set kitchen delivery=sync   # or nfs, the default
+```
+
+- **`nfs`:** the boot hook mounts the tree from neochumbyd on every boot.
+- **`sync`:** the Chumby keeps a whole copy of its tree on its USB stick,
+  in step with neochumbyd, and boots from it. A Chumby on sync boots
+  without the server, and loads from the stick rather than the network.
+  Plug in any FAT stick; the first sync fills it.
+
+Sync works like an A/B update. The stick's `neochumby/` holds two whole
+sets, `a/` and `b/`, and `current` names the live one. While its settings
+say sync, the session runs `neochumby-sync`, which once a minute:
+
+1. sends neochumbyd the digest of its live set's manifest. If it matches
+   the tree, nothing is written;
+2. otherwise sends the standby set's SHA-256 manifest, and neochumbyd sends
+   only the files that differ, whole;
+3. writes them into the standby set only, each under a temporary name,
+   hashed as it streams, fsynced and renamed into place. Files the tree no
+   longer has are removed;
+4. writes the set's completion marker (`a.complete`, carrying its manifest)
+   last, then rewrites `current` to make it live from the next boot.
+
+Files arrive only over the paired session, from the pinned neochumbyd key,
+never SSH. Writes stay inside the stick's `neochumby/`: no `..`, absolute
+paths or symbolic links, at most 64 MB a file and 512 MB a set. The live
+set is never written. A rename on FAT can tear in a power cut, so the boot
+hook doesn't trust `current` alone. It runs the set `current` names only if
+that set's marker is whole and every file it lists is there at its size
+(`neochumby check-set`), else the other set, else it boots as before. A
+power cut at any point leaves a complete set to boot.
+
+On the Chumby (with SSH enabled by its owner):
+
+```sh
+neochumby-sync status     # the sets, which is live
+neochumby-sync rollback   # the other set is live from the next boot; syncing holds
+neochumby-sync resume     # sync again
+```
+
+**Files for one Chumby.** A Chumby's tree is the shared tree (what NFS
+serves) with its own files on top, from `<state>/overlay/<name>/`, laid
+out like the tree (`overlay/kitchen/apps/wx/forecast.raw`). A file there
+replaces the shared one at the same path. This is the hook for per-Chumby
+renderers, such as a weather feed that draws each Chumby's screens:
+
+- write into the overlay, putting each file in under a name starting with
+  `.` and renaming it into place. Names starting with `.` are never sent;
+- keep names stable, and leave unchanged files alone, so that only what
+  changed is sent and written to the stick;
+- `neochumbyd manifest NAME` prints what NAME would be sent, and whether a
+  Chumby would take it.
+
+The overlay is for sync only; NFS serves the shared tree. A Chumby paired
+before sync has the old boot hook in `/psp`, which pairing installs, so
+pair it again to boot from its synced sets.
 
 When a stick and a server are both available, the stick wins. The hook
 times out every step that could block, and returns to the stock boot if

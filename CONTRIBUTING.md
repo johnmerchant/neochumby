@@ -29,7 +29,13 @@ tools/tree /tmp/tree doom quake airplay   # a whole tree, with apps
 CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
-crates), and `cargo test -p neochumby-proto -p neochumbyd`.
+crates), and `cargo test -p neochumby-proto -p neochumby-sync -p
+neochumbyd`.
+
+Code that runs on the Chumby but needs no Chumby goes in a crate that also
+builds on the host, so CI can test it there. `neochumby-sync` is one: its
+tests run whole sync rounds over a real session on loopback, with a
+temporary directory standing in for the stick.
 
 ## Writing an app
 
@@ -90,9 +96,29 @@ the app:
 
 `apps/airplay` is a worked example of both halves.
 
+## Files for one Chumby
+
+With `delivery=sync`, each Chumby's tree is the shared tree plus its own
+files from neochumbyd's `overlay/<name>/` (see the README). A program that
+renders for one Chumby writes there:
+
+- **Atomically:** each file goes in under a name starting with `.`, then is
+  renamed into place. Names starting with `.` are never sent.
+- **Stable names:** the same picture keeps the same name on every run. A
+  new name is a new file to send and write to the stick.
+- **Only when changed:** leave an identical file alone. Per-run
+  timestamps baked into large files make them change every run, so they
+  are sent every time.
+- **Names a Chumby takes:** A-Z a-z 0-9 `.` `_` `+` `-`, not starting or
+  ending with `.`, and unique ignoring case (the stick is FAT).
+  `neochumbyd manifest NAME` reports anything left out.
+
 ## Pull requests
 
 Keep a pull request to one change, explain why in its description, and make
 sure CI is green. If you're changing how a Chumby boots
 (`boot/userhook2`), test on a real one or say that you couldn't: a hook
-that hangs stops the Chumby's boot.
+that hangs stops the Chumby's boot. The hook runs under BusyBox 1.6 `sh`,
+which has `sed` but no `sha256sum`, `printf`, `od` or `head -c`. Anything
+it can't do goes in the session binary as a subcommand, like `neochumby
+check-set`.
