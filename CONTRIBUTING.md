@@ -53,6 +53,7 @@ colour = "4a90d9"                    # optional
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
 neochumbyd = "optional"              # "required" | "optional" | absent
+shells = ["home"]                    # optional: only these home screens list it
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -74,6 +75,10 @@ Things your app can rely on:
   redraws when it comes back.
 - **Getting out:** holding the top-left corner for 3 seconds ends your app,
   whatever it is doing, and goes back to `neochumby-home`.
+- **Any home screen:** without `shells`, every home screen lists your app
+  and can launch it. A home screen you write must be able to launch any
+  `exec` app it lists, as `neochumby-home` does: give up the screen, run it
+  as above, and redraw when it exits.
 
 **Companions.** An app with a server half ships it as a second binary,
 named by `companion`. neochumbyd runs it for each paired Chumby that opens

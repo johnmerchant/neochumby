@@ -6,7 +6,8 @@
 //! (holding the top-left corner).
 //!
 //! An app that needs a neochumbyd this Chumby has not got is listed, greyed,
-//! and does not open.
+//! and does not open. An app whose `shells=` leaves out this home screen
+//! ("home") is not listed.
 
 mod pair;
 
@@ -18,6 +19,9 @@ use neochumby::apps::{self, App};
 use neochumby::conf;
 use neochumby::fb::{self, Fb, rgb};
 use neochumby::input::{Touch, Touchscreen};
+
+/// This home screen's app name, as other apps' `shells=` name it.
+const SHELL: &str = "home";
 
 const BG: u16 = rgb(16, 16, 32);
 const GREY: u16 = rgb(90, 90, 100);
@@ -155,7 +159,12 @@ fn main() {
     let root = apps::root();
     let all = apps::all(&root);
     let mut screen = Screen {
-        listed: all.iter().enumerate().filter(|(_, a)| a.title.is_some() && a.exec.is_some()).map(|(i, _)| i).collect(),
+        listed: all
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.title.is_some() && a.exec.is_some() && a.offered_in(SHELL))
+            .map(|(i, _)| i)
+            .collect(),
         page: 0,
         pairing: pairing_offer(),
     };

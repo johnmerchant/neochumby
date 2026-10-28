@@ -9,6 +9,8 @@
 //!   neochumbyd=required        needs a paired neochumbyd (or `optional`:
 //!                              uses one when there is one; absent: never)
 //!   home=neochumby-home        this app is the home screen
+//!   shells=wx home             offered only in these home screens (each
+//!                              its app name); absent: in every one
 //!
 //! An app may have any of these. The session (neochumby) and the home
 //! screen agree on the tree through NEOCHUMBY_ROOT.
@@ -38,12 +40,19 @@ pub struct App {
     pub service: Option<PathBuf>,
     pub home: Option<PathBuf>,
     pub needs: Needs,
+    /// The home screens that offer it, by app name; empty: all of them.
+    pub shells: Vec<String>,
 }
 
 impl App {
     /// Whether it can run here: what it needs of a neochumbyd it has.
     pub fn runnable(&self) -> bool {
         self.needs != Needs::Required || conf::paired().is_some()
+    }
+
+    /// Whether the home screen `shell` (its app name) should offer it.
+    pub fn offered_in(&self, shell: &str) -> bool {
+        self.shells.is_empty() || self.shells.iter().any(|s| s == shell)
     }
 }
 
@@ -75,6 +84,7 @@ pub fn load(dir: &Path) -> Option<App> {
             Some("optional") => Needs::Optional,
             _ => Needs::Nothing,
         },
+        shells: field("shells").map(|v| v.split_whitespace().map(String::from).collect()).unwrap_or_default(),
     })
 }
 
@@ -93,4 +103,27 @@ pub fn all(root: &Path) -> Vec<App> {
         std::fs::read_dir(root.join("apps")).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
     dirs.sort();
     dirs.iter().filter_map(|d| load(d)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn app(manifest: &str) -> App {
+        let dir = std::env::temp_dir().join(format!("neochumby-apps-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("manifest"), manifest).unwrap();
+        let a = load(&dir).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+        a
+    }
+
+    #[test]
+    fn shells() {
+        let any = app("title=DOOM\nexec=neochumby-doom\n");
+        assert!(any.offered_in("home") && any.offered_in("wx"));
+        let some = app("title=WEATHER\nshells=wx  other\n");
+        assert_eq!(some.shells, ["wx", "other"]);
+        assert!(some.offered_in("wx") && some.offered_in("other") && !some.offered_in("home"));
+    }
 }

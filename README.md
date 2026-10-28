@@ -57,6 +57,7 @@ service = "neochumby-airplay"        # runs in the background
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
 home = "neochumby-home"              # this app can be the home screen
+shells = ["home"]                    # only these home screens list it
 ```
 
 An app can use any of these keys:
@@ -72,6 +73,12 @@ An app can use any of these keys:
   top-left corner of the screen for 3 seconds** always brings back
   `neochumby-home`, ending whatever was running. That's the way out of a
   home screen or app gone wrong.
+- **`shells`:** the home screens that list the app, by their app names
+  (`shells = ["home", "wx"]`, or one name as a string). Without it, every
+  home screen does. It's for apps that only make sense in one home screen;
+  `exec` apps like Doom leave it out. **Every home screen can launch any
+  `exec` app it lists**, the way `neochumby-home` does, so an app that
+  leaves out `shells` runs under whichever home screen a Chumby has.
 
 ## Building
 
