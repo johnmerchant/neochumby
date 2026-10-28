@@ -18,10 +18,16 @@
 //! through the session: the Chumby's half sends [`Msg::Open`], and frames
 //! then go both ways as [`Msg::Data`], each one a [`frame`] on the
 //! companion's stdin or stdout.
+//!
+//! A paired Chumby's session also keeps a connection of its own, the
+//! developer link ([`dev`]): it sends [`Msg::Dev`], streams its log as
+//! [`Msg::Log`], and answers [`Msg::Restart`] and [`Msg::Shot`], so that
+//! working on a Chumby needs no shell on it.
 
 use std::fmt::Write as _;
 use std::io;
 
+pub mod dev;
 mod msg;
 pub use msg::Msg;
 
@@ -182,12 +188,23 @@ mod tests {
             Msg::Closed,
             Msg::Config(vec![]),
             Msg::Config(vec![("start".into(), "wx".into()), ("delivery".into(), "nfs".into())]),
+            Msg::Dev,
+            Msg::Log(vec![]),
+            Msg::Log(vec!["neochumby: opening home".into(), String::new(), "ünïcode".into()]),
+            Msg::Restart,
+            Msg::Shot,
+            Msg::Screen { width: 320, height: 240 },
+            Msg::Screen { width: 0, height: 0 },
         ] {
             assert_eq!(Msg::decode(&m.encode()).unwrap(), m);
         }
         assert!(Msg::decode(&[200]).is_err());
         assert!(Msg::decode(&[0, 9, 0]).is_err());
         assert!(Msg::decode(&[9, 0, 1]).is_err());
+        // Short, long, and a count with too few lines.
+        assert!(Msg::decode(&[14, 1, 64, 0]).is_err());
+        assert!(Msg::decode(&[12, 0]).is_err());
+        assert!(Msg::decode(&[11, 0, 2, 0, 1, b'x']).is_err());
     }
 
     #[test]

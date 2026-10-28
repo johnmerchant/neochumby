@@ -11,6 +11,9 @@
 //! The escape hatch (a touch held in the top-left corner) ends whatever is
 //! in front, with its process group, and opens `home`, even if the start
 //! app is another one.
+//!
+//! A restart asked by neochumbyd (devlink.rs) ends whatever is in front
+//! the same way, and the loop returns for the session to start again.
 
 use std::path::Path;
 use std::process::{Child, ExitStatus};
@@ -28,6 +31,18 @@ use crate::start;
 pub trait Device {
     /// Whether the escape hatch was used since the last call.
     fn escaped(&mut self) -> bool;
+
+    /// Whether a restart was asked for since the last call.
+    fn restart(&mut self) -> bool {
+        false
+    }
+}
+
+/// Why the loop ended.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Ended {
+    ChumbyMode,
+    Restart,
 }
 
 pub struct Timing {
@@ -69,6 +84,7 @@ enum Next<'a> {
     /// Opens the app, telling it why (NEOCHUMBY_REASON) if there's a reason.
     Open(&'a App, Option<&'static str>),
     ChumbyMode,
+    Restart,
 }
 
 /// The app in front.
@@ -97,10 +113,21 @@ impl<'a, D: Device> Session<'a, D> {
         Session { apps, root, start, device, timing, failures: Vec::new(), last_open: None }
     }
 
-    /// Runs apps until CHUMBY MODE.
-    pub fn run(mut self) {
+    /// Runs apps until CHUMBY MODE or a restart.
+    pub fn run(mut self) -> Ended {
         let mut next = Next::Open(self.start, None);
-        while let Next::Open(app, reason) = next {
+        loop {
+            let (app, reason) = match next {
+                Next::Open(app, reason) => (app, reason),
+                Next::ChumbyMode => {
+                    eprintln!("neochumby: CHUMBY MODE");
+                    return Ended::ChumbyMode;
+                }
+                Next::Restart => {
+                    eprintln!("neochumby: restarting");
+                    return Ended::Restart;
+                }
+            };
             if let Some(gap) = self.last_open.and_then(|t| self.timing.min_gap.checked_sub(t.elapsed())) {
                 neochumby::sleep_ms(gap.as_millis() as u32);
             }
@@ -113,7 +140,6 @@ impl<'a, D: Device> Session<'a, D> {
                 }
             };
         }
-        eprintln!("neochumby: CHUMBY MODE");
     }
 
     fn open(&self, app: &'a App, reason: Option<&'static str>) -> std::io::Result<Front<'a>> {
@@ -135,6 +161,11 @@ impl<'a, D: Device> Session<'a, D> {
                 eprintln!("neochumby: escape: ending {} and what it started", f.app.name);
                 let _ = child::end(&mut f.child, self.timing.patience);
                 return Next::Open(start::home(self.apps).unwrap_or(self.start), None);
+            }
+            if self.device.restart() {
+                eprintln!("neochumby: restart: ending {} and what it started", f.app.name);
+                let _ = child::end(&mut f.child, self.timing.patience);
+                return Next::Restart;
             }
             self.read(&mut f);
             // Exited, but not reaped yet (process::exited), so its group
@@ -254,13 +285,19 @@ mod tests {
     /// can fail to run ("text file busy").
     static ONE: Mutex<()> = Mutex::new(());
 
+    #[derive(Default)]
     struct Fake {
         escape: Arc<AtomicBool>,
+        restart: Arc<AtomicBool>,
     }
 
     impl Device for Fake {
         fn escaped(&mut self) -> bool {
             self.escape.swap(false, Ordering::SeqCst)
+        }
+
+        fn restart(&mut self) -> bool {
+            self.restart.swap(false, Ordering::SeqCst)
         }
     }
 
@@ -303,9 +340,13 @@ mod tests {
     }
 
     fn run_timed(root: &Path, choices: &[(&str, &str)], escape: Arc<AtomicBool>, timing: Timing) {
+        assert_eq!(run_fake(root, choices, Fake { escape, ..Fake::default() }, timing), Ended::ChumbyMode);
+    }
+
+    fn run_fake(root: &Path, choices: &[(&str, &str)], fake: Fake, timing: Timing) -> Ended {
         let all = apps::all(root);
         let start = start::choose(&all, choices.first().copied()).expect("a start app");
-        Session::new(&all, root, start, Fake { escape }, timing).run();
+        Session::new(&all, root, start, fake, timing).run()
     }
 
     /// Waits for the process whose pid is in `pid_file` to be gone.
@@ -437,6 +478,25 @@ mod tests {
         });
         run(&root, &[("conf", "wx")], escape);
         assert_eq!(log(&root), ["wx", "home"]);
+        gone(&root.join("pid"));
+    }
+
+    #[test]
+    fn a_restart_ends_the_front_app_and_the_loop() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree("restart", &[("home", "start=true\n", "sleep 30 &\necho $! > \"$NEOCHUMBY_ROOT/pid\"\nwait")]);
+        let restart = Arc::new(AtomicBool::new(false));
+        let flag = restart.clone();
+        let pid_file = root.join("pid");
+        std::thread::spawn(move || {
+            while !pid_file.exists() {
+                neochumby::sleep_ms(10);
+            }
+            flag.store(true, Ordering::SeqCst);
+        });
+        let ended = run_fake(&root, &[], Fake { restart, ..Fake::default() }, timing());
+        assert_eq!(ended, Ended::Restart);
+        assert_eq!(log(&root), ["home"]);
         gone(&root.join("pid"));
     }
 }

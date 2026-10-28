@@ -30,6 +30,23 @@ pub enum Msg {
     /// owner chose them on the server, as key/value pairs (`start` names the
     /// start app). A Chumby that has no use for them reads past them.
     Config(Vec<(String, String)>),
+    /// Chumby, after `Config`, in place of `Open`: this connection is the
+    /// developer link ([`crate::dev`]). The Chumby streams its log on it,
+    /// and neochumbyd may ask for a restart or a screenshot.
+    Dev,
+    /// Chumby, on the developer link: lines of its log, oldest first, each
+    /// without its newline. neochumbyd keeps the last few thousand.
+    Log(Vec<String>),
+    /// neochumbyd, on the developer link: end the apps and services and
+    /// start the session again from the tree (`neochumbyd restart NAME`).
+    Restart,
+    /// neochumbyd, on the developer link: send the screen
+    /// (`neochumbyd shot NAME OUT.png`).
+    Shot,
+    /// Chumby, answering `Shot`: the screen is this size, and follows as
+    /// `Data`, width x height RGB565 pixels, little-endian, row by row, in
+    /// as many messages as it takes. A width or height of 0: no screen.
+    Screen { width: u16, height: u16 },
 }
 
 impl Msg {
@@ -72,6 +89,21 @@ impl Msg {
                     s(&mut b, k);
                     s(&mut b, v);
                 }
+            }
+            Msg::Dev => b.push(10),
+            Msg::Log(lines) => {
+                b.push(11);
+                b.extend_from_slice(&(lines.len() as u16).to_be_bytes());
+                for l in lines {
+                    s(&mut b, l);
+                }
+            }
+            Msg::Restart => b.push(12),
+            Msg::Shot => b.push(13),
+            Msg::Screen { width, height } => {
+                b.push(14);
+                b.extend_from_slice(&width.to_be_bytes());
+                b.extend_from_slice(&height.to_be_bytes());
             }
         }
         b
@@ -118,6 +150,21 @@ impl Msg {
                     pairs.push((k, string(&mut rest)?));
                 }
                 Msg::Config(pairs)
+            }
+            10 => Msg::Dev,
+            11 => {
+                let n = u16_(&mut rest)?;
+                let mut lines = Vec::new();
+                for _ in 0..n {
+                    lines.push(string(&mut rest)?);
+                }
+                Msg::Log(lines)
+            }
+            12 => Msg::Restart,
+            13 => Msg::Shot,
+            14 => {
+                let width = u16_(&mut rest)?;
+                Msg::Screen { width, height: u16_(&mut rest)? }
             }
             _ => return Err(invalid("unknown message")),
         };

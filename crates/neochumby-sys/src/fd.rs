@@ -1,5 +1,6 @@
 //! File descriptors: one handed to this process by number, close-on-exec,
-//! and reads from a socket that don't wait.
+//! reads from a socket that don't wait, and stdout and stderr pointed
+//! elsewhere.
 
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
@@ -52,6 +53,25 @@ pub fn recv_nowait(sock: BorrowedFd<'_>, buf: &mut [u8]) -> io::Result<usize> {
     if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
 }
 
+/// Standard output or standard error, by number.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Stdio {
+    Out = 1,
+    Err = 2,
+}
+
+/// Points `which` at what `to` refers to (dup2(2)), for this process and
+/// the programs it runs from then on; `to` stays open as it was. Flush
+/// what std has buffered for `which` first. The new descriptor is not
+/// close-on-exec, as stdout and stderr never are.
+pub fn redirect(which: Stdio, to: BorrowedFd<'_>) -> io::Result<()> {
+    // SAFETY: dup2 takes ints and touches no memory. Descriptors 1 and 2
+    // belong to no OwnedFd or File here (std's Stdout and Stderr use them
+    // by number, and never close them), so closing and replacing one
+    // atomically takes nothing from an owner; `to` is open while borrowed.
+    if unsafe { libc::dup2(to.as_raw_fd(), which as RawFd) } < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;
@@ -76,5 +96,27 @@ mod tests {
         assert!(handed_over(-1).is_none());
         set_cloexec(copy.as_fd(), false).unwrap();
         set_cloexec(copy.as_fd(), true).unwrap();
+    }
+
+    /// In a child, so the test harness keeps its own stdout and stderr.
+    #[test]
+    fn redirected() {
+        if std::env::var_os("NEOCHUMBY_SYS_REDIRECT").is_some() {
+            let (mut a, b) = UnixStream::pair().unwrap();
+            redirect(Stdio::Err, b.as_fd()).unwrap();
+            drop(b);
+            eprintln!("to the socket");
+            let mut buf = [0u8; 64];
+            let n = std::io::Read::read(&mut a, &mut buf).unwrap();
+            assert_eq!(&buf[..n], b"to the socket\n");
+            return;
+        }
+        let me = std::env::current_exe().unwrap();
+        let ok = std::process::Command::new(me)
+            .args(["--exact", "fd::tests::redirected", "--nocapture"])
+            .env("NEOCHUMBY_SYS_REDIRECT", "1")
+            .status()
+            .unwrap();
+        assert!(ok.success());
     }
 }
