@@ -36,8 +36,11 @@ const FLAGS: &[&str] = &["start", "button", "interrupt"];
 ///   volume are the session's, asked for over the request pipe;
 /// - `accel`: the accelerometer;
 /// - `system`: /proc, /sys and /etc, as the app's own user sees them;
+/// - `network`: the names it needs to look hosts up (/etc/resolv.conf and
+///   /etc/hosts); without it, the session ends an app it finds with an
+///   internet socket open;
 /// - `root`: no jail: it runs as root, as the session does. Listed alone.
-const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "root"];
+const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "root"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {

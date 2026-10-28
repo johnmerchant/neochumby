@@ -20,6 +20,9 @@
 //!             lists it; the mute and the volume are the session's
 //!   accel     /dev/accel
 //!   system    /proc, /sys and /etc
+//!   network   copies of /etc/resolv.conf and /etc/hosts (with `system`,
+//!             /etc has them); and the session lets it keep internet
+//!             sockets (network.rs)
 //!
 //! Each app runs as its own uid (from FIRST_UID, in the tree's name order:
 //! an app's exec and its service share one), with a group of the same id
@@ -53,6 +56,9 @@ const FIRST_UID: u32 = 20000;
 const SPEAKER_GID: u32 = 19999;
 /// The variable that turns jails off, for dev/emulate.
 pub const OFF_ENV: &str = "NEOCHUMBY_JAIL";
+
+/// What looking hosts up needs, for `network`: copies, as the app starts.
+const NAMES: [&str; 2] = ["/etc/resolv.conf", "/etc/hosts"];
 
 const PROCESSES: u32 = 64;
 const FILES: u32 = 256;
@@ -112,6 +118,12 @@ fn uid(app: &App) -> io::Result<u32> {
     Ok(FIRST_UID + i as u32)
 }
 
+/// The uid of `app`, if it runs jailed without `network`: one the session
+/// ends if it finds it with an internet socket.
+pub fn offline(app: &App) -> Option<u32> {
+    (jailed(app) && !app.access.network).then(|| uid(app).ok()).flatten()
+}
+
 /// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
 /// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment and the
 /// descriptors in `keep`.
@@ -162,6 +174,12 @@ pub fn start(
         j.kernel_fs("proc", "/proc")?;
         j.kernel_fs("sysfs", "/sys")?;
         j.bind(Path::new("/etc"), "/etc")?;
+    } else if a.network {
+        for f in NAMES {
+            if let Ok(c) = std::fs::read(f) {
+                j.file(f, c, 0o444, 0, 0)?;
+            }
+        }
     }
     j.limit(Limit::Processes(PROCESSES)).limit(Limit::Files(FILES)).limit(Limit::Core(0));
 

@@ -18,6 +18,7 @@
 //! never told what is in front, and what they ask for is dropped, so the
 //! interruption rules never come into it.
 
+use std::collections::HashSet;
 use std::path::Path;
 use std::time::{Duration, Instant};
 
@@ -28,7 +29,7 @@ use neochumby_sys::jail::Process;
 use neochumby_sys::process::{Signal, exited, kill_group};
 
 use crate::child;
-use crate::jail::Role;
+use crate::jail::{self, Role};
 
 /// The waits between a service's runs.
 #[derive(Clone, Copy)]
@@ -145,6 +146,23 @@ impl<'a> Services<'a> {
             ev.died.push((s.app, pid));
         }
         ev
+    }
+
+    /// Ends each running service whose app lists no `network` but whose
+    /// uid is among `owners` (network.rs). The next poll finds it exited,
+    /// and starts it again later, as any service that exits.
+    pub fn end_offline(&mut self, owners: &HashSet<u32>) {
+        for s in &self.list {
+            if let Some(r) = &s.running
+                && jail::offline(s.app).is_some_and(|uid| owners.contains(&uid))
+            {
+                eprintln!(
+                    "neochumby: service {} has an internet socket open, without network access; ending it",
+                    s.app.name
+                );
+                let _ = kill_group(r.child.id(), Signal::Kill);
+            }
+        }
     }
 
     /// Tells each running service that `app` is now in front.

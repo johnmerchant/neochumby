@@ -41,6 +41,7 @@ mod child;
 mod companion;
 mod devlink;
 mod jail;
+mod network;
 mod run;
 mod services;
 mod start;

@@ -57,7 +57,8 @@ use neochumby_sys::process::exited;
 
 use crate::button::Edges;
 use crate::child;
-use crate::jail::Role;
+use crate::jail::{self, Role};
+use crate::network;
 use crate::services::{Backoff, Services};
 use crate::start;
 
@@ -175,6 +176,8 @@ pub struct Session<'a, D: Device> {
     /// yielded may say so after the next one asked), and when it goes the
     /// speaker is put back.
     speaker_by: Option<(&'a str, Role)>,
+    /// When to look for apps on the network without `network`.
+    network: network::Watch,
 }
 
 /// Whether the service of the app `from` may replace `front` in front;
@@ -215,6 +218,7 @@ impl<'a, D: Device> Session<'a, D> {
             suppressed: false,
             button: Edges::default(),
             speaker_by: None,
+            network: network::Watch::new(),
         }
     }
 
@@ -351,6 +355,17 @@ impl<'a, D: Device> Session<'a, D> {
                     eprintln!("neochumby: service {} replaces {}", from.name, f.app.name);
                     let _ = child::end(&mut f.child, self.timing.patience);
                     return next;
+                }
+            }
+            if let Some(owners) = self.network.due() {
+                self.services.end_offline(&owners);
+                if jail::offline(f.app).is_some_and(|uid| owners.contains(&uid)) {
+                    eprintln!(
+                        "neochumby: {} has an internet socket open, without network access; ending it",
+                        f.app.name
+                    );
+                    let status = child::end(&mut f.child, Duration::ZERO);
+                    return self.ended(f, status);
                 }
             }
             // Exited, but not reaped yet (process::exited), so its group
