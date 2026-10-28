@@ -45,6 +45,8 @@ pub mod speaker;
 pub mod time;
 
 #[cfg(target_os = "linux")]
+pub mod jail;
+#[cfg(target_os = "linux")]
 pub mod mm;
 #[cfg(target_os = "linux")]
 pub mod oss;
