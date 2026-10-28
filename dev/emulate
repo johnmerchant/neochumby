@@ -930,7 +930,8 @@ def cmd_selftest(state):
         for _ in range(10):
             os.write(d, bytes(22050 * 4 // 10))
         took = time.monotonic() - start
-        check(0.6 < took < 1.5, f"dsp: one second of sound takes about a second ({took:.2f} s)")
+        # The writer may run up to the buffer plus one write ahead of the sound.
+        check(0.5 < took < 1.5, f"dsp: one second of sound takes about a second ({took:.2f} s)")
         os.close(d)
     if fails:
         sys.exit(f"{len(fails)} failed")

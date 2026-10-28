@@ -99,4 +99,8 @@ emu tap 160 220
 emu wait exit 20 || fail "CHUMBY MODE didn't end the session from the stick"
 emu log > "$out/log-stick.txt"
 
+echo "-- the session's log, from the tree:"
+cat "$out/log.txt"
+echo "-- and from the stick:"
+cat "$out/log-stick.txt"
 echo "dev/emulate-smoke: all passed"
