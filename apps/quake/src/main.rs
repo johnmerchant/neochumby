@@ -1,6 +1,7 @@
 //! neochumby-quake: Quake on the Chumby Classic. The engine
-//! (third_party/quake, C) calls the chum_* functions here, through
-//! csrc/glue.c, for the screen, time and input.
+//! (third_party/quake, C) is driven from here, and calls back the platform
+//! functions a port provides (VID_*, IN_*, SNDDMA_*, Sys_*) for the screen,
+//! input, sound, files and time; engine.rs mirrors its side.
 //!
 //! Controls, as neochumby's Doom: the screen is a 3x3 grid of keys, and
 //! squeezing the case fires.
@@ -14,14 +15,19 @@
 #![allow(unsafe_code)]
 #![allow(clippy::undocumented_unsafe_blocks)]
 
+mod engine;
+mod net;
+mod sound;
 mod span;
+mod sys;
+mod vid;
 
 use std::cell::UnsafeCell;
 use std::collections::VecDeque;
-use std::ffi::{CStr, CString, c_char, c_int, c_uchar};
-use std::io::Write;
+use std::ffi::{CString, c_char, c_int, c_void};
 use std::time::Instant;
 
+use neochumby::audio::Stream;
 use neochumby::fb::{self, Palette};
 use neochumby::input::{Squeeze, Touch, Touchscreen};
 
@@ -47,6 +53,11 @@ struct State {
     held: Option<i32>,
     squeezed: bool,
     start: Instant,
+    sound: Option<Stream>,
+    /// The engine's open files, by handle (sys.rs).
+    files: Vec<Option<std::fs::File>>,
+    /// The answer for this host's own name, once asked (net.rs).
+    own_host: Option<Box<net::OwnHost>>,
 }
 
 /// The engine is single-threaded and calls in only from its own thread.
@@ -56,52 +67,6 @@ static STATE: Global = Global(UnsafeCell::new(None));
 
 fn state() -> &'static mut State {
     unsafe { (*STATE.0.get()).as_mut().expect("neochumby-quake: state before main") }
-}
-
-unsafe extern "C" {
-    fn chum_quake_main(argc: c_int, argv: *mut *mut c_char) -> c_int;
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn chum_fb_init() {
-    let s = state();
-    match fb::Fb::open() {
-        Ok(f) => s.fb = Some(f),
-        Err(e) => eprintln!("neochumby-quake: /dev/fb0: {e}"),
-    }
-}
-
-/// # Safety
-/// `pal` points to 256 RGB triples (768 bytes).
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn chum_fb_palette(pal: *const c_uchar) {
-    state().palette.set_rgb(unsafe { std::slice::from_raw_parts(pal, 768) });
-}
-
-/// # Safety
-/// `buf` points to `height` lines of `rowbytes` bytes.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn chum_fb_present(buf: *const c_uchar, width: c_int, height: c_int, rowbytes: c_int) {
-    let s = state();
-    if let Some(f) = s.fb.as_mut() {
-        let (w, h, r) = (width as usize, height as usize, rowbytes as usize);
-        let src = unsafe { std::slice::from_raw_parts(buf, r * h) };
-        f.blit_indexed(&s.palette, src, w, h, r);
-    }
-}
-
-#[unsafe(no_mangle)]
-pub extern "C" fn chum_time() -> f64 {
-    state().start.elapsed().as_secs_f64()
-}
-
-/// # Safety
-/// `msg` is a NUL-terminated string.
-#[unsafe(no_mangle)]
-pub unsafe extern "C" fn chum_log(msg: *const c_char) {
-    let s = unsafe { CStr::from_ptr(msg) };
-    let mut err = std::io::stderr().lock();
-    let _ = err.write_all(s.to_bytes());
 }
 
 fn press(s: &mut State, key: Option<i32>) {
@@ -132,25 +97,29 @@ fn refresh(s: &mut State) {
     }
 }
 
-/// # Safety
-/// `key` and `down` point to writable ints.
 #[unsafe(no_mangle)]
-pub unsafe extern "C" fn chum_poll_key(key: *mut c_int, down: *mut c_int) -> c_int {
+pub extern "C" fn Sys_SendKeyEvents() {
     let s = state();
     if s.keys.is_empty() {
         refresh(s);
     }
-    match s.keys.pop_front() {
-        Some((k, d)) => {
-            unsafe {
-                *key = k;
-                *down = d as c_int;
-            }
-            1
-        }
-        None => 0,
+    while let Some((k, d)) = s.keys.pop_front() {
+        unsafe { engine::Key_Event(k, d as engine::qboolean) };
     }
 }
+
+// The engine's input.h: all input comes as key events.
+#[unsafe(no_mangle)]
+pub extern "C" fn IN_Init() {}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn IN_Shutdown() {}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn IN_Commands() {}
+
+#[unsafe(no_mangle)]
+pub extern "C" fn IN_Move(_cmd: *mut c_void) {}
 
 fn main() {
     neochumby::debug::install("neochumby-quake");
@@ -164,11 +133,39 @@ fn main() {
             held: None,
             squeezed: false,
             start: Instant::now(),
+            sound: None,
+            files: Vec::new(),
+            own_host: None,
         });
     }
     let args: Vec<CString> = std::env::args().map(|a| CString::new(a).expect("argument with a NUL")).collect();
     let mut argv: Vec<*mut c_char> = args.iter().map(|a| a.as_ptr() as *mut c_char).collect();
     argv.push(std::ptr::null_mut());
+    unsafe {
+        engine::COM_InitArgv(args.len() as c_int, argv.as_mut_ptr());
+        // Most of the RAM left once the stock UI is gone; -mem <MB> overrides.
+        let mut memsize = 10 * 1024 * 1024;
+        let p = engine::COM_CheckParm(c"-mem".as_ptr());
+        if p != 0 && p + 1 < engine::com_argc {
+            memsize = (engine::Q_atof(*engine::com_argv.add(p as usize + 1)) * 1024.0 * 1024.0) as c_int;
+        }
+        // In u64s, for malloc's alignment.
+        let membase = Box::leak(vec![0u64; memsize.max(0) as usize / 8].into_boxed_slice());
+        let parms = Box::leak(Box::new(engine::quakeparms_t {
+            basedir: c".".as_ptr(),
+            cachedir: std::ptr::null(),
+            argc: engine::com_argc,
+            argv: engine::com_argv,
+            membase: membase.as_mut_ptr().cast(),
+            memsize,
+        }));
+        engine::Host_Init(parms);
+    }
     // Quake leaves by exit() (Sys_Quit, Sys_Error).
-    unsafe { chum_quake_main(args.len() as c_int, argv.as_mut_ptr()) };
+    let mut old = sys::Sys_FloatTime();
+    loop {
+        let new = sys::Sys_FloatTime();
+        unsafe { engine::Host_Frame((new - old) as f32) };
+        old = new;
+    }
 }

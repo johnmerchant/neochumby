@@ -1,4 +1,4 @@
-//! OSS (/dev/dsp) format settings, from sys/soundcard.h.
+//! OSS (/dev/dsp) format settings and buffer space, from sys/soundcard.h.
 
 use std::fs::File;
 use std::io;
@@ -26,6 +26,33 @@ impl Setting {
             Setting::Channels => 0xc004_5006u32 as libc::Ioctl,
         }
     }
+}
+
+/// SNDCTL_DSP_GETOSPACE: _IOR('P', 12, audio_buf_info), four ints.
+const GETOSPACE: u32 = 0x8010_500c;
+
+/// The driver's playback buffer, in bytes: what is written and not yet
+/// played, what can be written without blocking, and the size of its
+/// fragments (a driver may play none of one until it is full).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Space {
+    pub queued: usize,
+    pub free: usize,
+    pub fragment: usize,
+}
+
+/// `dsp`'s playback buffer (SNDCTL_DSP_GETOSPACE).
+pub fn space(dsp: &File) -> io::Result<Space> {
+    // audio_buf_info: fragments, fragstotal, fragsize, bytes.
+    let mut info: [libc::c_int; 4] = [0; 4];
+    // SAFETY: GETOSPACE writes one audio_buf_info, four ints, through the
+    // pointer, and `info` is four live c_ints; the descriptor is open while
+    // `dsp` is borrowed.
+    if unsafe { libc::ioctl(dsp.as_raw_fd(), GETOSPACE as libc::Ioctl, info.as_mut_ptr()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let [_, total, size, free] = info.map(|v| v.max(0) as usize);
+    Ok(Space { queued: (total * size).saturating_sub(free), free, fragment: size })
 }
 
 /// Sets one of `dsp`'s settings (an ioctl on /dev/dsp). The driver may pick
