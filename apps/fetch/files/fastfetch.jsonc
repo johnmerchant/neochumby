@@ -1,5 +1,6 @@
 // fastfetch's configuration on the Chumby: what fits 64 columns beside
-// the logo (chumby.txt, given on the command line). The stock firmware has
+// the logo (chumby.txt, our own drawing of the device, given on the
+// command line). The stock firmware has
 // no os-release, so the host is named here. A line too long is cut at the
 // screen's edge, not wrapped.
 {

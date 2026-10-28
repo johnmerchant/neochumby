@@ -6,7 +6,8 @@
 //!   neochumby-fetch                    on the screen, from the app's directory
 //!   neochumby-fetch fastfetch [ARG..]  fastfetch itself, on this terminal
 //!
-//! fastfetch.jsonc and chumby.txt (files/) are its configuration and logo.
+//! fastfetch.jsonc and chumby.txt (files/) are its configuration and logo:
+//! our own drawing of the device, not Chumby's artwork (docs/legal.md).
 
 // FFI to fastfetch's main, so allowed unsafe code, as the games are.
 #![allow(unsafe_code)]
