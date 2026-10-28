@@ -75,7 +75,11 @@ pub enum Touch {
 pub struct Touchscreen {
     file: Option<File>,
     cal: Calibration,
-    raw: (i32, i32),
+    /// The last raw X and Y, once each has been reported since opening.
+    /// evdev sends a coordinate only when it changes, so a reader opened
+    /// during a steady touch (as the next app is, after the corner hold)
+    /// sees presses before any position, and must not take one for (0, 0).
+    raw: (Option<i32>, Option<i32>),
     pressed: bool,
     was_pressed: bool,
 }
@@ -85,7 +89,7 @@ impl Touchscreen {
         Touchscreen {
             file: open_nonblock("/dev/input/event0"),
             cal: Calibration::load(),
-            raw: (0, 0),
+            raw: (None, None),
             pressed: false,
             was_pressed: false,
         }
@@ -107,18 +111,19 @@ impl Touchscreen {
                 let code = u16::from_le_bytes([e[10], e[11]]);
                 let value = i32::from_le_bytes([e[12], e[13], e[14], e[15]]);
                 match (ty, code) {
-                    (EV_ABS, ABS_X) => self.raw.0 = value,
-                    (EV_ABS, ABS_Y) => self.raw.1 = value,
+                    (EV_ABS, ABS_X) => self.raw.0 = Some(value),
+                    (EV_ABS, ABS_Y) => self.raw.1 = Some(value),
                     (EV_ABS, ABS_PRESSURE) => self.pressed = value > 0,
                     (EV_KEY, BTN_TOUCH) => self.pressed = value != 0,
                     (EV_SYN, _) => {
-                        if self.pressed {
-                            let (x, y) = self.cal.map(self.raw.0, self.raw.1);
-                            out.push(Touch::Down { x, y, raw: self.raw });
-                        } else if self.was_pressed {
+                        if let (true, (Some(rx), Some(ry))) = (self.pressed, self.raw) {
+                            let (x, y) = self.cal.map(rx, ry);
+                            out.push(Touch::Down { x, y, raw: (rx, ry) });
+                            self.was_pressed = true;
+                        } else if !self.pressed && self.was_pressed {
                             out.push(Touch::Up);
+                            self.was_pressed = false;
                         }
-                        self.was_pressed = self.pressed;
                     }
                     _ => {}
                 }
