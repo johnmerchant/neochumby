@@ -8,7 +8,8 @@ run on hardware as on the two emulators.
   shot, pixel, compare, wait screen
                `neochumbyd shot NAME OUT.png`
   tap          `neochumbyd tap NAME X Y --hold MS`
-  button       `neochumbyd button NAME press|down|up`
+  button       `neochumbyd button NAME tap|press|release`, for dev/emulate's
+               press|down|up
   stop         `neochumbyd restart NAME`: back to the start app
   prompt TEXT  shows a step for the person beside the Chumby (pull the
                power, plug in a stick) and waits for Enter
@@ -16,8 +17,11 @@ run on hardware as on the two emulators.
 The server is local, or HOST over ssh (--host, NEOCHUMBY_EMU_HOST), with
 its state in NEOCHUMBYD_DIR (default /var/lib/neochumbyd) and the
 neochumbyd tools/deploy installs there (else one on PATH, locally). Remote
-input needs the Chumby set `dev=on` (`neochumbyd set NAME dev=on`); a
-neochumbyd without `tap` or `button` yet makes those steps skip (exit 77).
+input needs the Chumby set `dev=on` (`neochumbyd set NAME dev=on`); an older
+neochumbyd, from before `tap` and `button`, makes those steps skip (exit
+77). A remote press goes where a real one would, so it can't reach an app
+that reads the switch itself (`button = true`, Doom's FIRE): scenarios that
+need that skip on a device.
 The session's end is its "neochumby: CHUMBY MODE" line: the boot hook's
 exit status isn't on the link.
 """
@@ -72,9 +76,11 @@ def server_of(read, state):
     return Server(read(state, "device-host"), read(state, "device-dir")), read(state, "device-name")
 
 
-def missing(r):
-    """Whether a neochumbyd answered with its usage: a command it hasn't got."""
-    return r.returncode == 2 and "usage:" in (r.stderr + r.stdout)
+def missing(r, command):
+    """Whether a neochumbyd answered with a usage that hasn't `command`: one
+    from before it."""
+    text = r.stderr + r.stdout
+    return r.returncode == 2 and "usage:" in text and f"|{command} NAME" not in text
 
 
 def start(state, opts, tree, write, read, remove):
@@ -181,21 +187,28 @@ def stop(state, read, remove):
 def tap(state, read, x, y, hold_ms):
     server, name = server_of(read, state)
     r = server.run("tap", name, str(x), str(y), "--hold", str(hold_ms), check=False)
-    if missing(r):
+    if missing(r, "tap"):
         print("dev/emulate tap: skipped: this neochumbyd has no `tap` yet")
         sys.exit(SKIPPED)
     if r.returncode:
-        sys.exit(f"dev/emulate tap: {(r.stderr or r.stdout).strip()} (is {name} set dev=on?)")
+        why = (r.stderr or r.stdout).strip()
+        sys.exit(f"dev/emulate tap: {why}" + ("" if "dev=on" in why else f" (is {name} set dev=on?)"))
+
+
+# dev/emulate's words for the button, in neochumbyd's: a press is down and
+# up, as neochumbyd's tap.
+BUTTON = {"press": "tap", "down": "press", "up": "release"}
 
 
 def button(state, read, how):
     server, name = server_of(read, state)
-    r = server.run("button", name, how, check=False)
-    if missing(r):
+    r = server.run("button", name, BUTTON[how], check=False)
+    if missing(r, "button"):
         print("dev/emulate button: skipped: this neochumbyd has no `button` yet")
         sys.exit(SKIPPED)
     if r.returncode:
-        sys.exit(f"dev/emulate button: {(r.stderr or r.stdout).strip()} (is {name} set dev=on?)")
+        why = (r.stderr or r.stdout).strip()
+        sys.exit(f"dev/emulate button: {why}" + ("" if "dev=on" in why else f" (is {name} set dev=on?)"))
 
 
 def fetch_screen(state, read):

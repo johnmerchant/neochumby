@@ -28,24 +28,26 @@ binaries are static (musl), so they don't depend on its userland.
 
 | Path | What | Licence |
 | --- | --- | --- |
-| `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
+| `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, a terminal for programs written for one, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, or Noise as a build option | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
-| `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, vendored) with a Rust platform layer | GPL-2.0 |
-| `apps/quake` | neochumby-quake: id's WinQuake software renderer, made fast on the ARM926 (below) | GPL-2.0-or-later |
+| `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
+| `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
+| `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
 
 Everything we write is MIT, except in `apps/doom` and `apps/quake`. Doom
 and Quake link GPL engines, so each of those crates, our Rust in it
-included, is GPL and lives in its own directory with its upstream licence
-(`apps/quake/src/span.rs` is a port of the engine's span drawer, so it
-could be nothing else). Nothing links an app: each runs as a separate
+included, is GPL and lives in its own directory, with the engine's
+upstream licence in its submodule (`apps/quake/src/span.rs` is a port of
+the engine's span drawer, so it could be nothing else). `apps/fetch` links
+fastfetch, which is MIT as we are (its `LICENSE` is in its submodule). Nothing links an app: each runs as a separate
 program. The
 soft-float routines' runtime exception puts no conditions on the programs
 they're linked into.
@@ -114,7 +116,14 @@ You'll need Rust with the `armv5te-unknown-linux-musleabi` target and
 [zig](https://ziglang.org) on `PATH`. zig is the C compiler and linker, and
 supplies musl (`tools/zigcc`).
 
+Third-party source (Doom, Quake, fetch's fastfetch) is in git
+submodules, and fetch builds fastfetch with [CMake](https://cmake.org)
+3.21 or later. `tools/tree`, `tools/stick` and `tools/deploy` check out
+the submodules of the apps they build; for `cargo` on its own, check them
+out first:
+
 ```sh
+git submodule update --init   # or clone with --recursive
 rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 cargo chumby          # the session and apps, for the Chumby
 cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux
@@ -136,6 +145,7 @@ apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
 apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manifest
+apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
 ```
 
 `tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes
@@ -269,6 +279,15 @@ neochumbyd log den [-f]          # its log: the session's, its apps' and service
 neochumbyd restart den           # end its apps and start its session again from the tree
 neochumbyd shot den den.png      # its screen
 tools/deploy HOST doom --restart den    # deploy, then restart den on the new tree
+```
+
+Once its owner allows it (`neochumbyd set den dev=on`; off by default),
+the same link also takes input, so the scenarios that drive the emulators
+can drive a real Chumby:
+
+```sh
+neochumbyd tap den 160 120 [--hold MS]     # touch the screen there (pixels)
+neochumbyd button den press|release|tap    # the top button
 ```
 
 neochumbyd keeps the last 2000 lines of each Chumby's log in its state
