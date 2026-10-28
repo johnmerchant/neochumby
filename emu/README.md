@@ -105,19 +105,24 @@ Emulated time follows the host's clock, as on the device. With
 and the boot to the control panel takes a few seconds rather than half
 a minute.
 
-### Touch, screenshots and the console
+### Touch, the top button, screenshots and the console
 
 `chumby-ctl` (`emu/qemu/qemu-chumby/chumby-ctl` once built) sends
-touches and takes screenshots over the QMP socket, in screen pixels:
+touches, presses the top button and takes screenshots over the QMP
+socket, in screen pixels:
 
     chumby-ctl qmp.sock tap 278 22          # press and release
     chumby-ctl qmp.sock down 100 120        # press and hold
     chumby-ctl qmp.sock up
+    chumby-ctl qmp.sock button tap          # the top button, for 300 ms
+    chumby-ctl qmp.sock button down         # hold it; button up releases
     chumby-ctl qmp.sock shot screen.png
 
 It sends QMP's `input-send-event` (`abs` events on the `x` and `y` axes,
 0 to 32767 across the screen, and the `left` button) and `screendump`
-(`"format": "png"`), which any QMP client can send. From the human
+(`"format": "png"`), which any QMP client can send. The top button
+(`/dev/switch` in the guest) is the machine's `button` property:
+`qom-set` on `/machine`, `true` while pressed. From the human
 monitor (`-monitor unix:mon.sock,server=on,wait=off`, or the window's),
 `screendump screen.png -f png` writes a screenshot.
 
@@ -150,4 +155,5 @@ The ARM926EJ-S is QEMU's. The rest is in qemu-chumby's README; in short:
 | CSPI and TSC2100 | Touches reach the stock driver and the control panel; audio registers only |
 | USB host | Control registers and an empty root hub only |
 | GPIO, PWM | Complete enough for the drivers |
-| DMA, SSI audio, keypad, watchdog | Not yet: registers read back as written |
+| Keypad port | As GPIO: the top button (`/dev/switch`) is row 0 |
+| DMA, SSI audio, watchdog | Not yet: registers read back as written |

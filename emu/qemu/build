@@ -9,7 +9,7 @@
 set -eu
 
 repo=https://github.com/johnmerchant/qemu-chumby
-rev=f2a3a06a03c57cf5c21527ad4935bf226e626825
+rev=4e8ccbfadd6f36fe14cd2c01f25d515c5e1fe426
 
 here=$(cd "$(dirname "$0")" && pwd)
 src=$here/qemu-chumby
