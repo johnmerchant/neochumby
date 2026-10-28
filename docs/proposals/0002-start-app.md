@@ -65,13 +65,43 @@ front: a button that brings the app back, idle timeouts, dimming the
 backlight at night, alarms. That is what the `service` role is for: the
 session runs every app's service for as long as neochumby runs.
 
-- A service gets the same request pipe, so it can `open <app>`. If another app
-  is in front, the session ends it first.
-- Input devices give every reader every event, so a service can watch the
-  top button or the touchscreen without new plumbing in the session.
-- The library provides the shared pieces (watching the buttons, the
-  backlight, idle time, sunrise and sunset, the request pipe), so each app
-  that wants this behaviour doesn't write its own.
+- **The session supervises services:** one that exits is restarted, with
+  backoff.
+- **A service gets the same request pipe,** so it can `open <app>`. If
+  another app is in front, the session ends it first. To keep services from
+  fighting over the screen:
+  - only the **start app's service** may open an app while another one is
+    in front;
+  - an app can declare `interrupt = false` (games, AirPlay) so that it
+    isn't ended this way;
+  - after the escape hatch, such requests are ignored until someone opens
+    an app by hand.
+- **The session tells services what's in front:** a `front <app>` line on
+  the pipe. The pipe is line-based, and both ends ignore lines they don't
+  know, so lines can be added later.
+- **The touchscreen is shared:** every reader gets every event, so a
+  service can watch it.
+- The library provides the shared pieces (the request pipe, the backlight,
+  idle time, sunrise and sunset), so each app that wants this behaviour
+  doesn't write its own.
+
+## The top button belongs to the session
+
+`/dev/switch` (the top button) can only be opened by one process at a
+time, so it can't be shared like the touchscreen. The session opens it once
+and decides who gets each press:
+
+- **An app that declares `button = true`** (Doom and Quake use it as FIRE)
+  inherits the open file while it's in front, and the session stops reading
+  it. `Squeeze::open` picks it up from the environment, so those apps don't
+  change.
+- **For any other app, a press returns to the start app,** which is told why
+  (`NEOCHUMBY_REASON=button`), so it can show its own main screen. This is
+  the stock Chumby's behaviour.
+- **There's no hold gesture on the button,** since games hold it to fire.
+  The corner hold is the way out of anything.
+- **On `chumby-mode`, the session closes it,** so the stock software can open
+  it.
 
 This is deliberately not a resident shell. The always-on behaviour is split
 into small programs that each do one thing and can be replaced, restarted
@@ -94,5 +124,5 @@ role.
 | --- | --- |
 | #4 (`shells=`) | **Closed, or cut down** to documenting that apps open apps through the session. |
 | #5 (`Msg::Config`) | The setting is **`start`**, not `home`. Otherwise unchanged. |
-| #6 (installer, manifest in `Cargo.toml`) | `home` and `shells` are removed from the manifest keys. |
-| The session and `neochumby-home` | The request pipe; the session runs apps and returns to the start app; the app list uses the pipe; `apps/home` becomes a plain `exec` app. |
+| #6 (installer, manifest in `Cargo.toml`) | `home` and `shells` are removed from the manifest keys; `button` and `interrupt` are added. |
+| The session and `neochumby-home` | The request pipe; the session runs apps and returns to the start app; services supervised, with the interruption rules and `front`; the top button handed over; the app list uses the pipe; `apps/home` becomes a plain `exec` app. |
