@@ -13,6 +13,10 @@ changes easy to take.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL
   code says so in its `license` field and ships the upstream licence. Never
   commit game data, firmware images or anything from a Chumby's settings.
+- **None of the Chumby's own software, anywhere.** No firmware, images or
+  stock artwork in the repository, releases, CI or attachments, and the
+  emulator never impersonates a real device: see
+  [docs/legal.md](docs/legal.md).
 - **Nothing starts remote access by itself.** SSH on a Chumby is turned on
   by its owner, from its settings.
 
