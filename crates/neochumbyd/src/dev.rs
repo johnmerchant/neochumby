@@ -662,7 +662,7 @@ mod tests {
         asked.join().unwrap().unwrap();
         let (w, h, raw) = png::tests::read(&std::fs::read(d.join("den.png")).unwrap());
         assert_eq!((w, h), (320, 240));
-        assert_eq!(&raw[..7], [0, 255, 0, 0, 0, 0, 255]);
+        assert_eq!(&raw[..6], [255, 0, 0, 0, 0, 255]);
 
         // Input, without dev=on: refused, and nothing reaches the Chumby.
         let ask = |m: Msg| {
