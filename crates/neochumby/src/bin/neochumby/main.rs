@@ -7,6 +7,11 @@
 //! services and exits, and the boot carries on with the Chumby's own
 //! software.
 //!
+//! On a paired Chumby, its output also goes to its neochumbyd, which can
+//! ask it to restart, or for its screen (devlink.rs). A restart stops
+//! everything as CHUMBY MODE does, then runs the tree's `neochumby` in
+//! this process's place: the newest tree, deployed since boot.
+//!
 //! Holding the top-left corner of the screen for three seconds, whatever
 //! is running, ends the app in front and whatever it started, and opens
 //! neochumby-home: the way back from an app that has gone wrong. The top
@@ -22,6 +27,7 @@
 
 mod button;
 mod child;
+mod devlink;
 mod run;
 mod services;
 mod start;
@@ -30,6 +36,8 @@ use std::fs::{File, OpenOptions};
 use std::io::Read;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::process::CommandExt;
+use std::process::Command;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
@@ -143,6 +151,8 @@ struct Chumby {
     /// When the session last tried to open the button, while it hasn't got
     /// it; None once it has closed it for good.
     button_tried: Option<Instant>,
+    /// Set by the developer link.
+    restart: Option<Arc<AtomicBool>>,
 }
 
 impl run::Device for Chumby {
@@ -202,9 +212,15 @@ impl run::Device for Chumby {
         self.button = None;
         self.button_tried = None;
     }
+
+    fn restart(&mut self) -> bool {
+        self.restart.as_ref().is_some_and(|r| r.swap(false, Ordering::SeqCst))
+    }
 }
 
 fn session() {
+    // First, so that it carries everything the session logs.
+    let link = devlink::Link::start();
     let root = apps::root();
     let all = apps::all(&root);
     // The master volume as the boot set it from /psp/volume: nothing has
@@ -222,8 +238,11 @@ fn session() {
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
-    match start::choose(&all, choice) {
-        None => eprintln!("neochumby: no start app (not even {})", start::HOME),
+    let ended = match start::choose(&all, choice) {
+        None => {
+            eprintln!("neochumby: no start app (not even {})", start::HOME);
+            run::Ended::ChumbyMode
+        }
         Some(first) => {
             let chumby = Chumby {
                 escape,
@@ -231,11 +250,31 @@ fn session() {
                 restoring: Arc::default(),
                 button: open_button(false),
                 button_tried: Some(Instant::now()),
+                restart: link.as_ref().map(devlink::Link::restart_flag),
             };
+            // On either ending, the loop has closed the button, stopped the
+            // services and put the speaker back.
             run::Session::new(&all, &root, first, chumby, run::Timing::default()).run()
         }
-    }
+    };
 
+    if ended == run::Ended::Restart {
+        // Everything this process holds is close-on-exec (std opens files
+        // and sockets so, and the request pipes are marked so), so the new
+        // session starts with what the boot hook gave this one.
+        if let Some(link) = link {
+            link.release();
+        }
+        // Just after a deploy, the NFS client may still hold the replaced
+        // file's handle: the first try fails as stale, and drops it.
+        let exe = root.join("neochumby");
+        for _ in 0..5 {
+            let e = Command::new(&exe).exec();
+            eprintln!("neochumby: restart: {}: {e}", exe.display());
+            neochumby::sleep_ms(1000);
+        }
+        eprintln!("neochumby: restart failed; back to the Chumby");
+    }
     if let Ok(mut fb) = Fb::open() {
         fb.clear(rgb(0, 0, 0));
     }
