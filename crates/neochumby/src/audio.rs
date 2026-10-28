@@ -217,6 +217,8 @@ pub struct Stream {
     /// Bytes written to /dev/dsp since it was opened: where in a fragment
     /// the next byte falls.
     sent: u64,
+    /// What [`Stream::played`] last said.
+    played: u64,
 }
 
 /// The least rate the speaker plays a [`Stream`] at, in Hz.
@@ -238,6 +240,7 @@ impl Stream {
             retry: None,
             yielded: false,
             sent: 0,
+            played: 0,
         };
         s.poll();
         s
@@ -251,6 +254,15 @@ impl Stream {
     /// Frames played so far, never more than [`Stream::written`]: a stream
     /// that has run dry plays the next frame written at once.
     pub fn played(&mut self) -> u64 {
+        let p = self.measure();
+        // Never back: a fragment that fills takes what it held off the
+        // count, and an engine that reads a position going back (Quake's)
+        // takes it for a pass of its ring.
+        self.played = self.played.max(p).min(self.written);
+        self.played
+    }
+
+    fn measure(&mut self) -> u64 {
         self.poll();
         self.flush();
         let frame = 2 * self.channels as u64;
