@@ -15,6 +15,10 @@
 //! needs are built only for Linux (and the crash reports only for ARM);
 //! the rest also serves neochumbyd and app companions on Linux and macOS.
 //!
+//! One module is not system calls: [`speaker`], the files by which
+//! processes hand the speaker over. It is here because this crate builds
+//! and tests on the host, and the device library doesn't.
+//!
 //! # Why not rustix
 //!
 //! [rustix](https://docs.rs/rustix) offers safe wrappers for much of POSIX,
@@ -32,8 +36,10 @@
 
 #![allow(unsafe_code)]
 
+pub mod fd;
 pub mod net;
 pub mod process;
+pub mod speaker;
 pub mod time;
 
 #[cfg(target_os = "linux")]

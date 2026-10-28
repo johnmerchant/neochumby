@@ -1,17 +1,18 @@
 //! The apps in the tree: each a directory apps/<name>/ holding a `manifest`
 //! of key=value lines, file names relative to the app's directory:
 //!
-//!   title=DOOM                 listed on the home screen; runs `exec`
-//!   exec=neochumby-doom
+//!   title=DOOM                 listed in app lists; opens `exec`
+//!   exec=neochumby-doom        runs full-screen, in front, when opened
 //!   colour=dc281e              (its colour, hex RGB; optional)
 //!   service=neochumby-airplay  runs in the background while neochumby does
 //!   companion=...              its server half, which neochumbyd runs
 //!   neochumbyd=required        needs a paired neochumbyd (or `optional`:
 //!                              uses one when there is one; absent: never)
-//!   home=neochumby-home        this app is the home screen
+//!   start=true                 may be the start app (see the session)
+//!   interrupt=false            no service may replace it in front (games)
 //!
-//! An app may have any of these. The session (neochumby) and the home
-//! screen agree on the tree through NEOCHUMBY_ROOT.
+//! An app may have any of these. The session (neochumby) and the apps
+//! agree on the tree through NEOCHUMBY_ROOT.
 
 use std::path::{Path, PathBuf};
 
@@ -36,8 +37,13 @@ pub struct App {
     pub exec: Option<PathBuf>,
     pub colour: u16,
     pub service: Option<PathBuf>,
-    pub home: Option<PathBuf>,
     pub needs: Needs,
+    /// It may be the start app: it promises to open other apps and CHUMBY
+    /// MODE through the session, and to keep running.
+    pub start: bool,
+    /// While it's in front, the start app's service may replace it (unless
+    /// its manifest says `interrupt=false`).
+    pub interrupt: bool,
 }
 
 impl App {
@@ -69,12 +75,13 @@ pub fn load(dir: &Path) -> Option<App> {
         exec: file("exec"),
         colour: field("colour").and_then(|c| parse_colour(&c)).unwrap_or(rgb(220, 160, 40)),
         service: file("service"),
-        home: file("home"),
         needs: match field("neochumbyd").as_deref() {
             Some("required") => Needs::Required,
             Some("optional") => Needs::Optional,
             _ => Needs::Nothing,
         },
+        start: field("start").as_deref() == Some("true"),
+        interrupt: field("interrupt").as_deref() != Some("false"),
     })
 }
 

@@ -4,13 +4,15 @@
 //! companion, in its directory of the tree.
 //!
 //!   neochumbyd serve [options]    the daemon
-//!   neochumbyd pairing            Chumbys paired and asking to pair
+//!   neochumbyd pairing            Chumbys paired and asking to pair, and
+//!                                 the start apps in the tree (tree.rs)
 //!   neochumbyd approve CODE       pair the Chumby showing CODE
 //!   neochumbyd refuse CODE
 //!   neochumbyd forget NAME
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
 //!                                  sent to it when it next connects;
-//!                                  KEY= removes it
+//!                                  KEY= removes it. For `start`, it says
+//!                                  which apps in the tree may be named
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -22,6 +24,7 @@ mod api;
 mod companion;
 mod nfs;
 mod state;
+mod tree;
 
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -85,16 +88,24 @@ fn main() {
     let a = args();
     let state = State::open(a.state.clone()).unwrap_or_else(|e| fail(format!("{}: {e}", a.state.display())));
     let operand = || a.operand.clone().unwrap_or_else(|| usage());
+    let tree_dir = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     match a.command.as_str() {
         "serve" => serve(&a, state),
         "pairing" => {
+            let starts = tree::start_apps(&tree_dir);
             for (name, key) in state.pairs().unwrap_or_else(|e| fail(e)) {
-                let settings: Vec<String> = state.config(&name).iter().map(|(k, v)| format!("{k}={v}")).collect();
+                let config = state.config(&name);
+                let settings: Vec<String> = config.iter().map(|(k, v)| format!("{k}={v}")).collect();
                 println!("paired   {name}  {key}  {}", settings.join(" "));
+                let start = config.iter().find(|(k, _)| k == "start").map(|(_, v)| v.as_str());
+                if let Some(note) = tree::start_note(&name, start, &starts) {
+                    println!("         {note}");
+                }
             }
             for p in state.pending().unwrap_or_else(|e| fail(e)) {
                 println!("asking   {}  code {}  from {}  {}", p.name, p.code, p.addr, neochumby_proto::hex(&p.key));
             }
+            println!("{}", tree::hint(&starts));
         }
         "approve" => {
             let name = state.approve(&operand()).unwrap_or_else(|e| fail(e));
@@ -106,6 +117,13 @@ fn main() {
             let setting = a.setting.clone().unwrap_or_else(|| usage());
             let (key, value) = setting.split_once('=').unwrap_or_else(|| usage());
             state.set(&operand(), key, value).unwrap_or_else(|e| fail(e));
+            if key == "start" {
+                let starts = tree::start_apps(&tree_dir);
+                if !value.is_empty() && !starts.iter().any(|s| s == value) {
+                    eprintln!("neochumbyd: {value} isn't a start app in the tree; the Chumby will open {}", tree::HOME);
+                }
+                println!("{}", tree::hint(&starts));
+            }
         }
         _ => usage(),
     }

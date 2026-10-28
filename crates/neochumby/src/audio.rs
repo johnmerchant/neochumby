@@ -2,13 +2,32 @@
 //! (/proc/sys/sense1/spkmute; the boot leaves it on) and the stock
 //! firmware's master volume (0-100, through /usr/bin/chumby_set_volume).
 //!
-//! /dev/dsp can be open in only one process at a time: while another has
-//! it, opening it fails, and a service should drop its audio until it is
-//! free rather than wait for it.
-//!
 //! [`Unmuted`] is the volume and the mute alone, for a process that has
 //! another program play (the stock btplay, which opens /dev/dsp itself);
 //! [`Speaker`] is that plus /dev/dsp, for one that writes PCM itself.
+//!
+//! # The handover
+//!
+//! /dev/dsp can be open in only one process at a time, so the newest player
+//! takes the speaker: whoever holds it is asked to yield, stops its player
+//! and drops its guard, and may start again once the speaker is free.
+//! Processes agree on this through two files in /tmp/neochumby:
+//! - `speaker`: the holder's pid. Creating an [`Unmuted`] or a [`Speaker`]
+//!   writes it, failing if another live process's pid is there; dropping
+//!   the guard removes it. A dead process's claim is ignored and replaced.
+//! - `speaker.yield`: the pid of the process asking for the speaker. A
+//!   newcomer that finds the speaker held writes it, and its guard's
+//!   creation fails with [`io::ErrorKind::WouldBlock`]; it tries again
+//!   soon, which renews the request, and taking the speaker removes it. A
+//!   request counts while its process is alive and for five seconds after
+//!   it was last written. While one is pending, a second newcomer waits
+//!   (also `WouldBlock`) and asks the first once that one holds the speaker.
+//!
+//! The holder polls its guard's `yield_requested` as it plays and, when it
+//! is true, stops its player (and waits for it to exit, if it has another
+//! program play) before dropping the guard. A process that yielded doesn't
+//! ask for the speaker back: it waits until [`free`] says no one else holds
+//! it or has asked for it. A newcomer that gives up calls [`withdraw`].
 //!
 //! A [`Speaker`] is written as an [`io::Write`] of interleaved 16-bit
 //! little-endian PCM, rather than through cpal, the crate most Rust audio
@@ -31,6 +50,7 @@ use std::io::{self, Write};
 use std::process::Command;
 
 use neochumby_sys::oss::{self, AFMT_S16_LE, Setting};
+use neochumby_sys::speaker::{Handover, Take};
 
 use crate::debug;
 
@@ -57,54 +77,137 @@ pub fn set_volume(v: u32) -> io::Result<()> {
     Command::new(SET_VOLUME).arg("--master_volume").arg(v.to_string()).output().map(|_| ())
 }
 
+/// Whether the speaker is free for this process: no other live process
+/// holds it or has asked for it. A process that yielded the speaker waits
+/// for this before taking it again.
+pub fn free() -> bool {
+    Handover::new().free()
+}
+
+/// The live process holding the speaker, if another one does.
+pub fn holder() -> Option<u32> {
+    Handover::new().holder()
+}
+
+/// Withdraws this process's request for the speaker, if it has one: for a
+/// newcomer that no longer wants it.
+pub fn withdraw() {
+    Handover::new().withdraw();
+}
+
 /// The speaker unmuted and at a volume while held; dropping it mutes the
 /// speaker and puts the volume back. Only a drop restores them, so a process
 /// killed while holding it leaves the speaker unmuted and at its volume.
 pub struct Unmuted {
-    volume_before: Option<u32>,
+    // Dropped first: the volume is put back before the speaker is given up.
+    _volume: Volume,
+    claim: Claim,
 }
 
 impl Unmuted {
-    /// Sets the master volume to `volume` and unmutes, remembering the
-    /// volume to put back.
-    pub fn at(volume: u32) -> Unmuted {
-        let volume_before = self::volume();
-        report(SET_VOLUME, set_volume(volume));
-        report(SPEAKER_MUTE, mute(false));
-        Unmuted { volume_before }
+    /// Takes the speaker, then sets the master volume to `volume` and
+    /// unmutes, remembering the volume to put back. If another process
+    /// holds the speaker, asks it to yield and fails with
+    /// [`io::ErrorKind::WouldBlock`], changing nothing: try again soon.
+    pub fn at(volume: u32) -> io::Result<Unmuted> {
+        let claim = Claim::take()?;
+        Ok(Unmuted { _volume: Volume::at(volume), claim })
+    }
+
+    /// Whether another process has asked for the speaker: if so, stop
+    /// playing and drop this.
+    pub fn yield_requested(&self) -> bool {
+        self.claim.yield_requested()
     }
 }
 
-impl Drop for Unmuted {
-    fn drop(&mut self) {
-        report(SPEAKER_MUTE, mute(true));
-        if let Some(v) = self.volume_before {
-            report(SET_VOLUME, set_volume(v));
-        }
-    }
-}
-
-/// The speaker, held: /dev/dsp set for 16-bit little-endian PCM, and
-/// [`Unmuted`] while open. Dropping it restores the speaker, then closes
-/// /dev/dsp.
+/// The speaker, held: /dev/dsp set for 16-bit little-endian PCM, and the
+/// speaker unmuted and at a volume while open, as [`Unmuted`]. Dropping it
+/// restores the speaker, closes /dev/dsp, then gives the speaker up.
 pub struct Speaker {
-    // Dropped first: the speaker is muted before /dev/dsp closes.
-    _unmuted: Unmuted,
+    // In this order: the speaker is muted before /dev/dsp closes, and
+    // /dev/dsp is closed before the next player is let take it.
+    _volume: Volume,
     dsp: File,
+    claim: Claim,
 }
 
 impl Speaker {
-    /// Opens /dev/dsp for `channels` channels at `rate` Hz, then sets the
-    /// master volume to `volume` and unmutes. Fails, changing nothing, if
-    /// /dev/dsp is busy or refuses the format.
+    /// Takes the speaker, opens /dev/dsp for `channels` channels at `rate`
+    /// Hz, then sets the master volume to `volume` and unmutes. If another
+    /// process holds the speaker, asks it to yield and fails with
+    /// [`io::ErrorKind::WouldBlock`]: try again soon. Fails, changing
+    /// nothing, if /dev/dsp is busy (with a program outside the handover)
+    /// or refuses the format.
     pub fn open(channels: u32, rate: u32, volume: u32) -> io::Result<Speaker> {
+        let claim = Claim::take()?;
         let dsp = OpenOptions::new().write(true).open(DSP)?;
         for (setting, value) in
             [(Setting::Format, AFMT_S16_LE), (Setting::Channels, channels as i32), (Setting::Rate, rate as i32)]
         {
             oss::set(&dsp, setting, value)?;
         }
-        Ok(Speaker { _unmuted: Unmuted::at(volume), dsp })
+        Ok(Speaker { _volume: Volume::at(volume), dsp, claim })
+    }
+
+    /// Whether another process has asked for the speaker: if so, stop
+    /// writing and drop this.
+    pub fn yield_requested(&self) -> bool {
+        self.claim.yield_requested()
+    }
+}
+
+/// This process's claim on the speaker, given up when dropped.
+struct Claim(Handover);
+
+impl Claim {
+    fn take() -> io::Result<Claim> {
+        let h = Handover::new();
+        match h.take()? {
+            Take::Taken => Ok(Claim(h)),
+            Take::Asked { holder } => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("the speaker is process {holder}'s; asked it to yield"),
+            )),
+            Take::Waiting { asker } => Err(io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("process {asker} has asked for the speaker first"),
+            )),
+        }
+    }
+
+    fn yield_requested(&self) -> bool {
+        self.0.yield_requested()
+    }
+}
+
+impl Drop for Claim {
+    fn drop(&mut self) {
+        self.0.release();
+    }
+}
+
+/// The master volume set and the speaker unmuted while held; dropping it
+/// mutes the speaker and puts the volume back.
+struct Volume {
+    before: Option<u32>,
+}
+
+impl Volume {
+    fn at(volume: u32) -> Volume {
+        let before = self::volume();
+        report(SET_VOLUME, set_volume(volume));
+        report(SPEAKER_MUTE, mute(false));
+        Volume { before }
+    }
+}
+
+impl Drop for Volume {
+    fn drop(&mut self) {
+        report(SPEAKER_MUTE, mute(true));
+        if let Some(v) = self.before {
+            report(SET_VOLUME, set_volume(v));
+        }
     }
 }
 
