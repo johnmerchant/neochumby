@@ -42,6 +42,55 @@ CI runs the same checks on every pull request. To run them yourself:
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
 crates), and `cargo test -p neochumby-proto -p neochumbyd`.
 
+## Testing without a Chumby: dev/emulate
+
+`dev/emulate` runs a tree on a Linux PC as if it were a Chumby: the same
+static ARM binaries, unchanged, under qemu-arm user mode, chrooted in a fake
+root with the Chumby's paths. The screen is a file, and the touchscreen, top
+button and speaker are fakes you drive from outside. It needs Linux, root,
+FUSE, and qemu-user with its binfmt handler; on a Mac, use a Linux VM. CI
+boots every pull request's tree with it (`dev/emulate-smoke`).
+
+```sh
+sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
+tools/tree /tmp/tree doom
+sudo dev/emulate start /tmp/tree     # the tree at /mnt/neochumby, as over NFS
+dev/emulate shot home.png
+dev/emulate tap 160 102              # the second row of the home screen
+dev/emulate tap 5 5 --hold 3500      # the corner hold
+dev/emulate button press             # the top button
+dev/emulate log -f                   # what the session and its apps print
+dev/emulate stop
+```
+
+- **A stick:** `sudo dev/emulate mkstick /tmp/stick.img /tmp/tree` makes a
+  FAT image laid out as `tools/stick` does, and `start --stick
+  /tmp/stick.img` mounts it at `/mnt/usb` and boots from it. Given a tree
+  as well, the session runs from the tree and the stick starts as it is.
+- **A neochumbyd:** the emulator shares the PC's network, so a neochumbyd
+  running on the PC can pair with it (`start --server 127.0.0.1 ...`).
+- **Inside:** `sudo dev/emulate exec /mnt/neochumby/neochumby sensors` runs
+  a binary beside the session. `/psp` is kept from run to run in
+  `target/emulate/psp`.
+
+`dev/emulate --help` lists the fake devices and what each does. What it
+can't catch is what the full-system emulator (`emu/`, #19: the whole
+Chumby, stock firmware included) and real devices are for:
+
+- **The 2.6.16 kernel.** System calls go to the PC's kernel. Futex flags
+  that kernel lacks, `nanosleep` failing with `EINVAL` on restart, and newer
+  calls and flags all work here and fail there.
+- **Real FAT and USB.** The stick is the PC's vfat driver on a file in
+  memory, not the old driver on a slow stick. Its directory fsync, its
+  speed, a stick pulled out and a power cut aren't reproduced.
+- **Real input.** Taps are clean: no echo after a release, no brief releases
+  during a hold, and the button never bounces.
+- **Speed.** qemu on a PC isn't a 266 MHz ARM926, so frame rates and CPU
+  load mean nothing here. Only the speaker is paced, to the rate it's set to.
+- **The rest of the Chumby.** The boot hook doesn't run: the session is
+  started directly. There's no BusyBox, `btplay` or `chumby_set_volume`, no
+  accelerometer, and no overlay or backlight to see.
+
 ## Writing an app
 
 An app is a crate named `neochumby-<name>`. It lives in this repository
