@@ -307,10 +307,15 @@ fn not_connected(name: &str) -> io::Error {
     )
 }
 
-/// `name`'s screen, as a PNG at `out`, through the daemon. Fails if the
-/// daemon hasn't passed the request on within `wait`, or no screen has
-/// come within `wait` and [`SHOT_TIMEOUT`].
+/// `name`'s screen, as a PNG at `out`, through the daemon: [`shot_png`].
 pub fn shot(state_dir: &Path, name: &str, out: &Path, wait: Duration) -> io::Result<()> {
+    std::fs::write(out, shot_png(state_dir, name, wait)?)
+}
+
+/// `name`'s screen, as a PNG, through the daemon. Fails if the daemon
+/// hasn't passed the request on within `wait`, or no screen has come
+/// within `wait` and [`SHOT_TIMEOUT`].
+pub fn shot_png(state_dir: &Path, name: &str, wait: Duration) -> io::Result<Vec<u8>> {
     let asks = requests(state_dir, name);
     std::fs::create_dir_all(&asks)?;
     let (png, err) = (asks.join("shot.png"), asks.join("shot.err"));
@@ -320,10 +325,9 @@ pub fn shot(state_dir: &Path, name: &str, out: &Path, wait: Duration) -> io::Res
     std::fs::write(&ask, "")?;
     let start = Instant::now();
     loop {
-        if png.exists() {
-            std::fs::copy(&png, out)?;
+        if let Ok(bytes) = std::fs::read(&png) {
             let _ = std::fs::remove_file(&png);
-            return Ok(());
+            return Ok(bytes);
         }
         if let Ok(why) = std::fs::read_to_string(&err) {
             let _ = std::fs::remove_file(&err);
@@ -462,6 +466,7 @@ mod tests {
             nfs_port: 2049,
             tree: d.join("tree"),
             state_dir: d.clone(),
+            hashes: Default::default(),
             links: Links::default(),
         };
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
