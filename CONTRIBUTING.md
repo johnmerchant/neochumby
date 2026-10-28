@@ -46,6 +46,16 @@ CI runs the same checks on every pull request. To run them yourself:
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
 crates), and `cargo test -p neochumby-proto -p neochumbyd`.
 
+### On a Chumby
+
+A paired Chumby can be worked on without SSH. Deploy a tree and restart
+its session on it (`tools/deploy HOST [APP ...] --restart NAME`), read
+what it and its apps wrote (`neochumbyd log NAME -f`) and capture its
+screen (`neochumbyd shot NAME OUT.png`), all on the server. Everything
+an app writes to stdout or stderr ends up in that log, so print what
+you'd want to read there. The protocol is in `neochumby-proto`'s `dev`
+module.
+
 ## Writing an app
 
 An app is a crate named `neochumby-<name>`. It lives in this repository
