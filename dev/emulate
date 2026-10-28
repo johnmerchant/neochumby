@@ -16,6 +16,8 @@ the F flag, as Debian and Ubuntu do (`apt install qemu-user-binfmt`, or
          [--server ADDR[:PORT]]   a neochumbyd, as the boot hook passes it on
          [--psp DIR]              /psp starts as a copy of DIR
          [--env KEY=VALUE]        more environment for the session
+         [--run PATH]             what to run, in the fake root, if not the
+                                  session
   dev/emulate tap X Y [--hold MS] a touch at screen pixel (X, Y)
   dev/emulate button down|up|press  the top button (/dev/switch)
   dev/emulate shot OUT.png        the screen (dev/fb2png.py)
@@ -992,7 +994,12 @@ def main(argv):
 
     if cmd == "start":
         stick = flag("--stick")
-        opts = {"stick": stick and os.path.abspath(stick), "server": flag("--server"), "psp": flag("--psp"), "run": flag("--run")}
+        opts = {
+            "stick": stick and os.path.abspath(stick),
+            "server": flag("--server"),
+            "psp": flag("--psp"),
+            "run": flag("--run"),
+        }
         env = {}
         while "--env" in args:
             k, _, v = flag("--env").partition("=")
