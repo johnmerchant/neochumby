@@ -27,9 +27,9 @@ out=${2:?usage: dev/emulate-smoke TREE OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$out"
 state=$out/state
+emu() { "$dev/emulate" --state "$state" "$@"; }
 machine=$(emu backend)
 slow=$(emu scale)
-emu() { "$dev/emulate" --state "$state" "$@"; }
 step() { echo "== $*"; }
 fail() {
   echo "FAIL: $*"
