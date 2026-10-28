@@ -5,7 +5,7 @@
 //! carries on with the Chumby's own software.
 //!
 //! The home screen is an app whose manifest has `home=`: the one named by
-//! `home=<app>` in this Chumby's settings from its neochumbyd
+//! `start=<app>` in this Chumby's settings from its neochumbyd
 //! (neochumby::settings, kept in /psp for boots without it), else in
 //! /psp/neochumby.conf, else neochumby-home (apps/home).
 //! Holding the top-left corner of the screen for three seconds, whatever
@@ -156,13 +156,13 @@ fn session() {
 
     let is_home = |name: &str| all.iter().find(|a| a.name == name && a.home.is_some());
     let fallback = is_home(DEFAULT_HOME);
-    // The server's choice is a name, trusted only as far as the tree goes:
+    // The server's `start` is a name, trusted only as far as the tree goes:
     // it runs only if that app is here and has `home=`. Otherwise the local
     // choice, then the built-in home screen.
     let settings = settings::load();
-    let chosen = settings::get(&settings, "home")
+    let chosen = settings::get(&settings, "start")
         .and_then(is_home)
-        .or_else(|| conf::get(conf::CONF, "home").and_then(|n| is_home(&n)))
+        .or_else(|| conf::get(conf::CONF, "start").and_then(|n| is_home(&n)))
         .or(fallback);
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());

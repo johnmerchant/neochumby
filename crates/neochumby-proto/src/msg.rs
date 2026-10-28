@@ -27,7 +27,7 @@ pub enum Msg {
     /// neochumbyd: the companion has gone (or the app has none).
     Closed,
     /// neochumbyd, right after `Welcome`: this Chumby's settings as its
-    /// owner chose them on the server, as key/value pairs (`home` names the
+    /// owner chose them on the server, as key/value pairs (`start` names the
     /// home screen). A Chumby that has no use for them reads past them.
     Config(Vec<(String, String)>),
 }

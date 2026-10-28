@@ -8,7 +8,7 @@
 //!   neochumbyd approve CODE       pair the Chumby showing CODE
 //!   neochumbyd refuse CODE
 //!   neochumbyd forget NAME
-//!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`home=wx`),
+//!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
 //!                                  sent to it when it next connects;
 //!                                  KEY= removes it
 //!

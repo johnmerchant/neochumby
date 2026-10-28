@@ -65,8 +65,10 @@ An app can use any of these keys:
   neochumbyd runs it for each Chumby that asks, and relays frames between
   the two halves over the paired connection. neochumbyd knows no app by
   name.
-- **`home`:** the session (`neochumby`) runs the app named by `home=<app>`
-  in `/psp/neochumby.conf`, or else `neochumby-home`. **Holding the
+- **`home`:** the session (`neochumby`) runs the app named by `start=<app>`
+  in this Chumby's settings from its neochumbyd (`neochumbyd set NAME
+  start=<app>`, kept in `/psp/neochumby.settings`), else in
+  `/psp/neochumby.conf`, or else `neochumby-home`. **Holding the
   top-left corner of the screen for 3 seconds** always brings back
   `neochumby-home`, ending whatever was running. That's the way out of a
   home screen or app gone wrong.

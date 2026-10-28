@@ -4,7 +4,7 @@
 //!   paired/<key>      a paired Chumby: file named for its public key (hex),
 //!                     holding its name
 //!   pending/<code>    a Chumby asking to pair: "name key address"
-//!   config/<name>     a Chumby's settings, key=value lines (`home=<app>`),
+//!   config/<name>     a Chumby's settings, key=value lines (`start=<app>`),
 //!                     sent to it on every connection (`Msg::Config`). Kept
 //!                     by name, so a Chumby paired again under its name
 //!                     keeps them
@@ -209,19 +209,19 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         let st = State::open(dir.clone()).unwrap();
         let key = Identity::generate().unwrap().public();
-        assert!(st.set("kitchen", "home", "wx").is_err(), "not paired");
+        assert!(st.set("kitchen", "start", "wx").is_err(), "not paired");
         std::fs::write(dir.join("paired").join(hex(&key)), "kitchen\n").unwrap();
 
-        st.set("kitchen", "home", "wx").unwrap();
+        st.set("kitchen", "start", "wx").unwrap();
         st.set("kitchen", "delivery", "sync").unwrap();
-        st.set("kitchen", "home", "home").unwrap();
-        assert_eq!(st.config("kitchen"), [("delivery".into(), "sync".into()), ("home".into(), "home".into())]);
+        st.set("kitchen", "start", "home").unwrap();
+        assert_eq!(st.config("kitchen"), [("delivery".into(), "sync".into()), ("start".into(), "home".into())]);
         st.set("kitchen", "delivery", "").unwrap();
-        assert_eq!(st.config("kitchen"), [("home".to_string(), "home".to_string())]);
+        assert_eq!(st.config("kitchen"), [("start".to_string(), "home".to_string())]);
 
         assert!(st.set("kitchen", "Home", "wx").is_err());
-        assert!(st.set("kitchen", "home", "w x").is_err());
-        assert!(st.set("kitchen", "home", "a\nb=c").is_err());
+        assert!(st.set("kitchen", "start", "w x").is_err());
+        assert!(st.set("kitchen", "start", "a\nb=c").is_err());
         assert!(st.config("../kitchen").is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }

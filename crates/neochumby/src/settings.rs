@@ -1,5 +1,5 @@
 //! This Chumby's settings as its owner chose them on the neochumbyd it is
-//! paired with (`neochumbyd set NAME home=wx`, later its web page): sent
+//! paired with (`neochumbyd set NAME start=wx`, later its web page): sent
 //! after `Welcome` as `Msg::Config`. The session asks once as it starts,
 //! and keeps the answer in /psp, so a boot without the server uses the last
 //! settings it had.
