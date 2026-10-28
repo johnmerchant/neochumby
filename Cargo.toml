@@ -13,6 +13,7 @@ members = [
     "apps/home",
     "apps/classic",
     "apps/doom",
+    "apps/fetch",
     "apps/quake",
 ]
 

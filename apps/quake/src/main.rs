@@ -1,6 +1,6 @@
-//! neochumby-quake: Quake on the Chumby Classic. The engine (engine/, C) calls the
-//! chum_* functions here, through csrc/glue.c, for the screen, time and
-//! input.
+//! neochumby-quake: Quake on the Chumby Classic. The engine
+//! (third_party/quake, C) calls the chum_* functions here, through
+//! csrc/glue.c, for the screen, time and input.
 //!
 //! Controls, as neochumby's Doom: the screen is a 3x3 grid of keys, and
 //! squeezing the case fires.

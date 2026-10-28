@@ -5,9 +5,18 @@ changes easy to take.
 
 ## Ground rules
 
-- **Rust** for everything we write. Third-party engines in C (Doom, Quake)
-  are vendored with as few changes as possible, each marked with a comment
-  naming the app (`// neochumby-quake: ...`), and linked from a Rust crate.
+- **Rust** for everything we write. Third-party C (Doom's doomgeneric,
+  Quake's engine, fetch's fastfetch) is a git submodule, pinned to an
+  upstream commit and left unchanged, and linked from a Rust crate. Where
+  an app needs it to do otherwise, its `build.rs` builds that file with a
+  function renamed, so that the app's own takes its place, and says why
+  (`apps/quake/build.rs`). A change that can't be made that way goes in a
+  fork, as a commit marked with a comment naming the app
+  (`// neochumby-quake: ...`), and the submodule is pinned to that commit:
+  no patch files applied at build time. `tools/tree` (and so `tools/stick`
+  and `tools/deploy`) checks out the submodules of the apps it builds, so a
+  clone without `--recurse-submodules` works there; `cargo` alone needs
+  `git submodule update --init` first.
 - **Comments say what the code does and why the rule is what it is**, not
   how it was debugged. One paragraph is usually enough.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL
@@ -26,7 +35,7 @@ The workspace denies `unsafe` code. Every raw system call lives in
 `crates/neochumby-sys`, behind safe functions, each `unsafe` block with a
 `// SAFETY:` comment saying why it holds; anything else needing one adds a
 function there, and uses std instead wherever std does the job safely. The
-games (Doom, Quake) are allowed it as FFI to their C engines. We use libc
+games (Doom, Quake) and fetch are allowed it as FFI to their C. We use libc
 rather than rustix: rustix calls the kernel directly and needs Linux 3.2,
 the Chumby runs 2.6.16, and its `ioctl` and `mmap` are `unsafe` too (see
 neochumby-sys's documentation).
@@ -34,11 +43,13 @@ neochumby-sys's documentation).
 ## Building and checking
 
 ```sh
+git submodule update --init   # the third-party C: Doom, Quake, fastfetch
 rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # zig 0.17 on PATH (the C compiler, linker and musl): https://ziglang.org
+# CMake 3.21 or later, for fetch
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
-tools/tree /tmp/tree doom quake airplay   # a whole tree, with apps
+tools/tree /tmp/tree doom quake airplay fetch   # a whole tree, with apps
 ```
 
 CI runs the same checks on every pull request. To run them yourself:
@@ -60,8 +71,56 @@ what it and its apps wrote (`neochumbyd log NAME -f`) and capture its
 screen (`neochumbyd shot NAME OUT.png`), all on the server. Everything
 an app writes to stdout or stderr ends up in that log, so print what
 you'd want to read there. The protocol is in `neochumby-proto`'s `dev`
-module. To let Claude Code do the same, add `neochumbyd mcp` as an MCP
-server (`claude mcp add neochumby -- ssh HOST neochumbyd mcp`).
+module.
+
+### With Claude Code (MCP)
+
+`neochumbyd mcp` serves the same as an [MCP](https://modelcontextprotocol.io)
+server on stdin and stdout, so Claude Code (or any MCP client) can read a
+Chumby's log, restart it and look at its screen while you work on an app
+together. Add it once, from your checkout, running it on the server over
+SSH:
+
+```sh
+claude mcp add neochumby -- ssh -o BatchMode=yes HOST neochumbyd mcp
+```
+
+That adds it for you, in this project only (Claude Code's `local` scope),
+and nothing is committed; `claude mcp list` or `/mcp` in Claude Code shows
+it connected, with its tools and what each does. The SSH user needs what
+the `neochumbyd` command does on that server, usually membership of its
+group.
+
+A loop that works well: deploy (`tools/deploy HOST APP --restart NAME`),
+then ask Claude to read the log and look at the screen and say what's
+wrong. Pairing stays with a person (`neochumbyd pairing`, `approve`), and
+so does turning on remote input (`dev=on`): don't let a tool do that for
+you.
+
+To drive it as a scenario drives the emulators, turn on input for it
+first: `neochumbyd set NAME dev=on` (and `dev=` to turn it off again). It
+is off by default, and both neochumbyd and the Chumby refuse input
+without it: pairing a Chumby lets its server see its log and its screen,
+not use it, until its owner says so. Then:
+
+- `neochumbyd tap NAME X Y [--hold MS]` touches the screen at (X, Y), in
+  pixels (0-319, 0-239), for MS milliseconds (100 by default, at most
+  10000), then lets go. It's written to the touchscreen's input device,
+  through the Chumby's own calibration, so every reader sees it as a
+  finger: the app in front, and the escape hatch (`tap NAME 10 10 --hold
+  3500` ends the app in front).
+- `neochumbyd button NAME press|release|tap` puts the top button down, up,
+  or down and up again 300 ms later. It goes where a real press goes: a
+  `button` line to the start app, or back to the start app with
+  `NEOCHUMBY_REASON=button`. **Except to an app with `button = true`**:
+  such an app reads `/dev/switch` itself, so a press from neochumbyd can't
+  reach it, and the command says so. A scenario that needs the button in a
+  game (FIRE in Doom) can't be run on a Chumby this way.
+
+Each command returns once the Chumby has done it (a tap, once it has let
+go), or fails with why not, or after 15 seconds if the Chumby isn't
+connected. One at a time per Chumby. A press is let go, and a touch
+lifted, if the link drops.
 
 ## Testing without a Chumby: dev/emulate
 
@@ -214,15 +273,19 @@ button = true                        # optional: it gets the top button (games)
 (`neochumby-manifest`). An app with a `companion` must also say
 `neochumbyd = "required"` or `"optional"`: it is never inferred. A
 `files/` directory beside `Cargo.toml`, optional, is copied into the app's
-directory as it is (icons, configuration).
+directory as it is (icons, configuration). An app in its own repository
+may keep third-party source in submodules: `tools/tree` checks them out
+for a `git+` app (in `~/.cache/neochumby/app-sources`), and a crate
+published to crates.io carries their files in its package.
 
 Binaries named by `exec` and `service` are built for the Chumby
 (`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
-accelerometer (`input`), the manifest and settings (`apps`, `conf`) and
-crash reports (`debug`), and the request pipe (`session`). The screen is
-320x240 RGB565, so prerender what you can, and keep in mind that the CPU is
-a 266 MHz ARM926 with no FPU.
+accelerometer (`input`), the manifest and settings (`apps`, `conf`),
+crash reports (`debug`), the request pipe (`session`) and a terminal for a
+program written for one (`term::run`, which `apps/fetch` uses). The screen
+is 320x240 RGB565, so prerender what you can, and keep in mind that the CPU
+is a 266 MHz ARM926 with no FPU.
 
 ### The app contract
 
