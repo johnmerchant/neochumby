@@ -19,17 +19,22 @@
 //! then go both ways as [`Msg::Data`], each one a [`frame`] on the
 //! companion's stdin or stdout.
 //!
+//! A Chumby with `delivery=sync` keeps a copy of its tree on its stick, in
+//! step with neochumbyd, through the `Sync*` messages (neochumby-sync has
+//! the rounds they make up).
+//!
 //! A paired Chumby's session also keeps a connection of its own, the
 //! developer link ([`dev`]): it sends [`Msg::Dev`], streams its log as
 //! [`Msg::Log`], and answers [`Msg::Restart`] and [`Msg::Shot`], so that
-//! working on a Chumby needs no shell on it.
+//! working on a Chumby needs no shell on it; and, only on a Chumby its
+//! owner set `dev=on`, [`Msg::Tap`] and [`Msg::Button`].
 
 use std::fmt::Write as _;
 use std::io;
 
 pub mod dev;
 mod msg;
-pub use msg::Msg;
+pub use msg::{Msg, SyncEntry};
 
 /// A companion's frames, on its stdin and stdout: a u32 big-endian length,
 /// then that many bytes, at most [`MAX_FRAME`].
@@ -188,6 +193,22 @@ mod tests {
             Msg::Closed,
             Msg::Config(vec![]),
             Msg::Config(vec![("start".into(), "wx".into()), ("delivery".into(), "nfs".into())]),
+            Msg::SyncHave { live: [3; 32] },
+            Msg::SyncUpToDate,
+            Msg::SyncWant,
+            Msg::SyncManifest { entries: vec![], last: true },
+            Msg::SyncManifest {
+                entries: vec![
+                    SyncEntry { path: "neochumby".into(), size: 1 << 33, sha256: [1; 32] },
+                    SyncEntry { path: "apps/home/manifest".into(), size: 0, sha256: [0xff; 32] },
+                ],
+                last: false,
+            },
+            Msg::SyncFile(SyncEntry { path: "apps/doom/doom1.wad".into(), size: 4196020, sha256: [9; 32] }),
+            Msg::SyncData(vec![0; 1000]),
+            Msg::SyncEnd,
+            Msg::SyncDone { ok: false, detail: "no space".into() },
+            Msg::SyncProgress { done: 1 << 20, total: 512 << 20 },
             Msg::Dev,
             Msg::Log(vec![]),
             Msg::Log(vec!["neochumby: opening home".into(), String::new(), "ünïcode".into()]),
@@ -195,12 +216,22 @@ mod tests {
             Msg::Shot,
             Msg::Screen { width: 320, height: 240 },
             Msg::Screen { width: 0, height: 0 },
+            Msg::Tap { x: 0, y: 0, hold_ms: 0 },
+            Msg::Tap { x: 319, y: 239, hold_ms: dev::MAX_HOLD_MS },
+            Msg::Button { down: true },
+            Msg::Button { down: false },
+            Msg::Done { ok: true, why: String::new() },
+            Msg::Done { ok: false, why: "dev is off".into() },
         ] {
             assert_eq!(Msg::decode(&m.encode()).unwrap(), m);
         }
         assert!(Msg::decode(&[200]).is_err());
         assert!(Msg::decode(&[0, 9, 0]).is_err());
         assert!(Msg::decode(&[9, 0, 1]).is_err());
+        assert!(Msg::decode(&[10, 0]).is_err(), "short hash");
+        assert!(Msg::decode(&[13, 2, 0, 0]).is_err(), "a flag is 0 or 1");
+        assert!(Msg::decode(&[16, 0]).is_err());
+        assert!(Msg::decode(&[18, 0, 0, 0, 0, 0, 0, 0, 1]).is_err(), "short");
         // Short, long, and a count with too few lines.
         assert!(Msg::decode(&[36, 1, 64, 0]).is_err());
         assert!(Msg::decode(&[34, 0]).is_err());
@@ -208,6 +239,19 @@ mod tests {
         // The dev tags, where #10's sync messages don't reach.
         assert_eq!(Msg::Dev.encode(), [32]);
         assert_eq!(Msg::Shot.encode(), [35]);
+        assert_eq!(Msg::Tap { x: 1, y: 2, hold_ms: 3 }.encode(), [37, 0, 1, 0, 2, 0, 3]);
+        assert_eq!(Msg::Button { down: true }.encode(), [38, 1]);
+        // Input: short, long, a hold past the limit, a bool that isn't one.
+        assert!(Msg::decode(&[37, 0, 1, 0, 2, 0]).is_err());
+        assert!(Msg::decode(&[37, 0, 1, 0, 2, 0, 3, 0]).is_err());
+        let over = (dev::MAX_HOLD_MS + 1).to_be_bytes();
+        assert!(Msg::decode(&[37, 0, 1, 0, 2, over[0], over[1]]).is_err());
+        assert!(Msg::decode(&[38]).is_err());
+        assert!(Msg::decode(&[38, 2]).is_err());
+        assert!(Msg::decode(&[38, 1, 0]).is_err());
+        assert!(Msg::decode(&[39, 1]).is_err());
+        assert!(Msg::decode(&[39, 7, 0, 0]).is_err());
+        assert!(Msg::decode(&[39, 0, 0, 2, b'x']).is_err());
     }
 
     #[test]

@@ -55,7 +55,13 @@ tools/tree /tmp/tree doom quake airplay fetch   # a whole tree, with apps
 CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
-crates), and `cargo test -p neochumby-proto -p neochumbyd`.
+crates), and `cargo test -p neochumby-proto -p neochumby-sync -p
+neochumbyd`.
+
+Code that runs on the Chumby but needs no Chumby goes in a crate that also
+builds on the host, so CI can test it there. `neochumby-sync` is one: its
+tests run whole sync rounds over a real session on loopback, with a
+temporary directory standing in for the stick.
 
 ### On a Chumby
 
@@ -65,7 +71,33 @@ what it and its apps wrote (`neochumbyd log NAME -f`) and capture its
 screen (`neochumbyd shot NAME OUT.png`), all on the server. Everything
 an app writes to stdout or stderr ends up in that log, so print what
 you'd want to read there. The protocol is in `neochumby-proto`'s `dev`
-module.
+module. To let Claude Code do the same, add `neochumbyd mcp` as an MCP
+server (`claude mcp add neochumby -- ssh HOST neochumbyd mcp`).
+
+To drive it as a scenario drives the emulators, turn on input for it
+first: `neochumbyd set NAME dev=on` (and `dev=` to turn it off again). It
+is off by default, and both neochumbyd and the Chumby refuse input
+without it: pairing a Chumby lets its server see its log and its screen,
+not use it, until its owner says so. Then:
+
+- `neochumbyd tap NAME X Y [--hold MS]` touches the screen at (X, Y), in
+  pixels (0-319, 0-239), for MS milliseconds (100 by default, at most
+  10000), then lets go. It's written to the touchscreen's input device,
+  through the Chumby's own calibration, so every reader sees it as a
+  finger: the app in front, and the escape hatch (`tap NAME 10 10 --hold
+  3500` ends the app in front).
+- `neochumbyd button NAME press|release|tap` puts the top button down, up,
+  or down and up again 300 ms later. It goes where a real press goes: a
+  `button` line to the start app, or back to the start app with
+  `NEOCHUMBY_REASON=button`. **Except to an app with `button = true`**:
+  such an app reads `/dev/switch` itself, so a press from neochumbyd can't
+  reach it, and the command says so. A scenario that needs the button in a
+  game (FIRE in Doom) can't be run on a Chumby this way.
+
+Each command returns once the Chumby has done it (a tap, once it has let
+go), or fails with why not, or after 15 seconds if the Chumby isn't
+connected. One at a time per Chumby. A press is let go, and a touch
+lifted, if the link drops.
 
 ## Testing without a Chumby: dev/emulate
 
@@ -382,9 +414,21 @@ the app:
 
 `apps/airplay` is a worked example of both halves.
 
+## Files in the tree
+
+With `delivery=sync`, a Chumby keeps a copy of the tree on its FAT stick.
+Names must be ones it can take: A-Z a-z 0-9 `.` `_` `+` `-`, not starting
+or ending with `.`, unique ignoring case, and not a DOS device name (`con`,
+`aux.txt`). `neochumbyd manifest` lists anything left out. Only files that
+change are sent, so keep names stable and leave identical files alone.
+
 ## Pull requests
 
 Keep a pull request to one change, explain why in its description, and make
 sure CI is green. If you're changing how a Chumby boots
 (`boot/userhook2`), test on a real one or say that you couldn't: a hook
-that hangs stops the Chumby's boot.
+that hangs stops the Chumby's boot. The hook runs under BusyBox 1.6 `sh`,
+which has `sed` but no `sha256sum`, `printf`, `od` or `head -c`. Anything
+it can't do goes in the session binary as a subcommand, like `neochumby
+check-set`. Raise its `neochumby-hook-version` line with every change: the
+session replaces the hook installed in `/psp` only with a higher version.

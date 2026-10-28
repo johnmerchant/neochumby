@@ -10,6 +10,7 @@ publish.workspace = true
 libc.workspace = true
 neochumby-proto.workspace = true
 neochumby-macros.workspace = true
+neochumby-sync.workspace = true
 neochumby-sys.workspace = true
 font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
 # Fb is a DrawTarget: its fonts (the terminal's 5x8), shapes and text.
