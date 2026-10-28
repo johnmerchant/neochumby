@@ -1,7 +1,7 @@
 # Proposal 0002: no shells, a start app, and the session opens apps
 
-Status: **proposed by John**, replacing the "shells" part of proposal 0001
-(#1). For discussion with Matt before #4 and #5 go further.
+Status: **agreed by John and Matt**, replacing the "shells" part of
+proposal 0001 (#1).
 
 ## What neochumby is for
 
@@ -35,6 +35,16 @@ What a Chumby actually needs is smaller.
    Chumby opens at boot and returns to after any other app exits. It
    defaults to `home`. It's set on the server and reaches the Chumby
    through `Msg::Config` (#5), kept in `/psp` for boots without the server.
+   - **Only apps that declare `start = true` can be start apps,** so that
+     `start=doom` can't trap someone in Doom. The session refuses any other
+     name, logs why, and opens `home`.
+   - Declaring it is a promise: the app opens other apps through the
+     session, offers CHUMBY MODE and a way to the owner's settings, shows its
+     own main screen on `NEOCHUMBY_REASON=button`, and doesn't take the
+     button (`button = true`).
+   - **The server's settings suggest such an app as the start app** when it
+     is added to the tree (in `neochumbyd set` and the web page).
+   - `neochumby-home` and wx declare it.
 3. **The session opens every app.** An app never launches another one
    itself. It asks the session, which runs the requested app full-screen
    and, when that exits, goes back to the start app.
@@ -108,13 +118,16 @@ and decides who gets each press:
 The speaker is usually driven by a service (AirPlay, music), not the app in
 front, so there's no manifest key for it.
 
-- **The library holds the speaker handling:** a guard that opens
-  `/dev/dsp`, saves the volume, sets a level, unmutes, and restores all of
-  it when dropped.
-- **`/dev/dsp` can be opened by only one process at a time.** Whoever holds
-  it keeps it, and the others wait until it's free. If a process should
-  be able to take it over, the session can hand it over like the top
-  button, once there's a measured case for that.
+- **The library holds the speaker handling** (#13): `audio::Unmuted` saves
+  the volume, sets a level and unmutes, restoring both when dropped, for a
+  process that has another program play (wx's music, through the stock
+  `btplay`). `audio::Speaker` adds `/dev/dsp`, for one that writes PCM
+  itself (AirPlay).
+- **`/dev/dsp` can be opened by only one process at a time,** so the
+  newest player takes the speaker. The library asks whoever holds it to
+  yield; the holder stops its player and drops its guard, and may start
+  again once the speaker is free. So AirPlay doesn't wait while the radio
+  plays.
 - **When a supervised service dies,** the session mutes the speaker and
   restores the volume it had at boot, so a crash can't leave it on.
 
@@ -137,7 +150,9 @@ role.
 
 | PR | Change |
 | --- | --- |
-| #4 (`shells=`) | **Closed, or cut down** to documenting that apps open apps through the session. |
-| #5 (`Msg::Config`) | The setting is **`start`**, not `home`. Otherwise unchanged. |
-| #6 (installer, manifest in `Cargo.toml`) | `home` and `shells` are removed from the manifest keys; `button` and `interrupt` are added. |
-| The session and `neochumby-home` | The request pipe; the session runs apps and returns to the start app; services supervised, with the interruption rules and `front`; the top button handed over; the app list uses the pipe; `apps/home` becomes a plain `exec` app. |
+| #4 (`shells=`) | Closed. |
+| #5 (`Msg::Config`) | The setting is **`start`**. |
+| The manifest keys | `home` and `shells` go; `start`, `button` and `interrupt` come. `neochumbyd` stays explicit, and a companion without it is refused when the tree is built. |
+| #13 (the speaker) | `audio::Unmuted` and `audio::Speaker` in the library. |
+| The speaker handover | A follow-up PR: the newest player takes the speaker. |
+| The session (Matt, three PRs) | 1. The request pipe and the start app (`start = true`); `neochumby-home` on the pipe as a plain `exec` app. 2. Services supervised, with the interruption rules. 3. The top button handed over. `front` notices where they fit. |
