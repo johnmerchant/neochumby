@@ -148,7 +148,9 @@ if [ "$machine" != user ]; then
 fi
 
 step "boot from a stick"
-emu mkstick --force "$out/stick.img" "$tree"
+# A stick with room for the tree: twice its size, at least 64 MB.
+size=$(du -sm "$tree" | cut -f1)
+emu mkstick --force --size $((size * 2 > 64 ? size * 2 : 64)) "$out/stick.img" "$tree"
 emu start --stick "$out/stick.img"
 opened_home 1 "the home screen didn't open from the stick"
 emu shot "$out/4-stick.png"
