@@ -1,6 +1,6 @@
 // Builds the Quake engine (third_party/quake/WinQuake, id's, a submodule,
 // unchanged: software renderer, the C paths rather than id's x86 assembly)
-// and csrc/glue.c into the binary. Where the Chumby needs the engine to do
+// and csrc/varargs.c into the binary. Where the Chumby needs the engine to do
 // otherwise, a file is built with a function renamed, so that ours takes
 // its place.
 
@@ -19,7 +19,7 @@ const RENAMED: &[(&str, &[(&str, &str)])] = &[
     // The span drawers are src/span.rs (fixed point, no soft float in the
     // loop); the engine's own go unused.
     ("d_scan", &[("D_DrawSpans8", "D_DrawSpans8_c"), ("D_DrawZSpans", "D_DrawZSpans_c")]),
-    // Its own address, from its host name: csrc/glue.c's lookup doesn't
+    // Its own address, from its host name: src/net.rs's lookup doesn't
     // fail on a Chumby whose name isn't in DNS, which crashed the engine.
     ("net_udp", &[("gethostbyname", "chum_gethostbyname")]),
 ];
@@ -56,7 +56,7 @@ fn main() {
         }
         build.objects(b.file(format!("{DIR}/{f}.c")).compile_intermediates());
     }
-    build.file("csrc/glue.c").compile("quake");
+    build.file("csrc/varargs.c").compile("quake");
     println!("cargo:rerun-if-changed={DIR}");
     println!("cargo:rerun-if-changed=csrc");
 }
