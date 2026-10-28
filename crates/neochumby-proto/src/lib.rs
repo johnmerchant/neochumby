@@ -201,6 +201,7 @@ mod tests {
             Msg::SyncData(vec![0; 1000]),
             Msg::SyncEnd,
             Msg::SyncDone { ok: false, detail: "no space".into() },
+            Msg::SyncProgress { done: 1 << 20, total: 512 << 20 },
         ] {
             assert_eq!(Msg::decode(&m.encode()).unwrap(), m);
         }
@@ -210,6 +211,7 @@ mod tests {
         assert!(Msg::decode(&[10, 0]).is_err(), "short hash");
         assert!(Msg::decode(&[13, 2, 0, 0]).is_err(), "a flag is 0 or 1");
         assert!(Msg::decode(&[16, 0]).is_err());
+        assert!(Msg::decode(&[18, 0, 0, 0, 0, 0, 0, 0, 1]).is_err(), "short");
     }
 
     #[test]

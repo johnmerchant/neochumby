@@ -123,4 +123,5 @@ sure CI is green. If you're changing how a Chumby boots
 that hangs stops the Chumby's boot. The hook runs under BusyBox 1.6 `sh`,
 which has `sed` but no `sha256sum`, `printf`, `od` or `head -c`. Anything
 it can't do goes in the session binary as a subcommand, like `neochumby
-check-set`.
+check-set`. Raise its `neochumby-hook-version` line with every change: the
+session replaces the hook installed in `/psp` only with a higher version.

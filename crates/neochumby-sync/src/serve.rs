@@ -167,9 +167,14 @@ pub fn round(s: &mut Session, live: [u8; 32], tree: &Tree) -> io::Result<Served>
         bytes += e.size;
     }
     s.send(&Msg::SyncEnd)?;
-    match next(s, &clock)? {
-        Msg::SyncDone { ok, detail } => Ok(Served::Sent { files: need.len(), bytes, ok, detail }),
-        m => Err(unexpected(&m)),
+    // Each SyncProgress (the Chumby hashing what it kept) restarts the
+    // wait; the round's own limit still holds.
+    loop {
+        match next(s, &clock)? {
+            Msg::SyncProgress { .. } => {}
+            Msg::SyncDone { ok, detail } => return Ok(Served::Sent { files: need.len(), bytes, ok, detail }),
+            m => return Err(unexpected(&m)),
+        }
     }
 }
 

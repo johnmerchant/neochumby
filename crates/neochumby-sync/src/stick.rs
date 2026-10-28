@@ -16,6 +16,7 @@ use std::fs::{self, File, OpenOptions};
 use std::io::{self, Read, Write};
 use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 use neochumby_sys::fs::NO_FOLLOW;
 use ring::digest::{Context, SHA256};
@@ -52,6 +53,9 @@ impl Set {
         }
     }
 }
+
+/// How often finish() reports progress while it hashes kept files.
+const PROGRESS: Duration = Duration::from_secs(30);
 
 /// A batch is synced once it holds this many files, or bytes.
 const BATCH_FILES: usize = 64;
@@ -343,13 +347,28 @@ impl Writer<'_> {
     /// short, are hashed now. A power cut can leave a renamed file sharing
     /// its clusters with its temporary name, and a cheap stick can reorder
     /// its own writes, so the sizes can match over the wrong bytes. A file
-    /// that fails is removed and dropped from the journal, for the next
-    /// round to send again. Then the marker is written, last.
-    pub fn finish(mut self) -> io::Result<()> {
+    /// that fails, or can't be read at all (a damaged FAT chain gives EIO),
+    /// is removed and dropped from the journal, for the next round to send
+    /// again; otherwise it would fail every round. Then the marker is
+    /// written, last. Hashing a large set takes minutes on the stick, so
+    /// `progress(done, total)` is called every 30 seconds meanwhile.
+    pub fn finish(mut self, mut progress: impl FnMut(u64, u64)) -> io::Result<()> {
         self.flush()?;
+        let total: u64 = self.unverified.iter().map(|e| e.size).sum();
+        let (mut done, mut said) = (0u64, Instant::now());
         let mut bad = Vec::new();
         for e in &self.unverified {
-            if hash_file(&self.dir.join(&e.path))? != (e.size, e.sha256) {
+            let r = hash_file(&self.dir.join(&e.path), &mut |n| {
+                done += n;
+                if said.elapsed() >= PROGRESS {
+                    progress(done, total);
+                    said = Instant::now();
+                }
+            });
+            if r.as_ref().ok() != Some(&(e.size, e.sha256)) {
+                // A stick pulled mid-hash fails every read: nothing is
+                // removed then, and the round fails as it is.
+                self.stick.mounted()?;
                 bad.push(e.path.clone());
             }
         }
@@ -406,8 +425,8 @@ impl Drop for Writer<'_> {
     }
 }
 
-/// A file's size and SHA-256, read in full.
-fn hash_file(p: &Path) -> io::Result<(u64, [u8; 32])> {
+/// A file's size and SHA-256, read in full, `read(n)` told of each part.
+fn hash_file(p: &Path, read: &mut dyn FnMut(u64)) -> io::Result<(u64, [u8; 32])> {
     let mut f = OpenOptions::new().read(true).custom_flags(NO_FOLLOW).open(p)?;
     let mut h = Context::new(&SHA256);
     let mut buf = vec![0u8; 64 << 10];
@@ -418,6 +437,7 @@ fn hash_file(p: &Path) -> io::Result<(u64, [u8; 32])> {
             k => {
                 h.update(&buf[..k]);
                 n += k as u64;
+                read(k as u64);
             }
         }
     }
@@ -562,7 +582,7 @@ pub(crate) mod tests {
             let mut chunks = d.chunks(3).map(|c| c.to_vec()).collect::<Vec<_>>().into_iter();
             w.receive(e, || Ok(chunks.next().unwrap_or_default()))?;
         }
-        w.finish()
+        w.finish(|_, _| {})
     }
 
     const V1: &[(&str, &[u8])] = &[("apps/home/manifest", b"home=neochumby-home\n"), ("neochumby", b"session 1")];
@@ -705,7 +725,7 @@ pub(crate) mod tests {
         assert!(w.receive(&entry("other", b"x"), || Ok(b"x".to_vec())).is_err());
         assert!(!root.join("neochumby/a/neochumby").exists());
         assert!(fs::read_dir(root.join("neochumby/a")).unwrap().next().is_none(), "no temporary file left");
-        assert!(w.finish().is_err(), "incomplete");
+        assert!(w.finish(|_, _| {}).is_err(), "incomplete");
         assert!(st.check(Set::A).is_err());
         fs::remove_dir_all(&root).unwrap();
     }
@@ -784,6 +804,32 @@ pub(crate) mod tests {
         let huge = Entry { path: "neochumby".into(), size: 1 << 60, sha256: [0; 32] };
         let e = st.begin(Set::A, &[huge], &[]).err().unwrap();
         assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{e}");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
+    fn a_kept_file_that_cannot_be_read_is_sent_again() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = tempdir("unreadable");
+        let st = Stick::new(root.join("neochumby"), None);
+        let tree: Vec<Entry> = V2.iter().map(|(p, d)| entry(p, d)).collect();
+        let mut w = st.begin(Set::A, &tree, &[]).unwrap();
+        w.receive(&tree[0], || Ok(b"IWAD".to_vec())).unwrap();
+        drop(w);
+        // Reads of it fail (standing in for EIO from a damaged FAT chain).
+        let wad = root.join("neochumby/a/apps/doom/doom1.wad");
+        fs::set_permissions(&wad, fs::Permissions::from_mode(0o000)).unwrap();
+        if File::open(&wad).is_ok() {
+            // Running as root: permissions don't stop reads. Nothing to test.
+            fs::remove_dir_all(&root).unwrap();
+            return;
+        }
+        let e = write_set(&st, Set::A, V2).unwrap_err();
+        assert!(e.to_string().contains("doom1.wad"), "{e}");
+        assert!(!wad.exists(), "removed");
+        assert!(st.have(Set::A).iter().all(|e| !e.path.ends_with("doom1.wad")), "dropped from the journal");
+        write_set(&st, Set::A, V2).unwrap();
+        assert_eq!(st.check(Set::A).unwrap(), tree);
         fs::remove_dir_all(&root).unwrap();
     }
 }

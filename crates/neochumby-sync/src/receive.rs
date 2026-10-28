@@ -97,7 +97,11 @@ fn run(s: &mut Session, stick: &Stick, wait: &Clock) -> io::Result<Outcome> {
         return Err(invalid(format!("{}: never sent", e.path)));
     }
     if let Some(w) = w {
-        w.finish()?;
+        // neochumbyd waits on SyncDone; this tells it the Chumby is still
+        // at work.
+        w.finish(|done, total| {
+            let _ = s.send(&Msg::SyncProgress { done, total });
+        })?;
     }
     stick.flip(target)?;
     let files = tree.len();

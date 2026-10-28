@@ -271,3 +271,25 @@ fn a_round_has_a_time_limit() {
     t.join().unwrap();
     fs::remove_dir_all(&root).unwrap();
 }
+
+/// A Chumby still hashing what it kept sends SyncProgress before SyncDone;
+/// neochumbyd keeps waiting.
+#[test]
+fn progress_before_done() {
+    let root = tempdir("progress");
+    let tree = root.join("tree");
+    put(&tree, "neochumby", b"session");
+    let (srv, mut c) = sessions();
+    let served = server(srv, tree.clone());
+    c.send(&Msg::SyncHave { live: [0; 32] }).unwrap();
+    assert_eq!(c.recv().unwrap(), Msg::SyncWant);
+    c.send(&Msg::SyncManifest { entries: vec![], last: true }).unwrap();
+    while c.recv().unwrap() != Msg::SyncEnd {}
+    for done in [1, 2] {
+        c.send(&Msg::SyncProgress { done, total: 2 }).unwrap();
+    }
+    c.send(&Msg::SyncDone { ok: true, detail: "fine".into() }).unwrap();
+    drop(c);
+    assert_eq!(served.join().unwrap(), [Served::Sent { files: 1, bytes: 7, ok: true, detail: "fine".into() }]);
+    fs::remove_dir_all(&root).unwrap();
+}

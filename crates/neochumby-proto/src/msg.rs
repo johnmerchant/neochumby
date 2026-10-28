@@ -62,6 +62,10 @@ pub enum Msg {
     /// place of `SyncUpToDate` or `SyncWant`: never `ok`, a tree it will not
     /// send, and why.
     SyncDone { ok: bool, detail: String },
+    /// Chumby, between `SyncEnd` and its `SyncDone`: still working (hashing
+    /// files kept from a round cut short), `done` of `total` bytes. Each
+    /// one restarts neochumbyd's wait.
+    SyncProgress { done: u64, total: u64 },
 }
 
 impl Msg {
@@ -137,6 +141,11 @@ impl Msg {
                 b.push(17);
                 b.push(*ok as u8);
                 s(&mut b, detail);
+            }
+            Msg::SyncProgress { done, total } => {
+                b.push(18);
+                b.extend_from_slice(&done.to_be_bytes());
+                b.extend_from_slice(&total.to_be_bytes());
             }
         }
         b
@@ -224,6 +233,11 @@ impl Msg {
             17 => {
                 let ok = flag(&mut rest)?;
                 Msg::SyncDone { ok, detail: string(&mut rest)? }
+            }
+            18 => {
+                let done = u64::from_be_bytes(take(&mut rest, 8)?.try_into().expect("8 bytes"));
+                let total = u64::from_be_bytes(take(&mut rest, 8)?.try_into().expect("8 bytes"));
+                Msg::SyncProgress { done, total }
             }
             _ => return Err(invalid("unknown message")),
         };

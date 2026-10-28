@@ -1,4 +1,7 @@
 #!/bin/sh
+# neochumby-hook-version=1
+# (Raise it with every change: the session replaces an installed hook only
+# with a higher version, so a rollback to an older set never downgrades it.)
 # neochumby's boot hook. The same script goes in two places, and the stock
 # boot (/etc/init.d/rcS) runs both, in this order, once the network is up
 # and before the Chumby's own software starts:
