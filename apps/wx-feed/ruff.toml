@@ -1,0 +1,6 @@
+# The Python in files/python and tests/: pyflakes' checks (undefined and unused
+# names, imports) and syntax errors. Its style is its own (long, aligned lines).
+target-version = "py312"
+
+[lint]
+select = ["F", "E9"]

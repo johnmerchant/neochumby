@@ -355,6 +355,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-wx-feed"
+version = "0.1.0"
+dependencies = [
+ "neochumby-proto",
+]
+
+[[package]]
 name = "neochumbyd"
 version = "0.1.0"
 dependencies = [

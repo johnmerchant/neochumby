@@ -1,0 +1,31 @@
+[package]
+name = "neochumby-wx-feed"
+description = "The wx shell's server half: its renderer (a companion per Chumby) and its my-channels web page (a daemon), in Python"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Two thin launchers for the Python in files/python/, which tools/tree copies
+# into the app's directory beside them (as python/):
+#   neochumby-wx-feed      the companion: renders a Chumby's pages and
+#                          screens every few minutes (wxfeed.py)
+#   neochumby-wx-feed-web  the daemon: the my-channels web page, once per
+#                          server (configweb.py)
+[[bin]]
+name = "neochumby-wx-feed"
+path = "src/companion.rs"
+
+[[bin]]
+name = "neochumby-wx-feed-web"
+path = "src/web.rs"
+
+[dependencies]
+neochumby-proto.workspace = true
+
+# The web page is a daemon: add `daemon = "neochumby-wx-feed-web"` here once
+# neochumby-manifest knows that key (#9). Until then it is started by hand
+# (see README.md).
+[package.metadata.neochumby]
+companion = "neochumby-wx-feed"
+neochumbyd = "required"

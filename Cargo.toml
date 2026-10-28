@@ -7,6 +7,7 @@ members = [
     "crates/neochumby-softfloat",
     "crates/neochumbyd",
     "apps/airplay",
+    "apps/wx-feed",
     "apps/home",
     "apps/doom",
     "apps/quake",

@@ -1,0 +1,6 @@
+# The wx-feed renderer (wxfeed.py) and its web page (configweb.py). Python 3.12 or newer.
+Pillow>=10.0
+# The QR code in Settings -> APPS; without it that screen shows the address only.
+segno>=1.5
+# Optional: iPhone HEIC photo uploads on the web page.
+# pillow-heif>=0.16

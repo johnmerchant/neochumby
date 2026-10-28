@@ -29,6 +29,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the home screen: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
+| `apps/wx-feed` | The wx shell's server half: a renderer per Chumby and the "my channels" web page, in Python (Pillow) behind thin Rust launchers | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, vendored) with a Rust platform layer | GPL-2.0 |
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer, made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |

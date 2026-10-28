@@ -11,3 +11,4 @@
 
 # Agents' worktrees
 /.claude/
+__pycache__/

@@ -1,6 +1,7 @@
 # Every push and pull request, on GitHub's own runners: formatting, lints
 # and tests on the host, and every binary built for both of its targets
 # (the Chumby's ARM926 and neochumbyd's x86_64), with TLS and with Noise.
+# wx-feed's Python is linted and run in a job of its own.
 name: CI
 
 on:
@@ -32,6 +33,22 @@ jobs:
       - run: cargo test -p neochumby-proto -p neochumbyd -p neochumby-manifest
       - run: cargo test -p neochumby-proto --features noise
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
+      # wx-feed's launchers (its Python has its own job, below).
+      - run: cargo clippy -p neochumby-wx-feed --all-targets -- -D warnings
+      - run: cargo test -p neochumby-wx-feed
+
+  python:
+    name: wx-feed's Python (lint, every page rendered offline)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r apps/wx-feed/files/python/requirements.txt ruff
+      - run: ruff check apps/wx-feed
+      # Made-up data for every source, a frozen clock, no network.
+      - run: python apps/wx-feed/tests/smoke.py
 
   cross:
     name: Build for the Chumby and the server (${{ matrix.proto }})
@@ -66,6 +83,7 @@ jobs:
           cargo build --release --target x86_64-unknown-linux-musl $FEATURES -p neochumbyd
           cargo build --release --target x86_64-unknown-linux-musl $FEATURES \
             -p neochumby-airplay --bin neochumby-airplay-companion
+          cargo build --release --target x86_64-unknown-linux-musl $FEATURES -p neochumby-wx-feed
       - name: A tree, as tools/tree lays it out
         if: matrix.proto == 'tls'
-        run: tools/tree "$RUNNER_TEMP/tree" doom quake airplay && find "$RUNNER_TEMP/tree" -type f | sort
+        run: tools/tree "$RUNNER_TEMP/tree" doom quake airplay wx-feed && find "$RUNNER_TEMP/tree" -type f | sort
