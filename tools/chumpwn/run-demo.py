@@ -168,6 +168,7 @@ def main():
         pump(2)
         text = bytes(buf)
         guest_checks = [
+            (b"Linux (none) 5.9.16-mx21-nomtd", "uname 5.9.16"),
             (b"MTD_RC=1", "no /proc/mtd"),
             (b"MTD_DEV_RC=1", "no /dev/mtd*"),
             (b"NAND_GREP_RC=1", "no NAND in dmesg"),
