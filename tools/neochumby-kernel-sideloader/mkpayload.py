@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
-"""Build the QEMU -device loader container for chumpwn.
+"""Build the QEMU -device loader container for the kernel sideloader.
 
 The container is loaded at 0xc3800000, above the stock kernel's mem=56M
 limit, so the stock 2.6.16 kernel never allocates it.  Layout:
 
-    0x00  "CHUMPWN1" + version/header size + offsets/sizes
+    0x00  "NEOCHUM1" + version/header size + offsets/sizes
     0x1000  Linux 5.9.16 zImage
     ...     initramfs (gzipped cpio)
 
@@ -15,7 +15,7 @@ import sys
 
 BASE = 0xC3800000
 LIMIT = 0x00700000  # keep clear of ATAGS at 0xc3f00000
-MAGIC = b"CHUMPWN1"
+MAGIC = b"NEOCHUM1"
 
 def main():
     if len(sys.argv) != 4:

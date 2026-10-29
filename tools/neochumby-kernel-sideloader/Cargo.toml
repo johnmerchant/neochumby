@@ -1,13 +1,13 @@
 [package]
-name = "chumpwn"
+name = "neochumby-kernel-sideloader"
 version = "0.1.0"
 edition = "2021"
 publish = false
 license = "MIT"
-description = "Stock Chumby 2.6.16 -> NAND-less Linux 5.9.16 chainloader"
+description = "Stock Chumby 2.6.16 -> NAND-less Linux 5.9.16 kernel sideloader"
 
 [[bin]]
-name = "chumpwn"
+name = "neochumby-kernel-sideloader"
 path = "src/main.rs"
 
 [profile.release]
