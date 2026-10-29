@@ -94,7 +94,9 @@ pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
 // physical address here is SDRAM, not the NAND controller or an MTD device.
 const SRC_PHYS: u32 = 0xc200_0000;
 const SRC_VA: u32 = 0x0200_0000;
-const SRC_MAP_LEN: u32 = 0x0060_0000;
+// Matches mkpayload.py's LIMIT: the container's room to grow before it
+// nears ATAGS at 0xc3f00000.
+const SRC_MAP_LEN: u32 = 0x0070_0000;
 
 const KERNEL_DST_VA: u32 = 0x0200_0000;
 const KERNEL_MAP_LEN: u32 = 0x0060_0000;
