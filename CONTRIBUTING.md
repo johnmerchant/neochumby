@@ -53,6 +53,13 @@ cargo neochumbyd        # the server
 tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 ```
 
+The server half (neochumbyd and companions) is built for x86_64 Linux by
+default. `tools/tree --server-target aarch64-unknown-linux-musl` (64-bit
+ARM Linux) or `--server-target host` (this machine, natively; a Mac, say)
+builds companions for another, and `tools/deploy` picks the one its server
+runs. A companion must build for all three: keep anything
+platform-specific behind `cfg`, as neochumbyd does.
+
 CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
