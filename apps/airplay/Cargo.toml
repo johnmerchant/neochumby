@@ -53,10 +53,12 @@ colour = "8c64dc"
 service = "neochumby-airplay"
 companion = "neochumby-airplay-companion"
 neochumbyd = "required"
+# The screen draws and takes touches; the service plays. Jailed (#45), the
+# exec and the service share a uid, which the screen's socket checks.
+access = ["screen", "touch", "speaker"]
 # FOLLOW-UP, once #54 (the `music` capability) is in main: `music = true`.
 # The service already takes the session's `pause` and `resume` lines, which
 # is what the flag promises; the manifest tool refuses the key until then.
-# And with #45: access = ["screen", "touch", "speaker"].
 
 [lints]
 workspace = true

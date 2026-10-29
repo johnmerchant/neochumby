@@ -25,22 +25,20 @@
 //! sender is asked to pause or play, and the audio is dropped meanwhile in
 //! case it can't be.
 //!
-//! Connects to the paired neochumbyd (/psp/neochumby.conf) and checks its
-//! key against the one pinned there; reconnects, backing off, whenever the
-//! connection goes. The screens are looked after meanwhile.
+//! The session opens the companion for it (neochumby::companion); it opens
+//! it again, backing off, whenever the companion goes. The screens are
+//! looked after meanwhile.
 
 use std::io::{self, Write};
 use std::os::unix::net::UnixListener;
 use std::time::{Duration, Instant};
 
 use neochumby::audio::{self, Speaker};
-use neochumby::companion;
-use neochumby::conf;
+use neochumby::companion::{self, Link};
 use neochumby::session::{Notice, Pipe, Request};
 use neochumby_airplay::frames::{AUDIO, Control, END, Frame};
 use neochumby_airplay::hub::Hub;
 use neochumby_airplay::link::{self, Peer};
-use neochumby_proto::{Identity, Msg, Session};
 
 /// The master volume while AirPlay plays. The phone's volume is applied to
 /// the audio itself (by shairport-sync), so this only has to be loud enough
@@ -160,16 +158,16 @@ impl Front {
 }
 
 /// The screens' buttons, on to the companion: only CONTROL frames.
-fn controls(frames: Vec<Vec<u8>>, s: &mut Session) -> io::Result<()> {
+fn controls(frames: Vec<Vec<u8>>, s: &mut Link) -> io::Result<()> {
     for f in frames {
         if let Some(Frame::Control(_)) = Frame::parse(&f) {
-            s.send(&Msg::Data(f))?;
+            s.send(&f)?;
         }
     }
     Ok(())
 }
 
-fn play(mut s: Session, screens: &mut Screens, hub: &mut Hub, front: &mut Front) -> io::Result<()> {
+fn play(mut s: Link, screens: &mut Screens, hub: &mut Hub, front: &mut Front) -> io::Result<()> {
     let mut speaker: Option<Speaker> = None;
     // While the speaker is someone else's: when to try it again.
     let mut busy_until: Option<Instant> = None;
@@ -181,13 +179,10 @@ fn play(mut s: Session, screens: &mut Screens, hub: &mut Hub, front: &mut Front)
         controls(got, &mut s)?;
         front.listen();
         for c in std::mem::take(&mut front.asked) {
-            s.send(&Msg::Data(Frame::Control(c).encode()))?;
+            s.send(&Frame::Control(c).encode())?;
         }
-        let frame = match s.recv_timeout(TICK)? {
-            Some(Msg::Data(f)) => f,
-            Some(Msg::Closed) => return Err(io::Error::other("the companion has gone")),
-            _ => continue,
-        };
+        // Fails once the companion has gone.
+        let Some(frame) = s.recv_timeout(TICK)? else { continue };
         match frame.split_first() {
             Some((&AUDIO, _)) if front.held => {
                 // Paused by the session: silent, and the speaker free.
@@ -252,24 +247,13 @@ fn play(mut s: Session, screens: &mut Screens, hub: &mut Hub, front: &mut Front)
 
 fn main() {
     neochumby::debug::install("neochumby-airplay");
-    let Some(p) = conf::paired() else {
-        eprintln!("neochumby-airplay: not paired");
-        std::process::exit(1);
-    };
-    let me = match Identity::from_secret(&p.secret) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("neochumby-airplay: {}: {e}", conf::KEY);
-            std::process::exit(1);
-        }
-    };
     let mut screens = Screens::new();
     let mut hub = Hub::default();
     let mut front = Front { pipe: Pipe::from_env(), app: None, held: false, asked: Vec::new() };
     let mut backoff = 2;
     loop {
         let started = Instant::now();
-        let r = companion::open(neochumby::companion!(), &p, &me).and_then(|s| {
+        let r = companion::open(neochumby::companion!()).and_then(|s| {
             screens.send(&hub.link(true));
             play(s, &mut screens, &mut hub, &mut front)
         });
