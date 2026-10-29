@@ -7,7 +7,8 @@
   `/tmp` of its own and only the devices its manifest's `access` lists
   ([CONTRIBUTING](CONTRIBUTING.md#the-app-contract) has the list). It
   can't read the Chumby's key, write to `/psp` (where something would
-  survive a reboot), or signal or trace other apps or root. It has limits
+  survive a reboot) beyond its own `storage` directory, or signal or trace
+  other apps or root. It has limits
   on processes and open files. Its companion is opened for it by the
   session, so it reaches only its own. `home` alone runs as root, as it
   pairs the Chumby.
@@ -22,6 +23,12 @@
   it finds an internet socket of its in `/proc/net` (it looks once a
   second). That finds a socket; it doesn't stop one. A packet sent between
   two looks goes unseen.
+- **What the session does as root for an app** is narrow: the mute and
+  volume, the backlight (the start app only), and the stock player
+  `btplay`, run with an `http://` URL checked character by character as
+  one argument, never through a shell. `storage` is capped by measuring
+  (every 2 seconds), not by the kernel, so an app can overshoot its 64 KiB
+  briefly before it's ended.
 - **The app tree is served over NFSv3,** read-only and without
   authentication. Every file is served as root's, without setuid or
   setgid bits, and the Chumby mounts it `nosuid,nodev`. Anyone who can reach a neochumbyd's NFS port can read the
