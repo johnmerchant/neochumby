@@ -34,16 +34,16 @@
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs is described in
-//! child.rs. The default music app is chosen as the session starts
-//! (music.rs).
+//! child.rs. The default player is chosen as the session starts
+//! (player.rs).
 
 mod button;
 mod child;
 mod companion;
 mod devlink;
 mod jail;
-mod music;
 mod network;
+mod player;
 mod run;
 mod services;
 mod start;
@@ -366,16 +366,16 @@ fn session() {
     // played yet.
     let boot_volume = audio::volume();
 
-    // The server's `start` and `music`, else the local ones: names, trusted
-    // only as far as the tree goes (start.rs, music.rs).
+    // The server's `start` and `player`, else the local ones: names, trusted
+    // only as far as the tree goes (start.rs, player.rs).
     let settings = settings::load();
     let core = core_services(&root, &settings);
-    let (local, local_music) = (conf::get(conf::CONF, "start"), conf::get(conf::CONF, "music"));
+    let (local, local_player) = (conf::get(conf::CONF, "start"), conf::get(conf::CONF, "player"));
     let choice = chosen(&settings, "start", local.as_deref());
-    let music = music::choose(&all, chosen(&settings, "music", local_music.as_deref()));
-    match music {
-        Some(m) => eprintln!("neochumby: the music app is {}", m.name),
-        None => eprintln!("neochumby: no music app here (music = true in a manifest)"),
+    let player = player::choose(&all, chosen(&settings, "player", local_player.as_deref()));
+    match player {
+        Some(m) => eprintln!("neochumby: the player is {}", m.name),
+        None => eprintln!("neochumby: no player here (player = true in a manifest)"),
     }
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
@@ -398,7 +398,7 @@ fn session() {
             };
             // On either ending, the loop has closed the button, stopped the
             // services (neochumby-sync with them) and put the speaker back.
-            run::Session::new(&all, &core, &root, first, music, chumby, run::Timing::default()).run()
+            run::Session::new(&all, &core, &root, first, player, chumby, run::Timing::default()).run()
         }
     };
 
@@ -455,7 +455,7 @@ fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
         // It mounts the stick.
         companion: false,
         access: neochumby::apps::Access { root: true, ..Default::default() },
-        music: false,
+        player: false,
     }]
 }
 

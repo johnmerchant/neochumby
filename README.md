@@ -52,6 +52,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
+| `emu/` | The emulator: QEMU's `chumby-classic` machine, from [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit, which boots the stock firmware from your own flash backup; and chumby-emu, a host tool that builds its images | MIT (the machine: GPL-2.0-or-later, like QEMU) |
 
 Everything we write is MIT, except in `apps/doom`, `apps/quake`,
 `apps/htop`, `apps/top`, `apps/cmatrix`, `apps/bonsai`, `apps/pipes` and
@@ -86,7 +87,7 @@ start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
 access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
-music = true                         # a music app: MUSIC buttons may open it (needs exec and speaker)
+player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
 ```
 
 An app can use any of these keys:
@@ -136,12 +137,12 @@ An app can use any of these keys:
   never sees the Chumby's key. `root`, listed alone, runs
   it unjailed, as root: only `home` does, as it pairs the Chumby.
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
-- **`music`:** a Chumby's default music app is the one a start app's MUSIC
-  button opens (`NEOCHUMBY_MUSIC`), and its MUTE button pauses and resumes
-  (the start app asks the session, which tells the music app's service).
-  It's named by `music=<app>` (`neochumbyd set NAME music=<app>`), else it's
-  `somafm`, else the first app with `music = true`. `neochumbyd pairing`
-  names the music apps in the tree.
+- **`player`:** a Chumby's default player is the one a start app's MUSIC
+  button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
+  (the start app asks the session, which tells the player's service).
+  It's named by `player=<app>` (`neochumbyd set NAME player=<app>`), else it's
+  `somafm`, else the first app with `player = true`. `neochumbyd pairing`
+  names the players in the tree.
 
 ## Building
 
@@ -366,6 +367,30 @@ times out every step that could block, and returns to the stock boot if
 anything fails. To skip it, create `/psp/neochumby-off`, or put a file
 named `neochumby-off` on a stick. neochumby never starts SSH; enable it
 yourself from the Chumby's settings (Chumby info → π) when you need it.
+
+## The emulator
+
+QEMU's `chumby-classic` machine runs a Chumby without the device: the
+stock kernel, root disk and settings partition from your own flash
+backup, unmodified, to the stock control panel, with the screen,
+touchscreen, serial console and flash working. The machine lives in
+[qemu-chumby](https://github.com/johnmerchant/qemu-chumby) (patches
+against a pinned QEMU release); `emu/` builds it at a pinned commit and
+makes the images. [`emu/README.md`](emu/README.md) has the details.
+
+```sh
+emu/qemu/build                       # QEMU with the machine (deps: emu/README.md)
+(cd emu && cargo build --release)    # chumby-emu, the image tools
+emu/target/release/chumby-emu mkpsp PSPDIR psp.jffs2
+emu/target/release/chumby-emu mknand BACKUPDIR psp.jffs2 nand.img
+emu/qemu/run zImage nand.img         # console on stdio, QMP on qmp.sock
+emu/qemu/qemu-chumby/chumby-ctl qmp.sock tap 160 120      # touch at a pixel
+emu/qemu/qemu-chumby/chumby-ctl qmp.sock shot screen.png  # screenshot
+```
+
+The NAND image is written as the Chumby writes its flash; add `-snapshot`
+to keep it unchanged, and `-icount shift=auto,sleep=off` to boot in a few
+seconds rather than in real time.
 
 ## Game data
 
