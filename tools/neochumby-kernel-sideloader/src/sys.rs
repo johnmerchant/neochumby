@@ -1,5 +1,7 @@
-//! Minimal Linux 2.6.16 EABI syscalls and the small string/printing helpers
-//! the loader needs.
+//! Linux 2.6.16 EABI syscall numbers and the small safe helpers the loader
+//! needs.  The raw syscalls themselves live in `raw`.
+
+use crate::raw::{self, Mem};
 
 // ARM private syscall numbers, 2.6.16 EABI.
 pub(crate) const SYS_EXIT: usize = 1;
@@ -7,7 +9,7 @@ pub(crate) const SYS_READ: usize = 3;
 pub(crate) const SYS_WRITE: usize = 4;
 pub(crate) const SYS_OPEN: usize = 5;
 pub(crate) const SYS_CLOSE: usize = 6;
-pub(crate) const SYS_CACHEFLUSH: usize = 0x0f00_02;
+pub(crate) const SYS_CACHEFLUSH: usize = 0x000f_0002;
 pub(crate) const SYS_UNAME: usize = 122;
 pub(crate) const SYS_GETUID32: usize = 199;
 pub(crate) const SYS_GETGID32: usize = 200;
@@ -28,41 +30,21 @@ pub(crate) const PROT_WRITE: usize = 2;
 pub(crate) const MAP_SHARED: usize = 1;
 pub(crate) const MAP_FIXED: usize = 0x10;
 
-#[inline(always)]
-pub(crate) unsafe fn syscall6(n: usize, a: usize, b: usize, c: usize, d: usize, e: usize, f: usize) -> isize {
-    let mut r0 = a;
-    core::arch::asm!(
-        "svc 0",
-        in("r7") n,
-        inout("r0") r0,
-        in("r1") b,
-        in("r2") c,
-        in("r3") d,
-        in("r4") e,
-        in("r5") f,
-        options(nostack)
-    );
-    r0 as isize
+pub(crate) const O_RDWR: usize = 2;
+
+pub(crate) fn write(fd: usize, buf: &[u8]) {
+    raw::write(fd, buf);
 }
 
-#[inline(always)]
-pub(crate) unsafe fn syscall3(n: usize, a: usize, b: usize, c: usize) -> isize {
-    syscall6(n, a, b, c, 0, 0, 0)
-}
-
-pub(crate) unsafe fn write(fd: usize, buf: &[u8]) {
-    syscall3(SYS_WRITE, fd, buf.as_ptr() as usize, buf.len());
-}
-
-pub(crate) unsafe fn print(s: &[u8]) {
+pub(crate) fn print(s: &[u8]) {
     write(1, s);
 }
 
-pub(crate) unsafe fn print_str(s: &str) {
+pub(crate) fn print_str(s: &str) {
     print(s.as_bytes());
 }
 
-pub(crate) unsafe fn print_hex(v: u32) {
+pub(crate) fn print_hex(v: u32) {
     let mut b = [0u8; 11];
     b[0] = b'0';
     b[1] = b'x';
@@ -74,7 +56,7 @@ pub(crate) unsafe fn print_hex(v: u32) {
     print(&b);
 }
 
-pub(crate) unsafe fn print_dec(mut v: u32) {
+pub(crate) fn print_dec(mut v: u32) {
     let mut b = [0u8; 12];
     let mut i = 11;
     b[i] = b'\n';
@@ -90,19 +72,7 @@ pub(crate) unsafe fn print_dec(mut v: u32) {
     print(&b[i..]);
 }
 
-pub(crate) unsafe fn cstr_len(p: *const u8) -> usize {
-    let mut n = 0;
-    while *p.add(n) != 0 {
-        n += 1;
-    }
-    n
-}
-
-pub(crate) unsafe fn cstr(p: *const u8) -> &'static [u8] {
-    core::slice::from_raw_parts(p, cstr_len(p))
-}
-
-pub(crate) unsafe fn str_eq(a: &[u8], b: &[u8]) -> bool {
+pub(crate) fn str_eq(a: &[u8], b: &[u8]) -> bool {
     if a.len() != b.len() {
         return false;
     }
@@ -116,7 +86,7 @@ pub(crate) unsafe fn str_eq(a: &[u8], b: &[u8]) -> bool {
     true
 }
 
-pub(crate) unsafe fn parse_u32(s: &[u8]) -> Option<u32> {
+pub(crate) fn parse_u32(s: &[u8]) -> Option<u32> {
     if s.is_empty() {
         return None;
     }
@@ -147,32 +117,25 @@ pub(crate) unsafe fn parse_u32(s: &[u8]) -> Option<u32> {
     Some(v)
 }
 
-/// Read `path` into `dst`, at most `max` bytes.  The file is opened read-only
-/// and closed before returning.
-pub(crate) unsafe fn read_file(path: &[u8], dst: u32, max: u32) -> Option<u32> {
-    let mut p = [0u8; 256];
-    if path.len() + 1 > p.len() {
+/// Read `path` into `mem`, at most `max` bytes.  The file is opened
+/// read-only and closed before returning.
+pub(crate) fn read_file(path: &[u8], mem: &Mem, max: u32) -> Option<u32> {
+    if max > mem.len() {
         return None;
     }
-    let mut i = 0;
-    while i < path.len() {
-        p[i] = path[i];
-        i += 1;
-    }
-    p[path.len()] = 0;
-    let fd = syscall3(SYS_OPEN, p.as_ptr() as usize, 0, 0);
+    let fd = raw::open(path, 0);
     if fd < 0 {
         return None;
     }
     let mut got: u32 = 0;
     loop {
         if got >= max {
-            syscall3(SYS_CLOSE, fd as usize, 0, 0);
+            raw::close(fd as usize);
             return None;
         }
-        let n = syscall3(SYS_READ, fd as usize, (dst + got) as usize, (max - got) as usize);
+        let n = raw::read(fd as usize, mem, got, max - got);
         if n < 0 {
-            syscall3(SYS_CLOSE, fd as usize, 0, 0);
+            raw::close(fd as usize);
             return None;
         }
         if n == 0 {
@@ -180,6 +143,6 @@ pub(crate) unsafe fn read_file(path: &[u8], dst: u32, max: u32) -> Option<u32> {
         }
         got += n as u32;
     }
-    syscall3(SYS_CLOSE, fd as usize, 0, 0);
+    raw::close(fd as usize);
     Some(got)
 }

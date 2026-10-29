@@ -1,0 +1,79 @@
+# The NANDLESS image and its recovery path.  This is a heavier job than CI:
+# it builds the custom QEMU and the Buildroot image, then runs the
+# self-contained recovery test with a zeroed NAND image.  It runs only when
+# the image, the sideloader or the emulator changes, and on demand.
+name: NANDLESS recovery
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "dist/**"
+      - "tools/neochumby-kernel-sideloader/**"
+      - "emu/qemu/**"
+      - ".github/workflows/nandless.yml"
+  pull_request:
+    paths:
+      - "dist/**"
+      - "tools/neochumby-kernel-sideloader/**"
+      - "emu/qemu/**"
+      - ".github/workflows/nandless.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  recovery:
+    name: Build NANDLESS image and test recovery
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # emu/qemu/qemu-chumby's build dependencies (its README has the list).
+      - name: QEMU build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential python3 python3-venv ninja-build pkg-config \
+            libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
+            curl xz-utils patch
+
+      - name: Cache QEMU
+        id: qemu-cache
+        uses: actions/cache@v4
+        with:
+          path: emu/qemu/out
+          key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
+
+      - name: Build QEMU
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        run: emu/qemu/build
+
+      # Buildroot's downloads, toolchain and output.  A cold cache is slow;
+      # later runs rebuild only what changed.
+      - name: Cache Buildroot work
+        id: dist-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/neochumby-dist
+          key: neochumby-dist-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+
+      - name: Build the NANDLESS image
+        env:
+          NEOCHUMBY_DIST_WORK: ${{ runner.temp }}/neochumby-dist
+        run: dist/build build/nandless-dist
+
+      - name: Recovery end-to-end
+        run: |
+          QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
+          KERNEL=$PWD/build/nandless-dist/nandless-zImage \
+          python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+
+      # The container writes as root; the cache save runs as the runner.
+      - name: Make the Buildroot cache readable
+        if: always()
+        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-dist" || true
