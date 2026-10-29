@@ -3,9 +3,39 @@
 //! their 32 bytes, all big-endian.
 //!
 //! Tags taken: 0-9 the core (pairing, companions, settings); 10-18 sync
-//! (delivery=sync, #10), with 19-31 left for it and anything near it;
-//! 32-39 the developer link (crate::dev): 32-36 its log, restart and
-//! screenshot, 37-39 input (taps and the top button, opt-in).
+//! (delivery=sync), with 19-31 left for it and anything near it; 32-39 the
+//! developer link (crate::dev): 32-36 its log, restart and screenshot,
+//! 37-39 input (taps and the top button, opt-in); 40 the core again, from
+//! protocol version 1 on ([`Msg::Version`]).
+//!
+//! # Versions
+//!
+//! Each message has the protocol version that brought it in
+//! ([`Msg::since`]); everything up to tag 39 is version 0, the protocol
+//! from before versions were numbered. A [`Session`](crate::Session) sends
+//! only messages of its negotiated version or older (crate::version has
+//! how the two ends agree on it), so a peer is never sent a message it
+//! cannot decode. An encoding, once it has shipped, never changes: a new
+//! field is a new message.
+//!
+//! # Unknown messages
+//!
+//! A tag this build doesn't know decodes as [`Msg::Unknown`], not as an
+//! error; a malformed body of a known tag is still an error. Receivers go
+//! by one rule:
+//!
+//! - Where a receiver takes whatever comes next (a companion's frames, the
+//!   developer link's log and requests, the first message after `Config`),
+//!   it skips an `Unknown` and carries on.
+//! - Where it waits for one particular answer (the handshake, a sync
+//!   round, a screenshot's pixels), an `Unknown` is unexpected, and an
+//!   error like any other unexpected message.
+//!
+//! So a later version may add a message of either kind. One that a peer
+//! may ignore (a hint, a notice) needs only that both ends speak version 1,
+//! which skips; one that must be understood is sent only once the
+//! negotiated version is at least the one that added it. Version-0 peers
+//! refuse unknown tags outright, so they are sent neither.
 
 use std::io;
 
@@ -98,9 +128,28 @@ pub enum Msg {
     /// Chumby, answering each `Tap` (once it has let go) or `Button`:
     /// done, or why not.
     Done { ok: bool, why: String },
+    /// Chumby, version 1 on: right after a `Config` that says its
+    /// neochumbyd speaks version 1 or later, the newest version this
+    /// Chumby speaks. Both ends then use the lower of the two
+    /// (crate::version).
+    Version(u16),
+    /// A tag this build doesn't know, from a newer peer, and its body as it
+    /// came. See the module's documentation for when it is skipped. Never
+    /// sent: [`Session::send`](crate::Session::send) refuses it.
+    Unknown { tag: u8, body: Vec<u8> },
 }
 
 impl Msg {
+    /// The protocol version that brought this message in; None for
+    /// [`Msg::Unknown`], which is never sent.
+    pub fn since(&self) -> Option<u16> {
+        match self {
+            Msg::Version(_) => Some(1),
+            Msg::Unknown { .. } => None,
+            _ => Some(0),
+        }
+    }
+
     pub fn encode(&self) -> Vec<u8> {
         let mut b = Vec::new();
         let s = |b: &mut Vec<u8>, s: &str| {
@@ -204,6 +253,14 @@ impl Msg {
             Msg::Done { ok, why } => {
                 b.extend_from_slice(&[39, *ok as u8]);
                 s(&mut b, why);
+            }
+            Msg::Version(v) => {
+                b.push(40);
+                b.extend_from_slice(&v.to_be_bytes());
+            }
+            Msg::Unknown { tag, body } => {
+                b.push(*tag);
+                b.extend_from_slice(body);
             }
         }
         b
@@ -325,7 +382,12 @@ impl Msg {
                 let ok = flag(&mut rest)?;
                 Msg::Done { ok, why: string(&mut rest)? }
             }
-            _ => return Err(invalid("unknown message")),
+            40 => Msg::Version(u16_(&mut rest)?),
+            _ => {
+                let body = rest.to_vec();
+                rest = &[];
+                Msg::Unknown { tag, body }
+            }
         };
         if !rest.is_empty() {
             return Err(invalid("trailing bytes"));

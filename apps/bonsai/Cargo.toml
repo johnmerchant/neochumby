@@ -17,7 +17,8 @@ cc = "1"
 [package.metadata.neochumby]
 title = "BONSAI"
 exec = "neochumby-bonsai"
-colour = "78a03c"
+access = ["screen", "touch", "terminal"]
+color = "78a03c"
 
 [lints]
 workspace = true
