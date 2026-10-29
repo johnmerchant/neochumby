@@ -33,11 +33,12 @@ jobs:
       - run: cargo fmt --check $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.manifest_path | contains("/third_party/") | not) | "-p " + .name')
       # The crates that build for the host: the protocol, sync's rounds (on
       # both sides, so a temporary directory stands in for the stick),
-      # neochumbyd, the manifest tool, the system calls, the macros, and
-      # AirPlay's companion.
-      - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -- -D warnings
+      # neochumbyd, the manifest tool, the system calls, the macros,
+      # AirPlay's companion, and neochumby-classic's engine (its host build
+      # renders frames to files).
+      - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -- -D warnings
       - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
-      - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros
+      - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic
       - run: cargo test -p neochumby-proto -p neochumby-sync --features neochumby-proto/noise
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
 
@@ -71,11 +72,11 @@ jobs:
           cargo clippy --release --target armv5te-unknown-linux-musleabi $FEATURES \
             -p neochumby -p neochumby-home -p neochumby-airplay -p neochumby-doom -p neochumby-quake \
             -p neochumby-fetch -p neochumby-htop -p neochumby-top -p neochumby-cmatrix -p neochumby-clock \
-            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -- -D warnings
+            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-classic -- -D warnings
           cargo build --release --target armv5te-unknown-linux-musleabi $FEATURES \
             -p neochumby -p neochumby-home -p neochumby-airplay -p neochumby-doom -p neochumby-quake \
             -p neochumby-fetch -p neochumby-htop -p neochumby-top -p neochumby-cmatrix -p neochumby-clock \
-            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact
+            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-classic
       - name: The server's binaries
         run: |
           cargo build --release --target x86_64-unknown-linux-musl $FEATURES -p neochumbyd
@@ -85,7 +86,7 @@ jobs:
         if: matrix.proto == 'tls'
         run: |
           tools/tree "$RUNNER_TEMP/tree" doom quake airplay fetch htop top \
-            cmatrix clock bonsai pipes aquarium genact
+            cmatrix clock bonsai pipes aquarium genact classic
           find "$RUNNER_TEMP/tree" -type f | sort
       # That tree booted as a Chumby would, under qemu-arm (dev/emulate):
       # the home screen, a tap on DOOM, the devices, the corner hold, CHUMBY
