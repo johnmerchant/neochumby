@@ -124,6 +124,12 @@ fn send(target: libc::pid_t, sig: Signal) -> io::Result<()> {
     if unsafe { libc::kill(target, sig.raw()) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 
+/// This process's real user id (getuid(2)).
+pub fn uid() -> u32 {
+    // SAFETY: getuid(2) takes nothing, touches no memory and can't fail.
+    unsafe { libc::getuid() }
+}
+
 /// Passes the descriptors `fds` on to the program `cmd` runs, though they
 /// are close-on-exec here: in the child, between fork and exec, each is
 /// marked not close-on-exec. Starting the program fails if one isn't open.
