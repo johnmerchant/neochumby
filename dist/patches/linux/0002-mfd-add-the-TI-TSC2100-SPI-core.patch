@@ -1,7 +1,7 @@
 From 4f4e7e71879befffa30b297181d162959e5931a6 Mon Sep 17 00:00:00 2001
 From: John Merchant <john@johnmerchant.dev>
 Date: Fri, 30 Oct 2026 02:23:30 +1030
-Subject: [PATCH 2/6] mfd: add the TI TSC2100 SPI core
+Subject: [PATCH 2/7] mfd: add the TI TSC2100 SPI core
 
 The TSC2100 is a touchscreen controller and audio codec on SPI. The core
 owns the SPI device and a regmap of the chip's 16-bit registers, and adds

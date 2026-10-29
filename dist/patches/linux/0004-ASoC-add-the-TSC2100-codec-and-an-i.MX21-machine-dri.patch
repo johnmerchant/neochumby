@@ -1,7 +1,7 @@
 From a6ffd5c82942494f7414d84545842ec0388d66bc Mon Sep 17 00:00:00 2001
 From: John Merchant <john@johnmerchant.dev>
 Date: Fri, 30 Oct 2026 02:23:31 +1030
-Subject: [PATCH 4/6] ASoC: add the TSC2100 codec and an i.MX21 machine driver
+Subject: [PATCH 4/7] ASoC: add the TSC2100 codec and an i.MX21 machine driver
 
 The codec is the TSC2100 MFD's audio half: I2S master, its PLL run from
 MCLK. The machine driver puts it on SSI1 through the AUDMUX, as the

@@ -1,7 +1,7 @@
 From 3ead6947cc2e13eab2f4ce344100971dfc67d463 Mon Sep 17 00:00:00 2001
 From: John Merchant <john@johnmerchant.dev>
 Date: Fri, 30 Oct 2026 02:23:30 +1030
-Subject: [PATCH 3/6] Input: add the TSC2100 touchscreen
+Subject: [PATCH 3/7] Input: add the TSC2100 touchscreen
 
 The pen interrupt starts a threaded handler that converts X, Y and the
 pressure host-controlled, every 10 ms until the pen lifts, as tsc2007

@@ -1,0 +1,38 @@
+From df4019df506339fbc0c1ce148517a21a523ebb31 Mon Sep 17 00:00:00 2001
+From: John Merchant <john@johnmerchant.dev>
+Date: Fri, 30 Oct 2026 03:17:24 +1030
+Subject: [PATCH 7/7] ASoC: fsl: imx-ssi: don't register the FIQ PCM on a DMA
+ board
+
+Both the FIQ and the dmaengine PCM register on the SSI's device, so
+both bind to a card that names it as platform, and each keeps its own
+state in the runtime's private_data. Whichever opens last wins: on the
+Chumby Classic (IMX_SSI_DMA) the FIQ PCM's open replaced the dmaengine
+PCM's, and hw_params dereferenced a NULL DMA channel. A board that
+asks for DMA now gets only the DMA PCM.
+
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+ sound/soc/fsl/imx-ssi.c | 9 ++++++++-
+ 1 file changed, 8 insertions(+), 1 deletion(-)
+
+diff --git a/sound/soc/fsl/imx-ssi.c b/sound/soc/fsl/imx-ssi.c
+index f8488e8f5..1e26d2603 100644
+--- a/sound/soc/fsl/imx-ssi.c
++++ b/sound/soc/fsl/imx-ssi.c
+@@ -595,7 +595,14 @@ static int imx_ssi_probe(struct platform_device *pdev)
+ 	ssi->fiq_params.dma_params_rx = &ssi->dma_params_rx;
+ 	ssi->fiq_params.dma_params_tx = &ssi->dma_params_tx;
+ 
+-	ssi->fiq_init = imx_pcm_fiq_init(pdev, &ssi->fiq_params);
++	/*
++	 * Both PCMs would bind to this device and share the runtime's
++	 * private data, so a board that asks for DMA gets only DMA.
++	 */
++	if (ssi->flags & IMX_SSI_DMA)
++		ssi->fiq_init = -ENODEV;
++	else
++		ssi->fiq_init = imx_pcm_fiq_init(pdev, &ssi->fiq_params);
+ 	ssi->dma_init = imx_pcm_dma_init(pdev, IMX_SSI_DMABUF_SIZE);
+ 
+ 	if (ssi->fiq_init && ssi->dma_init) {
