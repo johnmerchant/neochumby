@@ -720,8 +720,11 @@ are three ways, from quickest to most faithful:
    `NEOCHUMBY_EMU_MACHINE=chumby-classic dev/e2e TREE NEOCHUMBYD OUT` runs
    the same scenarios on it, and `dev/emulate-stock`, which only it can:
    neochumby inside the stock boot, handing back to the stock software.
-   Put where your images are in `.env.local` at the checkout's root
-   (`NEOCHUMBY_EMU_KERNEL=`, `_NAND=`, `_PSP=` lines; git ignores it), and
+   Put where your images are in `~/.config/neochumby/env.local`, which
+   every checkout and worktree shares, or in `.env.local` at a checkout's
+   root, which wins over it (git ignores it): `NEOCHUMBY_EMU_KERNEL=`,
+   `_NAND=`, `_PSP=` lines, and for a real Chumby with `--device`, where
+   its neochumbyd is (`NEOCHUMBY_EMU_HOST=`, `NEOCHUMBYD_DIR=`).
    `dev/emulate` and `dev/e2e` find them. CI can't, having no firmware (and it never
    will), so this suite is yours to run locally, and its results are the
    evidence.

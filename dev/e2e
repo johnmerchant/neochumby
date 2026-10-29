@@ -25,10 +25,16 @@ tree=${1:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 out=${3:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
-# The checkout's .env.local, as dev/emulate reads it (the environment wins):
-# where your own firmware images are, say.
-local=${NEOCHUMBY_ENV_LOCAL:-$dev/../.env.local}
-if [ -f "$local" ]; then
+# Your own settings, as dev/emulate reads them (the environment wins): the
+# checkout's .env.local, then ~/.config/neochumby/env.local, shared by every
+# checkout; where your firmware images are, say.
+if [ -n "${NEOCHUMBY_ENV_LOCAL:-}" ]; then
+  files=$NEOCHUMBY_ENV_LOCAL
+else
+  files="$dev/../.env.local ${XDG_CONFIG_HOME:-$HOME/.config}/neochumby/env.local"
+fi
+for local in $files; do
+  [ -f "$local" ] || continue
   while IFS='=' read -r key value; do
     case $key in
     '' | \#* | [0-9]* | *[!A-Za-z0-9_]*) continue ;;
@@ -38,7 +44,7 @@ if [ -f "$local" ]; then
     esac
     eval "[ -n \"\${$key+set}\" ]" || export "$key=$value"
   done < "$local"
-fi
+done
 mkdir -p "$out"
 summary=$out/summary.txt
 failed=0
