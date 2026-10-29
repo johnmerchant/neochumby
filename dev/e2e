@@ -12,7 +12,9 @@
 #   NEOCHUMBY_EMU_DEVICE=NAME dev/e2e TREE NEOCHUMBYD OUT
 #       a real Chumby, paired and set dev=on
 #
-# TREE from tools/tree, with doom and neochumby-sync; NEOCHUMBYD the x86_64
+# TREE from tools/tree, with doom and neochumby-sync, and for the stock
+# firmware's scenario ./dev/probe (`tools/tree OUT doom ./dev/probe`, at
+# most four apps); NEOCHUMBYD the x86_64
 # neochumbyd built with it. NEOCHUMBY_CLASSIC_PICTURES (a renderer's output)
 # adds dev/emulate-classic. Each scenario's screenshots and logs go in
 # OUT/<scenario>/, its output in OUT/<scenario>.txt, and the results in
@@ -23,6 +25,20 @@ tree=${1:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 out=${3:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
+# The checkout's .env.local, as dev/emulate reads it (the environment wins):
+# where your own firmware images are, say.
+local=${NEOCHUMBY_ENV_LOCAL:-$dev/../.env.local}
+if [ -f "$local" ]; then
+  while IFS='=' read -r key value; do
+    case $key in
+    '' | \#* | [0-9]* | *[!A-Za-z0-9_]*) continue ;;
+    esac
+    case $value in
+    "~/"*) value=$HOME/${value#"~/"} ;;
+    esac
+    eval "[ -n \"\${$key+set}\" ]" || export "$key=$value"
+  done < "$local"
+fi
 mkdir -p "$out"
 summary=$out/summary.txt
 failed=0
@@ -54,6 +70,7 @@ run() {
 
 run smoke "$dev/emulate-smoke" "$tree" "$out/smoke"
 run powercut "$dev/emulate-powercut" "$tree" "$neochumbyd" "$out/powercut"
+run stock "$dev/emulate-stock" "$tree" "$out/stock"
 if [ -n "${NEOCHUMBY_CLASSIC_PICTURES:-}" ]; then
   run classic "$dev/emulate-classic" "$tree" "$NEOCHUMBY_CLASSIC_PICTURES" "$out/classic"
 fi

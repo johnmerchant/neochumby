@@ -64,7 +64,7 @@ pub mod tests {
             name: name.into(),
             title: Some(name.to_uppercase()),
             exec: Some(PathBuf::from("/nowhere").join(name).join(name)),
-            colour: 0,
+            color: 0,
             service: None,
             needs: Needs::Nothing,
             start,
@@ -72,6 +72,7 @@ pub mod tests {
             button: false,
             companion: false,
             access: Default::default(),
+            player: false,
         }
     }
 

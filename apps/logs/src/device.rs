@@ -16,10 +16,10 @@ use neochumby::input::{Touch, Touchscreen};
 use neochumby_sys::chan::{self, Disconnected, Receiver, Sender};
 use neochumby_sys::klog;
 
-use crate::frame as tag;
 use crate::tail::{self, Tail};
 use crate::text::Text;
 use crate::view::{self, Action, Bar, View};
+use crate::{FromCompanion, FromViewer, Logs};
 
 /// The session's own log, which the boot hook and every app write to.
 const SESSION_LOG: &str = "/tmp/neochumby.log";
@@ -93,29 +93,20 @@ fn host(show: Receiver<u8>, to: Sender<FromHost>) {
     let mut backoff = 5;
     loop {
         let r: std::io::Result<()> = (|| {
-            let mut link = companion::open(neochumby::companion!())?;
+            let mut link = companion::open(neochumby::companion!())?.typed::<Logs>();
             backoff = 5;
             loop {
                 loop {
                     match show.recv(0) {
-                        Ok(Some(i)) => link.send(&[tag::SHOW, i])?,
+                        Ok(Some(i)) => link.send(&FromViewer::Show(i))?,
                         Ok(None) => break,
                         Err(Disconnected) => return Ok(()),
                     }
                 }
                 let ev = match link.recv_timeout(Duration::from_millis(100))? {
-                    Some(f) => match f.split_first() {
-                        Some((&tag::SOURCES, names)) => FromHost::Sources(
-                            String::from_utf8_lossy(names)
-                                .split('\n')
-                                .filter(|n| !n.is_empty())
-                                .map(String::from)
-                                .collect(),
-                        ),
-                        Some((&tag::START, &[i])) => FromHost::Start(i),
-                        Some((&tag::TEXT, t)) => FromHost::Text(t.to_vec()),
-                        _ => continue,
-                    },
+                    Some(FromCompanion::Sources(names)) => FromHost::Sources(names),
+                    Some(FromCompanion::Start(i)) => FromHost::Start(i),
+                    Some(FromCompanion::Text(t)) => FromHost::Text(t),
                     None => continue,
                 };
                 if to.send(ev).is_err() {

@@ -2,9 +2,10 @@
 //!
 //! Everything the session runs gets NEOCHUMBY_ROOT (the tree), HOME=/tmp
 //! (the root filesystem is read-only, and so is the tree), its own
-//! request pipe as NEOCHUMBY_SESSION (neochumby::session) and, if its app
-//! has a companion, a socket to it as NEOCHUMBY_COMPANION
-//! (neochumby::companion). It runs in a
+//! request pipe as NEOCHUMBY_SESSION (neochumby::session), if its app has a
+//! companion, a socket to it as NEOCHUMBY_COMPANION (neochumby::companion)
+//! and, when this Chumby has one, its default player as NEOCHUMBY_PLAYER
+//! (player.rs). It runs in a
 //! process group of its own, so that it and whatever it started end
 //! together. An app runs jailed, as jail.rs describes, unless its manifest
 //! says `access = ["root"]`; the session's own services run as root.
@@ -35,17 +36,25 @@ pub struct Launch<'a> {
     root: &'a Path,
     env: Vec<(String, String)>,
     keep: Vec<RawFd>,
+    player: Option<&'a str>,
 }
 
 /// `exe` of `app`, as `role`, from the tree at `root`.
 pub fn launch<'a>(app: &'a App, exe: &'a Path, role: Role, root: &'a Path) -> Launch<'a> {
-    Launch { app, exe, role, root, env: Vec::new(), keep: Vec::new() }
+    Launch { app, exe, role, root, env: Vec::new(), keep: Vec::new(), player: None }
 }
 
-impl Launch<'_> {
+impl<'a> Launch<'a> {
     /// Adds `key`=`value` to its environment.
     pub fn env(&mut self, key: &str, value: impl Into<String>) -> &mut Self {
         self.env.push((key.into(), value.into()));
+        self
+    }
+
+    /// Names `player` the default player (NEOCHUMBY_PLAYER); without
+    /// this, the variable is unset, whatever the session was started with.
+    pub fn player(&mut self, player: Option<&'a str>) -> &mut Self {
+        self.player = player;
         self
     }
 
@@ -60,6 +69,9 @@ impl Launch<'_> {
         let (pipe, theirs) = Pipe::pair()?;
         self.keep.push(theirs.as_raw_fd());
         self.env.push((session::ENV.into(), theirs.as_raw_fd().to_string()));
+        if let Some(m) = self.player {
+            self.env.push((session::PLAYER_ENV.into(), m.into()));
+        }
         let link = if self.app.companion { Some(companion::relay(&self.app.name)?) } else { None };
         if let Some(l) = &link {
             self.keep.push(l.as_raw_fd());
@@ -70,6 +82,7 @@ impl Launch<'_> {
         } else {
             let mut cmd = Command::new(self.exe);
             cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", self.root).env("HOME", "/tmp");
+            cmd.env_remove(session::PLAYER_ENV);
             cmd.envs(self.env).process_group(0);
             pass_fds(&mut cmd, self.keep);
             Process::from(cmd.spawn()?)

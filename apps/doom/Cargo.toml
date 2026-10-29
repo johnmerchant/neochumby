@@ -17,7 +17,7 @@ cc = "1"
 [package.metadata.neochumby]
 title = "DOOM"
 exec = "neochumby-doom"
-colour = "dc281e"
+color = "dc281e"
 # A game: no service may replace it in front, and the top button fires.
 interrupt = false
 button = true

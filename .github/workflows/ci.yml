@@ -62,7 +62,7 @@ jobs:
           submodules: true
       - uses: dtolnay/rust-toolchain@stable
         with:
-          targets: armv5te-unknown-linux-musleabi, x86_64-unknown-linux-musl
+          targets: armv5te-unknown-linux-musleabi, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
           components: clippy
       - uses: mlugg/setup-zig@v2
         with:
@@ -89,6 +89,15 @@ jobs:
           cargo build --release --target x86_64-unknown-linux-musl $FEATURES \
             -p neochumby-airplay --bin neochumby-airplay-companion
           cargo build --release --target x86_64-unknown-linux-musl $FEATURES \
+            -p neochumby-logs --bin neochumby-logs-companion
+      # The server half for 64-bit ARM Linux too (a Raspberry Pi, say).
+      - name: The server's binaries for 64-bit ARM
+        if: matrix.proto == 'tls'
+        run: |
+          cargo build --release --target aarch64-unknown-linux-musl -p neochumbyd
+          cargo build --release --target aarch64-unknown-linux-musl \
+            -p neochumby-airplay --bin neochumby-airplay-companion
+          cargo build --release --target aarch64-unknown-linux-musl \
             -p neochumby-logs --bin neochumby-logs-companion
       - name: A tree, as tools/tree lays it out
         if: matrix.proto == 'tls'

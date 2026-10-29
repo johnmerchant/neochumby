@@ -3,7 +3,8 @@
 //!
 //!   title=DOOM                 listed in app lists; opens `exec`
 //!   exec=neochumby-doom        runs full-screen, in front, when opened
-//!   colour=dc281e              (its colour, hex RGB; optional)
+//!   color=dc281e               (its color, hex RGB; optional; `colour`,
+//!                              from older trees, is read too)
 //!   service=neochumby-airplay  runs in the background while neochumby does
 //!   companion=...              its server half, which neochumbyd runs
 //!   neochumbyd=required        needs a paired neochumbyd (or `optional`:
@@ -13,6 +14,9 @@
 //!   button=true                gets the top button while in front (games)
 //!   access=screen,touch        what it reaches beyond its jail (absent:
 //!                              nothing; neochumby-manifest lists the words)
+//!   player=true                a player: may be the default one, opened
+//!                              by MUSIC buttons; its service takes `pause`
+//!                              and `resume` (see the session)
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
@@ -38,7 +42,7 @@ pub struct App {
     pub name: String,
     pub title: Option<String>,
     pub exec: Option<PathBuf>,
-    pub colour: u16,
+    pub color: u16,
     pub service: Option<PathBuf>,
     /// It has a companion: the session opens it for the app
     /// (neochumby::companion).
@@ -54,6 +58,10 @@ pub struct App {
     /// While it's in front, it has the top button (neochumby::input::Squeeze),
     /// and a press doesn't return to the start app.
     pub button: bool,
+    /// A player: it may be this Chumby's default player, which start
+    /// apps open for MUSIC (NEOCHUMBY_PLAYER). It promises that its service
+    /// pauses and resumes on the session's `pause` and `resume` lines.
+    pub player: bool,
     /// What it reaches beyond its jail.
     pub access: Access,
 }
@@ -112,7 +120,7 @@ impl App {
     }
 }
 
-fn parse_colour(s: &str) -> Option<u16> {
+fn parse_color(s: &str) -> Option<u16> {
     let v = u32::from_str_radix(s.trim_start_matches('#'), 16).ok()?;
     Some(rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
@@ -132,7 +140,7 @@ pub fn load(dir: &Path) -> Option<App> {
         name: dir.file_name()?.to_string_lossy().into_owned(),
         title: field("title"),
         exec: file("exec"),
-        colour: field("colour").and_then(|c| parse_colour(&c)).unwrap_or(rgb(220, 160, 40)),
+        color: field("color").or_else(|| field("colour")).and_then(|c| parse_color(&c)).unwrap_or(rgb(220, 160, 40)),
         service: file("service"),
         companion: field("companion").is_some_and(|c| !c.is_empty()),
         needs: match field("neochumbyd").as_deref() {
@@ -143,6 +151,7 @@ pub fn load(dir: &Path) -> Option<App> {
         start: field("start").as_deref() == Some("true"),
         interrupt: field("interrupt").as_deref() != Some("false"),
         button: field("button").as_deref() == Some("true"),
+        player: field("player").as_deref() == Some("true"),
         access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
     })
 }

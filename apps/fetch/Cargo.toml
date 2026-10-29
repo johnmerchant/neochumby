@@ -17,7 +17,7 @@ cmake = "0.1"
 [package.metadata.neochumby]
 title = "FETCH"
 exec = "neochumby-fetch"
-colour = "3c8cb4"
+color = "3c8cb4"
 # fastfetch reads the system: /proc, /sys and /etc.
 access = ["screen", "touch", "system", "terminal"]
 
