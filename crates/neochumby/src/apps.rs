@@ -7,8 +7,9 @@
 //!   service=neochumby-airplay  runs in the background while neochumby does
 //!   companion=...              its server half, which neochumbyd runs
 //!                              for each Chumby
-//!   daemon=...                 its once-per-server half, which neochumbyd
-//!                              runs at its start (not read here)
+//!   server=...                 its half that runs once on the server for
+//!                              all Chumbys, which neochumbyd starts (not
+//!                              read here, nor are access= and listen=)
 //!   neochumbyd=required        needs a paired neochumbyd (or `optional`:
 //!                              uses one when there is one; absent: never)
 //!   start=true                 may be the start app (see the session)

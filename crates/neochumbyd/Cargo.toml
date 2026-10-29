@@ -19,8 +19,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 [lints]
 workspace = true
 
-# End to end on loopback. It runs its own binary again as an app's daemon,
+# End to end on loopback. It runs its own binary again as an app's server program,
 # so it has a main of its own rather than the test harness.
 [[test]]
-name = "daemon"
+name = "server"
 harness = false

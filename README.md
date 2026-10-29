@@ -79,7 +79,8 @@ exec = "neochumby-quake"             # binaries, by name; exec runs in front
 colour = "8c5a28"                    # optional
 service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
-daemon = "neochumby-web"             # runs once per server, by neochumbyd
+server = "neochumby-web"             # runs once on the server, for all Chumbys
+listen = [8080]                      # the TCP ports the server program may bind
 neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
@@ -96,10 +97,22 @@ An app can use any of these keys:
   name. An app with a companion sets `neochumbyd` too, and its Chumby half
   opens it with `neochumby::companion!()`, which fails the build if the
   app's `Cargo.toml` declares no companion.
-- **`daemon`:** a server half that runs once per server rather than once
-  per Chumby, such as a household web page. neochumbyd starts it when it
-  starts, starts it again if it exits, and stops it when neochumbyd stops.
-  It reaches neochumbyd through the admin socket (below).
+- **`server`:** a server half that runs once on the server for all its
+  Chumbys, rather than once per Chumby as a companion does, such as a
+  household web page. neochumbyd starts it when it starts, starts it again
+  if it exits, and stops it when neochumbyd stops. It may bind the TCP
+  ports `listen` names. With its owner's leave, it reaches neochumbyd
+  through the admin socket (below).
+
+  | Key | Runs | How many |
+  | --- | --- | --- |
+  | `exec` | on the Chumby | the app, in front |
+  | `service` | on the Chumby | in the background |
+  | `companion` | on the server | one per Chumby |
+  | `server` | on the server | one for all of them |
+
+  Companions and server programs run sandboxed: see
+  [SECURITY](SECURITY.md).
 - **`exec`:** what runs, full-screen, when the app is opened. The session
   (`neochumby`) runs one app at a time in front. An app opens another, or
   CHUMBY MODE, by asking the session over its request pipe
@@ -182,8 +195,8 @@ they are:
 | `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it prints the commit to pin) |
 | `crate:neochumby-x@1.0.0` | crates.io (unversioned, the newest) |
 
-Each app's binaries are built for the Chumby, and its companion and daemon
-for the server, with the toolchain above. Its manifest is made from its
+Each app's binaries are built for the Chumby, and its companion and server
+program for the server, with the toolchain above. Its manifest is made from its
 `Cargo.toml`, and its `files/` directory, if it has one, is copied as it
 is. Game data is added from `DATA`, your own copies laid out the same way.
 The tree can come from a stick or from a server.
@@ -228,14 +241,20 @@ The code comes from the connection itself, so it matches on both screens
 only if nothing sits between them. After pairing, each end checks the
 other's key on every connection.
 
-**The admin socket** lets an app's daemon, such as a household web page,
-do what the commands above do: list the Chumbys paired and asking, approve
-or refuse a request, forget a Chumby, and set its settings
-(`neochumbyd set`). It's `admin.sock` in the state directory, answering
-only neochumbyd's own user and root. Approving or forgetting a Chumby
-through it needs the **owner's token**, which `neochumbyd token` prints:
-give it to the web page when it asks. `neochumbyd token new` replaces it.
-The protocol is described in `crates/neochumbyd/src/admin.rs`.
+**The admin socket** lets an app's server program, such as a household
+web page, do what the commands above do: list the Chumbys paired and
+asking, approve or refuse a request, forget a Chumby, and set its settings
+(`neochumbyd set`). Only an app you allow gets it: `neochumbyd allow
+<app> pairing` (`disallow` to take it back; `allow` alone lists what's
+allowed). A web page that pairs Chumbys, such as neochumby-classic's when
+it becomes a server program, needs this. Every change through it needs
+the **owner's token**, which `neochumbyd token` prints: give it to the web
+page when it asks. `neochumbyd token new` replaces it. The protocol is
+described in `crates/neochumbyd/src/admin.rs`.
+
+Where neochumbyd has no sandbox for apps' programs (see
+[SECURITY](SECURITY.md)), it runs no companion or server program unless
+started with `--unsandboxed`.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its
 companion on neochumbyd runs an AirPlay receiver named after it ("Kitchen

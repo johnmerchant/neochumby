@@ -11,7 +11,7 @@
 #
 # An app is a crate named neochumby-<name>, whose Cargo.toml has a
 # [package.metadata.neochumby] table naming its binaries (exec and service
-# are built for the Chumby, companion and daemon for neochumbyd's host);
+# are built for the Chumby, companion and server for neochumbyd's host);
 # the tree's manifest is made from it (neochumby-manifest). A files/
 # directory beside its Cargo.toml, if it has one, is copied as it is. An
 # APP is one of:
@@ -142,7 +142,7 @@ for app in home "$@"; do
 
   dest=$out/apps/$name
   mkdir -p "$dest"
-  # The Chumby's binaries, if it has any: an app may be only a daemon.
+  # The Chumby's binaries, if it has any: an app may be only a server program.
   if [ -n "$(field "$manifest" exec)$(field "$manifest" service)" ]; then
     build --target $chumby_t -p "$crate"
   fi
@@ -150,7 +150,7 @@ for app in home "$@"; do
     f=$(field "$manifest" "$key")
     [ -z "$f" ] || cp "$bin/$chumby_t/release/$f" "$dest/"
   done
-  for key in companion daemon; do
+  for key in companion server; do
     f=$(field "$manifest" "$key")
     [ -z "$f" ] || {
       build --target $server_t -p "$crate" --bin "$f"

@@ -29,6 +29,8 @@ pub struct Api {
     pub hashes: neochumby_sync::serve::Hashes,
     /// The Chumbys' developer links.
     pub links: dev::Links,
+    /// How apps' programs are run: sandboxed, or not at all.
+    pub confine: crate::confine::Confine,
 }
 
 pub fn serve(listener: TcpListener, api: Arc<Api>) {
@@ -67,7 +69,7 @@ fn handle(api: &Api, tcp: TcpStream) -> io::Result<()> {
             s.send(&Msg::Welcome)?;
             s.send(&Msg::Config(api.state.config(&name)))?;
             match s.recv() {
-                Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &name, &app, s),
+                Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &api.confine, &name, &app, s),
                 Ok(m @ Msg::SyncHave { .. }) => sync::serve(api, &name, s, m),
                 Ok(Msg::Dev) => dev::run(api, &name, s),
                 // A Chumby that came only for its settings hangs up.

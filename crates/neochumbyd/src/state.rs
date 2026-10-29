@@ -9,16 +9,19 @@
 //!                     by name, so a Chumby paired again under its name
 //!                     keeps them
 //!   owner-token       the owner's token (0640, the state directory's
-//!                     group), which a daemon such as the household web
-//!                     page must pass to approve or forget a pairing
-//!                     (admin.rs)
-//!   admin.sock        the admin socket, while the daemon runs (admin.rs)
+//!                     group), which an app's server program such as the
+//!                     household web page must pass to change anything
+//!                     through the admin socket (admin.rs)
+//!   allow/<app>       what its owner allows an app's server program beyond
+//!                     its sandbox, a word a line: `pairing`, the admin
+//!                     socket (`neochumbyd allow <app> pairing`)
 //!   apps/<app>        each app's own directory, for its companions and its
-//!                     daemon
+//!                     server program: the only part of the state directory
+//!                     they can reach (confine.rs)
 //!   logs/, dev/       what the developer link keeps and is asked (dev.rs)
 //!
 //! The daemon writes pending/; `neochumbyd approve <code>` (whoever is in
-//! the daemon's group), or a daemon through the admin socket, turns one
+//! the daemon's group), or a server program through the admin socket, turns one
 //! into paired/, which the daemon, waiting on the Chumby's connection,
 //! sees. The command line and the admin socket share these functions.
 
@@ -28,6 +31,11 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use neochumby_proto::{Identity, PublicKey, hex, unhex_key, valid_name};
+
+/// What the owner may allow an app's server program: the admin socket,
+/// with which it pairs Chumbys and changes their settings.
+pub const PAIRING: &str = "pairing";
+const GRANTS: &[&str] = &[PAIRING];
 
 #[derive(Clone)]
 pub struct State {
@@ -143,6 +151,58 @@ impl State {
         let Ok(owner) = std::fs::read_to_string(self.dir.join("owner-token")) else { return false };
         let (a, b) = (owner.trim().as_bytes(), token.as_bytes());
         !a.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0, |d, (x, y)| d | (x ^ y)) == 0
+    }
+
+    /// What the owner allows `app` (`pairing`), in the order allowed.
+    pub fn allowed(&self, app: &str) -> Vec<String> {
+        if !valid_name(app) {
+            return Vec::new();
+        }
+        let s = std::fs::read_to_string(self.dir.join("allow").join(app)).unwrap_or_default();
+        s.lines().filter(|w| GRANTS.contains(w)).map(str::to_string).collect()
+    }
+
+    /// Allows `app` `what`, or with `on` false, no longer.
+    pub fn allow(&self, app: &str, what: &str, on: bool) -> io::Result<()> {
+        if !valid_name(app) {
+            return Err(bad("not an app's name"));
+        }
+        if !GRANTS.contains(&what) {
+            return Err(bad(&format!("only {} can be allowed", GRANTS.join(", "))));
+        }
+        let mut words = self.allowed(app);
+        words.retain(|w| w != what);
+        if on {
+            words.push(what.into());
+        }
+        let dir = self.dir.join("allow");
+        std::fs::create_dir_all(&dir)?;
+        let path = dir.join(app);
+        if words.is_empty() {
+            return match std::fs::remove_file(&path) {
+                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+                r => r,
+            };
+        }
+        let tmp = path.with_extension("new");
+        std::fs::write(&tmp, words.iter().map(|w| format!("{w}\n")).collect::<String>())?;
+        std::fs::rename(tmp, path)
+    }
+
+    /// Every app the owner has allowed something, and what.
+    pub fn allowances(&self) -> Vec<(String, Vec<String>)> {
+        let mut out: Vec<(String, Vec<String>)> = std::fs::read_dir(self.dir.join("allow"))
+            .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>())
+            .unwrap_or_default()
+            .into_iter()
+            .map(|app| {
+                let w = self.allowed(&app);
+                (app, w)
+            })
+            .filter(|(_, w)| !w.is_empty())
+            .collect();
+        out.sort();
+        out
     }
 
     /// The name `key` paired under, if it has.
@@ -322,6 +382,25 @@ mod tests {
     /// decided would show here as 0600. Where this user is in a second group, the
     /// directory is given that one, as a setgid directory of neochumbyd's
     /// group would be for an admin whose own group differs.
+    #[test]
+    fn allowances() {
+        let dir = std::env::temp_dir().join(format!("neochumbyd-allow-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = State::open(dir.clone()).unwrap();
+        assert!(st.allowed("web").is_empty());
+        st.allow("web", PAIRING, true).unwrap();
+        st.allow("web", PAIRING, true).unwrap();
+        assert_eq!(st.allowed("web"), [PAIRING]);
+        assert_eq!(st.allowances(), [("web".to_string(), vec![PAIRING.to_string()])]);
+        assert!(st.allow("web", "root", true).is_err());
+        assert!(st.allow("../x", PAIRING, true).is_err());
+        assert!(st.allowed("../allow/web").is_empty());
+        st.allow("web", PAIRING, false).unwrap();
+        assert!(st.allowed("web").is_empty() && st.allowances().is_empty());
+        st.allow("web", PAIRING, false).unwrap();
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
     #[test]
     fn owner_token() {
         let dir = std::env::temp_dir().join(format!("neochumbyd-token-test-{}", std::process::id()));

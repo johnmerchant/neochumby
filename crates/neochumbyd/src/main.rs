@@ -1,10 +1,10 @@
 //! neochumbyd: what a Chumby pairs with. Serves the app tree over NFS, or
 //! keeps a copy of it on the Chumby's stick (`delivery=sync`, sync.rs),
 //! pairs Chumbys, and runs the server half of their apps (companion.rs)
-//! over neochumby-proto, and the apps' once-per-server daemons
-//! (daemon.rs), which reach it through its admin socket (admin.rs). It
-//! knows no app by name: an app brings its own companion and daemon, in
-//! its directory of the tree.
+//! over neochumby-proto, and the apps' once-per-server server programs
+//! (server.rs), which may reach it through an admin socket (admin.rs).
+//! Both run sandboxed (confine.rs). It knows no app by name: an app brings
+//! its own companion and server program, in its directory of the tree.
 //!
 //!   neochumbyd serve [options]    the daemon
 //!   neochumbyd pairing            Chumbys paired and asking to pair, and
@@ -36,24 +36,31 @@
 //!   neochumbyd mcp                 log, restart, shot, set and pairing's
 //!                                  list as an MCP server on stdio, for
 //!                                  Claude Code and the like (mcp.rs)
+//!   neochumbyd allow APP pairing  lets APP's server program use the admin
+//!                                  socket (admin.rs) as it next starts;
+//!                                  `allow` alone lists what's allowed
+//!   neochumbyd disallow APP pairing
 //!   neochumbyd token [new]        the owner's token, which approving or
-//!                                  forgetting a pairing through the admin
-//!                                  socket needs; `new` replaces it
+//!                                  every change through the admin socket
+//!                                  needs; `new` replaces it
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
 //!   --tree DIR         the app tree to serve, default <state>/tree
 //!   --nfs ADDR         default 0.0.0.0:2049
 //!   --api ADDR         default 0.0.0.0:7340
+//!   --unsandboxed      run apps' server programs and companions without
+//!                      a sandbox, where there is none (confine.rs)
 
 mod admin;
 mod api;
 mod companion;
-mod daemon;
+mod confine;
 mod dev;
 mod mcp;
 mod nfs;
 mod png;
+mod server;
 mod state;
 mod sync;
 mod tree;
@@ -91,11 +98,12 @@ struct Args {
     tree: Option<PathBuf>,
     nfs: String,
     api: String,
+    unsandboxed: bool,
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new] [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--unsandboxed]"
     );
     std::process::exit(2)
 }
@@ -112,6 +120,7 @@ fn args() -> Args {
         tree: None,
         nfs: "0.0.0.0:2049".into(),
         api: format!("0.0.0.0:{}", neochumby_proto::API_PORT),
+        unsandboxed: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -123,10 +132,13 @@ fn args() -> Args {
             "--api" => a.api = value(),
             "-f" | "--follow" => a.follow = true,
             "--hold" => a.hold = Some(value()),
+            "--unsandboxed" => a.unsandboxed = true,
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
             _ if a.operand.is_none() => a.operand = Some(arg),
-            _ if matches!(a.command.as_str(), "set" | "shot") && a.setting.is_none() => a.setting = Some(arg),
+            _ if matches!(a.command.as_str(), "set" | "shot" | "allow" | "disallow") && a.setting.is_none() => {
+                a.setting = Some(arg)
+            }
             _ if matches!(a.command.as_str(), "tap" | "button") => a.rest.push(arg),
             _ => usage(),
         }
@@ -228,6 +240,22 @@ fn main() {
             }
             println!("{name}: {}", a.rest.join(" "));
         }
+        "allow" | "disallow" if a.operand.is_none() => {
+            for (app, words) in state.allowances() {
+                println!("{app}  {}", words.join(" "));
+            }
+        }
+        "allow" | "disallow" => {
+            let what = a.setting.clone().unwrap_or_else(|| usage());
+            let on = a.command == "allow";
+            state.allow(&operand(), &what, on).unwrap_or_else(|e| fail(e));
+            let app = operand();
+            if on {
+                println!("{app} allowed {what}: its server program gets the admin socket as it next starts");
+            } else {
+                println!("{app} no longer allowed {what}: its admin socket stops answering");
+            }
+        }
         "token" => {
             let token = match a.operand.as_deref() {
                 None => state.owner_token(),
@@ -307,10 +335,10 @@ fn serve(a: &Args, state: State) {
 
     // Made now, so the owner can read it before the web page asks.
     state.owner_token().unwrap_or_else(|e| fail(format!("owner token: {e}")));
-    let admin_path = a.state.join("admin.sock");
-    let admin = admin::listen(&admin_path).unwrap_or_else(|e| fail(format!("{}: {e}", admin_path.display())));
-    let admin_state = state.clone();
-    std::thread::spawn(move || admin::serve(admin, admin_state));
+    let confine = confine::Confine::choose(a.unsandboxed);
+    // An admin socket left by an earlier neochumbyd (they had paths then).
+    let _ = std::fs::remove_file(a.state.join("admin.sock"));
+    let server_state = state.clone();
 
     let listener = TcpListener::bind(&a.api).unwrap_or_else(|e| fail(format!("{}: {e}", a.api)));
     let api = Arc::new(api::Api {
@@ -321,29 +349,28 @@ fn serve(a: &Args, state: State) {
         state_dir: a.state.clone(),
         hashes: neochumby_sync::serve::Hashes::default(),
         links: Default::default(),
+        confine: confine.clone(),
     });
     std::thread::spawn(move || api::serve(listener, api));
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));
-    let (daemons, failed) = rt.block_on(async {
+    let (servers, failed) = rt.block_on(async {
         let mut term = signal(SignalKind::terminate()).unwrap_or_else(|e| fail(e));
         let listener = NFSTcpListener::bind(&a.nfs, nfs::TreeFs::new(tree.clone()))
             .await
             .unwrap_or_else(|e| fail(format!("{}: {e}", a.nfs)));
-        // Last, so nothing above can fail with daemons running.
-        let daemons = daemon::start(&tree, &a.state, &admin_path);
+        // Last, so nothing above can fail with server programs running.
+        let servers = server::start(&tree, &a.state, &server_state, &confine);
         let failed = tokio::select! {
             r = listener.handle_forever() => r.err(),
             _ = term.recv() => None,
             _ = tokio::signal::ctrl_c() => None,
         };
-        (daemons, failed)
+        (servers, failed)
     });
-    // Stopping, on SIGTERM or SIGINT: the daemons first, while their
-    // socket is still there.
+    // Stopping, on SIGTERM or SIGINT: the server programs first.
     eprintln!("neochumbyd: stopping");
-    daemons.stop();
-    let _ = std::fs::remove_file(&admin_path);
+    servers.stop();
     if let Some(e) = failed {
         fail(format!("{}: {e}", a.nfs));
     }

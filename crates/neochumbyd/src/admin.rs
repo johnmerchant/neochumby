@@ -1,11 +1,16 @@
-//! The admin socket: how an app's daemon (daemon.rs), such as the
-//! household web page, pairs Chumbys and sets their settings. It does what
-//! the command line does, through the same functions (state.rs).
+//! The admin socket: how an app's server program, such as the household
+//! web page, pairs Chumbys and sets their settings. It does what the
+//! command line does, through the same functions (state.rs).
 //!
-//! A Unix socket, `<state>/admin.sock`, mode 0600. neochumbyd also checks
-//! each connection's peer: only its own user and root are answered. Daemons
-//! run as neochumbyd's user, so they can connect; nobody else can. Who is
-//! answered is decided in one place, [`Access`].
+//! It has no path, so no program can find it. Only an app whose owner
+//! allows it `pairing` (`neochumbyd allow <app> pairing`) gets one: a
+//! connected Unix socket, made for each run of its server program and
+//! inherited by it as descriptor 3 (`NEOCHUMBY_ADMIN=3`), with neochumbyd's
+//! end answered by [`serve`] until the program closes it, or the owner
+//! disallows it (`neochumbyd disallow <app> pairing`). The program should
+//! mark descriptor 3 close-on-exec as it starts, so that programs it runs
+//! don't get it. The command line doesn't use the socket: it works on the
+//! state directory itself.
 //!
 //! The protocol is lines of text. A request is a command and its words,
 //! separated by spaces, ending in a newline, at most 1024 bytes. The answer
@@ -14,107 +19,46 @@
 //! requests, one after another. No value holds a space: names, codes, keys,
 //! addresses and settings are all single words.
 //!
-//!   paired             paired NAME KEY [KEY=VALUE ...]   each Chumby paired,
-//!                      ok                                with its settings
-//!   pending            pending CODE NAME ADDRESS KEY     each asking to pair
-//!                      ok
-//!   approve CODE TOKEN ok NAME          pairs the Chumby showing CODE; TOKEN
-//!                                       is the owner's (`neochumbyd token`)
-//!   refuse CODE        ok
-//!   forget NAME TOKEN  ok               unpairs NAME; TOKEN as above
-//!   set NAME KEY=VALUE ok               one of a Chumby's settings; KEY=
-//!                                       removes it
-//!   check TOKEN        ok               whether TOKEN is the owner's, for
-//!                                       the page's own login
+//!   paired                    paired NAME KEY [K=V ...]   each Chumby
+//!                             ok                          paired, and its
+//!                                                         settings
+//!   pending                   pending CODE NAME ADDRESS KEY
+//!                             ok                          each asking
+//!   approve CODE TOKEN        ok NAME     pairs the Chumby showing CODE
+//!   refuse CODE TOKEN         ok
+//!   forget NAME TOKEN         ok          unpairs NAME
+//!   set NAME KEY=VALUE TOKEN  ok          one of a Chumby's settings;
+//!                                         KEY= removes it
+//!   check TOKEN               ok          whether TOKEN is the owner's,
+//!                                         for the page's own login
 //!
-//! Approving and forgetting need the owner's token. Comparing the code on
+//! TOKEN is the owner's (`neochumbyd token`). Every change needs it; only
+//! reading (`paired`, `pending`) and `check` don't. Comparing the code on
 //! both screens is what pairing's security rests on, so the person
 //! approving must be the owner, not just someone on the network who can
-//! reach the web page. Forgetting undoes a pairing, which only someone at
-//! the Chumby can make again, so a fault in the page must not be able to
-//! do it on its own. A wrong token is answered after a second, to slow
-//! guessing through the page.
+//! reach the web page; and settings include remote input (`dev=on`) and
+//! where a Chumby's apps come from. So nothing depends on the page putting
+//! a change behind its own login. A wrong token is answered after a
+//! second, to slow guessing through the page.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
-use std::os::unix::fs::PermissionsExt;
-use std::os::unix::net::{UnixListener, UnixStream};
-use std::path::Path;
+use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
 use neochumby_proto::hex;
-use neochumby_sys::user::{self, Ids};
 
 use crate::state::State;
 
 /// The longest request line.
 const MAX_LINE: usize = 1024;
 
-/// Who the socket answers, and the socket's mode to match. Only
-/// neochumbyd's own user and root, for now. `Group` would also let in
-/// whoever's group (as the kernel reports it, so their primary group) is
-/// neochumbyd's, for a web page that runs as a user of its own: setting
-/// ACCESS to it is the whole change.
-// Only one of the two is used, whichever ACCESS names.
-#[allow(dead_code)]
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Access {
-    User,
-    Group,
-}
+/// The commands that change something, and so need the owner's token
+/// (their last word), with how many words each takes.
+const CHANGES: &[(&str, usize)] = &[("approve", 3), ("refuse", 3), ("forget", 3), ("set", 4)];
 
-const ACCESS: Access = Access::User;
-
-impl Access {
-    fn mode(self) -> u32 {
-        match self {
-            Access::User => 0o600,
-            Access::Group => 0o660,
-        }
-    }
-
-    /// Whether to answer `peer`, the user and group at the other end of a
-    /// connection, as the kernel says.
-    fn allows(self, peer: Ids) -> bool {
-        let me = user::effective();
-        peer.uid == 0 || peer.uid == me.uid || (self == Access::Group && peer.gid == me.gid)
-    }
-}
-
-/// Binds the socket at `path`, with ACCESS's mode, in place of one left by a
-/// neochumbyd that has gone. Fails if one is still answering there.
-pub fn listen(path: &Path) -> io::Result<UnixListener> {
-    if UnixStream::connect(path).is_ok() {
-        return Err(io::Error::new(io::ErrorKind::AddrInUse, "another neochumbyd has this admin socket"));
-    }
-    match std::fs::remove_file(path) {
-        Err(e) if e.kind() != io::ErrorKind::NotFound => return Err(e),
-        _ => {}
-    }
-    let l = UnixListener::bind(path)?;
-    // Between bind and this, the socket has the umask's mode; the peer
-    // check below holds either way.
-    std::fs::set_permissions(path, std::fs::Permissions::from_mode(ACCESS.mode()))?;
-    Ok(l)
-}
-
-pub fn serve(listener: UnixListener, state: State) {
-    for conn in listener.incoming().flatten() {
-        match user::peer(&conn) {
-            Ok(p) if ACCESS.allows(p) => {
-                let state = state.clone();
-                std::thread::spawn(move || {
-                    if let Err(e) = handle(&state, conn) {
-                        eprintln!("neochumbyd: admin: {e}");
-                    }
-                });
-            }
-            Ok(p) => eprintln!("neochumbyd: admin: refused a connection from uid {} gid {}", p.uid, p.gid),
-            Err(e) => eprintln!("neochumbyd: admin: {e}"),
-        }
-    }
-}
-
-fn handle(state: &State, conn: UnixStream) -> io::Result<()> {
+/// Answers `app`'s requests on `conn` until it closes it, or its owner no
+/// longer allows it `pairing`.
+pub fn serve(state: &State, conn: UnixStream, app: &str) -> io::Result<()> {
     let mut out = conn.try_clone()?;
     let mut r = BufReader::new(conn);
     loop {
@@ -125,6 +69,10 @@ fn handle(state: &State, conn: UnixStream) -> io::Result<()> {
         }
         if !line.ends_with('\n') {
             out.write_all(b"error line too long\n")?;
+            return Ok(());
+        }
+        if !state.allowed(app).iter().any(|w| w == crate::state::PAIRING) {
+            out.write_all(format!("error {app} isn't allowed pairing\n").as_bytes())?;
             return Ok(());
         }
         let answer = request(state, line.trim_end_matches(['\n', '\r']));
@@ -165,44 +113,41 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             }
             Ok(out + "ok\n")
         }
-        ["approve", code, token] => {
-            if !state.is_owner_token(token) {
-                eprintln!("neochumbyd: admin: approving {code}: wrong token");
-                return Err(bad("wrong token"));
-            }
-            let name = state.approve(code)?;
-            eprintln!("neochumbyd: admin: approved {name} ({code})");
-            Ok(format!("ok {name}\n"))
-        }
         ["check", token] => {
             if !state.is_owner_token(token) {
                 return Err(bad("wrong token"));
             }
             Ok("ok\n".into())
         }
-        ["refuse", code] => {
+        [cmd, ..] if CHANGES.iter().any(|&(c, n)| c == *cmd && n != words.len()) => {
+            Err(bad(&format!("{cmd}: wrong number of words")))
+        }
+        [cmd, .., token] if CHANGES.iter().any(|&(c, _)| c == *cmd) && !state.is_owner_token(token) => {
+            eprintln!("neochumbyd: admin: {cmd}: wrong token");
+            Err(bad("wrong token"))
+        }
+        ["approve", code, _] => {
+            let name = state.approve(code)?;
+            eprintln!("neochumbyd: admin: approved {name} ({code})");
+            Ok(format!("ok {name}\n"))
+        }
+        ["refuse", code, _] => {
             state.refuse(code)?;
             eprintln!("neochumbyd: admin: refused {code}");
             Ok("ok\n".into())
         }
-        ["forget", name, token] => {
-            if !state.is_owner_token(token) {
-                eprintln!("neochumbyd: admin: forgetting {name}: wrong token");
-                return Err(bad("wrong token"));
-            }
+        ["forget", name, _] => {
             state.forget(name)?;
             eprintln!("neochumbyd: admin: forgot {name}");
             Ok("ok\n".into())
         }
-        ["set", name, setting] => {
-            let (key, value) = setting.split_once('=').ok_or_else(|| bad("set NAME KEY=VALUE"))?;
+        ["set", name, setting, _] => {
+            let (key, value) = setting.split_once('=').ok_or_else(|| bad("set NAME KEY=VALUE TOKEN"))?;
             state.set(name, key, value)?;
             eprintln!("neochumbyd: admin: {name}: {key}={value}");
             Ok("ok\n".into())
         }
-        [cmd, ..] if ["paired", "pending", "approve", "check", "refuse", "forget", "set"].contains(cmd) => {
-            Err(bad(&format!("{cmd}: wrong number of words")))
-        }
+        ["paired" | "pending" | "check", ..] => Err(bad(&format!("{}: wrong number of words", words[0]))),
         _ => Err(bad("unknown command")),
     }
 }
@@ -239,17 +184,25 @@ mod tests {
         assert_eq!(request(&st, &format!("approve 123456 {token}")), "error no such request\n");
         assert_eq!(request(&st, "pending"), "ok\n");
 
-        assert_eq!(request(&st, &format!("set kitchen {START}=wx")), "ok\n");
-        assert_eq!(request(&st, "set kitchen delivery=sync"), "ok\n");
+        // Every change needs the token.
+        assert_eq!(request(&st, &format!("set kitchen {START}=wx")), "error set: wrong number of words\n");
+        assert_eq!(request(&st, &format!("set kitchen {START}=wx nope")), "error wrong token\n");
+        assert_eq!(request(&st, "set kitchen dev=on nope"), "error wrong token\n");
+        assert_eq!(request(&st, "paired"), format!("paired kitchen {}\nok\n", hex(&key)));
+        assert_eq!(request(&st, &format!("set kitchen {START}=wx {token}")), "ok\n");
+        assert_eq!(request(&st, &format!("set kitchen delivery=sync {token}")), "ok\n");
         assert_eq!(request(&st, "paired"), format!("paired kitchen {} {START}=wx delivery=sync\nok\n", hex(&key)));
-        assert_eq!(request(&st, "set kitchen delivery="), "ok\n");
-        assert_eq!(request(&st, &format!("set kitchen {START}")), "error set NAME KEY=VALUE\n");
-        assert!(request(&st, &format!("set kitchen {START}=a/../b c")).starts_with("error"));
-        assert!(request(&st, &format!("set lounge {START}=wx")).starts_with("error no Chumby"));
+        assert_eq!(request(&st, &format!("set kitchen delivery= {token}")), "ok\n");
+        assert_eq!(request(&st, &format!("set kitchen {START} {token}")), "error set NAME KEY=VALUE TOKEN\n");
+        assert!(request(&st, &format!("set kitchen {START}=a!b {token}")).starts_with("error"));
+        assert!(request(&st, &format!("set lounge {START}=wx {token}")).starts_with("error no Chumby"));
 
         st.request("654321", "lounge", &key, "192.0.2.8:4000".parse().unwrap()).unwrap();
-        assert_eq!(request(&st, "refuse 654321"), "ok\n");
-        assert_eq!(request(&st, "refuse 12"), "error not a code\n");
+        assert_eq!(request(&st, "refuse 654321"), "error refuse: wrong number of words\n");
+        assert_eq!(request(&st, "refuse 654321 nope"), "error wrong token\n");
+        assert_eq!(request(&st, "pending").lines().count(), 2, "still asking");
+        assert_eq!(request(&st, &format!("refuse 654321 {token}")), "ok\n");
+        assert_eq!(request(&st, &format!("refuse 12 {token}")), "error not a code\n");
         assert_eq!(request(&st, "pending"), "ok\n");
 
         assert_eq!(request(&st, "forget kitchen"), "error forget: wrong number of words\n");
@@ -257,41 +210,23 @@ mod tests {
         assert!(request(&st, "paired").starts_with("paired kitchen "), "still paired");
         assert_eq!(request(&st, &format!("forget kitchen {token}")), "ok\n");
         assert_eq!(request(&st, "paired"), "ok\n");
+        assert_eq!(request(&st, "paired x"), "error paired: wrong number of words\n");
         assert_eq!(request(&st, ""), "error unknown command\n");
         assert_eq!(request(&st, "rm -rf /"), "error unknown command\n");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Root and neochumbyd's user always; its group only with
-    /// Access::Group; nobody else.
-    #[test]
-    fn access() {
-        let Ids { uid, gid } = user::effective();
-        let stranger = uid.wrapping_add(4242);
-        for a in [Access::User, Access::Group] {
-            assert!(a.allows(Ids { uid: 0, gid: 4242 }));
-            assert!(a.allows(Ids { uid, gid: 4242 }));
-            assert!(!a.allows(Ids { uid: stranger, gid: gid.wrapping_add(1) }));
-            assert_eq!(a.allows(Ids { uid: stranger, gid }), a == Access::Group);
-        }
-        assert_eq!((Access::User.mode(), Access::Group.mode()), (0o600, 0o660));
-    }
-
+    /// Over a connected pair, as a server program gets it: several requests,
+    /// and a line too long cut off.
     #[test]
     fn socket() {
         let (dir, st) = temp_state("socket");
-        let path = dir.join("admin.sock");
-        let l = listen(&path).unwrap();
-        let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode, ACCESS.mode());
-        std::thread::spawn(move || serve(l, st));
-        assert!(listen(&path).is_err(), "one neochumbyd per socket");
-
-        // Our own user is let in, and may send several requests.
-        let c = UnixStream::connect(&path).unwrap();
-        assert!(ACCESS.allows(user::peer(&c).unwrap()));
-        let mut r = BufReader::new(c.try_clone().unwrap());
-        let mut w = c;
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        st.allow("web", crate::state::PAIRING, true).unwrap();
+        let st2 = st.clone();
+        std::thread::spawn(move || serve(&st2, ours, "web"));
+        let mut r = BufReader::new(theirs.try_clone().unwrap());
+        let mut w = theirs;
         let mut line = String::new();
         w.write_all(b"paired\npending\nfrobnicate\n").unwrap();
         for want in ["ok\n", "ok\n", "error unknown command\n"] {
@@ -299,16 +234,24 @@ mod tests {
             r.read_line(&mut line).unwrap();
             assert_eq!(line, want);
         }
-        // A line with no end is cut off.
         w.write_all(&[b'x'; MAX_LINE + 10]).unwrap();
         line.clear();
         r.read_line(&mut line).unwrap();
         assert_eq!(line, "error line too long\n");
 
-        // A socket left behind by a neochumbyd that died is replaced.
-        let stale = dir.join("stale.sock");
-        drop(UnixListener::bind(&stale).unwrap());
-        assert!(listen(&stale).is_ok());
+        // Disallowed while connected: the next request ends it.
+        let (ours, theirs) = UnixStream::pair().unwrap();
+        let st2 = st.clone();
+        std::thread::spawn(move || serve(&st2, ours, "web"));
+        let mut r = BufReader::new(theirs.try_clone().unwrap());
+        let mut w = theirs;
+        st.allow("web", crate::state::PAIRING, false).unwrap();
+        w.write_all(b"paired\n").unwrap();
+        line.clear();
+        r.read_line(&mut line).unwrap();
+        assert_eq!(line, "error web isn't allowed pairing\n");
+        line.clear();
+        assert_eq!(r.read_line(&mut line).unwrap(), 0, "closed");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
