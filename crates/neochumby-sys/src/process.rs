@@ -1,6 +1,6 @@
 //! Signals to other processes, by pid or by process group, whether a
 //! process is alive, the descriptors a child is given, and this process's
-//! priority.
+//! priority and user.
 
 use std::io;
 use std::os::fd::RawFd;
@@ -44,6 +44,12 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
 pub fn lower_priority(by: u8) {
     // SAFETY: nice(2) takes an integer and touches no memory of ours.
     unsafe { libc::nice(libc::c_int::from(by.min(19))) };
+}
+
+/// This process's real user id.
+pub fn uid() -> u32 {
+    // SAFETY: getuid(2) takes nothing, touches no memory and can't fail.
+    unsafe { libc::getuid() }
 }
 
 /// Whether any process is left in the group `pgid` (kill(2) with signal

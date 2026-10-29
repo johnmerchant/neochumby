@@ -1,0 +1,123 @@
+#!/bin/sh
+# AirPlay's now-playing screen under dev/emulate, end to end but for
+# AirPlay itself: a neochumbyd on this PC runs the airplay app's companion
+# with dev/fake-shairport in shairport-sync's place (made-up metadata, a
+# generated cover, silence, and a sender's remote-control server). It checks
+# that
+#   - once paired, the airplay service opens its companion, and the stream
+#     beginning opens the screen over the home screen (the session's log);
+#   - the screen shows the track, with the generated cover in its box;
+#   - play/pause on the screen reaches the sender as DACP, with its
+#     Active-Remote token, and the screen shows it paused;
+#   - next reaches it too, and the screen shows the next track's cover;
+#   - when the stream ends, the screen says it's ready for AirPlay.
+# Screenshots, the session's and neochumbyd's logs and the requests the
+# sender got go in OUT.
+#
+#   sudo dev/emulate-airplay TREE NEOCHUMBYD OUT
+#
+# TREE from tools/tree, with airplay (its companion built for this PC);
+# NEOCHUMBYD the x86_64 neochumbyd. User mode only: it pairs the emulated
+# Chumby with that neochumbyd through neochumby-home's PAIR.
+set -eu
+tree=${1:?usage: dev/emulate-airplay TREE NEOCHUMBYD OUT}
+neochumbyd=${2:?usage: dev/emulate-airplay TREE NEOCHUMBYD OUT}
+out=${3:?usage: dev/emulate-airplay TREE NEOCHUMBYD OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$out"
+state=$out/state
+emu() { "$dev/emulate" --state "$state" "$@"; }
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the session's log:"
+  emu log || true
+  echo "-- neochumbyd's log:"
+  cat "$out/neochumbyd.log" || true
+  emu stop || true
+  exit 1
+}
+# Waits up to $2 seconds for the command $1 to succeed.
+until_ok() {
+  i=0
+  until sh -c "$1" > /dev/null 2>&1; do
+    i=$((i + 1))
+    [ "$i" -lt $(($2 * 10)) ] || return 1
+    sleep 0.1
+  done
+}
+# The screen's buttons (neochumby_airplay::ui): previous, play/pause and
+# next along the bottom, 94 wide from x=10, 104 apart; y 176 to 232.
+PLAY_X=160 NEXT_X=263 BUTTONS_Y=204
+# Taps spaced past the touchscreen's echo filter (350 ms).
+tap() {
+  sleep 0.6
+  emu tap "$@"
+}
+
+[ -x "$tree/apps/airplay/neochumby-airplay-screen" ] || fail "$tree has no airplay with its screen"
+fake=$out/fake
+rm -rf "$out/nd" "$out/psp0" "$fake"
+mkdir -p "$out/psp0" "$fake"
+api=127.0.0.1:17340
+NEOCHUMBY_SHAIRPORT=$dev/fake-shairport NEOCHUMBY_FAKE_AIRPLAY=$fake \
+  "$neochumbyd" serve --state "$out/nd" --tree "$tree" --api "$api" --nfs 127.0.0.1:12049 \
+  > "$out/neochumbyd.log" 2>&1 &
+server=$!
+trap 'kill $server 2>/dev/null || true' EXIT
+nd() { "$neochumbyd" "$@" --state "$out/nd"; }
+
+step "pair through neochumby-home"
+emu start --psp "$out/psp0" --server "$api" "$tree"
+emu wait log 'neochumby: opening home' 30 || fail "the home screen didn't open"
+emu wait screen 30 || fail "the home screen didn't draw"
+emu tap 80 220 # PAIR
+i=0
+until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9]*\).*/\1/p') && [ -n "$code" ]; do
+  i=$((i + 1))
+  [ "$i" -lt 300 ] || fail "the Chumby didn't ask to pair"
+  sleep 0.1
+done
+nd approve "$code"
+until_ok "[ -f '$state/psp/neochumby.conf' ] && [ -f '$state/psp/neochumby.key' ]" 30 ||
+  fail "the Chumby didn't keep the pairing"
+emu stop
+
+step "paired: the stream opens the screen"
+emu start --server "$api" "$tree"
+emu wait log 'neochumby: opening airplay' 60 || fail "the stream didn't open the screen"
+until_ok "grep -q 'neochumbyd: airplay for chumby' '$out/neochumbyd.log'" 10 || fail "neochumbyd ran no companion"
+# The generated cover's top-left quarter is red, at the cover box's corner.
+until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#ff0000' ]" 30 || fail "no cover art on the screen"
+emu wait screen 30 || fail "the screen didn't settle"
+emu shot "$out/1-playing.png"
+
+step "play/pause reaches the sender"
+tap "$PLAY_X" "$BUTTONS_Y"
+until_ok "grep -qx 'playpause 424242' '$fake/requests.log'" 15 || fail "play/pause didn't reach the sender"
+emu wait screen 30 || fail "the screen didn't settle"
+emu shot "$out/2-paused.png"
+
+step "next reaches the sender, and its track shows"
+tap "$NEXT_X" "$BUTTONS_Y"
+until_ok "grep -qx 'nextitem 424242' '$fake/requests.log'" 15 || fail "next didn't reach the sender"
+# The second cover's top-left quarter is yellow.
+until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#ffff00' ]" 30 || fail "the next track's cover didn't show"
+emu wait screen 30 || fail "the screen didn't settle"
+emu shot "$out/3-next.png"
+
+step "the stream ends: ready for AirPlay"
+echo end > "$fake/cmd"
+# The idle screen has no cover box: its corner is the background again.
+until_ok "[ \"\$('$dev/emulate' --state '$state' pixel 20 20)\" = '#101020' ]" 30 || fail "the screen didn't go idle"
+emu wait screen 30 || fail "the screen didn't settle"
+emu shot "$out/4-ready.png"
+
+emu log > "$out/log.txt"
+cp "$fake/requests.log" "$out/requests.txt"
+emu stop
+echo "-- the session's log:"
+cat "$out/log.txt"
+echo "-- the sender's requests:"
+cat "$out/requests.txt"
+echo "dev/emulate-airplay: all passed"

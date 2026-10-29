@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""A stand-in for shairport-sync, for AirPlay's companion in tests
+(dev/emulate-airplay): no AirPlay, but what shairport-sync would send the
+companion while a phone played to it, and a phone's remote-control (DACP)
+server to take the Chumby's buttons. Stdlib only.
+
+    NEOCHUMBY_SHAIRPORT=dev/fake-shairport NEOCHUMBY_FAKE_AIRPLAY=DIR neochumbyd serve ...
+
+Run as the companion runs shairport-sync (`-c CONF`), it reads the metadata
+pipe's path from CONF and plays a made-up stream at once:
+  - metadata, as shairport-sync writes its pipe: the sender (clip, daid,
+    acre, and dapo, the port of its DACP server here on 127.0.0.1), pbeg, a
+    track's details, a generated cover (PNG), and progress;
+  - silence on stdout, S16LE stereo at 44.1 kHz, in real time, while
+    "playing".
+Its DACP server answers 204 and writes each request, "COMMAND TOKEN", to
+DIR/requests.log. playpause pauses (pfls; the audio stops) or resumes
+(prsm); nextitem starts a second track with another cover; previtem goes
+back to the start of the track. Writing "end" to DIR/cmd ends the stream
+(pend).
+"""
+import base64
+import http.server
+import os
+import re
+import struct
+import sys
+import threading
+import time
+import zlib
+
+RATE = 44100
+lock = threading.Lock()
+state = {"playing": True, "track": 0, "start": 1_000_000, "at": time.monotonic()}
+
+TRACKS = [
+    ("Test Signal", "dev/fake-shairport", "neochumby test data", 180_000),
+    ("Second Signal", "dev/fake-shairport", "neochumby test data", 95_000),
+]
+
+
+def png(colours, side=256):
+    """A square PNG in four flat quarters: top left, top right,
+    bottom left, bottom right."""
+    rows = []
+    half = side // 2
+    for y in range(side):
+        a, b = (colours[0], colours[1]) if y < half else (colours[2], colours[3])
+        rows.append(b"\0" + bytes(a) * half + bytes(b) * half)
+
+    def chunk(tag, data):
+        c = struct.pack(">I", len(data)) + tag + data
+        return c + struct.pack(">I", zlib.crc32(tag + data) & 0xFFFFFFFF)
+
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", side, side, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows), 9)) + chunk(b"IEND", b""))
+
+
+COVERS = [
+    png([(255, 0, 0), (0, 255, 0), (0, 0, 255), (255, 255, 255)]),
+    png([(255, 255, 0), (0, 255, 255), (255, 0, 255), (0, 0, 0)]),
+]
+
+
+class Pipe:
+    def __init__(self, path):
+        if not os.path.exists(path):
+            os.mkfifo(path, 0o666)
+        self.f = open(path, "wb", buffering=0)  # waits for the companion
+
+    def item(self, kind, code, data=b""):
+        s = b"<item><type>%x</type><code>%x</code><length>%u</length>" % (
+            int.from_bytes(kind, "big"), int.from_bytes(code, "big"), len(data))
+        if data:
+            s += b'\n<data encoding="base64">\n' + base64.b64encode(data) + b"</data>"
+        with lock:
+            self.f.write(s + b"</item>\n")
+
+
+def progress(pipe):
+    """prgr: the track's start, now and end, as RTP times."""
+    title, _, _, length = TRACKS[state["track"]]
+    start = state["start"]
+    gone = int((time.monotonic() - state["at"]) * RATE) if state["playing"] else 0
+    pipe.item(b"ssnc", b"prgr", b"%d/%d/%d" % (start, start + state.get("pos", 0) + gone, start + length * RATE // 1000))
+
+
+def track(pipe, n):
+    state["track"], state["pos"], state["at"] = n, 0, time.monotonic()
+    title, artist, album, length = TRACKS[n]
+    pipe.item(b"ssnc", b"mdst")
+    pipe.item(b"core", b"minm", title.encode())
+    pipe.item(b"core", b"asar", artist.encode())
+    pipe.item(b"core", b"asal", album.encode())
+    pipe.item(b"core", b"astm", struct.pack(">I", length))
+    pipe.item(b"ssnc", b"mden")
+    pipe.item(b"ssnc", b"pcst")
+    pipe.item(b"ssnc", b"PICT", COVERS[n])
+    pipe.item(b"ssnc", b"pcen")
+    progress(pipe)
+
+
+def main(argv):
+    conf = open(argv[argv.index("-c") + 1]).read()
+    path = re.search(r'pipe_name = "((?:[^"\\]|\\.)*)"', conf).group(1).replace('\\"', '"').replace("\\\\", "\\")
+    out = os.environ["NEOCHUMBY_FAKE_AIRPLAY"]
+    os.makedirs(out, exist_ok=True)
+    log = open(os.path.join(out, "requests.log"), "a", buffering=1)
+    pipe = Pipe(path)
+
+    class Dacp(http.server.BaseHTTPRequestHandler):
+        def do_GET(self):
+            command = self.path.rsplit("/", 1)[-1]
+            log.write(f"{command} {self.headers.get('Active-Remote', '')}\n")
+            self.send_response(204)
+            self.end_headers()
+            if command == "playpause":
+                if state["playing"]:
+                    state["pos"] = state.get("pos", 0) + int((time.monotonic() - state["at"]) * RATE)
+                    state["playing"] = False
+                    pipe.item(b"ssnc", b"pfls", b"1")
+                else:
+                    state["playing"], state["at"] = True, time.monotonic()
+                    pipe.item(b"ssnc", b"prsm")
+                    progress(pipe)
+            elif command == "nextitem":
+                track(pipe, (state["track"] + 1) % len(TRACKS))
+            elif command == "previtem":
+                state["pos"], state["at"] = 0, time.monotonic()
+                progress(pipe)
+
+        def log_message(self, *args):
+            pass
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Dacp)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+
+    pipe.item(b"ssnc", b"snam", b"Fake iPhone")
+    pipe.item(b"ssnc", b"clip", b"127.0.0.1")
+    pipe.item(b"ssnc", b"daid", b"FA4E0001")
+    pipe.item(b"ssnc", b"acre", b"424242")
+    pipe.item(b"ssnc", b"dapo", str(server.server_address[1]).encode())
+    pipe.item(b"ssnc", b"pbeg")
+    track(pipe, 0)
+
+    silence = bytes(RATE // 10 * 4)
+    cmd = os.path.join(out, "cmd")
+    ended = False
+    while True:
+        if not ended and os.path.exists(cmd) and open(cmd).read().strip() == "end":
+            ended = True
+            state["playing"] = False
+            pipe.item(b"ssnc", b"pend")
+        if state["playing"]:
+            sys.stdout.buffer.write(silence)
+            sys.stdout.buffer.flush()
+        time.sleep(0.1)
+
+
+if __name__ == "__main__":
+    main(sys.argv[1:])

@@ -35,7 +35,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's xterm-256color compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
-| `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
+| `apps/airplay` | AIRPLAY: a receiver per Chumby on neochumbyd, played on the Chumby's speaker, with a now-playing screen (the track, its cover, progress, previous/play/pause/next) | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
 | `apps/htop` | neochumby-htop: [htop](https://github.com/htop-dev/htop) (3.5.3, a submodule) on the library's terminal, the touchscreen its mouse (F10, Quit, is past the 64th column: the corner hold leaves it) | GPL-2.0-or-later |
@@ -159,7 +159,7 @@ userhook2                  the boot hook, which pairing installs
 apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
-apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manifest
+apps/airplay/              neochumby-airplay, neochumby-airplay-screen, neochumby-airplay-companion, manifest
 apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
 apps/htop/                 neochumby-htop, manifest
 apps/top/                  neochumby-top, manifest
@@ -229,6 +229,18 @@ Chumby"), and the Chumby plays the audio. The host provides
 `shairport-sync` on `PATH`, avahi, and the base of eighty ports as
 `NEOCHUMBY_AIRPLAY_PORT` (default 7350): RTSP from the base, UDP from
 base + 10. Each Chumby keeps the same ports.
+
+AIRPLAY's screen shows what's playing: the title, artist, album and cover
+art, where the track has got to, and previous, play/pause and next. A
+stream beginning opens it over the start app; otherwise it shows "Ready for
+AirPlay" and the name to choose. For that, shairport-sync must be built
+with metadata (`--with-metadata`, or `--with-metadata-pipe` from 5.0); the
+companion turns its metadata pipe on and scales the cover art for the
+Chumby. Without it, AirPlay plays as before, with no details. The buttons
+go to the phone or Mac as DACP remote-control requests. Their port comes
+from shairport-sync when it's built with a remote-control interface
+(D-Bus, MPRIS or MQTT), else from avahi's `avahi-browse` (avahi-utils).
+Senders that offer no remote control get dimmed buttons.
 
 ### Delivery: NFS or sync
 
