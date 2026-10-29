@@ -310,6 +310,20 @@ qemu-system-arm -M chumby-classic \
   -icount shift=auto,sleep=off
 ```
 
+`run-recovery-demo.py` automates that check with a synthetic zeroed NAND
+image, so it needs no stock firmware:
+
+```sh
+QEMU=/path/to/qemu-system-arm \
+KERNEL=build/nandless-zImage \
+python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+```
+
+It fails unless the log shows the no-marker path, the NAND modules loading,
+`mtd0:`, `/dev/mtdblock0`, `mxc_nand` in `/proc/modules`, and the recovery
+shell.  The sideloaded path is `run-demo.py`, which needs the user's own
+stock zImage and NAND image.
+
 ## Files
 
 ```text
@@ -326,6 +340,7 @@ build.sh                cargo build + copy the binary
 mkpayload.py            QEMU loader container
 mk_psp_nand.py          host-side scratch NAND: replace only the PSP partition
 run-demo.py             QEMU boot, serial interaction, NANDLESS checks
+run-recovery-demo.py    self-contained recovery-path E2E (zeroed NAND, no firmware)
 kernel/build.sh         NANDLESS sideload-only 5.9.16 zImage build
 kernel/nandless-sideload.config  CONFIG_MTD=n and friends
 kernel/*.patch          MX21ADS NAND platform guard; macOS host uuid workaround
