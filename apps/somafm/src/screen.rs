@@ -135,7 +135,7 @@ fn picture(path: &Path, pixels: usize) -> io::Result<Vec<u16>> {
     if b.len() != pixels * 2 {
         return Err(io::Error::other(format!("{}: {} bytes, not {}", path.display(), b.len(), pixels * 2)));
     }
-    Ok(b.chunks_exact(2).map(|p| u16::from_le_bytes([p[0], p[1]])).collect())
+    Ok(b.as_chunks::<2>().0.iter().map(|p| u16::from_le_bytes(*p)).collect())
 }
 
 impl Theme {
