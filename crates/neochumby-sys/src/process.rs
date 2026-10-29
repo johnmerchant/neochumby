@@ -39,6 +39,12 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
 }
 
+/// Whether this process runs as root (its effective uid is 0).
+pub fn is_root() -> bool {
+    // SAFETY: geteuid(2) takes nothing and cannot fail.
+    unsafe { libc::geteuid() == 0 }
+}
+
 /// Lowers this process's priority by `by` (nice(2)); 19 is the lowest. A
 /// process may always lower its own, so nothing is reported.
 pub fn lower_priority(by: u8) {
@@ -99,6 +105,12 @@ fn send(target: libc::pid_t, sig: Signal) -> io::Result<()> {
     // SAFETY: kill(2) takes plain integers and touches no memory of ours;
     // `target` is a single process or a single group, never 0 or -1.
     if unsafe { libc::kill(target, sig.raw()) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+/// This process's real user id (getuid(2)).
+pub fn uid() -> u32 {
+    // SAFETY: getuid(2) takes nothing, touches no memory and can't fail.
+    unsafe { libc::getuid() }
 }
 
 /// Passes the descriptors `fds` on to the program `cmd` runs, though they
