@@ -30,7 +30,7 @@ binaries are static (musl), so they don't depend on its userland.
 | --- | --- | --- |
 | `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, a terminal for programs written for one, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
-| `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, or Noise as a build option | MIT |
+| `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's xterm-256color compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
@@ -168,10 +168,6 @@ building it. `tools/deploy` builds for the server it installs on, asking
 it over ssh, and `tools/tree --server-target TRIPLE` takes a Rust target
 triple (CPU, vendor, OS and C library), or `host`.
 
-A Chumby and its neochumbyd talk TLS 1.3. To use Noise instead, build both
-with `--features neochumby-proto/noise`. Nothing is negotiated, so the two
-ends must be built the same way.
-
 ## Running it
 
 A Chumby runs neochumby from a tree of the session and its apps:
@@ -238,15 +234,21 @@ the mount hangs.
 
 1. Put a `neochumby.conf` holding `server=<neochumbyd's address>` on a
    neochumby stick, and boot the Chumby from it.
-2. The app list shows **PAIR**. Tap it: the Chumby shows a 6-digit code.
+2. The app list shows **PAIR**. Tap it: the Chumby shows a code of 32
+   hex digits, in eight groups of four.
 3. On the server, `neochumbyd pairing` lists the request with the same
-   code. If it matches, run `neochumbyd approve <code>`.
+   code. If it matches, run `neochumbyd approve CODE`, typing the code
+   from the Chumby's screen (case, dashes and spaces don't matter). If
+   another Chumby is already paired under the same name, `approve` says
+   so, and pairs this one in its place only with `--replace`.
 4. The Chumby writes its key, the server's key and the boot hook to
    `/psp`. Remove the stick and restart.
 
-The code comes from the connection itself, so it matches on both screens
-only if nothing sits between them. After pairing, each end checks the
-other's key on every connection.
+The code comes from the connection itself and both ends' keys, so it
+matches on both screens only if nothing sits between them, and it is too
+long for anyone in the middle to find a connection that makes it match.
+A request waits ten minutes; at most eight wait at once. After pairing,
+each end checks the other's key on every connection.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its
 companion on neochumbyd runs an AirPlay receiver named after it ("Kitchen
