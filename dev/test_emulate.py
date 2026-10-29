@@ -23,6 +23,8 @@ sys.path.insert(0, HERE)
 import chumby_classic as cc  # noqa: E402
 
 EMULATE = os.path.join(HERE, "emulate")
+# Not your own settings (.env.local): the tests choose what they have.
+os.environ["NEOCHUMBY_ENV_LOCAL"] = os.devnull
 
 
 def fake_dir(root):

@@ -120,23 +120,17 @@ impl Front {
     fn listen(&mut self) {
         let Some(p) = self.pipe.as_mut() else { return };
         for line in p.receive().lines {
-            // `pause` and `resume` are read as lines, which a session
-            // without player apps never sends (its Notice doesn't have them
-            // yet).
-            match line.as_str() {
-                "pause" => {
+            match Notice::parse(&line) {
+                Some(Notice::Pause) => {
                     self.held = true;
                     self.asked.push(Control::Pause);
                 }
-                "resume" => {
+                Some(Notice::Resume) => {
                     self.held = false;
                     self.asked.push(Control::Play);
                 }
-                _ => {
-                    if let Some(Notice::Front(app)) = Notice::parse(&line) {
-                        self.app = Some(app);
-                    }
-                }
+                Some(Notice::Front(app)) => self.app = Some(app),
+                _ => {}
             }
         }
     }

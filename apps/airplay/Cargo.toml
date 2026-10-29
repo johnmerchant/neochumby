@@ -56,9 +56,8 @@ neochumbyd = "required"
 # The screen draws and takes touches; the service plays. Jailed (#45), the
 # exec and the service share a uid, which the screen's socket checks.
 access = ["screen", "touch", "speaker"]
-# FOLLOW-UP, once #54 (the `player` capability) is in main: `player = true`.
-# The service already takes the session's `pause` and `resume` lines, which
-# is what the flag promises; the manifest tool refuses the key until then.
+# A player (#54): its service takes the session's `pause` and `resume`.
+player = true
 
 [lints]
 workspace = true

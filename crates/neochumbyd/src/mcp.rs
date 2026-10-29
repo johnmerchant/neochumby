@@ -3,7 +3,8 @@
 //! message a line. Its tools are the commands a developer runs:
 //!
 //!   chumbys      the paired Chumbys, their settings, those asking to pair
-//!                and the start apps in the tree (`neochumbyd pairing`)
+//!                and the start and players in the tree (`neochumbyd
+//!                pairing`)
 //!   log          the end of a Chumby's log (`neochumbyd log`)
 //!   restart      its session starts again from the tree (`neochumbyd restart`)
 //!   screenshot   its screen, as an image (`neochumbyd shot`)
@@ -77,7 +78,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "chumbys",
-            "description": "The Chumbys paired with this neochumbyd and their settings, those asking to pair, and the apps in the tree that may be a start app",
+            "description": "The Chumbys paired with this neochumbyd and their settings, those asking to pair, and the apps in the tree that may be a start app or the player",
             "inputSchema": {"type": "object", "properties": {}},
             "annotations": {"readOnlyHint": true},
         },
@@ -108,7 +109,7 @@ fn tools() -> Value {
         },
         {
             "name": "set",
-            "description": "Sets one of a paired Chumby's settings, sent to it when it next connects: `start` (its start app; see chumbys for those in the tree) or `delivery` (`nfs` or `sync`). An empty value removes the setting. Not `dev` (remote input), which is the owner's to turn on",
+            "description": "Sets one of a paired Chumby's settings, sent to it when it next connects: `start` (its start app; see chumbys for those in the tree), `player` (its default player, which MUSIC buttons open; likewise) or `delivery` (`nfs` or `sync`). An empty value removes the setting. Not `dev` (remote input), which is the owner's to turn on",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -208,14 +209,18 @@ impl Server {
     }
 
     fn chumbys(&self) -> Result<String, String> {
-        let starts = tree::start_apps(&self.tree);
+        let (starts, players) = (tree::start_apps(&self.tree), tree::players(&self.tree));
         let mut out = String::new();
         for (name, key) in self.state.pairs().map_err(|e| e.to_string())? {
             let config = self.state.config(&name);
             let settings: Vec<String> = config.iter().map(|(k, v)| format!("{k}={v}")).collect();
             out += &format!("paired   {name}  {key}  {}\n", settings.join(" "));
-            let start = config.iter().find(|(k, _)| k == "start").map(|(_, v)| v.as_str());
-            if let Some(note) = tree::start_note(&name, start, &starts) {
+            let setting = |key: &str| config.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+            let notes = [
+                tree::start_note(&name, setting("start"), &starts),
+                tree::player_note(&name, setting("player"), &players),
+            ];
+            for note in notes.into_iter().flatten() {
                 out += &format!("         {note}\n");
             }
         }
@@ -229,6 +234,7 @@ impl Server {
             out += "no Chumbys paired or asking\n";
         }
         out += &tree::hint(&starts);
+        out += &format!("\n{}", tree::player_hint(&players));
         Ok(out)
     }
 
@@ -258,6 +264,13 @@ impl Server {
                 out += &format!("\n{value} isn't a start app in the tree; the Chumby will open {}", tree::HOME);
             }
             out += &format!("\n{}", tree::hint(&starts));
+        }
+        if key == "player" {
+            let players = tree::players(&self.tree);
+            if let Some(note) = tree::player_note(name, Some(value).filter(|v| !v.is_empty()), &players) {
+                out += &format!("\n{note}");
+            }
+            out += &format!("\n{}", tree::player_hint(&players));
         }
         Ok(out)
     }
