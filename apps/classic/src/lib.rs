@@ -7,8 +7,8 @@
 //!
 //! Two programs: the app (main.rs) and its service (bin/service.rs, svc.rs),
 //! which keeps the backlight right while another app is in front. They
-//! share the settings in /psp (state.rs). The music is the default music
-//! app's: Home's MUSIC opens it, and MUTE pauses or resumes it.
+//! share the settings in /psp (state.rs). The music is the default
+//! player's: Home's MUSIC opens it, and MUTE pauses or resumes it.
 
 pub mod cache;
 #[cfg(target_arch = "arm")]

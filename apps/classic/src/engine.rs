@@ -19,25 +19,27 @@
 //! sun lines), 1 always on, 2 always off. A NIGHT tap flips it for now,
 //! until the next sunrise or sunset (12 h without sun data).
 //!
-//! State variables (for panes): music, night, nightmode, pin, page, secs.
+//! State variables (for panes): player, night, nightmode, pin, page, secs.
 //! night, nightmode, the volume and the slideshow timing persist (wx_night
 //! and so on, in /psp on the Chumby; the names the C engine used, so a
-//! Chumby keeps its settings). music is what MUTE last asked the session
+//! Chumby keeps its settings). player is what MUTE last asked the session
 //! (1: play, 0: pause), kept until the Chumby restarts; it starts as 1, as
-//! the session's own state does.
+//! the session's own state does. `music` is the C engine's name for it.
 //!
 //! Actions (tap zones): slideshow, screen NAME, chumby (exit: the session
-//! hands the Chumby back to its own software), music [SCREEN], music_toggle,
-//! night, nightmode, pin, next_app, prev_app, secs_up, secs_down (next_app
-//! and prev_app step whole apps with pageapp), and app NAME: open apps/NAME
-//! from the neochumby tree. classic is a start app (proposal 0002): it asks
+//! hands the Chumby back to its own software), player [SCREEN],
+//! player_toggle (or the C engine's music_toggle), night, nightmode, pin,
+//! next_app, prev_app, secs_up, secs_down (next_app and prev_app step whole
+//! apps with pageapp), and app NAME: open apps/NAME from the neochumby
+//! tree. classic is a start app (proposal 0002): it asks
 //! the session (session.rs) to open an app, or for CHUMBY MODE, and exits;
 //! the top button arrives from the session too.
 //!
-//! The music isn't classic's: it's the default music app's
-//! (NEOCHUMBY_MUSIC). `music` opens that app; without one, it shows SCREEN
-//! (the apps, say), else opens home, which lists them. `music_toggle`
-//! (MUTE) asks the session for `music toggle`, which pauses or resumes it.
+//! The music isn't classic's: it's the default player's
+//! (NEOCHUMBY_PLAYER). `player` (Home's MUSIC) opens that app; without one,
+//! it shows SCREEN (the apps, say), else opens home, which lists them.
+//! `player_toggle` (MUTE) asks the session for `player toggle`, which
+//! pauses or resumes it.
 //! The old radio's `station` lines and actions are skipped.
 //!
 //! Control: lines appended to the control file run within 0.2 s:
@@ -225,9 +227,10 @@ pub struct Engine<P: Plat> {
     /// The screen's name without _night.
     scr_base: String,
     page: i32,
-    music_on: i32,
-    /// The default music app (NEOCHUMBY_MUSIC), for `music`.
-    music_app: Option<String>,
+    /// What MUTE last asked: 1 play, 0 pause.
+    playing: i32,
+    /// The default player (NEOCHUMBY_PLAYER), for `player`.
+    player: Option<String>,
     night: i32,
     pin: i32,
     vol: i32,
@@ -340,8 +343,8 @@ impl<P: Plat> Engine<P> {
             scr: -1,
             scr_base: String::new(),
             page: 0,
-            music_on: 1,
-            music_app: crate::session::music_app(),
+            playing: 1,
+            player: crate::session::player(),
             night: 0,
             pin: 0,
             vol: 65,
@@ -1617,7 +1620,7 @@ impl<P: Plat> Engine<P> {
 
     fn var_value(&self, v: &str) -> i32 {
         match v {
-            "music" => self.music_on,
+            "player" | "music" => self.playing,
             "night" => self.night,
             "nightmode" => self.nightmode,
             "pin" => self.pin,
@@ -1749,32 +1752,32 @@ impl<P: Plat> Engine<P> {
         self.plat.state_path(name)
     }
 
-    /// MUTE: asks the session to pause or resume the default music app
-    /// (`music toggle`), and keeps what it asked, for MUTE's pane. The
+    /// MUTE: asks the session to pause or resume the default player
+    /// (`player toggle`), and keeps what it asked, for MUTE's pane. The
     /// session keeps whether the music plays, starting as playing; so does
     /// this, until the Chumby restarts. Run without a session (the host
     /// renderer), only the pane changes.
-    fn toggle_music(&mut self) {
+    fn toggle_player(&mut self) {
         if let Some(s) = &mut self.session
-            && !s.ask(&Ask::MusicToggle)
+            && !s.ask(&Ask::PlayerToggle)
         {
-            eprintln!("music: couldn't ask the session to toggle it");
+            eprintln!("player: couldn't ask the session to toggle it");
             return;
         }
-        self.music_on = (self.music_on == 0) as i32;
-        if let Some(p) = self.plat.run_path("music") {
-            save_int(&p, self.music_on);
+        self.playing = (self.playing == 0) as i32;
+        if let Some(p) = self.plat.run_path("player") {
+            save_int(&p, self.playing);
         }
     }
 
-    /// MUSIC: opens the default music app; without one, `apps` (a screen,
-    /// if there is one), else home, which lists the apps.
-    fn open_music(&mut self, apps: &str) {
-        match self.music_app.clone() {
+    /// MUSIC: opens the default player; without one, `apps` (a screen, if
+    /// there is one), else home, which lists the apps.
+    fn open_player(&mut self, apps: &str) {
+        match self.player.clone() {
             Some(app) => self.open_app(&app),
             None if !apps.is_empty() && self.find_screen(apps) >= 0 => self.show(apps),
             None => {
-                eprintln!("music: no music app on this Chumby");
+                eprintln!("player: no player on this Chumby");
                 self.open_app("home");
             }
         }
@@ -1934,8 +1937,8 @@ impl<P: Plat> Engine<P> {
             "screen" => self.show(&name),
             "chumby" => return true,
             "app" if !name.is_empty() => self.open_app(&name),
-            "music" => self.open_music(&name),
-            "music_toggle" => self.toggle_music(),
+            "player" => self.open_player(&name),
+            "player_toggle" | "music_toggle" => self.toggle_player(),
             "night" => {
                 // For now: until the next sunrise or sunset.
                 // wx_night first, then how long it holds: the service never
@@ -2371,7 +2374,7 @@ impl<P: Plat> Engine<P> {
         self.set_night(night as i32);
         // As MUTE last left it since the Chumby started; else playing, as
         // the session starts.
-        self.music_on = self.plat.run_path("music").is_none_or(|p| read_int(&p, 1) != 0) as i32;
+        self.playing = self.plat.run_path("player").is_none_or(|p| read_int(&p, 1) != 0) as i32;
         self.secs_override = read_int(&self.st("wx_secs"), 0);
         if !(0..=3600).contains(&self.secs_override) {
             self.secs_override = 0;
@@ -3253,9 +3256,10 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
-    /// Home with MUTE (a pane on `music` and `music_toggle`) and MUSIC
-    /// (`music apps`), and maybe an apps screen; the session's fake end.
-    fn music_set(tag: &str, apps_screen: bool, music_app: Option<&str>) -> (Engine<Host>, FakeSession, PathBuf) {
+    /// Home with MUTE (a pane on `player` and `player_toggle`, and the C
+    /// engine's `music_toggle`) and MUSIC (`player apps`), and maybe an apps
+    /// screen; the session's fake end.
+    fn music_set(tag: &str, apps_screen: bool, player: Option<&str>) -> (Engine<Host>, FakeSession, PathBuf) {
         let d = std::env::temp_dir().join(format!("classic-music-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -3271,15 +3275,16 @@ mod tests {
             d.join("manifest.txt"),
             format!(
                 "page 0 p.raw 12 noclock noticker\nscreen home home.raw\n{apps}\
-                 pane home mute.raw 10 10 0 0 music 2\n\
-                 hot home 0 0 100 100 music_toggle\nhot home 100 0 100 100 music apps\n\
+                 pane home mute.raw 10 10 0 0 player 2\n\
+                 hot home 0 0 100 100 player_toggle\nhot home 100 0 100 100 player apps\n\
+                 hot home 0 100 100 100 music_toggle\n\
                  station 0 old http://example.org/old\nhot home 200 0 100 100 station 0\n"
             ),
         )
         .unwrap();
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
         let mut e = Engine::new(h, d.clone());
-        e.music_app = music_app.map(Into::into);
+        e.player = player.map(Into::into);
         let s = FakeSession::default();
         e.set_session(Box::new(s.clone()), false);
         e.start();
@@ -3302,36 +3307,40 @@ mod tests {
     }
 
     #[test]
-    fn mute_asks_the_session_to_toggle_the_music() {
+    fn mute_asks_the_session_to_toggle_the_player() {
         let (mut e, s, d) = music_set("mute", false, Some("somafm"));
         // The session starts the music as playing; so does MUTE's pane.
-        assert_eq!(e.var_value("music"), 1);
+        assert_eq!((e.var_value("player"), e.var_value("music")), (1, 1));
         assert_eq!(e.plat.fb()[0], 0xFFFF);
         assert!(!tap_home(&mut e, 50, 50), "MUTE doesn't leave");
-        assert_eq!(*s.asked.borrow(), vec![Ask::MusicToggle]);
-        assert_eq!((e.var_value("music"), e.plat.fb()[0]), (0, 0x0000));
+        assert_eq!(*s.asked.borrow(), vec![Ask::PlayerToggle]);
+        assert_eq!((e.var_value("player"), e.plat.fb()[0]), (0, 0x0000));
         assert!(!tap_home(&mut e, 50, 50));
-        assert_eq!(*s.asked.borrow(), vec![Ask::MusicToggle, Ask::MusicToggle]);
-        assert_eq!((e.var_value("music"), e.plat.fb()[0]), (1, 0xFFFF));
+        assert_eq!(*s.asked.borrow(), vec![Ask::PlayerToggle, Ask::PlayerToggle]);
+        assert_eq!((e.var_value("player"), e.plat.fb()[0]), (1, 0xFFFF));
         assert!(!tap_home(&mut e, 50, 50));
         // Started again (after an app), it shows what MUTE last asked.
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
         let mut again = Engine::new(h, d.clone());
         again.start();
-        assert_eq!(again.var_value("music"), 0);
+        assert_eq!(again.var_value("player"), 0);
         // The old radio's station lines and actions do nothing.
         assert!(!tap_home(&mut e, 250, 50));
         assert_eq!(s.asked.borrow().len(), 3);
+        // The C engine's music_toggle is MUTE too.
+        assert!(!tap_home(&mut e, 50, 150));
+        assert_eq!(s.asked.borrow()[3], Ask::PlayerToggle);
+        assert_eq!(e.var_value("player"), 1);
         std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]
-    fn music_opens_the_default_music_app_else_the_apps() {
+    fn music_opens_the_default_player_else_the_apps() {
         let (mut e, s, d) = music_set("open", true, Some("somafm"));
         assert!(tap_home(&mut e, 150, 50), "it exits after asking");
         assert_eq!(*s.asked.borrow(), vec![Ask::Open("somafm".into())]);
         std::fs::remove_dir_all(&d).unwrap();
-        // No music app: the apps screen it names.
+        // No player: the apps screen it names.
         let (mut e, s, d) = music_set("apps", true, None);
         assert!(!tap_home(&mut e, 150, 50));
         assert!(s.asked.borrow().is_empty());

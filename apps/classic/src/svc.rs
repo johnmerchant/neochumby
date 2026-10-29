@@ -10,7 +10,7 @@
 //! only, and which is the only way a jailed app has); run by hand, without
 //! a session, the service writes /proc itself.
 //!
-//! **Music isn't classic's.** The default music app plays it (its own
+//! **Music isn't classic's.** The default player plays it (its own
 //! service, SomaFM's for one): Home's MUSIC opens that app, and MUTE asks
 //! the session to pause or resume it (engine.rs).
 //!

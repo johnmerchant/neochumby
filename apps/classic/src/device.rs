@@ -1,6 +1,6 @@
 //! The engine on the Chumby: the screen and touch through the neochumby
 //! crate, settings in /psp, and the session's pipe (opening apps, CHUMBY
-//! MODE, the top button, MUTE's `music toggle`, and the backlight, which
+//! MODE, the top button, MUTE's `player toggle`, and the backlight, which
 //! it sets as `brightness N`; without a session, through /proc).
 
 use std::collections::VecDeque;
@@ -8,7 +8,7 @@ use std::path::{Path, PathBuf};
 
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touchscreen};
-use neochumby::session::{Music, Notice, Pipe};
+use neochumby::session::{Notice, Pipe, Player};
 
 use crate::engine::Engine;
 use crate::plat::{Plat, Touch, wall_now};
@@ -172,7 +172,7 @@ impl Session for SessionPipe {
         match a {
             Ask::Open(app) => self.0.open(app),
             Ask::ChumbyMode => self.0.chumby_mode(),
-            Ask::MusicToggle => self.0.music(Music::Toggle),
+            Ask::PlayerToggle => self.0.player(Player::Toggle),
         }
         .is_ok()
     }

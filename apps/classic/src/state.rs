@@ -87,7 +87,7 @@ pub fn resolve_dir(base: &Path) -> PathBuf {
 }
 
 /// The private directory for the control and stats files, and whether the
-/// music was last asked to play or pause (it lasts until the Chumby
+/// player was last asked to play or pause (it lasts until the Chumby
 /// restarts, as the session's own state does).
 pub const RUN_DIR: &str = "/tmp/neochumby-classic";
 

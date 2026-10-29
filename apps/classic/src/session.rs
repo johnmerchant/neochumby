@@ -10,8 +10,8 @@
 //! delivered, the session starts classic again with NEOCHUMBY_REASON=button,
 //! and it opens on Home.
 //!
-//! The music is the default music app's (NEOCHUMBY_MUSIC): MUSIC opens it,
-//! and MUTE asks the session for `music toggle`, which pauses or resumes it.
+//! The music is the default player's (NEOCHUMBY_PLAYER): MUSIC opens it,
+//! and MUTE asks the session for `player toggle`, which pauses or resumes it.
 
 /// What the session told the app.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -27,9 +27,9 @@ pub enum Ask {
     Open(String),
     /// Hand the Chumby back to its own software (then the app exits).
     ChumbyMode,
-    /// Pause the default music app if it plays, else resume it (`music
+    /// Pause the default player if it plays, else resume it (`player
     /// toggle`; the app carries on).
-    MusicToggle,
+    PlayerToggle,
 }
 
 pub trait Session {
@@ -39,13 +39,13 @@ pub trait Session {
     fn ask(&mut self, a: &Ask) -> bool;
 }
 
-/// The variable naming the default music app.
-pub const MUSIC_ENV: &str = "NEOCHUMBY_MUSIC";
+/// The variable naming the default player.
+pub const PLAYER_ENV: &str = "NEOCHUMBY_PLAYER";
 
-/// This Chumby's default music app (NEOCHUMBY_MUSIC, which the session
-/// sets), for MUSIC to open; None if there's none.
-pub fn music_app() -> Option<String> {
-    std::env::var(MUSIC_ENV).ok().filter(|m| valid_app(m))
+/// This Chumby's default player (NEOCHUMBY_PLAYER, which the session sets),
+/// for MUSIC to open; None if there's none.
+pub fn player() -> Option<String> {
+    std::env::var(PLAYER_ENV).ok().filter(|m| valid_app(m))
 }
 
 /// An app's name as the session takes it: apps/<name>/ in the tree,

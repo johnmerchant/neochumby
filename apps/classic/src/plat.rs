@@ -26,7 +26,7 @@ pub trait Plat {
     fn backlight(&mut self, night: bool);
     /// Where a setting persists (`wx_night` and so on).
     fn state_path(&self, name: &str) -> PathBuf;
-    /// Where something lasts only until the Chumby restarts (`music`, what
+    /// Where something lasts only until the Chumby restarts (`player`, what
     /// MUTE last asked the session); None if there's nowhere of our own.
     fn run_path(&self, name: &str) -> Option<PathBuf>;
     /// Monotonic time, in microseconds.
