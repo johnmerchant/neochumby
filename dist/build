@@ -50,8 +50,8 @@ if [ "${1:-}" = --inside ]; then
   make -C "$br" O=/work/output
   # Kconfig drops an option whose dependencies aren't met, silently: every
   # line of the fragment has to be in the kernel's .config as written.
-  # (A kernel from a tarball of our choosing builds in linux-custom.)
-  config=/work/output/build/linux-custom/.config
+  # (The kernel builds in linux-<version>; Buildroot knows where.)
+  config=$(make -s -C "$br" O=/work/output printvars VARS=LINUX_DIR | sed 's/^[^=]*=//')/.config
   missing=0
   grep -E '^(CONFIG_|# CONFIG_)' "$root/dist/board/chumby-classic/linux.fragment" |
     while IFS= read -r line; do
