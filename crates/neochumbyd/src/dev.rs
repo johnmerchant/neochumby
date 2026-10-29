@@ -620,7 +620,7 @@ mod tests {
             nfs_port: 2049,
             tree: d.join("tree"),
             state_dir: d.clone(),
-            plugins: crate::isolate::Plugins::as_neochumbyd(&d),
+            sandbox: crate::isolate::Sandbox::as_neochumbyd(&d),
             hashes: Default::default(),
             links: Links::default(),
         };

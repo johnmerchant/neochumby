@@ -25,8 +25,9 @@ pub struct Api {
     pub tree: PathBuf,
     /// neochumbyd's state directory.
     pub state_dir: PathBuf,
-    /// How companions are run, and where they keep their state.
-    pub plugins: crate::isolate::Plugins,
+    /// How companions (and #9's server programs) run, and where they keep
+    /// their state.
+    pub sandbox: crate::isolate::Sandbox,
     /// The tree's hashes, for sync rounds.
     pub hashes: neochumby_sync::serve::Hashes,
     /// The Chumbys' developer links.
@@ -69,7 +70,7 @@ fn handle(api: &Api, tcp: TcpStream) -> io::Result<()> {
             s.send(&Msg::Welcome)?;
             s.send(&Msg::Config(api.state.config(&name)))?;
             match s.recv() {
-                Ok(Msg::Open { app }) => companion::run(&api.tree, &api.plugins, &name, &app, s),
+                Ok(Msg::Open { app }) => companion::run(&api.tree, &api.sandbox, &name, &app, s),
                 Ok(m @ Msg::SyncHave { .. }) => sync::serve(api, &name, s, m),
                 Ok(Msg::Dev) => dev::run(api, &name, s),
                 // A Chumby that came only for its settings hangs up.

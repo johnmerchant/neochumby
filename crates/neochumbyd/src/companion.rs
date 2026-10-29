@@ -1,7 +1,7 @@
 //! Apps' companions: the server half an app may have, named in its
 //! manifest (`companion=<file in the app's directory>`). For each Chumby
 //! that opens it, neochumbyd runs one, as its own process (under a uid of
-//! the app's own, with --plugin-uids: isolate.rs), with
+//! the app's own with --app-uids, or as isolate.rs otherwise says), with
 //!
 //!   NEOCHUMBY_CHUMBY   the Chumby's name, as it paired
 //!   NEOCHUMBY_STATE    a directory of the app's own, kept across runs
@@ -23,7 +23,7 @@ use std::time::{Duration, Instant};
 
 use neochumby_proto::{Msg, Session, frame, valid_name};
 
-use crate::isolate::Plugins;
+use crate::isolate::Sandbox;
 
 /// The companion, stopped as above when dropped.
 struct Running {
@@ -51,7 +51,7 @@ fn manifest(dir: &Path, key: &str) -> Option<String> {
 
 /// Runs `app`'s companion for `chumby` and relays between them until
 /// either goes.
-pub fn run(tree: &Path, plugins: &Plugins, chumby: &str, app: &str, mut s: Session) -> io::Result<()> {
+pub fn run(tree: &Path, sandbox: &Sandbox, chumby: &str, app: &str, mut s: Session) -> io::Result<()> {
     let dir = tree.join("apps").join(app);
     // Only a plain name in the app's own directory.
     let exe = valid_name(app)
@@ -61,7 +61,7 @@ pub fn run(tree: &Path, plugins: &Plugins, chumby: &str, app: &str, mut s: Sessi
     let Some(exe) = exe else {
         return s.send(&Msg::Closed);
     };
-    let mut child = plugins
+    let mut child = sandbox
         .command(&dir.join(&exe), app)?
         .env("NEOCHUMBY_CHUMBY", chumby)
         .stdin(Stdio::piped())
@@ -70,7 +70,7 @@ pub fn run(tree: &Path, plugins: &Plugins, chumby: &str, app: &str, mut s: Sessi
     let mut out = child.stdout.take().expect("piped");
     let stdin = child.stdin.take();
     let mut run = Running { child, stdin };
-    eprintln!("neochumbyd: {app} for {chumby}");
+    eprintln!("neochumbyd: {app} for {chumby} ({})", sandbox.label(app));
 
     let (tx, rx) = mpsc::sync_channel::<Vec<u8>>(16);
     std::thread::spawn(move || {

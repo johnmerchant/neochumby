@@ -10,7 +10,7 @@
 //!                     keeps them
 //!   logs/, dev/       what the developer link keeps and is asked (dev.rs)
 //!   apps/<app>        each app's own, for its companions (isolate.rs)
-//!   plugin-uids       each app's uid, with --plugin-uids (isolate.rs)
+//!   app-uids          each app's uid, with --app-uids (isolate.rs)
 //!
 //! None of it is readable by other users (`secure`), as companions may run
 //! under uids of their own.

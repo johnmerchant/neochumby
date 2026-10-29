@@ -1,26 +1,36 @@
-//! Each app's companion under a uid of its own, so that a companion can't
-//! read neochumbyd's key or pairings, change the tree, or reach another
-//! app's state.
+//! How apps' companions and server programs run: each app under a uid of
+//! its own, so that they can't read neochumbyd's key or pairings, change
+//! the tree, or reach another app's state. One of two sandboxes, with
+//! Landlock (#9); either is enough, and both may apply at once:
 //!
-//! neochumbyd started as root with `--plugin-uids FIRST-LAST`:
+//!   Landlock  uids  what runs
+//!   yes       yes   both, layered
+//!   yes       no    Landlock
+//!   no        yes   uids
+//!   no        no    nothing, unless the owner passes --unsandboxed; and
+//!                   never as root, where companions would run as root
+//!
+//! neochumbyd started as root with `--app-uids FIRST-LAST`:
 //!
 //! - becomes the user that owns its state directory, keeping only what it
-//!   needs to start companions as other uids (neochumby_sys::privilege);
+//!   needs to start programs as other uids (neochumby_sys::privilege);
 //! - gives each app the lowest uid in the range that no other app has and
 //!   /etc/passwd and /etc/group don't use, as its uid and its group, and
-//!   records it in `<state>/plugin-uids` ("app uid" lines), so the app
-//!   keeps it;
-//! - runs the app's companions as that uid, with no other groups, in
-//!   `<state>/apps/<app>`, which it owns, mode 0700. A directory left there
-//!   by a neochumbyd that ran companions as itself is handed over, with
-//!   what's in it.
+//!   records it in `<state>/app-uids` ("app uid" lines), so the app keeps
+//!   it;
+//! - runs the app's companions, and its server program (`server=`, #9),
+//!   as that one uid, with no other groups, in `<state>/apps/<app>`, which
+//!   it owns, mode 0700. A directory left there by a neochumbyd that ran
+//!   them as itself is handed over, with what's in it.
 //!
 //! The state directory must be other-executable (0711 or 0751, say), as a
-//! companion reaches its directory and its binary in the tree through it;
+//! program reaches its directory and its binary in the tree through it;
 //! neochumbyd's own files in it are not readable by others (State::secure).
 //!
-//! Without root, or without the flag, companions run as neochumbyd's own
-//! user, as they always have, and neochumbyd says so as it starts.
+//! Landlock isn't in neochumbyd yet: #9 brings it, passing what the kernel
+//! offers to [`Sandbox::start`], and applying it to each program it starts
+//! from [`Sandbox::command`]. Until then neochumbyd has the uids, or
+//! --unsandboxed.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
@@ -30,13 +40,63 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 
-/// Where each app's uid is recorded, in the state directory.
-const RECORD: &str = "plugin-uids";
+/// Where each app's uid is recorded, in the state directory, and where it
+/// was before the flag was --app-uids.
+const RECORD: &str = "app-uids";
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+const OLD_RECORD: &str = "plugin-uids";
 
-/// How companions are run.
-pub struct Plugins {
+/// How companions and server programs run.
+pub struct Sandbox {
     state: PathBuf,
     uids: Option<Uids>,
+    /// What Landlock the kernel offers, as #9 describes it ("Landlock ABI
+    /// 4"), when it applies.
+    landlock: Option<String>,
+}
+
+/// Which sandbox programs get, as `plan` decides.
+#[derive(Debug, PartialEq, Eq)]
+enum Plan {
+    /// A uid per app (and Landlock too, where the kernel has it).
+    Uids,
+    /// Landlock alone.
+    Landlock,
+    /// Neither: --unsandboxed, not as root.
+    Unsandboxed,
+}
+
+/// What to do to get a sandbox, for the refusals.
+const HOW: &str = "start neochumbyd as root with --app-uids FIRST-LAST, or on a kernel with Landlock; or, to run \
+                   companions as neochumbyd's own user, which they can then read and change, pass --unsandboxed \
+                   (SECURITY.md)";
+
+/// The sandbox, from whether neochumbyd is root, whether this system can
+/// change uids (Linux), whether --app-uids was given, whether the kernel
+/// has Landlock, and whether --unsandboxed was given.
+fn plan(root: bool, linux: bool, app_uids: bool, landlock: bool, unsandboxed: bool) -> Result<Plan, String> {
+    if app_uids && root && linux {
+        return Ok(Plan::Uids);
+    }
+    if landlock {
+        return Ok(Plan::Landlock);
+    }
+    if root && app_uids {
+        return Err(format!("--app-uids works on Linux only, and there's no Landlock here: {HOW}"));
+    }
+    if root {
+        return Err(format!(
+            "neochumbyd is root, with neither --app-uids nor Landlock, so companions would run as root; \
+             --unsandboxed doesn't allow that: {HOW}"
+        ));
+    }
+    if unsandboxed {
+        return Ok(Plan::Unsandboxed);
+    }
+    if app_uids {
+        return Err(format!("--app-uids needs neochumbyd started as root, and there's no Landlock here: {HOW}"));
+    }
+    Err(format!("no sandbox for companions: {HOW}"))
 }
 
 /// The uids companions get, and neochumbyd's own.
@@ -57,7 +117,7 @@ fn invalid(what: impl ToString) -> io::Error {
 /// `FIRST-LAST`, both at least 1000 (below are the system's own users),
 /// FIRST no more than LAST, and LAST below 4294967295 (-1, "no uid").
 pub fn parse_range(s: &str) -> Result<(u32, u32), String> {
-    let bad = || format!("--plugin-uids takes FIRST-LAST, each 1000 or more, not {s}");
+    let bad = || format!("--app-uids takes FIRST-LAST, each 1000 or more, not {s}");
     let (a, b) = s.split_once('-').ok_or_else(bad)?;
     let (a, b): (u32, u32) = (a.parse().map_err(|_| bad())?, b.parse().map_err(|_| bad())?);
     if a < 1000 || a > b || b == u32::MAX {
@@ -67,7 +127,7 @@ pub fn parse_range(s: &str) -> Result<(u32, u32), String> {
 }
 
 /// The ids in the third field of passwd(5) or group(5) lines.
-// Read on Linux only, where --plugin-uids works.
+// Read on Linux only, where --app-uids works.
 #[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 fn ids_in(text: &str) -> impl Iterator<Item = u32> + '_ {
     text.lines().filter_map(|l| l.split(':').nth(2)?.parse().ok())
@@ -96,50 +156,88 @@ fn allocate(apps: &BTreeMap<String, u32>, range: (u32, u32), taken: &BTreeSet<u3
     (range.0..=range.1).find(|u| !used.contains(u) && !taken.contains(u))
 }
 
-impl Plugins {
+impl Sandbox {
     /// Called first thing by `serve`, before any thread is started or any
     /// file written: as root with a range, becomes the state directory's
-    /// owner, as above. Anything else is said on stderr, and companions
-    /// run as this process's user.
-    pub fn start(state: &Path, range: Option<&str>) -> Result<Plugins, String> {
+    /// owner, as above. Refuses when there'd be no sandbox (above). Says
+    /// on stderr what programs get, and what isn't enforced.
+    pub fn start(
+        state: &Path,
+        app_uids: Option<&str>,
+        unsandboxed: bool,
+        landlock: Option<&str>,
+    ) -> Result<Sandbox, String> {
         let root = neochumby_sys::privilege::effective_uid() == 0;
-        let range = range.map(parse_range).transpose()?;
-        let uids = match (root, range) {
-            (true, Some(range)) => Uids::start(state, range)?,
-            (false, Some(_)) => {
-                eprintln!(
-                    "neochumbyd: WARNING: --plugin-uids needs neochumbyd started as root. Companions run as this \
-                     user, and can read its key and pairings."
-                );
-                None
-            }
-            (true, None) => {
-                eprintln!(
-                    "neochumbyd: WARNING: running as root without --plugin-uids. Companions run as root. Start \
-                     neochumbyd as root with --plugin-uids FIRST-LAST to give each app a uid of its own (SECURITY.md)."
-                );
-                None
-            }
-            (false, None) => {
-                eprintln!(
-                    "neochumbyd: WARNING: companions run as this user, and can read its key and pairings. Start \
-                     neochumbyd as root with --plugin-uids FIRST-LAST to give each app a uid of its own (SECURITY.md)."
-                );
-                None
-            }
+        let range = app_uids.map(parse_range).transpose()?;
+        let linux = cfg!(target_os = "linux");
+        let plan = plan(root, linux, range.is_some(), landlock.is_some(), unsandboxed)?;
+        let uids = match (plan, range) {
+            (Plan::Uids, Some(range)) => Some(Uids::start(state, range)?),
+            _ => None,
         };
-        Ok(Plugins { state: state.to_path_buf(), uids })
+        let s = Sandbox { state: state.to_path_buf(), uids, landlock: landlock.map(str::to_string) };
+        eprintln!("neochumbyd: companions and server programs get {}", s.describe(root));
+        if app_uids.is_some() && s.uids.is_none() {
+            eprintln!(
+                "neochumbyd: --app-uids isn't enforced here ({}): see the line above",
+                if root { "not on Linux" } else { "not root" }
+            );
+        }
+        Ok(s)
+    }
+
+    /// The sandbox, and what it doesn't enforce, for the log.
+    fn describe(&self, root: bool) -> String {
+        let who = if root { "root" } else { "neochumbyd's user" };
+        match (&self.uids, &self.landlock) {
+            (Some(u), Some(l)) => format!(
+                "a uid of each app's own ({}-{}) and {l}. Not enforced: the network, reading world-readable \
+                 files, resource limits, beyond what {l} restricts",
+                u.range.0, u.range.1
+            ),
+            (Some(u), None) => format!(
+                "a uid of each app's own ({}-{}), without Landlock. Not enforced: the network, reading \
+                 world-readable files (the tree included), resource limits",
+                u.range.0, u.range.1
+            ),
+            (None, Some(l)) => format!(
+                "{l}, running as {who}. Not enforced: what {l} leaves open (chmod and chown; signals before \
+                 ABI 6; truncation before ABI 3), the network beyond what it restricts, resource limits"
+            ),
+            (None, None) => format!(
+                "no sandbox (--unsandboxed), running as {who}. Not enforced: anything; they can read \
+                 neochumbyd's key and pairings and change the tree"
+            ),
+        }
+    }
+
+    /// How `app`'s programs run, for the line that says one started: its
+    /// uid, once [`Sandbox::command`] has given it one.
+    pub fn label(&self, app: &str) -> String {
+        let landlock = self.landlock.as_deref().map(|l| format!(", {l}")).unwrap_or_default();
+        match &self.uids {
+            Some(u) => {
+                let apps = u.apps.lock().unwrap_or_else(|e| e.into_inner());
+                match apps.get(app) {
+                    Some(uid) => format!("uid {uid}{landlock}"),
+                    None => format!("no uid yet{landlock}"),
+                }
+            }
+            None if self.landlock.is_some() => landlock[2..].to_string(),
+            None => "unsandboxed".to_string(),
+        }
     }
 
     /// Companions as neochumbyd's own user, for tests.
     #[cfg(test)]
-    pub fn as_neochumbyd(state: &Path) -> Plugins {
-        Plugins { state: state.to_path_buf(), uids: None }
+    pub fn as_neochumbyd(state: &Path) -> Sandbox {
+        Sandbox { state: state.to_path_buf(), uids: None, landlock: None }
     }
 
-    /// The command that runs `exe`, a companion of `app` (a valid name), in
-    /// the app's own directory, which it makes ready. `NEOCHUMBY_STATE` is
-    /// that directory; with a uid of its own, so is `HOME`.
+    /// The command that runs `exe`, a companion or the server program of
+    /// `app` (a valid name), in the app's own directory, which it makes
+    /// ready: both kinds under the app's one uid. `NEOCHUMBY_STATE` is that
+    /// directory; with a uid of its own, so is `HOME`.
     pub fn command(&self, exe: &Path, app: &str) -> io::Result<Command> {
         let home = self.state.join("apps").join(app);
         let mut cmd = Command::new(exe);
@@ -159,16 +257,12 @@ impl Plugins {
 
 impl Uids {
     #[cfg(not(target_os = "linux"))]
-    fn start(_state: &Path, _range: (u32, u32)) -> Result<Option<Uids>, String> {
-        eprintln!(
-            "neochumbyd: WARNING: --plugin-uids works on Linux only. Companions run as root here: run neochumbyd \
-             as its own user instead."
-        );
-        Ok(None)
+    fn start(_state: &Path, _range: (u32, u32)) -> Result<Uids, String> {
+        Err("--app-uids works on Linux only".to_string())
     }
 
     #[cfg(target_os = "linux")]
-    fn start(state: &Path, range: (u32, u32)) -> Result<Option<Uids>, String> {
+    fn start(state: &Path, range: (u32, u32)) -> Result<Uids, String> {
         let m = std::fs::metadata(state)
             .map_err(|e| format!("{}: {e} (make it, owned by neochumbyd's user)", state.display()))?;
         let own = (m.uid(), m.gid());
@@ -179,7 +273,7 @@ impl Uids {
             ));
         }
         if (range.0..=range.1).contains(&own.0) || (range.0..=range.1).contains(&own.1) {
-            return Err(format!("--plugin-uids {}-{} holds neochumbyd's own uid or group", range.0, range.1));
+            return Err(format!("--app-uids {}-{} holds neochumbyd's own uid or group", range.0, range.1));
         }
         if m.mode() & 0o001 == 0 {
             return Err(format!(
@@ -193,9 +287,14 @@ impl Uids {
         }
         neochumby_sys::privilege::become_user(own.0, own.1)
             .map_err(|e| format!("becoming uid {} group {}: {e}", own.0, own.1))?;
+        // The record under its old name, from before --app-uids.
+        if !state.join(RECORD).exists() && state.join(OLD_RECORD).exists() {
+            std::fs::rename(state.join(OLD_RECORD), state.join(RECORD))
+                .map_err(|e| format!("{OLD_RECORD} to {RECORD}: {e}"))?;
+        }
         let apps = parse_record(&std::fs::read_to_string(state.join(RECORD)).unwrap_or_default());
-        eprintln!("neochumbyd: running as uid {} group {}; companions get uids {}-{}", own.0, own.1, range.0, range.1);
-        Ok(Some(Uids { range, own, taken, apps: Mutex::new(apps) }))
+        eprintln!("neochumbyd: running as uid {} group {}", own.0, own.1);
+        Ok(Uids { range, own, taken, apps: Mutex::new(apps) })
     }
 
     /// `app`'s uid, given and recorded if it has none, with `home` its own.
@@ -205,13 +304,13 @@ impl Uids {
             Some(&uid) if (self.range.0..=self.range.1).contains(&uid) => uid,
             Some(&uid) => {
                 return Err(invalid(format!(
-                    "{app} has uid {uid}, outside --plugin-uids; give it back its range, or remove its line in \
+                    "{app} has uid {uid}, outside --app-uids; give it back its range, or remove its line in \
                      {RECORD} and its directory"
                 )));
             }
             None => {
                 let uid = allocate(&apps, self.range, &self.taken)
-                    .ok_or_else(|| io::Error::other("no uid left in --plugin-uids"))?;
+                    .ok_or_else(|| io::Error::other("no uid left in --app-uids"))?;
                 apps.insert(app.to_string(), uid);
                 let path = state.join(RECORD);
                 let tmp = path.with_extension("new");
@@ -277,6 +376,30 @@ mod tests {
     }
 
     #[test]
+    fn fail_closed() {
+        use Plan::*;
+        // (root, Linux, --app-uids, Landlock, --unsandboxed)
+        let ok = |a, b, c, d, e| plan(a, b, c, d, e).unwrap();
+        let refused = |a, b, c, d, e| plan(a, b, c, d, e).is_err();
+        // Either sandbox is enough; uids where they can be had.
+        assert_eq!(ok(true, true, true, true, false), Uids);
+        assert_eq!(ok(true, true, true, false, false), Uids);
+        assert_eq!(ok(false, true, false, true, false), Landlock);
+        assert_eq!(ok(true, true, false, true, false), Landlock);
+        // --app-uids that can't apply: Landlock covers it, or a refusal.
+        assert_eq!(ok(false, true, true, true, false), Landlock);
+        assert!(refused(false, true, true, false, false));
+        assert!(refused(true, false, true, false, true));
+        // Neither: only --unsandboxed, and never as root.
+        assert!(refused(false, true, false, false, false));
+        assert_eq!(ok(false, true, false, false, true), Unsandboxed);
+        assert_eq!(ok(false, true, true, false, true), Unsandboxed);
+        assert!(refused(true, true, false, false, false));
+        assert!(refused(true, true, false, false, true));
+        assert!(refused(true, false, false, false, true));
+    }
+
+    #[test]
     fn the_lowest_free_uid() {
         let mut apps = BTreeMap::new();
         let taken: BTreeSet<u32> = [61001].into();
@@ -312,7 +435,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("neochumbyd-isolate-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
-        let p = Plugins::as_neochumbyd(&dir);
+        let p = Sandbox::as_neochumbyd(&dir);
         let out = p.command(Path::new("/bin/sh"), "airplay").unwrap().args(["-c", "pwd -P"]).output().unwrap();
         let want = dir.join("apps/airplay").canonicalize().unwrap();
         assert_eq!(String::from_utf8(out.stdout).unwrap().trim(), want.to_str().unwrap());
@@ -335,7 +458,10 @@ mod tests {
         std::fs::DirBuilder::new().mode(0o711).create(&dir).unwrap();
         std::os::unix::fs::chown(&dir, Some(own), Some(own)).unwrap();
 
-        let plugins = Plugins::start(&dir, Some(range)).unwrap();
+        // Landlock or not, --app-uids applies (#9 passes Landlock in).
+        std::fs::write(dir.join(OLD_RECORD), "").unwrap();
+        let sandbox = Sandbox::start(&dir, Some(range), false, None).unwrap();
+        assert!(dir.join(RECORD).exists() && !dir.join(OLD_RECORD).exists(), "moved to its new name");
         assert_eq!(neochumby_sys::privilege::effective_uid(), own);
         let state = State::open(dir.clone()).unwrap();
         state.secure().unwrap();
@@ -346,7 +472,7 @@ mod tests {
         std::fs::write(dir.join("apps/feeds/cache/old"), "x").unwrap();
 
         let run = |app: &str, script: &str| {
-            let out = plugins.command(Path::new("/bin/sh"), app).unwrap().args(["-c", script]).output().unwrap();
+            let out = sandbox.command(Path::new("/bin/sh"), app).unwrap().args(["-c", script]).output().unwrap();
             String::from_utf8(out.stdout).unwrap()
         };
         let probe = "id -u; id -G; grep CapEff /proc/self/status; \

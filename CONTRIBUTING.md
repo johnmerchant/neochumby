@@ -205,7 +205,8 @@ expect to adjust it):
 ```sh
 tools/tree /tmp/tree doom && cargo neochumbyd
 B=target/x86_64-unknown-linux-musl/release/neochumbyd
-$B serve --state /tmp/nd --tree /tmp/tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049 &
+# neochumbyd as your own user (not root, which it refuses without a sandbox)
+sudo -u "$SUDO_USER" $B serve --state /tmp/nd --tree /tmp/tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049 --unsandboxed &
 dev/emulate mkstick /tmp/stick.img            # an empty FAT stick
 dev/emulate start --stick /tmp/stick.img --server 127.0.0.1 /tmp/tree
 dev/emulate tap 80 220                        # PAIR, on neochumby-home
@@ -450,8 +451,9 @@ the app:
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
   and `NEOCHUMBY_STATE` (a directory of its own, and its working
   directory). It should exit when its stdin closes.
-- **Its own uid:** with `--plugin-uids`, a companion runs as a uid of its
-  app's own, with `HOME` set to `NEOCHUMBY_STATE`. Keep everything it
+- **Its own uid:** with `--app-uids`, a companion runs as a uid of its
+  app's own (the same as its app's server program), with `HOME` set to
+  `NEOCHUMBY_STATE`. Keep everything it
   writes there: it can't write neochumbyd's state, the tree or another
   app's directory.
 
