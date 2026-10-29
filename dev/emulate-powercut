@@ -33,8 +33,16 @@ tree=${1:?usage: dev/emulate-powercut TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/emulate-powercut TREE NEOCHUMBYD OUT}
 out=${3:?usage: dev/emulate-powercut TREE NEOCHUMBYD OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
+# On a Mac, user mode runs in dev/emulate's Linux, as dev/emulate-smoke
+# does (the other backends run on the Mac itself).
+if [ "$(uname)" = Darwin ] && [ -z "${NEOCHUMBY_EMU_MACHINE:-}${NEOCHUMBY_EMU_DEVICE:-}" ]; then
+  exec "$dev/emulate" vm exec sh "$dev/emulate-powercut" "$@"
+fi
 mkdir -p "$out"
-state=$out/state
+# The emulator's directory: not in OUT, which may be a folder shared from a
+# Mac, where its control socket can't be.
+state=$(mktemp -d /var/tmp/neochumby-powercut.XXXXXX)
+trap 'rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
 step() { echo "== $*"; }
 fail() {
@@ -87,7 +95,12 @@ if [ "$backend" = device ]; then
   exit 0
 fi
 
-# User mode, everything on this PC.
+# User mode, everything on this PC. The stick is a FAT image: a kernel
+# without vfat (Apple's container's) can't run this.
+if ! grep -qw vfat /proc/filesystems && ! modprobe -q vfat 2>/dev/null; then
+  echo "dev/emulate-powercut: skipped: this kernel has no vfat (on a Mac, NEOCHUMBY_EMU_VM=lima has)"
+  exit 77
+fi
 work=$out/tree
 ndstate=$out/nd
 rm -rf "$ndstate" "$out/psp0"
@@ -96,7 +109,7 @@ mkdir -p "$out/psp0"
 api=127.0.0.1:17340
 "$neochumbyd" serve --state "$ndstate" --tree "$work" --api "$api" --nfs 127.0.0.1:12049 > "$out/neochumbyd.log" 2>&1 &
 server=$!
-trap 'kill $server 2>/dev/null || true' EXIT
+trap 'kill $server 2>/dev/null || true; rm -rf "$state"' EXIT
 nd() { "$neochumbyd" "$@" --state "$ndstate"; }
 # A clean stop: the stick is unmounted and flushed, a moment after.
 stopped() {

@@ -31,7 +31,15 @@ tree=${1:?usage: dev/emulate-classic TREE PICTURES OUT}
 pictures=${2:?usage: dev/emulate-classic TREE PICTURES OUT}
 out=${3:?usage: dev/emulate-classic TREE PICTURES OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
-state=$out/state
+# On a Mac, user mode runs in dev/emulate's Linux, as dev/emulate-smoke
+# does (the other backends run on the Mac itself).
+if [ "$(uname)" = Darwin ] && [ -z "${NEOCHUMBY_EMU_MACHINE:-}${NEOCHUMBY_EMU_DEVICE:-}" ]; then
+  exec "$dev/emulate" vm exec sh "$dev/emulate-classic" "$@"
+fi
+# The emulator's directory: not in OUT, which may be a folder shared from a
+# Mac, where its control socket can't be.
+state=$(mktemp -d /var/tmp/neochumby-classic.XXXXXX)
+trap 'rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
 step() { echo "== $*"; }
 fail() {
