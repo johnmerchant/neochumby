@@ -4,7 +4,9 @@
 # repository pins), into emu/qemu/out/obj/qemu-system-arm.
 #
 # qemu-chumby's own build script fetches the QEMU release it pins, checks
-# the tarball's SHA-256 and applies the patches.
+# the tarball's SHA-256 and applies the patches. All of neochumby's
+# emulation runs on this binary, through qemu-chumby's chumby-machine
+# (dev/emulate, the sideloader's tests).
 set -eu
 
 here=$(cd "$(dirname "$0")" && pwd)
