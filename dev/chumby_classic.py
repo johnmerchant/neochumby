@@ -66,7 +66,8 @@ EXITED = re.compile(rb"neochumby exited: (\d+)")
 
 
 # JFFS2, as emu/src/image.rs writes it: little-endian, 16 KiB erase blocks,
-# uncompressed, no clean markers.
+# uncompressed (or, for the stick, zlib), no clean markers.
+JFFS2_COMPR_ZLIB = 6
 
 
 def jffs2_crc(data):
@@ -79,9 +80,10 @@ DT_DIR, DT_REG, DT_LNK = 4, 8, 10
 
 
 class Jffs2:
-    def __init__(self):
+    def __init__(self, compress=False):
         self.out = bytearray()
         self.next_ino = 2
+        self.compress = compress
 
     def push(self, node):
         size = (len(node) + 3) & ~3
@@ -104,15 +106,20 @@ class Jffs2:
         self.push(n)
 
     def inode(self, ino, version, mode, isize, offset, data):
-        n = self.header(0xE002, 68 + len(data))
+        stored, compr = data, 0
+        if self.compress and data:
+            z = zlib.compress(data, 9)
+            if len(z) < len(data):
+                stored, compr = z, JFFS2_COMPR_ZLIB
+        n = self.header(0xE002, 68 + len(stored))
         for v in (ino, version, mode):
             n += v.to_bytes(4, "little")
         n += bytes(4)  # uid, gid: root
-        for v in (isize, JFFS2_TIME, JFFS2_TIME, JFFS2_TIME, offset, len(data), len(data)):
+        for v in (isize, JFFS2_TIME, JFFS2_TIME, JFFS2_TIME, offset, len(stored), len(data)):
             n += v.to_bytes(4, "little")
-        n += bytes(4)  # no compression, flags 0
-        n += jffs2_crc(data).to_bytes(4, "little")
-        n += jffs2_crc(n[:60]).to_bytes(4, "little") + data
+        n += bytes([compr, 0, 0, 0])  # the compressor; flags 0
+        n += jffs2_crc(stored).to_bytes(4, "little")
+        n += jffs2_crc(n[:60]).to_bytes(4, "little") + stored
         self.push(n)
 
     def add_dir(self, path, ino):
@@ -141,9 +148,12 @@ class Jffs2:
                 self.dirent(ino, version, child, raw, DT_REG)
 
 
-def mkjffs2(path, size):
-    """A JFFS2 image of the directory, padded with erased flash to `size`."""
-    j = Jffs2()
+def mkjffs2(path, size, compress=False):
+    """A JFFS2 image of the directory, padded with erased flash to `size`;
+    with `compress`, each block of a file zlib-compressed where that's
+    smaller, as mkfs.jffs2 does (the stick: binaries with their debug
+    information would not fit the Cache partition otherwise)."""
+    j = Jffs2(compress)
     j.add_dir(path, 1)
     if len(j.out) > size:
         raise ValueError(f"{path} doesn't fit: {len(j.out)} bytes of JFFS2 in a {size}-byte partition")
@@ -205,7 +215,7 @@ def build_nand(out, nand, factory_psp, extra_psp, tree):
     shutil.copyfile(nand, out)
     with tempfile.TemporaryDirectory() as work:
         psp = mkjffs2(psp_dir(work, factory_psp, extra_psp), PSP[1])
-        cache = mkjffs2(stick_dir(work, tree), CACHE[1])
+        cache = mkjffs2(stick_dir(work, tree), CACHE[1], compress=True)
     patch_nand(out, psp, cache)
 
 
@@ -215,7 +225,7 @@ def build_nand(out, nand, factory_psp, extra_psp, tree):
 def find_qemu(given):
     """The qemu-system-arm with the machine: given, $QEMU, emu/qemu/build's,
     else one on PATH that has it; or None."""
-    for q in (given, os.environ.get("QEMU"), os.path.join(REPO, "emu", "qemu", "build", "obj", "qemu-system-arm")):
+    for q in (given, os.environ.get("QEMU"), os.path.join(REPO, "emu", "qemu", "out", "obj", "qemu-system-arm")):
         if q and os.access(q, os.X_OK):
             return q
     q = shutil.which("qemu-system-arm")

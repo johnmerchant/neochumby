@@ -53,6 +53,13 @@ cargo neochumbyd        # the server
 tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 ```
 
+The server half (neochumbyd and companions) is built for x86_64 Linux by
+default. `tools/tree --server-target aarch64-unknown-linux-musl` (64-bit
+ARM Linux) or `--server-target host` (this machine, natively; a Mac, say)
+builds companions for another, and `tools/deploy` picks the one its server
+runs. A companion must build for all three: keep anything
+platform-specific behind `cfg`, as neochumbyd does.
+
 CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
@@ -763,7 +770,11 @@ are three ways, from quickest to most faithful:
    leave your machine). Use it for anything that depends on the kernel,
    the flash, FAT, the boot or the handover to the stock software:
    `NEOCHUMBY_EMU_MACHINE=chumby-classic dev/e2e TREE NEOCHUMBYD OUT` runs
-   the same scenarios on it. CI can't, having no firmware (and it never
+   the same scenarios on it, and `dev/emulate-stock`, which only it can:
+   neochumby inside the stock boot, handing back to the stock software.
+   Put where your images are in `.env.local` at the checkout's root
+   (`NEOCHUMBY_EMU_KERNEL=`, `_NAND=`, `_PSP=` lines; git ignores it), and
+   `dev/emulate` and `dev/e2e` find them. CI can't, having no firmware (and it never
    will), so this suite is yours to run locally, and its results are the
    evidence.
 3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
@@ -793,7 +804,7 @@ yet), say which and why. A reviewer may run it on a Chumby for you.
 ### Scenarios run everywhere
 
 The automated scenarios (`dev/emulate-smoke`, `dev/emulate-powercut`,
-`dev/emulate-classic`, and any you add to `dev/e2e`) use only `dev/emulate`'s verbs, `start`, `log`/`wait log`,
+`dev/emulate-classic`, `dev/emulate-stock`, and any you add to `dev/e2e`) use only `dev/emulate`'s verbs, `start`, `log`/`wait log`,
 `shot`, `tap`, `button` and `stop`, so the same scenario runs on user
 mode, on the emulator (`--machine chumby-classic`) and on a real Chumby
 (`--device NAME`, through `neochumbyd`; remote input needs that Chumby set
