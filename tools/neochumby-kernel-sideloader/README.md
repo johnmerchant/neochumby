@@ -11,11 +11,27 @@ no NAND platform device.
 The executable is Rust.  Its ELF has a `PT_LOAD` at virtual address 0 for the
 fake rtable and the jump payload; the page-zero route is the same as the
 earlier C implementation, ported to `global_asm!` in `src/asm.rs`.  This is a
-standalone bare-metal tool (`[workspace]` in `Cargo.toml`), so it uses
-`unsafe` directly rather than living under the workspace's app-contract/unsafe
-rules; it is MIT and never runs inside the neochumby jail.
+standalone bare-metal tool (`[workspace]` in `Cargo.toml`), outside the
+workspace's app contract, but it follows the same unsafe-code rule: the raw
+layer is isolated and documented, and the rest of the crate is safe.  It is
+MIT and never runs inside the neochumby jail.
 
 The demo is for the user's own device image and emulator.
+
+## Unsafe code
+
+The crate denies `unsafe_code` and `unsafe_op_in_unsafe_fn`.  The only Rust
+`unsafe` is in `src/raw.rs`, which holds the raw Linux 2.6.16 system calls,
+the volatile memory access and the entry ABI.  Every `unsafe` block has a
+`// SAFETY:` comment, and the rest of the crate uses `raw::Mem` (a
+bounds-checked mapping) and the safe wrappers.  `src/asm.rs` is the assembly
+payload; `global_asm!` is flagged by the `unsafe_code` lint even though it
+contains no Rust `unsafe`.
+
+This is the same pattern as the workspace's `neochumby-sys`: the raw layer is
+the only place that can be unsafe, and its callers are safe.  A bootloader
+cannot avoid it entirely — it makes system calls directly and runs with the
+MMU off — but it can keep the unsafe surface small and reviewable.
 
 ## NAND access and writes
 
@@ -256,14 +272,14 @@ ATAGS command line from the sideloader: `console=ttymxc0,115200 rdinit=/init`.
 ## Files
 
 ```text
-src/main.rs             entry, option parsing, loader flow
+src/main.rs             option parsing and loader flow (safe)
 src/asm.rs              page-zero entry, kernel payload, jump and stub blobs
 src/atags.rs            ATAGS builder
 src/container.rs        QEMU loader container parser
 src/layout.rs           SDRAM addresses and default command line
-src/runtime.rs          mem* helpers and volatile copies
-src/sys.rs              syscalls, printing, string helpers, file reads
-src/trigger.rs          CVE-2009-2698 trigger, mmap and cacheflush
+src/raw.rs              raw syscalls, volatile memory, entry ABI (the only unsafe Rust)
+src/sys.rs              syscall numbers, printing, string helpers, file reads
+src/trigger.rs          CVE-2009-2698 trigger sequence
 link.ld                 page-zero PT_LOAD at 0, code at 0x10000
 build.sh                cargo build + copy the binary
 mkpayload.py            QEMU loader container
