@@ -50,7 +50,7 @@ rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # CMake 3.21 or later, for fetch
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
-tools/tree /tmp/tree doom quake airplay fetch htop top   # a whole tree, with apps
+tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 ```
 
 CI runs the same checks on every pull request. To run them yourself:
@@ -376,6 +376,7 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `system` | `/proc`, `/sys` and `/etc` |
 | `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
+| `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
 | `root` | no jail: it runs as root, as the session does. Listed alone |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
@@ -492,7 +493,8 @@ the app:
   and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
   stdin closes.
 
-`apps/airplay` is a worked example of both halves.
+`apps/airplay` is a worked example of both halves, and `apps/logs` one
+whose companion is optional.
 
 ## Files in the tree
 

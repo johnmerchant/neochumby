@@ -76,6 +76,8 @@ pub struct Access {
     pub network: bool,
     /// /dev/ptmx and /dev/pts.
     pub terminal: bool,
+    /// The Chumby's logs, read-only.
+    pub logs: bool,
     /// No jail: root, as the session.
     pub root: bool,
 }
@@ -94,6 +96,7 @@ impl Access {
                 "system" => a.system = true,
                 "network" => a.network = true,
                 "terminal" => a.terminal = true,
+                "logs" => a.logs = true,
                 "root" => a.root = true,
                 _ => {}
             }

@@ -134,6 +134,37 @@ impl Link {
             },
         }
     }
+
+    /// The companion's next frame if one comes within `t`, else None; for
+    /// an app that sends while it waits. Once the companion has gone it
+    /// fails, with [`io::ErrorKind::BrokenPipe`].
+    pub fn recv_timeout(&mut self, t: Duration) -> io::Result<Option<Vec<u8>>> {
+        let gone = || io::Error::new(io::ErrorKind::BrokenPipe, "the companion has gone");
+        match &mut self.0 {
+            Inner::Relayed(sock, inbox) => {
+                sock.set_read_timeout(Some(t))?;
+                let r = loop {
+                    match inbox.next(sock) {
+                        Ok(None | Some((CLOSED, _))) => break Err(gone()),
+                        Ok(Some((DATA, f))) => break Ok(Some(f)),
+                        Ok(Some(_)) => {}
+                        // What has come of a message waits in the inbox.
+                        Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => {
+                            break Ok(None);
+                        }
+                        Err(e) => break Err(e),
+                    }
+                };
+                sock.set_read_timeout(None)?;
+                r
+            }
+            Inner::Direct(s) => match s.recv_timeout(t)? {
+                Some(Msg::Data(f)) => Ok(Some(f)),
+                Some(Msg::Closed) => Err(gone()),
+                _ => Ok(None),
+            },
+        }
+    }
 }
 
 impl Drop for Link {
