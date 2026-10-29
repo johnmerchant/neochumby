@@ -7,7 +7,7 @@
 //!   /mnt/neochumby/apps/<name>/   its directory, bound from the tree, read-
 //!                                 only (the tree is); NEOCHUMBY_ROOT and its
 //!                                 working directory
-//!   /tmp                          its own tmpfs (nosuid, nodev), HOME
+//!   /tmp                          its own tmpfs (nosuid, nodev, noexec), HOME
 //!   /dev/null zero random urandom
 //!
 //! and, as its `access` lists:
@@ -17,7 +17,8 @@
 //!             read-only                    (its exec only)
 //!   speaker   /dev/dsp, and /tmp/neochumby, where processes hand the
 //!             speaker over (neochumby::audio), shared by every app that
-//!             lists it; the mute and the volume are the session's
+//!             lists it (a nosuid, nodev, noexec tmpfs); the mute and the
+//!             volume are the session's
 //!   accel     /dev/accel
 //!   system    /proc, /sys and /etc
 //!   network   copies of /etc/resolv.conf and /etc/hosts (with `system`,
@@ -27,6 +28,11 @@
 //!             (neochumby::term)
 //!   storage   /psp/apps/<name>, its own, lasting across boots and shared
 //!             by its exec and service (storage.rs)
+//!   logs      the Chumby's logs, each file bound at its own path: the
+//!             session's (/tmp/neochumby.log), /tmp's other *.log and
+//!             /var/log's files, as they are when the app starts; only
+//!             plain files, none setuid or setgid, readable as their
+//!             modes say (the session's log is root's, 0644)
 //!
 //! Each app runs as its own uid (from FIRST_UID, in the tree's name order:
 //! an app's exec and its service share one), with a group of the same id
@@ -44,7 +50,7 @@
 use std::ffi::OsStr;
 use std::io;
 use std::os::fd::RawFd;
-use std::os::unix::fs::{PermissionsExt, chown};
+use std::os::unix::fs::{MetadataExt, PermissionsExt, chown};
 use std::path::Path;
 use std::sync::OnceLock;
 
@@ -79,6 +85,9 @@ pub enum Role {
 
 /// The apps' names, in the tree's order, which gives their uids.
 static JAILS: OnceLock<Vec<String>> = OnceLock::new();
+/// Whether [`prepare`] succeeded. When it hasn't, [`start`] refuses every
+/// app rather than running one unjailed.
+static READY: OnceLock<bool> = OnceLock::new();
 
 /// Turns jails on for `apps` (the tree's, in name order), unless they
 /// can't be: not root, or NEOCHUMBY_JAIL=off. Once, as the session starts;
@@ -93,19 +102,33 @@ pub fn init(apps: &[App]) {
         return;
     }
     // Jails stay on even so: an app's own start fails, and says why.
-    if let Err(e) = prepare() {
-        eprintln!("neochumby: preparing jails: {e}");
-    }
+    let ready = match prepare() {
+        Ok(()) => true,
+        Err(e) => {
+            eprintln!("neochumby: preparing jails: {e}");
+            false
+        }
+    };
+    let _ = READY.set(ready);
     let _ = JAILS.set(apps.iter().map(|a| a.name.clone()).collect());
 }
 
 /// The mount point, and /tmp/neochumby for the speaker's handover: the
-/// session's, and SPEAKER_GID's.
+/// session's, and SPEAKER_GID's. The handover is a tmpfs of its own,
+/// `nosuid,nodev,noexec`: it is the one host path a speaker app may write,
+/// so nothing executable may be put there.
 fn prepare() -> io::Result<()> {
     std::fs::create_dir_all(MOUNT_POINT)?;
     std::fs::set_permissions(MOUNT_POINT, std::fs::Permissions::from_mode(0o700))?;
     let speaker = neochumby_sys::speaker::DIR;
     std::fs::create_dir_all(speaker)?;
+    // A fresh tmpfs on /tmp/neochumby. If the session is restarted, the
+    // directory is already one of ours: its st_dev differs from /tmp's.
+    let tmp = std::fs::metadata("/tmp")?;
+    let handover = std::fs::metadata(speaker)?;
+    if tmp.dev() == handover.dev() {
+        neochumby_sys::jail::mount_tmpfs(Path::new(speaker), 64, 0o770, 0, SPEAKER_GID, true)?;
+    }
     chown(speaker, Some(0), Some(SPEAKER_GID))?;
     std::fs::set_permissions(speaker, std::fs::Permissions::from_mode(0o770))
 }
@@ -133,6 +156,26 @@ pub fn offline(app: &App) -> Option<u32> {
     (jailed(app) && !app.access.network).then(|| number(app).ok()).flatten()
 }
 
+/// The Chumby's logs, for `logs`: plain files only, none setuid or setgid
+/// (a bind mount keeps its source's flags, and /var/log may not be
+/// nosuid), so no other kind of file comes into the jail with them.
+fn logs() -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    for (dir, only_logs) in [("/tmp", true), ("/var/log", false)] {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            // symlink_metadata: a link isn't followed out of the directory.
+            let plain = std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file() && m.mode() & 0o6000 == 0);
+            if plain && (!only_logs || p.extension().is_some_and(|x| x == "log")) {
+                v.push(p);
+            }
+        }
+    }
+    v.sort();
+    v
+}
+
 /// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
 /// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment, the
 /// descriptors in `keep`, and `storage` (its directory in /psp) bound in at
@@ -146,6 +189,14 @@ pub fn start(
     keep: &[RawFd],
     storage: Option<&Path>,
 ) -> io::Result<Process> {
+    if !READY.get().copied().unwrap_or(false) {
+        return Err(io::Error::other("the jail couldn't be prepared"));
+    }
+    // The ELF loader maps a PT_LOAD at vaddr 0 even though the ARM mmap
+    // path refuses MAP_FIXED below PAGE_SIZE. Refuse such a file before
+    // exec, wherever it hides in the app's directory.
+    neochumby_sys::elf::check(exe)?;
+    neochumby_sys::elf::check_app_dir(&app.dir)?;
     let uid = number(app)?;
     let a = app.access;
     let front = role == Role::Front;
@@ -196,6 +247,13 @@ pub fn start(
         // Its own, already: the session made it so (storage.rs). /psp isn't
         // `nosuid`, but nothing setuid in it can be any uid but the app's.
         j.bind(s, &path(s)?)?;
+    }
+    if a.logs {
+        for f in logs() {
+            if let Some(p) = f.to_str() {
+                j.bind(&f, p)?;
+            }
+        }
     }
     if a.network && !a.system {
         for f in NAMES {

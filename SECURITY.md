@@ -12,6 +12,12 @@
   on processes and open files. Its companion is opened for it by the
   session, so it reaches only its own. `home` alone runs as root, as it
   pairs the Chumby.
+- **The jail refuses page-zero ELFs.** A static ARM ELF with a `PT_LOAD`
+  below `0x1000`, or one that needs an interpreter, is refused, as is one
+  hidden among the app directory's executable files. An app's `/tmp` and
+  the speaker handover are `noexec`. That closes one NULL-pointer family
+  (the ARM ELF loader can map page zero even though `mmap` refuses it); it
+  does not fix the 2.6.16 kernel.
 - **That stops apps that are buggy or careless, not ones written to
   attack.** The stock kernel (Linux 2.6.16, from 2006) has no user, pid
   or network namespaces, no seccomp, no cgroups and no netfilter, and it
@@ -28,7 +34,10 @@
   `btplay`, run with an `http://` URL checked character by character as
   one argument, never through a shell. `storage` is capped by measuring
   (every 2 seconds), not by the kernel, so an app can overshoot its 64 KiB
-  briefly before it's ended.
+  briefly before it's ended. **`storage` is not `noexec`:** it's a bind
+  mount from `/psp`, and 2.6.16 can't change a bind mount's flags, so an
+  app could put a page-zero ELF there and run it. That's an open question
+  on the pull request that adds it.
 - **The app tree is served over NFSv3,** read-only and without
   authentication. Every file is served as root's, without setuid or
   setgid bits, and the Chumby mounts it `nosuid,nodev`. Anyone who can reach a neochumbyd's NFS port can read the

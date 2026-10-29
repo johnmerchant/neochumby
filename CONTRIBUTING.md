@@ -50,7 +50,7 @@ rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # CMake 3.21 or later, for fetch
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
-tools/tree /tmp/tree doom quake airplay fetch htop top   # a whole tree, with apps
+tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 ```
 
 CI runs the same checks on every pull request. To run them yourself:
@@ -268,8 +268,8 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
-music = true                         # optional: a music app (below)
 access = ["screen", "touch"]         # optional: what it reaches beyond its jail
+music = true                         # optional: a music app (below)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -372,7 +372,7 @@ by hand).
 its `service` run as a user of their own (one uid per app, from 20000), in
 a private mount namespace, chrooted into a small tmpfs that holds:
 - your app's directory from the tree, at the same path, read-only;
-- `/tmp`, your app's own (4 MB, `nosuid,nodev`), which is `HOME`;
+- `/tmp`, your app's own (4 MB, `nosuid,nodev,noexec`), which is `HOME`;
 - `/dev/null`, `zero`, `random` and `urandom`;
 - what its `access` lists, and nothing else:
 
@@ -386,6 +386,7 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
 | `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service` (below) |
+| `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
 | `root` | no jail: it runs as root, as the session does. Listed alone |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
@@ -436,6 +437,14 @@ logged.
 
 In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
 `Pipe::brightness(n)`.
+
+**Your binaries.** Each `exec` and `service` must be a static ARM ELF.
+Before it starts one, the session refuses a file with a `PT_LOAD` below
+`0x1000` (page zero), a `PT_INTERP`, or a non-ARM ELF, and it checks every
+executable file in your app's directory the same way. Page zero is where
+the ARM `mmap` check doesn't reach the ELF loader. Put helper programs in
+the app's directory, not in `/tmp`: `/tmp` and the speaker handover are
+`noexec`.
 
 **The network.** The stock kernel can't take the network away from a
 process. Instead, once a second, the session looks for internet sockets in
@@ -585,7 +594,8 @@ the app:
   and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
   stdin closes.
 
-`apps/airplay` is a worked example of both halves.
+`apps/airplay` is a worked example of both halves, and `apps/logs` one
+whose companion is optional.
 
 ## Files in the tree
 
