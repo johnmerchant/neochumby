@@ -16,14 +16,14 @@
 //!   speaker <v>    unmute the speaker at master volume v (0-100), for a
 //!                  jailed app with `access = ["speaker"]`, which can't
 //!   speaker off    mute it again and put the boot's volume back
-//!   music pause    pause, resume or toggle the default music app, from the
-//!   music resume   start app or its service only: the session passes
-//!   music toggle   `pause` or `resume` on to that app's service
+//!   player pause   pause, resume or toggle the default player, from the
+//!   player resume  start app or its service only: the session passes
+//!   player toggle  `pause` or `resume` on to that app's service
 //!
 //! An app asks for the speaker while it plays (neochumby::audio), and
 //! carries on: only `open` and `chumby-mode` are followed by its exit.
-//! The same goes for `music`. For `toggle`, the session keeps whether the
-//! music is playing, starting as playing.
+//! The same goes for `player`. For `toggle`, the session keeps whether the
+//! player is playing, starting as playing.
 //!
 //! An app writes its request and then exits. The last request it made
 //! counts. If it hasn't exited a few seconds later, the session ends it.
@@ -38,8 +38,8 @@
 //!
 //!   front <app>    that app is now in front (also as the service starts)
 //!
-//! And what it tells the default music app's service, when the start app
-//! asks (`music`):
+//! And what it tells the default player's service, when the start app
+//! asks (`player`):
 //!
 //!   pause          stop playing, and be ready to resume
 //!   resume         play again
@@ -55,8 +55,8 @@
 //! NEOCHUMBY_REASON, when set, says why the session opened the app:
 //! `button` when the top button did. An app ignores values it doesn't know.
 //!
-//! NEOCHUMBY_MUSIC, when set, names this Chumby's default music app (an
-//! app with `music = true`): a start app's MUSIC button opens it. It's
+//! NEOCHUMBY_PLAYER, when set, names this Chumby's default player (an
+//! app with `player = true`): a start app's MUSIC button opens it. It's
 //! unset when there's none. The session sets it for everything it runs.
 
 use std::fs::File;
@@ -72,8 +72,8 @@ use neochumby_sys::fd;
 pub const ENV: &str = "NEOCHUMBY_SESSION";
 /// The variable saying why the app was opened.
 pub const REASON_ENV: &str = "NEOCHUMBY_REASON";
-/// The variable naming the default music app.
-pub const MUSIC_ENV: &str = "NEOCHUMBY_MUSIC";
+/// The variable naming the default player.
+pub const PLAYER_ENV: &str = "NEOCHUMBY_PLAYER";
 /// The longest line either end reads. Longer ones are dropped.
 pub const MAX_LINE: usize = 256;
 
@@ -88,14 +88,14 @@ pub enum Request {
     /// mute it and put back the volume it booted with: for a jailed app,
     /// which can't (neochumby::audio asks).
     Speaker(Option<u32>),
-    /// Pause, resume or toggle the default music app (the start app, and
+    /// Pause, resume or toggle the default player (the start app, and
     /// its service, only).
-    Music(Music),
+    Player(Player),
 }
 
-/// What a `music` request asks of the default music app.
+/// What a `player` request asks of the default player.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Music {
+pub enum Player {
     Pause,
     Resume,
     /// Pause if it's playing, else resume, as the session last left it.
@@ -111,9 +111,9 @@ impl Request {
             ("chumby-mode", None, None) => Some(Request::ChumbyMode),
             ("speaker", Some("off"), None) => Some(Request::Speaker(None)),
             ("speaker", Some(v), None) => v.parse().ok().filter(|v| *v <= 100).map(|v| Request::Speaker(Some(v))),
-            ("music", Some("pause"), None) => Some(Request::Music(Music::Pause)),
-            ("music", Some("resume"), None) => Some(Request::Music(Music::Resume)),
-            ("music", Some("toggle"), None) => Some(Request::Music(Music::Toggle)),
+            ("player", Some("pause"), None) => Some(Request::Player(Player::Pause)),
+            ("player", Some("resume"), None) => Some(Request::Player(Player::Resume)),
+            ("player", Some("toggle"), None) => Some(Request::Player(Player::Toggle)),
             _ => None,
         }
     }
@@ -125,9 +125,9 @@ impl Request {
             Request::ChumbyMode => "chumby-mode\n".into(),
             Request::Speaker(Some(v)) => format!("speaker {v}\n"),
             Request::Speaker(None) => "speaker off\n".into(),
-            Request::Music(Music::Pause) => "music pause\n".into(),
-            Request::Music(Music::Resume) => "music resume\n".into(),
-            Request::Music(Music::Toggle) => "music toggle\n".into(),
+            Request::Player(Player::Pause) => "player pause\n".into(),
+            Request::Player(Player::Resume) => "player resume\n".into(),
+            Request::Player(Player::Toggle) => "player toggle\n".into(),
         }
     }
 }
@@ -139,9 +139,9 @@ pub enum Notice {
     Front(String),
     /// To the start app in front: the top button was pressed.
     Button,
-    /// To the default music app's service: stop playing, ready to resume.
+    /// To the default player's service: stop playing, ready to resume.
     Pause,
-    /// To the default music app's service: play again.
+    /// To the default player's service: play again.
     Resume,
 }
 
@@ -173,10 +173,10 @@ pub fn reason() -> Option<String> {
     std::env::var(REASON_ENV).ok().filter(|r| !r.is_empty())
 }
 
-/// This Chumby's default music app, to `open`: NEOCHUMBY_MUSIC, if set to
-/// an app name. None when there's no music app (grey out a MUSIC button).
-pub fn music() -> Option<String> {
-    std::env::var(MUSIC_ENV).ok().filter(|m| valid_name(m))
+/// This Chumby's default player, to `open`: NEOCHUMBY_PLAYER, if set to
+/// an app name. None when there's no player (grey out a MUSIC button).
+pub fn player() -> Option<String> {
+    std::env::var(PLAYER_ENV).ok().filter(|m| valid_name(m))
 }
 
 /// Splits what arrives into lines. A line longer than [`MAX_LINE`], or not
@@ -273,10 +273,10 @@ impl Pipe {
         self.send(&Request::ChumbyMode.line())
     }
 
-    /// Asks the session to pause, resume or toggle the default music app:
+    /// Asks the session to pause, resume or toggle the default player:
     /// for a start app, or its service. Unlike `open`, carry on after it.
-    pub fn music(&mut self, what: Music) -> io::Result<()> {
-        self.send(&Request::Music(what).line())
+    pub fn player(&mut self, what: Player) -> io::Result<()> {
+        self.send(&Request::Player(what).line())
     }
 
     /// Writes a whole line, waiting for room if need be.
@@ -350,7 +350,7 @@ mod tests {
     fn requests() {
         assert_eq!(Request::parse("open doom"), Some(Request::Open("doom".into())));
         assert_eq!(Request::parse("chumby-mode"), Some(Request::ChumbyMode));
-        assert_eq!(Request::parse("music toggle"), Some(Request::Music(Music::Toggle)));
+        assert_eq!(Request::parse("player toggle"), Some(Request::Player(Player::Toggle)));
         for unknown in [
             "",
             "open",
@@ -359,14 +359,14 @@ mod tests {
             "open doom now",
             "chumby-mode please",
             "close doom",
-            "music",
-            "music stop",
-            "music pause now",
+            "player",
+            "player stop",
+            "player pause now",
         ] {
             assert_eq!(Request::parse(unknown), None, "{unknown:?}");
         }
-        let music = [Music::Pause, Music::Resume, Music::Toggle].map(Request::Music);
-        for r in [Request::Open("wx".into()), Request::ChumbyMode].into_iter().chain(music) {
+        let player = [Player::Pause, Player::Resume, Player::Toggle].map(Request::Player);
+        for r in [Request::Open("wx".into()), Request::ChumbyMode].into_iter().chain(player) {
             let line = r.line();
             assert_eq!(Request::parse(line.strip_suffix('\n').unwrap()), Some(r));
         }

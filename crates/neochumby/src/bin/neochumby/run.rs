@@ -34,9 +34,9 @@
 //! as a `button` line on its pipe when it's in front, else (or if the line
 //! can't be written) by opening it with NEOCHUMBY_REASON=button.
 //!
-//! The start app, in front, and its service may ask for `music pause`,
-//! `resume` or `toggle`. The session passes it on to the default music
-//! app's service (music.rs) as `pause` or `resume`, keeping which it last
+//! The start app, in front, and its service may ask for `player pause`,
+//! `resume` or `toggle`. The session passes it on to the default
+//! player's service (player.rs) as `pause` or `resume`, keeping which it last
 //! sent for `toggle` (playing, at first). It's not a request to leave: the
 //! app carries on. From any other app or service it's refused.
 //!
@@ -56,7 +56,7 @@ use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
-use neochumby::session::{Music, Notice, Pipe, Request};
+use neochumby::session::{Notice, Pipe, Player, Request};
 
 use neochumby_sys::jail::Process;
 use neochumby_sys::process::exited;
@@ -168,10 +168,10 @@ pub struct Session<'a, D: Device> {
     apps: &'a [App],
     root: &'a Path,
     start: &'a App,
-    /// The default music app, if there is one (music.rs).
-    music: Option<&'a App>,
-    /// Whether the music app was last told to resume (or never told): what
-    /// `music toggle` turns around.
+    /// The default player, if there is one (player.rs).
+    player: Option<&'a App>,
+    /// Whether the player was last told to resume (or never told): what
+    /// `player toggle` turns around.
     playing: bool,
     device: D,
     timing: Timing,
@@ -207,22 +207,22 @@ pub fn may_interrupt(from: &str, start: &str, front: &App, suppressed: bool) -> 
 
 impl<'a, D: Device> Session<'a, D> {
     /// `core` are the session's own services (services.rs), beside the
-    /// apps'; `music` is the default music app.
+    /// apps'; `player` is the default player.
     pub fn new(
         apps: &'a [App],
         core: &'a [App],
         root: &'a Path,
         start: &'a App,
-        music: Option<&'a App>,
+        player: Option<&'a App>,
         device: D,
         timing: Timing,
     ) -> Session<'a, D> {
-        let services = Services::new(apps, core, root, music.map(|m| m.name.as_str()), timing.service_backoff);
+        let services = Services::new(apps, core, root, player.map(|m| m.name.as_str()), timing.service_backoff);
         Session {
             apps,
             root,
             start,
-            music,
+            player,
             playing: true,
             device,
             timing,
@@ -292,7 +292,7 @@ impl<'a, D: Device> Session<'a, D> {
     fn open(&mut self, app: &'a App, reason: Option<&'static str>) -> std::io::Result<Front<'a>> {
         let exe = app.exec.as_ref().ok_or_else(|| std::io::Error::other("no exec"))?;
         let mut launch = child::launch(app, exe, Role::Front, self.root);
-        launch.music(self.music.map(|m| m.name.as_str()));
+        launch.player(self.player.map(|m| m.name.as_str()));
         if let Some(r) = reason {
             launch.env(neochumby::session::REASON_ENV, r);
         }
@@ -357,8 +357,8 @@ impl<'a, D: Device> Session<'a, D> {
                     self.speaker(from, Role::Service, on);
                     continue;
                 }
-                if let Request::Music(what) = req {
-                    self.music(&format!("service {}", from.name), from, what);
+                if let Request::Player(what) = req {
+                    self.player(&format!("service {}", from.name), from, what);
                     continue;
                 }
                 if f.asked.is_some() {
@@ -439,8 +439,8 @@ impl<'a, D: Device> Session<'a, D> {
                     self.speaker(f.app, Role::Front, on);
                     continue;
                 }
-                Some(Request::Music(what)) => {
-                    self.music(&f.app.name, f.app, what);
+                Some(Request::Player(what)) => {
+                    self.player(&f.app.name, f.app, what);
                     continue;
                 }
                 Some(Request::ChumbyMode) => Next::ChumbyMode,
@@ -485,7 +485,7 @@ impl<'a, D: Device> Session<'a, D> {
             }
             Request::ChumbyMode => Next::ChumbyMode,
             // Taken in before it gets here (watch).
-            Request::Speaker(_) | Request::Music(_) => return None,
+            Request::Speaker(_) | Request::Player(_) => return None,
             Request::Open(name) if *name == f.app.name => return None,
             Request::Open(name) => match self.openable(name) {
                 Ok(app) => Next::Open(app, None),
@@ -504,32 +504,32 @@ impl<'a, D: Device> Session<'a, D> {
         }
     }
 
-    /// `music <what>` from `app` (its exec or its service; `who` says
-    /// which, for the log): passed on to the default music app's service as
+    /// `player <what>` from `app` (its exec or its service; `who` says
+    /// which, for the log): passed on to the default player's service as
     /// `pause` or `resume`, if `app` is the start app.
-    fn music(&mut self, who: &str, app: &App, what: Music) {
-        let asked = Request::Music(what).line();
+    fn player(&mut self, who: &str, app: &App, what: Player) {
+        let asked = Request::Player(what).line();
         let asked = asked.trim_end();
         if app.name != self.start.name {
             eprintln!("neochumby: {who} asks: {asked}; refused: only the start app and its service may");
             return;
         }
-        let Some(music) = self.music else {
-            eprintln!("neochumby: {who} asks: {asked}; there's no music app here");
+        let Some(player) = self.player else {
+            eprintln!("neochumby: {who} asks: {asked}; there's no player here");
             return;
         };
         let resume = match what {
-            Music::Pause => false,
-            Music::Resume => true,
-            Music::Toggle => !self.playing,
+            Player::Pause => false,
+            Player::Resume => true,
+            Player::Toggle => !self.playing,
         };
         let notice = if resume { Notice::Resume } else { Notice::Pause };
-        match self.services.tell(&music.name, &notice) {
+        match self.services.tell(&player.name, &notice) {
             Ok(()) => {
-                eprintln!("neochumby: {who} asks: {asked}; told {}: {}", music.name, notice.line().trim_end());
+                eprintln!("neochumby: {who} asks: {asked}; told {}: {}", player.name, notice.line().trim_end());
                 self.playing = resume;
             }
-            Err(why) => eprintln!("neochumby: {who} asks: {asked}; {} can't be told: {why}", music.name),
+            Err(why) => eprintln!("neochumby: {who} asks: {asked}; {} can't be told: {why}", player.name),
         }
     }
 
@@ -752,8 +752,8 @@ mod tests {
     fn run_timed(root: &Path, choices: &[(&str, &str)], fake: Fake, timing: Timing) -> Ended {
         let all = apps::all(root);
         let start = start::choose(&all, choices.first().copied()).expect("a start app");
-        let music = crate::music::choose(&all, None);
-        Session::new(&all, &[], root, start, music, fake, timing).run()
+        let player = crate::player::choose(&all, None);
+        Session::new(&all, &[], root, start, player, fake, timing).run()
     }
 
     /// Waits for the process whose pid is in `pid_file` to be gone.
@@ -1214,32 +1214,32 @@ mod tests {
         assert_eq!(apps_log(&root), ["wx", "home", "home done", "game", "wx"]);
     }
 
-    /// The start app and its service pause and resume the music app's
+    /// The start app and its service pause and resume the player's
     /// service through the session; another app or service can't.
     #[test]
-    fn the_start_app_pauses_and_resumes_the_music_app() {
+    fn the_start_app_pauses_and_resumes_the_player() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let heard = "\"$NEOCHUMBY_ROOT/heard\"";
         let root = tree_with(
-            "music",
+            "player",
             &[
                 (
                     "home",
                     "start=true\n",
                     &format!(
-                        "echo \"home-env [$NEOCHUMBY_MUSIC]\" >> \"$log\"\n\
+                        "echo \"home-env [$NEOCHUMBY_PLAYER]\" >> \"$log\"\n\
                          if [ $runs = 1 ]; then\n  \
                            until grep -q '^radio-heard pause' \"$log\"; do sleep 0.02; done\n  \
                            ask 'open other'; exit 0\n\
                          fi\n\
-                         ask 'music toggle'; ask 'music toggle'; ask 'music resume'\n\
+                         ask 'player toggle'; ask 'player toggle'; ask 'player resume'\n\
                          until [ $(grep -c '^radio-heard [pr]' \"$log\") -ge 4 ]; do sleep 0.02; done\n\
                          touch {heard}; ask chumby-mode"
                     ),
                 ),
                 // Not the start app, nor its service: refused.
-                ("other", "", "ask 'music pause'"),
-                ("radio", "title=RADIO\nmusic=true\n", "exit 0"),
+                ("other", "", "ask 'player pause'"),
+                ("radio", "title=RADIO\nplayer=true\n", "exit 0"),
             ],
             &[
                 (
@@ -1248,13 +1248,13 @@ mod tests {
                        [ \"$line\" = 'front home' ] && [ ! -f \"$NEOCHUMBY_ROOT/once\" ] || continue\n  \
                        touch \"$NEOCHUMBY_ROOT/once\"\n  \
                        until grep -q '^radio-svc' \"$log\"; do sleep 0.02; done\n  \
-                       ask 'music pause'\n\
+                       ask 'player pause'\n\
                      done",
                 ),
-                ("other", "while read -r line <&\"$NEOCHUMBY_SESSION\"; do ask 'music pause'; done"),
+                ("other", "while read -r line <&\"$NEOCHUMBY_SESSION\"; do ask 'player pause'; done"),
                 (
                     "radio",
-                    "echo \"radio-env [$NEOCHUMBY_MUSIC]\" >> \"$log\"\n\
+                    "echo \"radio-env [$NEOCHUMBY_PLAYER]\" >> \"$log\"\n\
                      while read -r line <&\"$NEOCHUMBY_SESSION\"; do echo \"radio-heard $line\" >> \"$log\"; done",
                 ),
             ],
@@ -1273,17 +1273,17 @@ mod tests {
         assert_eq!(apps, ["home", "other", "home"]);
     }
 
-    /// Without a music app, NEOCHUMBY_MUSIC is unset and `music` does
+    /// Without a player, NEOCHUMBY_PLAYER is unset and `player` does
     /// nothing; neither is a request to leave.
     #[test]
-    fn without_a_music_app_music_does_nothing() {
+    fn without_a_player_player_does_nothing() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let root = tree(
-            "nomusic",
+            "noplayer",
             &[(
                 "home",
                 "start=true\n",
-                "echo \"home-env [$NEOCHUMBY_MUSIC]\" >> \"$log\"\nask 'music toggle'\nsleep 0.5\n\
+                "echo \"home-env [$NEOCHUMBY_PLAYER]\" >> \"$log\"\nask 'player toggle'\nsleep 0.5\n\
                  echo 'home stayed' >> \"$log\"\nask chumby-mode",
             )],
         );
@@ -1330,7 +1330,7 @@ mod tests {
             button: false,
             companion: false,
             access: Default::default(),
-            music: false,
+            player: false,
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");

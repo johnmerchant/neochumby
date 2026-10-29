@@ -13,7 +13,7 @@
 //! Chumby is paired (an app that needs a neochumbyd). Pairing asks for a
 //! restart anyway, so that's when a newly paired Chumby starts them.
 //!
-//! The default music app's service is also told `pause` and `resume`, when
+//! The default player's service is also told `pause` and `resume`, when
 //! the start app asks (run.rs).
 //!
 //! The session's own services (core: neochumby-sync, for delivery=sync)
@@ -90,19 +90,19 @@ pub struct Events<'a> {
 pub struct Services<'a> {
     list: Vec<Service<'a>>,
     root: &'a Path,
-    /// The default music app, for NEOCHUMBY_MUSIC.
-    music: Option<&'a str>,
+    /// The default player, for NEOCHUMBY_PLAYER.
+    player: Option<&'a str>,
 }
 
 impl<'a> Services<'a> {
     /// The service of each app in `apps` that can run here, and each of
-    /// `core`, the session's own; none started yet. `music` is the default
-    /// music app.
+    /// `core`, the session's own; none started yet. `player` is the default
+    /// player.
     pub fn new(
         apps: &'a [App],
         core: &'a [App],
         root: &'a Path,
-        music: Option<&'a str>,
+        player: Option<&'a str>,
         backoff: Backoff,
     ) -> Services<'a> {
         let now = Instant::now();
@@ -115,7 +115,7 @@ impl<'a> Services<'a> {
             .filter_map(|a| ours(a, false))
             .chain(core.iter().filter_map(|a| ours(a, true)))
             .collect();
-        Services { list, root, music }
+        Services { list, root, player }
     }
 
     /// Starts each service that is due, with `front` as the app in front;
@@ -126,7 +126,7 @@ impl<'a> Services<'a> {
         for s in &mut self.list {
             let Some(r) = s.running.as_mut() else {
                 if Instant::now() >= s.due {
-                    s.start(self.root, self.music, front);
+                    s.start(self.root, self.player, front);
                 }
                 continue;
             };
@@ -213,9 +213,9 @@ impl<'a> Services<'a> {
 }
 
 impl Service<'_> {
-    fn start(&mut self, root: &Path, music: Option<&str>, front: &str) {
+    fn start(&mut self, root: &Path, player: Option<&str>, front: &str) {
         let mut launch = child::launch(self.app, self.exe, Role::Service, root);
-        launch.music(music);
+        launch.player(player);
         match launch.spawn() {
             Ok((child, pipe)) => {
                 eprintln!("neochumby: service {} started", self.app.name);

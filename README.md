@@ -85,7 +85,7 @@ start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
 access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
-music = true                         # a music app: MUSIC buttons may open it (needs exec and speaker)
+player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
 ```
 
 An app can use any of these keys:
@@ -131,12 +131,12 @@ An app can use any of these keys:
   `network` and `terminal`. It never sees the Chumby's key. `root`, listed alone, runs
   it unjailed, as root: only `home` does, as it pairs the Chumby.
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
-- **`music`:** a Chumby's default music app is the one a start app's MUSIC
-  button opens (`NEOCHUMBY_MUSIC`), and its MUTE button pauses and resumes
-  (the start app asks the session, which tells the music app's service).
-  It's named by `music=<app>` (`neochumbyd set NAME music=<app>`), else it's
-  `somafm`, else the first app with `music = true`. `neochumbyd pairing`
-  names the music apps in the tree.
+- **`player`:** a Chumby's default player is the one a start app's MUSIC
+  button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
+  (the start app asks the session, which tells the player's service).
+  It's named by `player=<app>` (`neochumbyd set NAME player=<app>`), else it's
+  `somafm`, else the first app with `player = true`. `neochumbyd pairing`
+  names the players in the tree.
 
 ## Building
 

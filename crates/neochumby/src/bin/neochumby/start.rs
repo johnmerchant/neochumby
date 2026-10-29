@@ -72,7 +72,7 @@ pub mod tests {
             button: false,
             companion: false,
             access: Default::default(),
-            music: false,
+            player: false,
         }
     }
 
