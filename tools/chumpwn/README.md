@@ -47,6 +47,17 @@ This is a QEMU demo for the user's own device image/emulator.
   `/psp/rfs1/rcS` hook exits before them; QEMU snapshots any incidental stock
   writes.
 
+Audit of the tree:
+
+| path | NAND/MTD use |
+| --- | --- |
+| `src/main.rs` | opens `/dev/mem` only; maps SDRAM; no MTD strings or MTD ioctl |
+| `userspace/init` | reads `/proc/mtd`, `ls /dev/mtd*` for evidence; `mknod` only console/null |
+| `run-demo.py` | stock root cmdline `/dev/mtdblock5` (read-only mount); scratch `if=mtd` with `snapshot=on`; static/guest MTD checks |
+| `mk_psp_nand.py` | host-side scratch image copy; input opened read-only |
+| `kernel/nonand.config`, `kernel/*.patch` | `CONFIG_MTD=n`; no NAND platform device on MX21ADS |
+| `kernel/build.sh` | downloads/builds kernel; no NAND access |
+
 ## Result
 
 `evidence/chumpwn-demo.log` is one serial stream.  It contains the stock
