@@ -24,11 +24,11 @@ pub trait Plat {
     /// host renderer scripts presses here.
     fn button(&mut self) -> Option<bool>;
     fn backlight(&mut self, night: bool);
-    /// Plays a stream at a volume (0-100), or stops (None).
-    fn music(&mut self, url: Option<&str>, vol: i32);
-    fn volume(&mut self, vol: i32);
-    /// Where a setting persists (`wx_music` and so on).
+    /// Where a setting persists (`wx_night` and so on).
     fn state_path(&self, name: &str) -> PathBuf;
+    /// Where something lasts only until the Chumby restarts (`music`, what
+    /// MUTE last asked the session); None if there's nowhere of our own.
+    fn run_path(&self, name: &str) -> Option<PathBuf>;
     /// Monotonic time, in microseconds.
     fn now_us(&self) -> i64;
     /// Wall clock time, in seconds since the epoch.

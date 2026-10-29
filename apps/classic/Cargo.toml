@@ -24,12 +24,15 @@ neochumby-sys.workspace = true
 [target.'cfg(target_arch = "arm")'.dependencies]
 neochumby.workspace = true
 
-# The start app (start=classic); its service keeps the backlight and the
-# music going while another app is in front.
+# The start app (start=classic); its service keeps the backlight right
+# while another app is in front. Unjailed, as home is: its pictures are in
+# the Chumby's own /tmp (a jail has a /tmp of its own), its live values
+# read /proc and /psp, and its settings are in /psp.
 [package.metadata.neochumby]
 exec = "neochumby-classic"
 start = true
 service = "neochumby-classic-service"
+access = ["root"]
 
 [lints]
 workspace = true

@@ -18,7 +18,6 @@
 //! pane TARGET FILE W H X Y VAR FRAMES           TARGET: SCREEN, page:N, pagenight:N
 //! hot SCREEN X Y W H ACTION [ARG]
 //! slider SCREEN EMPTY FULL KNOB W H X Y T0 T1 KW KH
-//! station N ID URL
 //! sun RISE SET              epoch seconds, one line per day
 //! secsopts S1 S2 ...        the slideshow timings Settings steps through
 //! logofx PAGE FILE W H X Y [FX [MODE [HOLD]]]
@@ -73,8 +72,6 @@ pub const MAXSCR: usize = 512;
 pub const MAXPANE: usize = 512;
 /// Tap zones (about 120 bytes each, with the action and argument).
 pub const MAXHOT: usize = 2048;
-/// Music stations (each a URL of up to 255 bytes).
-pub const MAXST: usize = 64;
 /// Files a manifest names (about 150 bytes each, with the name, plus its
 /// picture while it is in the cache).
 pub const MAXASSET: usize = 4096;
@@ -354,8 +351,6 @@ pub struct Manifest {
     pub panes: Vec<Pane>,
     pub hots: Vec<Hot>,
     pub sliders: Vec<Slider>,
-    /// URLs by station number; "" where none was given.
-    pub stations: Vec<String>,
     pub sun: Vec<(i64, i64)>,
     pub secs_opt: Vec<i32>,
     pub clock: Clock,
@@ -811,12 +806,6 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 }
                 q = next_space(line, p);
             }
-        } else if let Some(v) = some(sc("station %d %23s %255s"), 3).filter(|v| idx(v[0].i(), MAXST)) {
-            let k = v[0].i() as usize;
-            if o.stations.len() <= k {
-                o.stations.resize(k + 1, String::new());
-            }
-            o.stations[k] = v[2].s().to_string();
         }
     }
     o
@@ -944,10 +933,6 @@ mod tests {
         assert_eq!(m.sliders.len(), 1);
         assert_eq!((m.sliders[0].t0, m.sliders[0].t1, m.sliders[0].kw), (12, 106, 24));
         assert_eq!(m.secs_opt, vec![8, 12, 20]);
-        assert_eq!(
-            m.stations,
-            vec!["http://example.org/groovesalad".to_string(), String::new(), "http://example.org/lush".into()]
-        );
         assert_eq!(m.clock.wd, [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 6, 5, 11, 10, 13]);
         assert_eq!((m.clock.cw, m.clock.ch, m.clock.right, m.clock.y), (14, 16, 314, 22));
         assert!(m.clock.pxn.is_some() && m.ticker.pxn.is_some());

@@ -1,24 +1,23 @@
 //! The engine on the Chumby: the screen and touch through the neochumby
-//! crate, the backlight through /proc, settings in /psp, and the session's
-//! pipe (opening apps, CHUMBY MODE, the top button). The music plays in the
-//! classic service (service.rs), which follows the settings this app
-//! writes, so it carries on while another app is in front.
+//! crate, settings in /psp, and the session's pipe (opening apps, CHUMBY
+//! MODE, the top button, MUTE's `music toggle`, and the backlight, which
+//! it sets as `brightness N`; without a session, through /proc).
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
 
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touchscreen};
-use neochumby::session::{Notice, Pipe};
+use neochumby::session::{Music, Notice, Pipe};
 
 use crate::engine::Engine;
 use crate::plat::{Plat, Touch, wall_now};
 use crate::session::{Ask, Heard, Session};
 
-/// /proc/sys/sense1/brightness, 0..65535; 12000 already looks very dark.
-const NIGHT_BRIGHTNESS: u32 = 9000;
-
 pub struct Device {
+    /// The session's pipe, for the backlight only (the engine has its own
+    /// copy for the rest); None without a session.
+    light: Option<Pipe>,
     fb: Fb,
     touch: Touchscreen,
     events: VecDeque<Touch>,
@@ -63,19 +62,25 @@ impl Plat for Device {
     }
 
     fn backlight(&mut self, night: bool) {
-        let v = if night { NIGHT_BRIGHTNESS } else { 65535 };
-        let _ = std::fs::write("/proc/sys/sense1/brightness", format!("{v}\n"));
+        let v = crate::svc::brightness(night);
+        match &mut self.light {
+            Some(p) => {
+                if let Err(e) = p.brightness(v) {
+                    eprintln!("neochumby-classic: brightness: {e}");
+                }
+            }
+            None => {
+                let _ = std::fs::write("/proc/sys/sense1/brightness", format!("{v}\n"));
+            }
+        }
     }
-
-    fn music(&mut self, _url: Option<&str>, _vol: i32) {
-        // The service plays it, from wx_music, wx_station and wx_volume,
-        // which the engine has just written.
-    }
-
-    fn volume(&mut self, _vol: i32) {}
 
     fn state_path(&self, name: &str) -> PathBuf {
         Path::new("/psp").join(name)
+    }
+
+    fn run_path(&self, name: &str) -> Option<PathBuf> {
+        crate::state::run_dir().map(|d| d.join(name))
     }
 
     fn now_us(&self) -> i64 {
@@ -126,6 +131,7 @@ pub fn run(dir: PathBuf) -> i32 {
         }
     };
     let d = Device {
+        light: Pipe::from_env(),
         fb,
         touch: Touchscreen::open(),
         events: VecDeque::new(),
@@ -166,6 +172,7 @@ impl Session for SessionPipe {
         match a {
             Ask::Open(app) => self.0.open(app),
             Ask::ChumbyMode => self.0.chumby_mode(),
+            Ask::MusicToggle => self.0.music(Music::Toggle),
         }
         .is_ok()
     }

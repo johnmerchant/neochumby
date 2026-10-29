@@ -1,5 +1,5 @@
 //! What the app and its service share: where the pictures are, the
-//! settings kept in /psp (wx_music, wx_night...), and the night schedule.
+//! settings kept in /psp (wx_night, wx_nightmode...), and the night schedule.
 //! The app decides night for what it draws; the service, for the backlight
 //! while another app is in front. Both decide from the same files.
 
@@ -86,8 +86,9 @@ pub fn resolve_dir(base: &Path) -> PathBuf {
     base.to_path_buf()
 }
 
-/// The private directory for the control and stats files, and the
-/// service's record of what it plays.
+/// The private directory for the control and stats files, and whether the
+/// music was last asked to play or pause (it lasts until the Chumby
+/// restarts, as the session's own state does).
 pub const RUN_DIR: &str = "/tmp/neochumby-classic";
 
 /// [`RUN_DIR`], made (or kept) a real directory of ours, mode 0700; None if
@@ -157,27 +158,17 @@ pub fn night_now(mode: i32, sun: &[(i64, i64)], now: i64, until: i64, last: bool
     }
 }
 
-/// The manifest's sun and station lines (all the service needs of it), as
-/// the manifest parser reads them.
-pub fn feed(m: &[u8]) -> (Vec<(i64, i64)>, Vec<String>) {
+/// The manifest's sun lines (all the service needs of it), as the manifest
+/// parser reads them.
+pub fn feed(m: &[u8]) -> Vec<(i64, i64)> {
     let mut sun = Vec::new();
-    let mut stations: Vec<String> = Vec::new();
     for l in lines(m) {
         let v = scan(l, "sun %ld %ld");
         if v.len() == 2 && sun.len() < crate::manifest::MAXSUN {
             sun.push((v[0].l(), v[1].l()));
-            continue;
-        }
-        let v = scan(l, "station %d %48s %255s");
-        if v.len() == 3 && (0..crate::manifest::MAXST as i32).contains(&v[0].i()) {
-            let k = v[0].i() as usize;
-            if stations.len() <= k {
-                stations.resize(k + 1, String::new());
-            }
-            stations[k] = v[2].s().to_string();
         }
     }
-    (sun, stations)
+    sun
 }
 
 #[cfg(test)]
@@ -208,10 +199,9 @@ mod tests {
 
     #[test]
     fn what_the_service_reads() {
-        let (sun, st) =
-            feed(b"page 0 p.raw 5\nsun 1 2\nstation 2 lush http://example.org/lush\nstation 99 x y\nsun 3 4\n");
+        // An old feeder's station lines are skipped with the rest.
+        let sun = feed(b"page 0 p.raw 5\nsun 1 2\nstation 2 lush http://example.org/lush\nsun 3 4\n");
         assert_eq!(sun, vec![(1, 2), (3, 4)]);
-        assert_eq!(st, vec![String::new(), String::new(), "http://example.org/lush".into()]);
         let d = std::env::temp_dir().join(format!("classic-state-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
         save_time(&d.join("t"), 1793178706);

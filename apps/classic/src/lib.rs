@@ -1,13 +1,14 @@
 //! neochumby-classic: the 2008 Chumby's look, as a neochumby start app
 //! (`start=classic`). A feeder on a server renders every pixel (the
-//! weather, news, stocks, the aurora screensaver, the Home, Music and
-//! Settings screens) and this shows them: see engine.rs for what it does
+//! weather, news, stocks, the aurora screensaver, the Home and Settings
+//! screens) and this shows them: see engine.rs for what it does
 //! and manifest.rs for what it reads. It is the Rust port of wxshow.c, and
 //! reads the same pictures and manifest.
 //!
 //! Two programs: the app (main.rs) and its service (bin/service.rs, svc.rs),
-//! which keeps the backlight and the music going while another app is in
-//! front. They share the settings in /psp (state.rs).
+//! which keeps the backlight right while another app is in front. They
+//! share the settings in /psp (state.rs). The music is the default music
+//! app's: Home's MUSIC opens it, and MUTE pauses or resumes it.
 
 pub mod cache;
 #[cfg(target_arch = "arm")]

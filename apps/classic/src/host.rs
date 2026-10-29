@@ -19,7 +19,7 @@
 //!   5th frame), e.g. `3000:show home;5000:night on`.
 //! - `--wall`: the wall clock at the start (the clock, night mode), default
 //!   now. Local time is TZ's.
-//! - `--state`: where wx_music and so on are kept, default a temporary
+//! - `--state`: where wx_night and so on are kept, default a temporary
 //!   directory.
 //! - `--values "wifi=3,ip=192.0.2.7,uptime=3d 4h"`: fake live device
 //!   values, by key; `--device-root DIR`: read the others from copies of
@@ -149,19 +149,12 @@ impl Plat for Host {
         eprintln!("[backlight] {}", if night { "dim" } else { "full" });
     }
 
-    fn music(&mut self, url: Option<&str>, vol: i32) {
-        match url {
-            Some(u) => eprintln!("[music] play {u} at {vol}%"),
-            None => eprintln!("[music] stop"),
-        }
-    }
-
-    fn volume(&mut self, vol: i32) {
-        eprintln!("[music] volume {vol}%");
-    }
-
     fn state_path(&self, name: &str) -> PathBuf {
         self.state.join(name)
+    }
+
+    fn run_path(&self, name: &str) -> Option<PathBuf> {
+        Some(self.state.join(name))
     }
 
     fn now_us(&self) -> i64 {
