@@ -11,6 +11,8 @@
 //!   start=true                 may be the start app (see the session)
 //!   interrupt=false            no service may replace it in front (games)
 //!   button=true                gets the top button while in front (games)
+//!   access=screen,touch        what it reaches beyond its jail (absent:
+//!                              nothing; neochumby-manifest lists the words)
 //!   music=true                 a music app: may be the default one, opened
 //!                              by MUSIC buttons; its service takes `pause`
 //!                              and `resume` (see the session)
@@ -41,6 +43,9 @@ pub struct App {
     pub exec: Option<PathBuf>,
     pub colour: u16,
     pub service: Option<PathBuf>,
+    /// It has a companion: the session opens it for the app
+    /// (neochumby::companion).
+    pub companion: bool,
     pub needs: Needs,
     /// It may be the start app: it promises to open other apps and CHUMBY
     /// MODE through the session, to keep running, and to handle the top
@@ -56,6 +61,55 @@ pub struct App {
     /// apps open for MUSIC (NEOCHUMBY_MUSIC). It promises that its service
     /// pauses and resumes on the session's `pause` and `resume` lines.
     pub music: bool,
+    /// What it reaches beyond its jail.
+    pub access: Access,
+}
+
+/// An app's `access`: what the session gives it beyond its own directory
+/// and a /tmp of its own. Each is false unless the manifest lists it.
+#[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
+pub struct Access {
+    /// /dev/fb0, for its exec only.
+    pub screen: bool,
+    /// The touchscreen and its calibration, for its exec only.
+    pub touch: bool,
+    /// /dev/dsp and the speaker's handover.
+    pub speaker: bool,
+    /// The accelerometer.
+    pub accel: bool,
+    /// /proc, /sys and /etc.
+    pub system: bool,
+    /// Internet sockets, and /etc/resolv.conf and /etc/hosts.
+    pub network: bool,
+    /// /dev/ptmx and /dev/pts.
+    pub terminal: bool,
+    /// The Chumby's logs, read-only.
+    pub logs: bool,
+    /// No jail: root, as the session.
+    pub root: bool,
+}
+
+impl Access {
+    /// From the manifest's comma-separated value; a word it doesn't know
+    /// grants nothing.
+    pub fn parse(s: &str) -> Access {
+        let mut a = Access::default();
+        for w in s.split(',').map(str::trim) {
+            match w {
+                "screen" => a.screen = true,
+                "touch" => a.touch = true,
+                "speaker" => a.speaker = true,
+                "accel" => a.accel = true,
+                "system" => a.system = true,
+                "network" => a.network = true,
+                "terminal" => a.terminal = true,
+                "logs" => a.logs = true,
+                "root" => a.root = true,
+                _ => {}
+            }
+        }
+        a
+    }
 }
 
 impl App {
@@ -87,6 +141,7 @@ pub fn load(dir: &Path) -> Option<App> {
         exec: file("exec"),
         colour: field("colour").and_then(|c| parse_colour(&c)).unwrap_or(rgb(220, 160, 40)),
         service: file("service"),
+        companion: field("companion").is_some_and(|c| !c.is_empty()),
         needs: match field("neochumbyd").as_deref() {
             Some("required") => Needs::Required,
             Some("optional") => Needs::Optional,
@@ -96,6 +151,7 @@ pub fn load(dir: &Path) -> Option<App> {
         interrupt: field("interrupt").as_deref() != Some("false"),
         button: field("button").as_deref() == Some("true"),
         music: field("music").as_deref() == Some("true"),
+        access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
     })
 }
 
@@ -106,6 +162,16 @@ pub fn root() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)))
         .unwrap_or_else(|| "/mnt/neochumby".into())
+}
+
+/// This program's own binary, to run it again (on a terminal, say): /proc's
+/// link to it, else its absolute argv[0], as the session starts apps. A
+/// jail without `system` has no /proc.
+pub fn exe() -> Option<PathBuf> {
+    std::env::current_exe().ok().or_else(|| {
+        let p = PathBuf::from(std::env::args_os().next()?);
+        p.is_absolute().then_some(p)
+    })
 }
 
 /// Every app in the tree, in name order.

@@ -8,7 +8,9 @@
 //! Prints the manifest, or fails with what is wrong: a crate not named
 //! neochumby-<name>, no metadata, an unknown key, or a value of the wrong
 //! kind. Values are strings, except `start`, `button`, `interrupt` and
-//! `music`, which are true or false. `neochumbyd` is `required` or `optional`
+//! `music`, which are true or false, and `access`, a list of what the app
+//! reaches beyond its jail ([`ACCESS`]), written as one comma-separated
+//! value. `neochumbyd` is `required` or `optional`
 //! (absent: the app never needs one), and an app with a `companion` must
 //! set it: only a neochumbyd runs companions. It is stated, not inferred
 //! from `companion`.
@@ -18,19 +20,68 @@ use std::process::ExitCode;
 use toml::Value;
 
 /// The keys an app may set, as apps.rs reads them on the Chumby.
-const KEYS: &[&str] =
-    &["title", "exec", "colour", "service", "companion", "neochumbyd", "start", "button", "interrupt", "music"];
+const KEYS: &[&str] = &[
+    "title",
+    "exec",
+    "colour",
+    "service",
+    "companion",
+    "neochumbyd",
+    "start",
+    "button",
+    "interrupt",
+    "music",
+    "access",
+];
 /// The keys among them that are true or false:
 /// - `start`: the app may be the start app;
 /// - `button`: while in front, it gets the top button;
 /// - `interrupt`: false if no service may replace it in front;
 /// - `music`: a music app, which may be a Chumby's default one. It needs an
-///   `exec`: that's what a MUSIC button opens.
+///   `exec` (that's what a MUSIC button opens) and `speaker` (or `root`) in
+///   its `access`.
 const FLAGS: &[&str] = &["start", "button", "interrupt", "music"];
+
+/// What an app may list in `access`, as the session grants it (jail.rs);
+/// without it, an app has only its own directory and a /tmp of its own:
+/// - `screen`: /dev/fb0, for its `exec` (in front), never its service;
+/// - `touch`: the touchscreen and its calibration, likewise;
+/// - `speaker`: /dev/dsp and the speaker's handover; the mute and the
+///   volume are the session's, asked for over the request pipe;
+/// - `accel`: the accelerometer;
+/// - `system`: /proc, /sys and /etc, as the app's own user sees them;
+/// - `network`: the names it needs to look hosts up (/etc/resolv.conf and
+///   /etc/hosts); without it, the session ends an app it finds with an
+///   internet socket open;
+/// - `terminal`: /dev/ptmx and /dev/pts, for a pseudo-terminal
+///   (neochumby::term);
+/// - `logs`: the Chumby's logs, read-only: the session's, /tmp's *.log
+///   and /var/log's files;
+/// - `root`: no jail: it runs as root, as the session does. Listed alone.
+const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "terminal", "logs", "root"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {
     !s.is_empty() && !s.contains(['\n', '\r', '='])
+}
+
+/// `access`'s list, checked, as one value.
+fn access(list: &[Value]) -> Result<String, String> {
+    let mut words: Vec<&str> = Vec::new();
+    for v in list {
+        match v.as_str() {
+            Some(w) if words.contains(&w) => return Err(format!("access: {w} twice")),
+            Some(w) if ACCESS.contains(&w) => words.push(w),
+            _ => return Err(format!("access: {v} is not one of {}", ACCESS.join(", "))),
+        }
+    }
+    if words.contains(&"root") && words.len() > 1 {
+        return Err("access: root is everything already; list it alone".into());
+    }
+    if words.is_empty() {
+        return Err("access: an empty list; leave it out".into());
+    }
+    Ok(words.join(","))
 }
 
 fn manifest(cargo_toml: &str) -> Result<String, String> {
@@ -50,6 +101,8 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
     for key in KEYS {
         let Some(v) = meta.get(*key) else { continue };
         let value = match (FLAGS.contains(key), v) {
+            (false, Value::Array(a)) if *key == "access" => access(a)?,
+            (false, _) if *key == "access" => return Err("access: not a list of strings".into()),
             (false, Value::String(s)) => s.clone(),
             (false, _) => return Err(format!("{key}: not a string")),
             (true, Value::Boolean(b)) => b.to_string(),
@@ -67,10 +120,17 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         None | Some("required" | "optional") => {}
         Some(v) => return Err(format!(r#"neochumbyd: {v:?} is not "required" or "optional" (or leave it out)"#)),
     }
-    // TODO: once `access` is in (#45), refuse a music app without
-    // `speaker` (or `root`) too: it couldn't play.
-    if meta.get("music").and_then(Value::as_bool) == Some(true) && !meta.contains_key("exec") {
-        return Err("music: a music app is opened, so it needs an exec".into());
+    if meta.get("music").and_then(Value::as_bool) == Some(true) {
+        if !meta.contains_key("exec") {
+            return Err("music: a music app is opened, so it needs an exec".into());
+        }
+        // Jailed, it plays only through the speaker it lists (or as root).
+        let listed = |w: &str| {
+            meta.get("access").and_then(Value::as_array).is_some_and(|a| a.iter().any(|v| v.as_str() == Some(w)))
+        };
+        if !listed("speaker") && !listed("root") {
+            return Err(r#"music: a music app plays, so its access lists "speaker""#.into());
+        }
     }
     if meta.contains_key("companion") && !meta.contains_key("neochumbyd") {
         return Err(r#"companion: only a neochumbyd runs it; set neochumbyd = "required" or "optional""#.into());
@@ -149,10 +209,35 @@ mod tests {
     }
 
     #[test]
-    fn a_music_app_has_an_exec() {
-        let m = manifest(&wrap("exec = \"neochumby-x\"\nservice = \"neochumby-x-service\"\nmusic = true")).unwrap();
-        assert_eq!(m, "exec=neochumby-x\nservice=neochumby-x-service\nmusic=true\n");
-        assert!(manifest(&wrap("service = \"neochumby-x\"\nmusic = true")).unwrap_err().starts_with("music:"));
+    fn access_is_a_list_of_what_the_session_grants() {
+        assert_eq!(manifest(&wrap(r#"access = ["screen", "touch"]"#)).unwrap(), "access=screen,touch\n");
+        assert_eq!(manifest(&wrap(r#"access = ["root"]"#)).unwrap(), "access=root\n");
+        for bad in [r#"access = "screen""#, r#"access = ["disk"]"#, r#"access = ["screen", "screen"]"#, "access = []"] {
+            assert!(manifest(&wrap(bad)).unwrap_err().starts_with("access:"), "{bad}");
+        }
+        assert!(manifest(&wrap(r#"access = ["root", "screen"]"#)).unwrap_err().contains("alone"));
+    }
+
+    #[test]
+    fn a_music_app_has_an_exec_and_the_speaker() {
+        let speaker = r#"access = ["speaker"]"#;
+        let m = manifest(&wrap(&format!(
+            "exec = \"neochumby-x\"\nservice = \"neochumby-x-service\"\nmusic = true\n{speaker}"
+        )))
+        .unwrap();
+        assert_eq!(m, "exec=neochumby-x\nservice=neochumby-x-service\nmusic=true\naccess=speaker\n");
+        let root = manifest(&wrap("exec = \"neochumby-x\"\nmusic = true\naccess = [\"root\"]")).unwrap();
+        assert_eq!(root, "exec=neochumby-x\nmusic=true\naccess=root\n");
+        // No exec, or nothing to play through.
+        assert!(
+            manifest(&wrap(&format!("service = \"neochumby-x\"\nmusic = true\n{speaker}")))
+                .unwrap_err()
+                .starts_with("music:")
+        );
+        for access in ["", r#"access = ["screen", "touch"]"#] {
+            let e = manifest(&wrap(&format!("exec = \"neochumby-x\"\nmusic = true\n{access}"))).unwrap_err();
+            assert!(e.starts_with("music:") && e.contains("speaker"), "{e}");
+        }
         assert_eq!(
             manifest(&wrap("service = \"neochumby-x\"\nmusic = false")).unwrap(),
             "service=neochumby-x\nmusic=false\n"

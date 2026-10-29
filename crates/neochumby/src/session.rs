@@ -13,12 +13,17 @@
 //!
 //!   open <app>     run that app next (an app name: apps/<app>/ in the tree)
 //!   chumby-mode    end neochumby and hand the Chumby back to its software
+//!   speaker <v>    unmute the speaker at master volume v (0-100), for a
+//!                  jailed app with `access = ["speaker"]`, which can't
+//!   speaker off    mute it again and put the boot's volume back
 //!   music pause    pause, resume or toggle the default music app, from the
 //!   music resume   start app or its service only: the session passes
 //!   music toggle   `pause` or `resume` on to that app's service
 //!
-//! `music` isn't followed by an exit: the start app carries on. The session
-//! keeps whether the music is playing for `toggle`, starting as playing.
+//! An app asks for the speaker while it plays (neochumby::audio), and
+//! carries on: only `open` and `chumby-mode` are followed by its exit.
+//! The same goes for `music`. For `toggle`, the session keeps whether the
+//! music is playing, starting as playing.
 //!
 //! An app writes its request and then exits. The last request it made
 //! counts. If it hasn't exited a few seconds later, the session ends it.
@@ -79,6 +84,10 @@ pub enum Request {
     Open(String),
     /// End neochumby; the Chumby's own software carries on.
     ChumbyMode,
+    /// Unmute the speaker at this master volume (0-100), or, with None,
+    /// mute it and put back the volume it booted with: for a jailed app,
+    /// which can't (neochumby::audio asks).
+    Speaker(Option<u32>),
     /// Pause, resume or toggle the default music app (the start app, and
     /// its service, only).
     Music(Music),
@@ -100,6 +109,8 @@ impl Request {
         match (words.next()?, words.next(), words.next()) {
             ("open", Some(app), None) if valid_name(app) => Some(Request::Open(app.to_string())),
             ("chumby-mode", None, None) => Some(Request::ChumbyMode),
+            ("speaker", Some("off"), None) => Some(Request::Speaker(None)),
+            ("speaker", Some(v), None) => v.parse().ok().filter(|v| *v <= 100).map(|v| Request::Speaker(Some(v))),
             ("music", Some("pause"), None) => Some(Request::Music(Music::Pause)),
             ("music", Some("resume"), None) => Some(Request::Music(Music::Resume)),
             ("music", Some("toggle"), None) => Some(Request::Music(Music::Toggle)),
@@ -112,6 +123,8 @@ impl Request {
         match self {
             Request::Open(app) => format!("open {app}\n"),
             Request::ChumbyMode => "chumby-mode\n".into(),
+            Request::Speaker(Some(v)) => format!("speaker {v}\n"),
+            Request::Speaker(None) => "speaker off\n".into(),
             Request::Music(Music::Pause) => "music pause\n".into(),
             Request::Music(Music::Resume) => "music resume\n".into(),
             Request::Music(Music::Toggle) => "music toggle\n".into(),
