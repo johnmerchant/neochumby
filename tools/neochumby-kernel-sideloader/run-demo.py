@@ -11,6 +11,7 @@ QEMU uses -snapshot and the drive uses snapshot=on.
 """
 import hashlib
 import os
+import re
 import select
 import socket
 import subprocess
@@ -174,7 +175,6 @@ def main():
         pump(2)
         text = bytes(buf)
         guest_checks = [
-            (b"Linux (none) 5.9.16-mx21-sideload", "uname 5.9.16-mx21-sideload"),
             (b"MTD_RC=1", "no /proc/mtd"),
             (b"MTD_DEV_RC=1", "no /dev/mtd*"),
             (b"NAND_GREP_RC=1", "no NAND in dmesg"),
@@ -187,6 +187,10 @@ def main():
             if marker not in text:
                 print(f"ERROR: 5.9.16 check failed: {what}", file=sys.stderr)
                 ok = False
+        if not re.search(rb"^Linux \(none\) 5\.9\.16-mx21-sideload #\d+ .* armv5tejl GNU/Linux\r?$",
+                         text, re.M):
+            print("ERROR: 5.9.16 check failed: uname -a is not the sideload kernel", file=sys.stderr)
+            ok = False
     p.terminate()
     time.sleep(0.5)
     try:

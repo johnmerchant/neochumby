@@ -11,6 +11,9 @@ the chip ID itself, so a zeroed 64 MiB image is enough.  The sideloaded path
 is `run-demo.py`, which needs the user's own stock zImage and NAND.
 """
 import os
+import re
+import select
+import socket
 import subprocess
 import sys
 import time
@@ -34,6 +37,9 @@ def main():
     with open(nand, "wb") as f:
         f.truncate(0x4200000)
     log_path = os.path.join(work, "recovery.log")
+    sock_path = os.path.join(work, "serial.sock")
+    if os.path.exists(sock_path):
+        os.unlink(sock_path)
     if os.path.exists(log_path):
         os.unlink(log_path)
 
@@ -43,46 +49,76 @@ def main():
         qemu, "-M", "chumby-classic", "-kernel", kernel,
         "-drive", f"if=mtd,file={nand},format=raw,snapshot=on",
         "-snapshot", "-display", "none", "-no-reboot", "-monitor", "none",
-        "-serial", f"file:{log_path}",
+        "-serial", f"unix:{sock_path},server=on,wait=off",
         "-append", "console=ttymxc0,115200 rdinit=/init loglevel=7",
         "-icount", "shift=auto,sleep=off",
     ]
-    p = subprocess.Popen(qemu_args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     checks = [
         (b"init: no sideload marker; this kernel was flashed", "no marker -> flashed"),
         (b"init: loading the NAND recovery modules", "NAND modules loaded"),
-        (b"5.9.16-mx21-sideload", "sideload kernel version"),
         (b"init: /proc/mtd: mtd0:", "/proc/mtd has mtd0"),
         (b"init: /dev/mtdblock0", "/dev/mtdblock0 exists"),
         (b"init: module mxc_nand loaded", "mxc_nand module is live"),
         (b"init: starting shell", "recovery shell started"),
     ]
-    ok = False
-    deadline = time.time() + timeout
-    try:
-        while time.time() < deadline:
-            time.sleep(0.5)
-            if not os.path.exists(log_path):
+    p = subprocess.Popen(qemu_args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
+    for _ in range(200):
+        if os.path.exists(sock_path):
+            break
+        time.sleep(0.05)
+    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+    s.connect(sock_path)
+    s.setblocking(False)
+    buf = bytearray()
+    log = open(log_path, "wb")
+
+    def pump(seconds):
+        end = time.time() + seconds
+        while time.time() < end:
+            r, _, _ = select.select([s], [], [], 0.1)
+            if not r:
                 continue
-            with open(log_path, "rb") as f:
-                text = f.read()
-            if all(marker in text for marker, _ in checks):
-                ok = True
+            try:
+                d = s.recv(65536)
+            except BlockingIOError:
+                continue
+            if not d:
                 break
-            if p.poll() is not None:
-                break
-    finally:
-        p.terminate()
-        try:
-            p.wait(timeout=5)
-        except subprocess.TimeoutExpired:
-            p.kill()
-    with open(log_path, "rb") as f:
-        text = f.read()
+            buf.extend(d)
+            log.write(d)
+            log.flush()
+
+    def wait_for(needle, seconds):
+        end = time.time() + seconds
+        while time.time() < end and p.poll() is None:
+            pump(0.2)
+            if needle in bytes(buf):
+                return True
+        return needle in bytes(buf)
+
+    ok = wait_for(b"/ # ", timeout)
+    if not ok:
+        print("ERROR: recovery check failed: no busybox prompt", file=sys.stderr)
+    else:
+        # The prompt means busybox is up; ask the kernel what it is.
+        s.sendall(b"uname -a\r")
+        pump(2)
+    p.terminate()
+    try:
+        p.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        p.kill()
+    log.close()
+    text = bytes(buf)
     for marker, what in checks:
         if marker not in text:
             print(f"ERROR: recovery check failed: {what}", file=sys.stderr)
             ok = False
+    if not re.search(rb"^Linux \(none\) 5\.9\.16-mx21-sideload #\d+ .* armv5tejl GNU/Linux\r?$",
+                     text, re.M):
+        print("ERROR: recovery check failed: uname -a is not the sideload 5.9.16 kernel",
+              file=sys.stderr)
+        ok = False
     print(f"sideload recovery demo: {'PASS' if ok else 'FAIL'}")
     print(f"log: {log_path}")
     return 0 if ok else 1
