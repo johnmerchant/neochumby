@@ -1,6 +1,7 @@
 //! The Chumbys' connections (neochumby-proto), one thread each.
 //!
-//! A paired Chumby says Hello and is welcomed, then may open an app's
+//! A paired Chumby says Hello and is welcomed, is sent its settings and
+//! the protocol's version (neochumby_proto::version), then may open an app's
 //! companion (companion.rs), make this its developer link (dev.rs), or ask
 //! for sync rounds (sync.rs). An unknown one may ask to pair: its request
 //! waits in pending/ until approved or refused (`neochumbyd approve|refuse
@@ -12,7 +13,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use neochumby_proto::{Identity, Msg, Session, valid_name};
+use neochumby_proto::{Identity, Msg, Session, valid_name, version};
 
 use crate::state::State;
 use crate::{companion, dev, sync};
@@ -65,8 +66,8 @@ fn handle(api: &Api, tcp: TcpStream) -> io::Result<()> {
                 return s.send(&Msg::Unpaired);
             };
             s.send(&Msg::Welcome)?;
-            s.send(&Msg::Config(api.state.config(&name)))?;
-            match s.recv() {
+            s.send(&version::config(&api.state.settings(&name)))?;
+            match version::after_config(&mut s) {
                 Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &name, &app, s),
                 Ok(m @ Msg::SyncHave { .. }) => sync::serve(api, &name, s, m),
                 Ok(Msg::Dev) => dev::run(api, &name, s),
