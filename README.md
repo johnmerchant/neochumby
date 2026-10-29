@@ -78,7 +78,7 @@ crate's `Cargo.toml`:
 [package.metadata.neochumby]
 title = "QUAKE"                      # listed in app lists
 exec = "neochumby-quake"             # binaries, by name; exec runs in front
-colour = "8c5a28"                    # optional
+color = "8c5a28"                    # optional; `colour` works too
 service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
@@ -86,6 +86,7 @@ start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
 access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
+player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
 ```
 
 An app can use any of these keys:
@@ -131,6 +132,12 @@ An app can use any of these keys:
   `network` and `terminal`. It never sees the Chumby's key. `root`, listed alone, runs
   it unjailed, as root: only `home` does, as it pairs the Chumby.
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
+- **`player`:** a Chumby's default player is the one a start app's MUSIC
+  button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
+  (the start app asks the session, which tells the player's service).
+  It's named by `player=<app>` (`neochumbyd set NAME player=<app>`), else it's
+  `somafm`, else the first app with `player = true`. `neochumbyd pairing`
+  names the players in the tree.
 
 ## Building
 
@@ -152,6 +159,13 @@ rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 cargo chumby          # the session and apps, for the Chumby
 cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux
 ```
+
+The server half also builds for 64-bit ARM Linux, such as a Raspberry Pi
+(`rustup target add aarch64-unknown-linux-musl`, then
+`--target aarch64-unknown-linux-musl`), or natively for the machine
+building it. `tools/deploy` builds for the server it installs on, asking
+it over ssh, and `tools/tree --server-target TRIPLE` takes a Rust target
+triple (CPU, vendor, OS and C library), or `host`.
 
 A Chumby and its neochumbyd talk TLS 1.3. To use Noise instead, build both
 with `--features neochumby-proto/noise`. Nothing is negotiated, so the two

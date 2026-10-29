@@ -18,7 +18,7 @@ cc = "1"
 title = "MATRIX"
 exec = "neochumby-cmatrix"
 access = ["screen", "touch", "terminal"]
-colour = "20c040"
+color = "20c040"
 
 [lints]
 workspace = true

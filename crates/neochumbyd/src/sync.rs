@@ -9,7 +9,7 @@
 use std::io;
 use std::time::Duration;
 
-use neochumby_proto::{Msg, Session};
+use neochumby_proto::{Delivery, Msg, Session};
 use neochumby_sync::serve::{self, Served};
 
 use crate::api::Api;
@@ -36,7 +36,7 @@ pub fn serve(api: &Api, name: &str, mut s: Session, first: Msg) -> io::Result<()
 }
 
 fn round(api: &Api, name: &str, s: &mut Session, live: [u8; 32]) -> io::Result<()> {
-    if !api.state.config(name).iter().any(|(k, v)| k == "delivery" && v == "sync") {
+    if api.state.settings(name).delivery != Some(Delivery::Sync) {
         return s.send(&Msg::Refused);
     }
     let served = match serve::scan(&api.tree, &api.hashes) {

@@ -20,7 +20,7 @@ title = "TOP"
 exec = "neochumby-top"
 # Reads every process from /proc.
 access = ["screen", "touch", "system", "terminal"]
-colour = "c8a028"
+color = "c8a028"
 
 [lints]
 workspace = true
