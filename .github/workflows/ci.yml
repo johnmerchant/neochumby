@@ -76,7 +76,7 @@ jobs:
             -p neochumby-airplay --bin neochumby-airplay-companion
       - name: A tree, as tools/tree lays it out
         if: matrix.proto == 'tls'
-        run: tools/tree "$RUNNER_TEMP/tree" doom quake airplay fetch somafm && find "$RUNNER_TEMP/tree" -type f | sort
+        run: tools/tree "$RUNNER_TEMP/tree" doom quake airplay fetch && find "$RUNNER_TEMP/tree" -type f | sort
       # That tree booted as a Chumby would, under qemu-arm (dev/emulate):
       # the home screen, a tap on DOOM, the devices, the corner hold, CHUMBY
       # MODE, and a boot from a stick image.
@@ -87,11 +87,13 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
           sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"
-      # SomaFM in that tree: its screen drawn as the host draws it, the
-      # taps, the storage, and the streams it asks the session to play.
+      # SomaFM, in a tree of its own (the smoke test's stick is sized for
+      # the tree above): its screen drawn as the host draws it, the taps,
+      # the storage, and the streams it asks the session to play.
       - name: SomaFM under dev/emulate
         if: matrix.proto == 'tls'
         timeout-minutes: 5
         run: |
+          tools/tree "$RUNNER_TEMP/somafm-tree" somafm
           cargo build -p neochumby-somafm --bin neochumby-somafm
-          sudo dev/emulate-somafm "$RUNNER_TEMP/tree" "$PWD/target/debug/neochumby-somafm" "$RUNNER_TEMP/somafm"
+          sudo dev/emulate-somafm "$RUNNER_TEMP/somafm-tree" "$PWD/target/debug/neochumby-somafm" "$RUNNER_TEMP/somafm"
