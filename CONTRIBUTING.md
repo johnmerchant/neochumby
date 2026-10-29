@@ -186,14 +186,16 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
-**AirPlay's now-playing screen** (`dev/emulate-airplay TREE NEOCHUMBYD
-OUT`; CI runs it). A neochumbyd on the PC runs the airplay app's companion
-with `dev/fake-shairport` in shairport-sync's place: made-up metadata, a
-generated cover, silence, and a sender's remote-control server. The
-emulated Chumby pairs through neochumby-home's PAIR, and the script checks
-that:
-- the stream beginning opens the screen over the home screen, with the
-  cover in its box;
+**Now playing** (`dev/emulate-nowplaying TREE NEOCHUMBYD OUT`; CI runs
+it). A neochumbyd on the PC runs the airplay and nowplaying apps'
+companions, with `dev/fake-shairport` in shairport-sync's place: made-up
+metadata, a generated cover, silence, and a sender's remote-control server.
+The emulated Chumby pairs through neochumby-home's PAIR, and the script
+checks that:
+- nowplaying's service reads the airplay app's metadata, and NOW PLAYING,
+  opened from the home screen, is ready for AirPlay;
+- when the fake phone plays, the screen shows the track, with the cover in
+  its box;
 - play/pause and next on the screen reach the sender as DACP requests,
   with its Active-Remote token, and the screen shows their effect;
 - the stream ending leaves the screen ready for AirPlay.
