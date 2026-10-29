@@ -1,0 +1,26 @@
+[package]
+name = "neochumby-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "A test app for the end-to-end scenarios: a known screen, and every touch it sees on stderr"
+
+# Built into a tree only for the scenarios (`tools/tree OUT ./dev/probe`),
+# apart from the device workspace.
+[workspace]
+
+[dependencies]
+neochumby = { path = "../../crates/neochumby" }
+
+[package.metadata.neochumby]
+title = "PROBE"
+exec = "neochumby-probe"
+color = "ff00ff"
+access = ["screen", "touch"]
+
+[profile.release]
+opt-level = 2
+lto = true
+panic = "abort"
+codegen-units = 1

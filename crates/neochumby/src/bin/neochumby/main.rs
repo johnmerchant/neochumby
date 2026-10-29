@@ -8,7 +8,8 @@
 //! software.
 //!
 //! On a paired Chumby, its output also goes to its neochumbyd, which can
-//! ask it to restart, or for its screen (devlink.rs). A restart stops
+//! ask it to restart, or for its screen, and, once its owner allows it,
+//! tap its screen and press its top button (devlink.rs). A restart stops
 //! everything as CHUMBY MODE does, then runs the tree's `neochumby` in
 //! this process's place: the newest tree, deployed since boot.
 //!
@@ -33,11 +34,16 @@
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs is described in
-//! child.rs.
+//! child.rs. The default player is chosen as the session starts
+//! (player.rs).
 
 mod button;
 mod child;
+mod companion;
 mod devlink;
+mod jail;
+mod network;
+mod player;
 mod run;
 mod services;
 mod start;
@@ -50,7 +56,7 @@ use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::Command;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
 
 use neochumby::apps::{self, App, Needs};
@@ -59,6 +65,7 @@ use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
+use neochumby_proto::{Delivery, Settings};
 
 /// The escape hatch: a touch held this long in this corner. The resistive
 /// touchscreen reports brief releases during a steady hold; one shorter
@@ -152,18 +159,84 @@ fn open_button(again: bool) -> Option<File> {
     }
 }
 
+/// The speaker as the session sets it for the apps: a master volume
+/// (None: leave it), unmuted or not.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+struct Speaker {
+    volume: Option<u32>,
+    unmuted: bool,
+}
+
+impl Speaker {
+    /// As one word for an atomic: the volume in the low byte (0xff for
+    /// none), unmuted in bit 8.
+    fn word(self) -> u32 {
+        self.volume.map_or(0xff, |v| v.min(100)) | u32::from(self.unmuted) << 8
+    }
+
+    fn from_word(w: u32) -> Speaker {
+        Speaker { volume: Some(w & 0xff).filter(|v| *v <= 100), unmuted: w & 0x100 != 0 }
+    }
+}
+
+/// What the volume thread is asked for and has done, as [`Speaker::word`]s.
+/// audio::set_volume runs the stock chumby_set_volume, which the loop
+/// mustn't wait on, and one thread applying the latest keeps the order.
+/// (Atomics, not a Mutex: std's waits on futex flags 2.6.16 lacks.)
+struct Volumes {
+    want: AtomicU32,
+    done: AtomicU32,
+}
+
+impl Volumes {
+    /// Starts the thread; nothing is asked of it yet.
+    fn start() -> Arc<Volumes> {
+        let v = Arc::new(Volumes { want: AtomicU32::new(u32::MAX), done: AtomicU32::new(u32::MAX) });
+        let t = v.clone();
+        std::thread::spawn(move || {
+            loop {
+                let w = t.want.load(Ordering::SeqCst);
+                if w == t.done.load(Ordering::SeqCst) {
+                    neochumby::sleep_ms(20);
+                    continue;
+                }
+                let s = Speaker::from_word(w);
+                if let Some(v) = s.volume
+                    && let Err(e) = audio::set_volume(v)
+                {
+                    eprintln!("neochumby: setting the volume: {e}");
+                }
+                // Unmuted only if that is still what's wanted: a reset that
+                // came while the volume was being set has muted it.
+                let mute = !(s.unmuted && t.want.load(Ordering::SeqCst) == w);
+                match audio::mute(mute) {
+                    Ok(()) => eprintln!(
+                        "neochumby: the speaker: {}, volume {:?}",
+                        if mute { "muted" } else { "unmuted" },
+                        s.volume
+                    ),
+                    Err(e) => eprintln!("neochumby: the speaker's mute: {e}"),
+                }
+                t.done.store(w, Ordering::SeqCst);
+            }
+        });
+        v
+    }
+}
+
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
     boot_volume: Option<u32>,
-    /// A thread is putting the volume back.
-    restoring: Arc<AtomicBool>,
+    speaker: Arc<Volumes>,
     button: Option<File>,
     /// When the session last tried to open the button, while it hasn't got
     /// it; None once it has closed it for good.
     button_tried: Option<Instant>,
     /// Set by the developer link.
     restart: Option<Arc<AtomicBool>>,
+    /// The top button as neochumbyd holds it, through the developer link.
+    remote: Option<Arc<devlink::Remote>>,
 }
 
 impl run::Device for Chumby {
@@ -171,29 +244,22 @@ impl run::Device for Chumby {
         self.escape.swap(false, Ordering::SeqCst)
     }
 
-    /// Mutes at once (a write to /proc). The volume is put back by a
-    /// thread, since audio::set_volume runs the stock chumby_set_volume and
-    /// the loop mustn't wait on it; one at a time. As the session ends, it
-    /// waits for that, up to `wait`.
+    /// Mutes at once (a write to /proc); the volume thread puts the boot's
+    /// volume back. As the session ends, it waits for that, up to `wait`.
     fn reset_speaker(&mut self, wait: Duration) {
         if let Err(e) = audio::mute(true) {
             eprintln!("neochumby: muting the speaker: {e}");
         }
-        if let Some(v) = self.boot_volume
-            && !self.restoring.swap(true, Ordering::SeqCst)
-        {
-            let restoring = self.restoring.clone();
-            std::thread::spawn(move || {
-                if let Err(e) = audio::set_volume(v) {
-                    eprintln!("neochumby: setting the volume: {e}");
-                }
-                restoring.store(false, Ordering::SeqCst);
-            });
-        }
+        let want = Speaker { volume: self.boot_volume, unmuted: false }.word();
+        self.speaker.want.store(want, Ordering::SeqCst);
         let deadline = Instant::now() + wait;
-        while self.restoring.load(Ordering::SeqCst) && Instant::now() < deadline {
+        while self.speaker.done.load(Ordering::SeqCst) != want && Instant::now() < deadline {
             neochumby::sleep_ms(20);
         }
+    }
+
+    fn unmute(&mut self, volume: u32) {
+        self.speaker.want.store(Speaker { volume: Some(volume), unmuted: true }.word(), Ordering::SeqCst);
     }
 
     fn speaker_holder(&self) -> Option<u32> {
@@ -209,13 +275,25 @@ impl run::Device for Chumby {
             self.button_tried = Some(Instant::now());
         }
         let mut b = [0u8; 1];
-        match self.button.as_mut()?.read(&mut b) {
-            Ok(1) => Some(b[0] != 0),
+        let real = match self.button.as_mut().map(|f| f.read(&mut b)) {
+            Some(Ok(1)) => Some(b[0] != 0),
             _ => None,
-        }
+        };
+        // Read only while the app in front hasn't the button (run.rs), so
+        // a press from neochumbyd can reach it.
+        let remote = self.remote.as_ref().map(|r| {
+            r.handed_over.store(false, Ordering::SeqCst);
+            r.button.load(Ordering::SeqCst)
+        });
+        button::level(real, remote)
     }
 
+    /// Asked for only as an app with `button = true` opens (run.rs): from
+    /// then until the button is read again, neochumbyd can't press it.
     fn button_fd(&self) -> Option<RawFd> {
+        if let Some(r) = &self.remote {
+            r.handed_over.store(true, Ordering::SeqCst);
+        }
         self.button.as_ref().map(|f| f.as_raw_fd())
     }
 
@@ -234,6 +312,7 @@ fn session() {
     let link = devlink::Link::start();
     let root = apps::root();
     let all = apps::all(&root);
+    jail::init(&all);
     match conf::refresh_hook(&root) {
         Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
         Ok(false) => {}
@@ -244,15 +323,17 @@ fn session() {
     // played yet.
     let boot_volume = audio::volume();
 
-    // The server's `start`, else the local one: a name, trusted only as far
-    // as the tree goes (start.rs).
+    // The server's `start` and `player`, else the local ones: names, trusted
+    // only as far as the tree goes (start.rs, player.rs).
     let settings = settings::load();
     let core = core_services(&root, &settings);
-    let local = conf::get(conf::CONF, "start");
-    let choice = match settings::get(&settings, "start") {
-        Some(s) => Some(("the server's settings", s)),
-        None => local.as_deref().map(|s| (conf::CONF, s)),
-    };
+    let (local, local_player) = (conf::get(conf::CONF, "start"), conf::get(conf::CONF, "player"));
+    let choice = chosen(settings.start.as_deref(), local.as_deref());
+    let player = player::choose(&all, chosen(settings.player.as_deref(), local_player.as_deref()));
+    match player {
+        Some(m) => eprintln!("neochumby: the player is {}", m.name),
+        None => eprintln!("neochumby: no player here (player = true in a manifest)"),
+    }
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
@@ -265,14 +346,15 @@ fn session() {
             let chumby = Chumby {
                 escape,
                 boot_volume,
-                restoring: Arc::default(),
+                speaker: Volumes::start(),
                 button: open_button(false),
                 button_tried: Some(Instant::now()),
                 restart: link.as_ref().map(devlink::Link::restart_flag),
+                remote: link.as_ref().map(devlink::Link::remote),
             };
             // On either ending, the loop has closed the button, stopped the
             // services (neochumby-sync with them) and put the speaker back.
-            run::Session::new(&all, &core, &root, first, chumby, run::Timing::default()).run()
+            run::Session::new(&all, &core, &root, first, player, chumby, run::Timing::default()).run()
         }
     };
 
@@ -298,12 +380,21 @@ fn session() {
     }
 }
 
+/// A setting from the server, else `local` (from /psp/neochumby.conf), with
+/// where it came from.
+fn chosen<'a>(server: Option<&'a str>, local: Option<&'a str>) -> Option<(&'static str, &'a str)> {
+    match server {
+        Some(s) => Some(("the server's settings", s)),
+        None => local.map(|s| (conf::CONF, s)),
+    }
+}
+
 /// The session's own services, supervised like the apps' (services.rs) but
 /// no app's: neochumby-sync, when this Chumby's settings say
 /// `delivery=sync`. It opens no app, so it is never told what is in front
 /// and nothing it asks for is done.
-fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
-    if settings::get(settings, "delivery") != Some("sync") {
+fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
+    if settings.delivery != Some(Delivery::Sync) {
         return Vec::new();
     }
     vec![App {
@@ -311,12 +402,16 @@ fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
         name: "neochumby-sync".into(),
         title: None,
         exec: None,
-        colour: 0,
+        color: 0,
         service: Some(root.join("neochumby-sync")),
         needs: Needs::Required,
         start: false,
         interrupt: false,
         button: false,
+        // It mounts the stick.
+        companion: false,
+        access: neochumby::apps::Access { root: true, ..Default::default() },
+        player: false,
     }]
 }
 

@@ -34,6 +34,12 @@
 //! as a `button` line on its pipe when it's in front, else (or if the line
 //! can't be written) by opening it with NEOCHUMBY_REASON=button.
 //!
+//! The start app, in front, and its service may ask for `player pause`,
+//! `resume` or `toggle`. The session passes it on to the default
+//! player's service (player.rs) as `pause` or `resume`, keeping which it last
+//! sent for `toggle` (playing, at first). It's not a request to leave: the
+//! app carries on. From any other app or service it's refused.
+//!
 //! When a service exits, the session mutes the speaker and puts back the
 //! volume the Chumby booted with (neochumby::audio), so a service that dies
 //! while playing can't leave it on; unless another live process holds the
@@ -46,16 +52,19 @@
 
 use std::os::fd::RawFd;
 use std::path::Path;
-use std::process::{Child, ExitStatus};
+use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
-use neochumby::session::{Notice, Pipe, Request};
+use neochumby::session::{Notice, Pipe, Player, Request};
 
+use neochumby_sys::jail::Process;
 use neochumby_sys::process::exited;
 
 use crate::button::Edges;
 use crate::child;
+use crate::jail::{self, Role};
+use crate::network;
 use crate::services::{Backoff, Services};
 use crate::start;
 
@@ -66,6 +75,9 @@ pub trait Device {
     /// Mutes the speaker and puts back the volume the Chumby booted with,
     /// waiting up to `wait` for the volume to be set.
     fn reset_speaker(&mut self, wait: Duration);
+    /// Sets the master volume to `volume` and unmutes, for a jailed app
+    /// that asked (`speaker <volume>`).
+    fn unmute(&mut self, volume: u32);
     /// The live process holding the speaker (neochumby::audio), if one
     /// does.
     fn speaker_holder(&self) -> Option<u32>;
@@ -144,7 +156,7 @@ enum Next<'a> {
 /// The app in front.
 struct Front<'a> {
     app: &'a App,
-    child: Child,
+    child: Process,
     pipe: Pipe,
     /// What it asked for, and when it first asked.
     asked: Option<(Next<'a>, Instant)>,
@@ -156,6 +168,11 @@ pub struct Session<'a, D: Device> {
     apps: &'a [App],
     root: &'a Path,
     start: &'a App,
+    /// The default player, if there is one (player.rs).
+    player: Option<&'a App>,
+    /// Whether the player was last told to resume (or never told): what
+    /// `player toggle` turns around.
+    playing: bool,
     device: D,
     timing: Timing,
     failures: Vec<Instant>,
@@ -165,6 +182,13 @@ pub struct Session<'a, D: Device> {
     suppressed: bool,
     last_open: Option<Instant>,
     button: Edges,
+    /// The app, as its exec or its service, that the session unmuted the
+    /// speaker for: only its `speaker off` mutes it again (a player that
+    /// yielded may say so after the next one asked), and when it goes the
+    /// speaker is put back.
+    speaker_by: Option<(&'a str, Role)>,
+    /// When to look for apps on the network without `network`.
+    network: network::Watch,
 }
 
 /// Whether the service of the app `from` may replace `front` in front;
@@ -183,20 +207,23 @@ pub fn may_interrupt(from: &str, start: &str, front: &App, suppressed: bool) -> 
 
 impl<'a, D: Device> Session<'a, D> {
     /// `core` are the session's own services (services.rs), beside the
-    /// apps'.
+    /// apps'; `player` is the default player.
     pub fn new(
         apps: &'a [App],
         core: &'a [App],
         root: &'a Path,
         start: &'a App,
+        player: Option<&'a App>,
         device: D,
         timing: Timing,
     ) -> Session<'a, D> {
-        let services = Services::new(apps, core, root, timing.service_backoff);
+        let services = Services::new(apps, core, root, player.map(|m| m.name.as_str()), timing.service_backoff);
         Session {
             apps,
             root,
             start,
+            player,
+            playing: true,
             device,
             timing,
             failures: Vec::new(),
@@ -204,6 +231,8 @@ impl<'a, D: Device> Session<'a, D> {
             services,
             suppressed: false,
             button: Edges::default(),
+            speaker_by: None,
+            network: network::Watch::new(),
         }
     }
 
@@ -229,7 +258,15 @@ impl<'a, D: Device> Session<'a, D> {
             }
             self.last_open = Some(Instant::now());
             next = match self.open(app, reason) {
-                Ok(front) => self.watch(front),
+                Ok(front) => {
+                    let next = self.watch(front);
+                    // It has gone, with whatever it started.
+                    if self.speaker_by == Some((app.name.as_str(), Role::Front)) {
+                        self.speaker_by = None;
+                        self.device.reset_speaker(Duration::ZERO);
+                    }
+                    next
+                }
                 Err(e) => {
                     eprintln!("neochumby: {}: {e}", app.name);
                     self.failed(app)
@@ -254,19 +291,18 @@ impl<'a, D: Device> Session<'a, D> {
 
     fn open(&mut self, app: &'a App, reason: Option<&'static str>) -> std::io::Result<Front<'a>> {
         let exe = app.exec.as_ref().ok_or_else(|| std::io::Error::other("no exec"))?;
-        let mut cmd = child::command(exe, &app.dir, self.root);
+        let mut launch = child::launch(app, exe, Role::Front, self.root);
+        launch.player(self.player.map(|m| m.name.as_str()));
         if let Some(r) = reason {
-            cmd.env(neochumby::session::REASON_ENV, r);
+            launch.env(neochumby::session::REASON_ENV, r);
         }
         eprintln!("neochumby: opening {}{}", app.name, reason.map(|r| format!(" ({r})")).unwrap_or_default());
-        let mut inherit = Vec::new();
         if app.button
             && let Some(fd) = self.device.button_fd()
         {
-            cmd.env(neochumby::input::BUTTON_ENV, fd.to_string());
-            inherit.push(fd);
+            launch.env(neochumby::input::BUTTON_ENV, fd.to_string()).keep(fd);
         }
-        let (child, pipe) = child::spawn(cmd, &inherit)?;
+        let (child, pipe) = launch.spawn()?;
         self.services.front(&app.name);
         Ok(Front { app, child, pipe, asked: None, unknown: 0 })
     }
@@ -306,6 +342,9 @@ impl<'a, D: Device> Session<'a, D> {
             self.read(&mut f);
             let ev = self.services.poll(&f.app.name);
             if !ev.died.is_empty() {
+                if ev.died.iter().any(|(app, _)| self.speaker_by == Some((app.name.as_str(), Role::Service))) {
+                    self.speaker_by = None;
+                }
                 // The dead service, or something it started, may have held
                 // the speaker; a live player that holds it is left alone.
                 match self.device.speaker_holder() {
@@ -314,6 +353,14 @@ impl<'a, D: Device> Session<'a, D> {
                 }
             }
             for (from, req) in ev.requests {
+                if let Request::Speaker(on) = req {
+                    self.speaker(from, Role::Service, on);
+                    continue;
+                }
+                if let Request::Player(what) = req {
+                    self.player(&format!("service {}", from.name), from, what);
+                    continue;
+                }
                 if f.asked.is_some() {
                     eprintln!(
                         "neochumby: service {} asks: {}; dropped: {} has asked already",
@@ -327,6 +374,17 @@ impl<'a, D: Device> Session<'a, D> {
                     eprintln!("neochumby: service {} replaces {}", from.name, f.app.name);
                     let _ = child::end(&mut f.child, self.timing.patience);
                     return next;
+                }
+            }
+            if let Some(owners) = self.network.due() {
+                self.services.end_offline(&owners);
+                if jail::offline(f.app).is_some_and(|n| owners.contains(&n)) {
+                    eprintln!(
+                        "neochumby: {} has an internet socket open, without network access; ending it",
+                        f.app.name
+                    );
+                    let status = child::end(&mut f.child, Duration::ZERO);
+                    return self.ended(f, status);
                 }
             }
             // Exited, but not reaped yet (process::exited), so its group
@@ -348,10 +406,43 @@ impl<'a, D: Device> Session<'a, D> {
         }
     }
 
+    /// `speaker <volume>` or `speaker off` from `app`, as `role`: only for
+    /// an app whose access lists the speaker.
+    fn speaker(&mut self, app: &'a App, role: Role, on: Option<u32>) {
+        if !app.access.speaker {
+            eprintln!("neochumby: {}: asks for the speaker, but its access doesn't list it", app.name);
+            return;
+        }
+        match on {
+            Some(v) => eprintln!("neochumby: {} asks for the speaker, at {v}", app.name),
+            None => eprintln!("neochumby: {} gives the speaker back", app.name),
+        }
+        match on {
+            Some(v) => {
+                self.device.unmute(v);
+                self.speaker_by = Some((app.name.as_str(), role));
+            }
+            None if self.speaker_by == Some((app.name.as_str(), role)) => {
+                self.speaker_by = None;
+                self.device.reset_speaker(Duration::ZERO);
+            }
+            // A player that yielded, after the next one took the speaker.
+            None => {}
+        }
+    }
+
     /// Takes in what the app in front has asked for.
     fn read(&mut self, f: &mut Front<'a>) {
         for line in f.pipe.receive().lines {
             let next = match Request::parse(&line) {
+                Some(Request::Speaker(on)) => {
+                    self.speaker(f.app, Role::Front, on);
+                    continue;
+                }
+                Some(Request::Player(what)) => {
+                    self.player(&f.app.name, f.app, what);
+                    continue;
+                }
                 Some(Request::ChumbyMode) => Next::ChumbyMode,
                 Some(Request::Open(name)) => match self.openable(&name) {
                     Ok(app) => {
@@ -393,6 +484,8 @@ impl<'a, D: Device> Session<'a, D> {
                 return None;
             }
             Request::ChumbyMode => Next::ChumbyMode,
+            // Taken in before it gets here (watch).
+            Request::Speaker(_) | Request::Player(_) => return None,
             Request::Open(name) if *name == f.app.name => return None,
             Request::Open(name) => match self.openable(name) {
                 Ok(app) => Next::Open(app, None),
@@ -408,6 +501,35 @@ impl<'a, D: Device> Session<'a, D> {
                 eprintln!("neochumby: service {} asks: {}; refused: {why}", from.name, req.line().trim_end());
                 None
             }
+        }
+    }
+
+    /// `player <what>` from `app` (its exec or its service; `who` says
+    /// which, for the log): passed on to the default player's service as
+    /// `pause` or `resume`, if `app` is the start app.
+    fn player(&mut self, who: &str, app: &App, what: Player) {
+        let asked = Request::Player(what).line();
+        let asked = asked.trim_end();
+        if app.name != self.start.name {
+            eprintln!("neochumby: {who} asks: {asked}; refused: only the start app and its service may");
+            return;
+        }
+        let Some(player) = self.player else {
+            eprintln!("neochumby: {who} asks: {asked}; there's no player here");
+            return;
+        };
+        let resume = match what {
+            Player::Pause => false,
+            Player::Resume => true,
+            Player::Toggle => !self.playing,
+        };
+        let notice = if resume { Notice::Resume } else { Notice::Pause };
+        match self.services.tell(&player.name, &notice) {
+            Ok(()) => {
+                eprintln!("neochumby: {who} asks: {asked}; told {}: {}", player.name, notice.line().trim_end());
+                self.playing = resume;
+            }
+            Err(why) => eprintln!("neochumby: {who} asks: {asked}; {} can't be told: {why}", player.name),
         }
     }
 
@@ -484,6 +606,8 @@ mod tests {
     struct Fake {
         escape: Arc<AtomicBool>,
         resets: Arc<AtomicUsize>,
+        /// The volumes the speaker was unmuted at, in order.
+        unmuted: Arc<Mutex<Vec<u32>>>,
         /// The button's level, and a file standing in for it.
         down: Arc<AtomicBool>,
         switch: Option<Arc<std::fs::File>>,
@@ -502,6 +626,10 @@ mod tests {
 
         fn reset_speaker(&mut self, _wait: Duration) {
             self.resets.fetch_add(1, Ordering::SeqCst);
+        }
+
+        fn unmute(&mut self, volume: u32) {
+            self.unmuted.lock().unwrap().push(volume);
         }
 
         fn speaker_holder(&self) -> Option<u32> {
@@ -624,7 +752,8 @@ mod tests {
     fn run_timed(root: &Path, choices: &[(&str, &str)], fake: Fake, timing: Timing) -> Ended {
         let all = apps::all(root);
         let start = start::choose(&all, choices.first().copied()).expect("a start app");
-        Session::new(&all, &[], root, start, fake, timing).run()
+        let player = crate::player::choose(&all, None);
+        Session::new(&all, &[], root, start, player, fake, timing).run()
     }
 
     /// Waits for the process whose pid is in `pid_file` to be gone.
@@ -684,6 +813,29 @@ mod tests {
         // About one open every 200 ms for a second.
         let games = log(&root).iter().filter(|l| *l == "game").count();
         assert!((1..=4).contains(&games), "{games} games");
+    }
+
+    #[test]
+    fn the_speaker_is_set_for_apps_whose_access_lists_it() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree(
+            "speaker",
+            &[
+                ("home", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open quiet'"),
+                // Not allowed: nothing happens.
+                ("quiet", "", "ask 'speaker 90'; sleep 0.3; ask 'open loud'"),
+                // Unmuted at one volume, then another; its going, without
+                // `speaker off`, puts the speaker back.
+                ("loud", "access=screen,speaker\n", "ask 'speaker 40'; sleep 0.3; ask 'speaker 70'; sleep 0.3"),
+            ],
+        );
+        let fake = Fake::default();
+        let (unmuted, resets) = (fake.unmuted.clone(), fake.resets.clone());
+        run_on(&root, &[("settings", "home")], fake);
+        assert_eq!(log(&root), ["home", "quiet", "loud", "home"]);
+        assert_eq!(*unmuted.lock().unwrap(), [40, 70]);
+        // Once as loud went, and once as the session ended.
+        assert_eq!(resets.load(Ordering::SeqCst), 2);
     }
 
     #[test]
@@ -866,6 +1018,9 @@ mod tests {
             neochumby::sleep_ms(100);
             down.store(false, Ordering::SeqCst);
             wait_for(&r, "game");
+            // Up for a few of the session's ticks first, so that it sees the
+            // release whenever the game opened.
+            neochumby::sleep_ms(100);
             press(&down);
         });
         run_on(&root, &[("settings", "wx")], fake);
@@ -1059,6 +1214,83 @@ mod tests {
         assert_eq!(apps_log(&root), ["wx", "home", "home done", "game", "wx"]);
     }
 
+    /// The start app and its service pause and resume the player's
+    /// service through the session; another app or service can't.
+    #[test]
+    fn the_start_app_pauses_and_resumes_the_player() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let heard = "\"$NEOCHUMBY_ROOT/heard\"";
+        let root = tree_with(
+            "player",
+            &[
+                (
+                    "home",
+                    "start=true\n",
+                    &format!(
+                        "echo \"home-env [$NEOCHUMBY_PLAYER]\" >> \"$log\"\n\
+                         if [ $runs = 1 ]; then\n  \
+                           until grep -q '^radio-heard pause' \"$log\"; do sleep 0.02; done\n  \
+                           ask 'open other'; exit 0\n\
+                         fi\n\
+                         ask 'player toggle'; ask 'player toggle'; ask 'player resume'\n\
+                         until [ $(grep -c '^radio-heard [pr]' \"$log\") -ge 4 ]; do sleep 0.02; done\n\
+                         touch {heard}; ask chumby-mode"
+                    ),
+                ),
+                // Not the start app, nor its service: refused.
+                ("other", "", "ask 'player pause'"),
+                ("radio", "title=RADIO\nplayer=true\n", "exit 0"),
+            ],
+            &[
+                (
+                    "home",
+                    "while read -r line <&\"$NEOCHUMBY_SESSION\"; do\n  \
+                       [ \"$line\" = 'front home' ] && [ ! -f \"$NEOCHUMBY_ROOT/once\" ] || continue\n  \
+                       touch \"$NEOCHUMBY_ROOT/once\"\n  \
+                       until grep -q '^radio-svc' \"$log\"; do sleep 0.02; done\n  \
+                       ask 'player pause'\n\
+                     done",
+                ),
+                ("other", "while read -r line <&\"$NEOCHUMBY_SESSION\"; do ask 'player pause'; done"),
+                (
+                    "radio",
+                    "echo \"radio-env [$NEOCHUMBY_PLAYER]\" >> \"$log\"\n\
+                     while read -r line <&\"$NEOCHUMBY_SESSION\"; do echo \"radio-heard $line\" >> \"$log\"; done",
+                ),
+            ],
+        );
+        run(&root, &[("settings", "home")], Arc::default());
+        let log = log(&root);
+        let heard: Vec<&str> =
+            log.iter().filter_map(|l| l.strip_prefix("radio-heard ")).filter(|l| !l.starts_with("front")).collect();
+        // Paused by home's service; then toggled twice, from paused, and
+        // resumed by home.
+        assert_eq!(heard, ["pause", "resume", "pause", "resume"]);
+        assert!(log.contains(&"home-env [radio]".to_string()), "{log:?}");
+        assert!(log.contains(&"radio-env [radio]".to_string()), "{log:?}");
+        let apps: Vec<String> =
+            apps_log(&root).into_iter().filter(|l| !l.contains("-env") && !l.contains("-heard")).collect();
+        assert_eq!(apps, ["home", "other", "home"]);
+    }
+
+    /// Without a player, NEOCHUMBY_PLAYER is unset and `player` does
+    /// nothing; neither is a request to leave.
+    #[test]
+    fn without_a_player_player_does_nothing() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree(
+            "noplayer",
+            &[(
+                "home",
+                "start=true\n",
+                "echo \"home-env [$NEOCHUMBY_PLAYER]\" >> \"$log\"\nask 'player toggle'\nsleep 0.5\n\
+                 echo 'home stayed' >> \"$log\"\nask chumby-mode",
+            )],
+        );
+        run(&root, &[], Arc::default());
+        assert_eq!(log(&root), ["home", "home-env []", "home stayed"]);
+    }
+
     #[test]
     fn services_restart_and_the_speaker_is_reset() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
@@ -1090,16 +1322,19 @@ mod tests {
             name: "core".into(),
             title: None,
             exec: None,
-            colour: 0,
+            color: 0,
             service: Some(root.join("core")),
             needs: apps::Needs::Required,
             start: false,
             interrupt: false,
             button: false,
+            companion: false,
+            access: Default::default(),
+            player: false,
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");
-        Session::new(&all, &core, &root, start, Fake::default(), timing()).run();
+        Session::new(&all, &core, &root, start, None, Fake::default(), timing()).run();
         assert_eq!(apps_log(&root).into_iter().filter(|l| !l.starts_with("core")).collect::<Vec<_>>(), ["wx"]);
         assert!(log(&root).iter().filter(|l| *l == "core").count() >= 2, "restarted: {:?}", log(&root));
         assert!(!log(&root).iter().any(|l| l.starts_with("core-heard")), "told: {:?}", log(&root));

@@ -9,5 +9,8 @@
 *.raw
 *.prof
 
+# Your own settings, such as where your firmware images are (dev/emulate).
+/.env.local
+
 # Agents' worktrees
 /.claude/

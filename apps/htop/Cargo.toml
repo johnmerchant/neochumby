@@ -1,0 +1,25 @@
+[package]
+name = "neochumby-htop"
+description = "htop on the Chumby Classic, on neochumby's terminal, as a neochumby app"
+# htop is GPL-2.0-or-later, and this binary links it.
+license = "GPL-2.0-or-later"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+neochumby.workspace = true
+neochumby-ncurses.workspace = true
+
+[build-dependencies]
+cc = "1"
+
+[package.metadata.neochumby]
+title = "HTOP"
+exec = "neochumby-htop"
+# Reads every process from /proc.
+access = ["screen", "touch", "system", "terminal"]
+color = "50a03c"
+
+[lints]
+workspace = true

@@ -17,6 +17,18 @@
 //! - **Screenshot:** neochumbyd sends [`Msg::Shot`](crate::Msg::Shot); the
 //!   session answers [`Msg::Screen`](crate::Msg::Screen), then the
 //!   framebuffer as `Data` of at most [`SHOT_CHUNK`] bytes each.
+//! - **Input**, only on a Chumby whose owner set `dev=on` on its neochumbyd
+//!   ([`Settings::dev`](crate::Settings::dev)): neochumbyd sends [`Msg::Tap`](crate::Msg::Tap)
+//!   or [`Msg::Button`](crate::Msg::Button), and the Chumby answers each
+//!   with [`Msg::Done`](crate::Msg::Done), a tap once it has let go. A tap
+//!   is written to the touchscreen's input device, so every reader sees it
+//!   as a real touch; a button press goes where a real one would, except
+//!   to an app that has the button itself (`button = true`), which reads
+//!   the hardware and can't be reached. neochumbyd sends the Chumby's
+//!   settings (`Msg::Config`) again before each, so the Chumby goes by
+//!   what they are now. Without `dev=on`, both ends refuse: a pairing
+//!   lets its server read the log and the screen, but drives nothing on
+//!   the Chumby unless its owner asks for that.
 //!
 //! neochumbyd accepts this only from a paired Chumby, over the session the
 //! pairing authenticates, and bounds everything that comes: see neochumbyd's
@@ -39,7 +51,11 @@ pub const BATCH_LINES: usize = 64;
 pub const SHOT_CHUNK: usize = 32768;
 /// The largest screen neochumbyd takes: 640x480 (the Chumby's is 320x240).
 pub const MAX_SHOT_PIXELS: usize = 640 * 480;
-
+/// The longest a [`Msg::Tap`](crate::Msg::Tap) holds the screen.
+pub const MAX_HOLD_MS: u16 = 10_000;
+/// How long `neochumbyd button NAME tap` holds the button: a few of the
+/// session's 50 ms looks at it.
+pub const BUTTON_TAP_MS: u64 = 300;
 /// `line` as it is sent and kept: at most [`MAX_LINE`] bytes, without
 /// control characters (a tab stays), so a log printed on a terminal can't
 /// drive it.
