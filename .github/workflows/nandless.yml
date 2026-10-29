@@ -34,7 +34,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: emu/qemu/out
-          key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
+          key: qemu-chumby-v1
 
       - name: Build QEMU
         if: steps.qemu-cache.outputs.cache-hit != 'true'
@@ -47,7 +47,7 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/neochumby-dist
-          key: neochumby-dist-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+          key: neochumby-dist-v1
 
       - name: Build the NANDLESS image
         env:
