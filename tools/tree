@@ -27,20 +27,48 @@
 # holding your own copies (apps/doom/doom1.wad, apps/quake/id1/pak0.pak),
 # it is copied in on top.
 #
-#   tools/tree OUT [-d DATA] [APP ...]    e.g. tools/tree /tmp/t doom quake
-#                                         (zig, git and curl on PATH)
+# Companions are built for the machine neochumbyd runs on, named by
+# --server-target, a Rust target triple (CPU, vendor, OS, C library):
+#
+#   x86_64-unknown-linux-musl     a PC running Linux (the default)
+#   aarch64-unknown-linux-musl    64-bit ARM Linux, such as a Raspberry Pi
+#   host                          the machine building it, natively (a Mac,
+#                                 say, to run neochumbyd there)
+#
+#   tools/tree OUT [-d DATA] [--server-target TRIPLE] [APP ...]
+#       e.g. tools/tree /tmp/t doom quake      (zig, git and curl on PATH)
 set -eu
-out=${1:?usage: tools/tree OUT [-d DATA] [APP ...]}
+usage="usage: tools/tree OUT [-d DATA] [--server-target TRIPLE] [APP ...]"
+out=${1:?$usage}
 shift
 data=
-if [ "${1:-}" = -d ]; then
-  data=$2
-  shift 2
-fi
+server_t=x86_64-unknown-linux-musl
+while :; do
+  case ${1:-} in
+    -d)
+      data=${2:?$usage}
+      shift 2
+      ;;
+    --server-target)
+      server_t=${2:?$usage}
+      shift 2
+      ;;
+    *) break ;;
+  esac
+done
+host_t=$(rustc -vV | sed -n 's/^host: //p')
+[ "$server_t" = host ] && server_t=$host_t
+case $server_t in
+  x86_64-unknown-linux-musl | aarch64-unknown-linux-musl | "$host_t") ;;
+  *)
+    echo "tools/tree: --server-target $server_t: x86_64-unknown-linux-musl," \
+      "aarch64-unknown-linux-musl or host ($host_t)" >&2
+    exit 2
+    ;;
+esac
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 chumby_t=armv5te-unknown-linux-musleabi
-server_t=x86_64-unknown-linux-musl
 # Fetched apps: outside the repository, which cargo would otherwise take
 # for workspace members.
 sources=${XDG_CACHE_HOME:-$HOME/.cache}/neochumby/app-sources
@@ -52,8 +80,11 @@ export CARGO_TARGET_ARMV5TE_UNKNOWN_LINUX_MUSLEABI_LINKER=$root/tools/zigcc
 export CARGO_TARGET_ARMV5TE_UNKNOWN_LINUX_MUSLEABI_RUSTFLAGS="-C link-self-contained=no -C target-cpu=arm926ej-s"
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_LINKER=$root/tools/zigcc-x86_64
 export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C link-self-contained=no"
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
+export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C linker-flavor=ld.lld -C link-self-contained=yes"
 export CC_armv5te_unknown_linux_musleabi=$root/tools/zigcc AR_armv5te_unknown_linux_musleabi=$root/tools/zigar
 export CC_x86_64_unknown_linux_musl=$root/tools/zigcc-x86_64 AR_x86_64_unknown_linux_musl=$root/tools/zigar
+export CC_aarch64_unknown_linux_musl=$root/tools/zigcc-aarch64 AR_aarch64_unknown_linux_musl=$root/tools/zigar
 
 field() { sed -n "s/^$2=//p" "$1" | head -n 1; }
 

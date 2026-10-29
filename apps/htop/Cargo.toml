@@ -17,7 +17,9 @@ cc = "1"
 [package.metadata.neochumby]
 title = "HTOP"
 exec = "neochumby-htop"
-colour = "50a03c"
+# Reads every process from /proc.
+access = ["screen", "touch", "system", "terminal"]
+color = "50a03c"
 
 [lints]
 workspace = true
