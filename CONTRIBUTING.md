@@ -611,6 +611,14 @@ volume.
 In Rust, a service reads its notices with `Pipe::receive`, which doesn't
 wait, and `Notice::parse`.
 
+**An exec talking to its own service.** `neochumby::service` gives the two
+a local socket, named after the app (`neochumby::service!()`, from its
+crate's name): the service `listen`s and `accept`s, the exec `connect`s,
+and frames go both ways without waiting. Each end refuses a peer running
+as another user. Another app could still bind the name first, which keeps
+the two apart, so don't let anything critical depend on it. AirPlay's
+screen and service are an example.
+
 **Companions.** An app with a server half ships it as a second binary,
 named by `companion`. neochumbyd runs it for each paired Chumby that opens
 the app:

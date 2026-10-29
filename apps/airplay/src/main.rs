@@ -14,7 +14,7 @@
 //! It is the only one to open the companion (a second connection would
 //! start a second receiver), so it is also the now-playing screen's way to
 //! it: what the companion says about the track (neochumby_airplay::frames)
-//! goes on to the screen over a local socket (neochumby_airplay::link),
+//! goes on to the screen over the app's service socket (neochumby::service),
 //! and the screen's buttons come back the same way and go on to the
 //! companion. A screen that connects is told everything at once
 //! (neochumby_airplay::hub). When a stream begins from stopped, it asks the
@@ -35,10 +35,10 @@ use std::time::{Duration, Instant};
 
 use neochumby::audio::{self, Speaker};
 use neochumby::companion::{self, Link};
+use neochumby::service::{self, Peer};
 use neochumby::session::{Notice, Pipe, Request};
 use neochumby_airplay::frames::{AUDIO, Control, END, Frame};
 use neochumby_airplay::hub::Hub;
-use neochumby_airplay::link::{self, Peer};
 
 /// The master volume while AirPlay plays. The phone's volume is applied to
 /// the audio itself (by shairport-sync), so this only has to be loud enough
@@ -68,7 +68,7 @@ struct Screens {
 
 impl Screens {
     fn new() -> Screens {
-        let listener = link::listen(link::NAME)
+        let listener = service::listen(neochumby::service!())
             .inspect_err(|e| eprintln!("neochumby-airplay: the screen's socket: {e}; playing without it"))
             .ok();
         Screens { listener, peers: Vec::new() }
@@ -81,7 +81,7 @@ impl Screens {
         if let Some(l) = &self.listener {
             // A few at a time: an error that persists can't hold the loop.
             for _ in 0..4 {
-                match link::accept(l) {
+                match service::accept(l) {
                     Ok(Some(mut p)) => {
                         if hub.replay().iter().all(|f| p.send(f).is_ok()) {
                             self.peers.push(p);

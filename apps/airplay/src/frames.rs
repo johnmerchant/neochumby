@@ -31,10 +31,6 @@
 //!
 //! A frame this end doesn't know is ignored, so types can be added.
 
-use std::io;
-
-use neochumby_proto::frame::MAX_FRAME;
-
 pub const AUDIO: u8 = 0;
 pub const END: u8 = 1;
 pub const NAME: u8 = 2;
@@ -213,39 +209,10 @@ impl Frame {
     }
 }
 
-/// Frames out of a byte stream that arrives in pieces (a socket read
-/// without waiting): neochumby_proto::frame's u32 big-endian length, then
-/// the frame.
-#[derive(Default)]
-pub struct Reader {
-    buf: Vec<u8>,
-}
-
-impl Reader {
-    pub fn push(&mut self, data: &[u8]) {
-        self.buf.extend_from_slice(data);
-    }
-
-    /// The next whole frame, if one has arrived; an error for a length
-    /// over MAX_FRAME, after which the stream is no use.
-    pub fn frame(&mut self) -> io::Result<Option<Vec<u8>>> {
-        let Some(len) = self.buf.first_chunk::<4>() else { return Ok(None) };
-        let n = u32::from_be_bytes(*len) as usize;
-        if n > MAX_FRAME {
-            return Err(io::Error::new(io::ErrorKind::InvalidData, "frame too long"));
-        }
-        if self.buf.len() < 4 + n {
-            return Ok(None);
-        }
-        let f = self.buf[4..4 + n].to_vec();
-        self.buf.drain(..4 + n);
-        Ok(Some(f))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use neochumby_proto::frame::MAX_FRAME;
 
     #[test]
     fn frames_go_and_come_back() {
@@ -297,25 +264,5 @@ mod tests {
         let side = COVER_SIDE as usize;
         let f = Frame::Cover(Cover { width: COVER_SIDE, height: COVER_SIDE, pixels: vec![0; side * side] }).encode();
         assert!(f.len() <= MAX_FRAME);
-    }
-
-    #[test]
-    fn the_reader_takes_frames_in_pieces() {
-        let mut stream = Vec::new();
-        neochumby_proto::frame::write(&mut stream, &Frame::Name("A".into()).encode()).unwrap();
-        neochumby_proto::frame::write(&mut stream, &Frame::Link(false).encode()).unwrap();
-        let mut r = Reader::default();
-        let mut got = Vec::new();
-        for b in &stream {
-            r.push(std::slice::from_ref(b));
-            while let Some(f) = r.frame().unwrap() {
-                got.push(Frame::parse(&f).unwrap());
-            }
-        }
-        assert_eq!(got, [Frame::Name("A".into()), Frame::Link(false)]);
-
-        let mut r = Reader::default();
-        r.push(&(MAX_FRAME as u32 + 1).to_be_bytes());
-        assert!(r.frame().is_err());
     }
 }
