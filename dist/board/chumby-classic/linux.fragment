@@ -64,3 +64,24 @@ CONFIG_CGROUPS=y
 CONFIG_MEMCG=y
 CONFIG_SECCOMP=y
 CONFIG_SECCOMP_FILTER=y
+
+# The board: Chumby's boot loader enters the kernel as an MX21ADS, so our
+# board file takes that machine number in its place.
+# CONFIG_MACH_MX21ADS is not set
+CONFIG_MACH_CHUMBY_CLASSIC=y
+
+# The TSC2100 on SPI3: touchscreen and audio codec.
+CONFIG_MFD_TSC2100=y
+CONFIG_TOUCHSCREEN_TSC2100=y
+CONFIG_SND_SOC_TSC2100=y
+CONFIG_SND_SOC_IMX_TSC2100=y
+
+# The keypad port as GPIO: the top button, polled, and the power switches.
+CONFIG_GPIO_GENERIC_PLATFORM=y
+CONFIG_KEYBOARD_GPIO_POLLED=y
+
+# The backlight, on the PWM.
+CONFIG_BACKLIGHT_PWM=y
+
+# The accelerometer on the sensor card, on SPI1.
+CONFIG_KXP74=y
