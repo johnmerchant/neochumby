@@ -39,6 +39,16 @@ pub fn kill_group(pgid: u32, sig: Signal) -> io::Result<()> {
     send(-positive(pgid)?, sig)
 }
 
+/// The process group of the process `pid`; None if there's no such
+/// process, or for an id [`kill`] would refuse.
+pub fn group_of(pid: u32) -> Option<u32> {
+    let pid = positive(pid).ok()?;
+    // SAFETY: getpgid(2) takes a plain integer and touches no memory of
+    // ours.
+    let g = unsafe { libc::getpgid(pid) };
+    u32::try_from(g).ok()
+}
+
 /// Whether this process runs as root (its effective uid is 0).
 pub fn is_root() -> bool {
     // SAFETY: geteuid(2) takes nothing and cannot fail.
@@ -138,6 +148,18 @@ mod tests {
             assert!(!group_alive(id));
             assert!(!alive(id));
         }
+    }
+
+    #[test]
+    fn the_group_of_a_process() {
+        use std::os::unix::process::CommandExt;
+        let mut child = std::process::Command::new("sleep").arg("5").process_group(0).spawn().unwrap();
+        assert_eq!(group_of(child.id()), Some(child.id()));
+        assert_ne!(group_of(std::process::id()), Some(child.id()));
+        assert_eq!(group_of(0), None);
+        child.kill().unwrap();
+        child.wait().unwrap();
+        assert_eq!(group_of(child.id()), None);
     }
 
     #[test]

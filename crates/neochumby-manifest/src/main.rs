@@ -41,8 +41,11 @@ const FLAGS: &[&str] = &["start", "button", "interrupt"];
 ///   internet socket open;
 /// - `terminal`: /dev/ptmx and /dev/pts, for a pseudo-terminal
 ///   (neochumby::term);
+/// - `storage`: a directory of its own that lasts across boots
+///   (/psp/apps/<name>, NEOCHUMBY_STORAGE), shared by its exec and service,
+///   capped at 64 KiB;
 /// - `root`: no jail: it runs as root, as the session does. Listed alone.
-const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "terminal", "root"];
+const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "terminal", "storage", "root"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {
@@ -184,6 +187,7 @@ mod tests {
     fn access_is_a_list_of_what_the_session_grants() {
         assert_eq!(manifest(&wrap(r#"access = ["screen", "touch"]"#)).unwrap(), "access=screen,touch\n");
         assert_eq!(manifest(&wrap(r#"access = ["root"]"#)).unwrap(), "access=root\n");
+        assert_eq!(manifest(&wrap(r#"access = ["speaker", "storage"]"#)).unwrap(), "access=speaker,storage\n");
         for bad in [r#"access = "screen""#, r#"access = ["disk"]"#, r#"access = ["screen", "screen"]"#, "access = []"] {
             assert!(manifest(&wrap(bad)).unwrap_err().starts_with("access:"), "{bad}");
         }

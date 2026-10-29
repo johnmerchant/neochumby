@@ -19,7 +19,7 @@
 //! interruption rules never come into it.
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
@@ -30,6 +30,7 @@ use neochumby_sys::process::{Signal, exited, kill_group};
 
 use crate::child;
 use crate::jail::{self, Role};
+use crate::storage::Storage;
 
 /// The waits between a service's runs.
 #[derive(Clone, Copy)]
@@ -87,12 +88,15 @@ pub struct Events<'a> {
 pub struct Services<'a> {
     list: Vec<Service<'a>>,
     root: &'a Path,
+    /// The apps' directories in /psp (`storage`), for their execs too.
+    pub storage: Storage,
 }
 
 impl<'a> Services<'a> {
     /// The service of each app in `apps` that can run here, and each of
-    /// `core`, the session's own; none started yet.
-    pub fn new(apps: &'a [App], core: &'a [App], root: &'a Path, backoff: Backoff) -> Services<'a> {
+    /// `core`, the session's own; none started yet. The apps' storage is
+    /// under `storage`.
+    pub fn new(apps: &'a [App], core: &'a [App], root: &'a Path, storage: PathBuf, backoff: Backoff) -> Services<'a> {
         let now = Instant::now();
         let ours = |a: &'a App, core| {
             Some(Service { app: a, exe: a.service.as_deref()?, running: None, backoff, due: now, core })
@@ -103,7 +107,7 @@ impl<'a> Services<'a> {
             .filter_map(|a| ours(a, false))
             .chain(core.iter().filter_map(|a| ours(a, true)))
             .collect();
-        Services { list, root }
+        Services { list, root, storage: Storage::new(storage, apps) }
     }
 
     /// Starts each service that is due, with `front` as the app in front;
@@ -114,7 +118,7 @@ impl<'a> Services<'a> {
         for s in &mut self.list {
             let Some(r) = s.running.as_mut() else {
                 if Instant::now() >= s.due {
-                    s.start(self.root, front);
+                    s.start(self.root, &self.storage, front);
                 }
                 continue;
             };
@@ -165,6 +169,29 @@ impl<'a> Services<'a> {
         }
     }
 
+    /// Ends each running service whose app's storage is over its limit
+    /// (storage.rs). The next poll finds it exited, and starts it again
+    /// later, as any service that exits.
+    pub fn end_over_storage(&mut self) {
+        for s in &self.list {
+            if let Some(r) = &s.running
+                && let Some(used) = self.storage.over(s.app)
+            {
+                eprintln!(
+                    "neochumby: service {}: its storage holds {used} bytes, over its limit; ending it",
+                    s.app.name
+                );
+                let _ = kill_group(r.child.id(), Signal::Kill);
+            }
+        }
+    }
+
+    /// The pid of the running service of the app `app` (which leads its
+    /// process group).
+    pub fn pid(&self, app: &str) -> Option<u32> {
+        self.list.iter().find(|s| !s.core && s.app.name == app)?.running.as_ref().map(|r| r.child.id())
+    }
+
     /// Tells each running service that `app` is now in front.
     pub fn front(&mut self, app: &str) {
         for s in self.list.iter_mut().filter(|s| !s.core) {
@@ -192,8 +219,12 @@ impl<'a> Services<'a> {
 }
 
 impl Service<'_> {
-    fn start(&mut self, root: &Path, front: &str) {
-        match child::launch(self.app, self.exe, Role::Service, root).spawn() {
+    fn start(&mut self, root: &Path, storage: &Storage, front: &str) {
+        let mut launch = child::launch(self.app, self.exe, Role::Service, root);
+        if let Some(dir) = storage.dir(self.app, jail::owner(self.app)) {
+            launch.storage(dir);
+        }
+        match launch.spawn() {
             Ok((child, pipe)) => {
                 eprintln!("neochumby: service {} started", self.app.name);
                 let mut r = Running { child, pipe, since: Instant::now(), untold: None };
