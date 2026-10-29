@@ -1,6 +1,6 @@
 [package]
 name = "neochumby-proto"
-description = "How a Chumby and its neochumbyd talk: TLS 1.3 (or Noise) over TCP"
+description = "How a Chumby and its neochumbyd talk: TLS 1.3 over TCP"
 license = "MIT"
 version.workspace = true
 edition.workspace = true
@@ -9,6 +9,7 @@ publish.workspace = true
 [features]
 # Noise_XX in place of TLS 1.3, for the whole build: both ends must be built
 # alike (cargo chumby / cargo neochumbyd --features neochumby-proto/noise).
+# Untested: CI neither builds nor tests it.
 noise = ["dep:snow"]
 
 [dependencies]
