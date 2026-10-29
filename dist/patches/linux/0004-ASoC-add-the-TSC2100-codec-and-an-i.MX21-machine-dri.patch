@@ -1,0 +1,703 @@
+From a6ffd5c82942494f7414d84545842ec0388d66bc Mon Sep 17 00:00:00 2001
+From: John Merchant <john@johnmerchant.dev>
+Date: Fri, 30 Oct 2026 02:23:31 +1030
+Subject: [PATCH 4/6] ASoC: add the TSC2100 codec and an i.MX21 machine driver
+
+The codec is the TSC2100 MFD's audio half: I2S master, its PLL run from
+MCLK. The machine driver puts it on SSI1 through the AUDMUX, as the
+Chumby Classic's 2.6.16 driver did, and switches the speaker with an
+optional GPIO.
+
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+ sound/soc/codecs/Kconfig    |   9 +
+ sound/soc/codecs/Makefile   |   2 +
+ sound/soc/codecs/tsc2100.c  | 387 ++++++++++++++++++++++++++++++++++++
+ sound/soc/fsl/Kconfig       |  12 ++
+ sound/soc/fsl/Makefile      |   2 +
+ sound/soc/fsl/imx-tsc2100.c | 194 ++++++++++++++++++
+ 6 files changed, 606 insertions(+)
+ create mode 100644 sound/soc/codecs/tsc2100.c
+ create mode 100644 sound/soc/fsl/imx-tsc2100.c
+
+diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
+index 601ea45d3..72dab64cc 100644
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -212,6 +212,7 @@ config SND_SOC_ALL_CODECS
+ 	imply SND_SOC_TSCS42XX
+ 	imply SND_SOC_TSCS454
+ 	imply SND_SOC_TS3A227E
++	imply SND_SOC_TSC2100
+ 	imply SND_SOC_TWL4030
+ 	imply SND_SOC_TWL6040
+ 	imply SND_SOC_UDA1334
+@@ -1385,6 +1386,14 @@ config SND_SOC_TS3A227E
+ 	tristate "TI Headset/Mic detect and keypress chip"
+ 	depends on I2C
+ 
++config SND_SOC_TSC2100
++	tristate "Texas Instruments TSC2100 audio CODEC"
++	depends on MFD_TSC2100
++	help
++	  Support for the audio codec in the TI TSC2100 touchscreen
++	  controller.  The TSC2100 MFD core driver provides the register
++	  access.
++
+ config SND_SOC_TSCS42XX
+ 	tristate "Tempo Semiconductor TSCS42xx CODEC"
+ 	depends on I2C
+diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
+index 0140c60db..be1f61b29 100644
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -224,6 +224,7 @@ snd-soc-tlv320aic32x4-spi-objs := tlv320aic32x4-spi.o
+ snd-soc-tlv320aic3x-objs := tlv320aic3x.o
+ snd-soc-tlv320dac33-objs := tlv320dac33.o
+ snd-soc-tlv320adcx140-objs := tlv320adcx140.o
++snd-soc-tsc2100-objs := tsc2100.o
+ snd-soc-tscs42xx-objs := tscs42xx.o
+ snd-soc-tscs454-objs := tscs454.o
+ snd-soc-ts3a227e-objs := ts3a227e.o
+@@ -529,6 +530,7 @@ obj-$(CONFIG_SND_SOC_TLV320AIC32X4_SPI)	+= snd-soc-tlv320aic32x4-spi.o
+ obj-$(CONFIG_SND_SOC_TLV320AIC3X)	+= snd-soc-tlv320aic3x.o
+ obj-$(CONFIG_SND_SOC_TLV320DAC33)	+= snd-soc-tlv320dac33.o
+ obj-$(CONFIG_SND_SOC_TLV320ADCX140)	+= snd-soc-tlv320adcx140.o
++obj-$(CONFIG_SND_SOC_TSC2100)	+= snd-soc-tsc2100.o
+ obj-$(CONFIG_SND_SOC_TSCS42XX)	+= snd-soc-tscs42xx.o
+ obj-$(CONFIG_SND_SOC_TSCS454)	+= snd-soc-tscs454.o
+ obj-$(CONFIG_SND_SOC_TS3A227E)	+= snd-soc-ts3a227e.o
+diff --git a/sound/soc/codecs/tsc2100.c b/sound/soc/codecs/tsc2100.c
+new file mode 100644
+index 000000000..617a0b7da
+--- /dev/null
++++ b/sound/soc/codecs/tsc2100.c
+@@ -0,0 +1,387 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * ASoC codec driver for the audio part of the TI TSC2100
++ *
++ * The TSC2100 is a touchscreen controller with a stereo audio codec on
++ * one SPI device.  The MFD core (drivers/mfd/tsc2100.c) owns the SPI
++ * device and its regmap; this driver is the core's "tsc2100-codec"
++ * child and only touches the page 2 (audio) registers.  It must never
++ * reset the chip: the touchscreen shares it.
++ *
++ * Register usage follows the stock Chumby 2.6.16 driver
++ * (drivers/mfd/chumby-tsc2100.c), and the DAI handling is modelled on
++ * tlv320aic26.c, the TSC2100's audio sibling.  Unlike that driver, the
++ * Fsref select (AUDIO_CTRL3 bit 13) is set for 44.1 kHz and cleared for
++ * 48 kHz, which is what the stock driver does on this chip.
++ */
++
++#include <linux/math64.h>
++#include <linux/mfd/tsc2100.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <sound/pcm.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++#include <sound/tlv.h>
++
++struct tsc2100_codec {
++	struct device *dev;
++	struct regmap *regmap;
++	unsigned int mclk;
++	bool master;
++	unsigned int datfm;
++	/* what hw_params last programmed, so a second stream can share it */
++	unsigned int cur_rate;
++	unsigned int cur_wlen;
++};
++
++/* Sample rates as Fsref / divisor, as the stock driver sets them */
++static const struct {
++	unsigned int rate;
++	unsigned int fsref;
++	unsigned int div;
++} tsc2100_rates[] = {
++	{  8000, 48000, TSC2100_FSDIV_6 },
++	{ 11025, 44100, TSC2100_FSDIV_4 },
++	{ 16000, 48000, TSC2100_FSDIV_3 },
++	{ 22050, 44100, TSC2100_FSDIV_2 },
++	{ 32000, 48000, TSC2100_FSDIV_1_5 },
++	{ 44100, 44100, TSC2100_FSDIV_1 },
++	{ 48000, 48000, TSC2100_FSDIV_1 },
++};
++
++/*
++ * Fsref = MCLK * K / (2048 * P), K = J.D (D in 1/10000).  The datasheet
++ * limits for a fractional K are 10 MHz <= MCLK / P <= 20 MHz and
++ * 4 <= J <= 11.  For the Chumby's 16 MHz MCLK this gives P = 1 and
++ * J.D = 6.1440 (48 kHz) or 5.6448 (44.1 kHz), the stock values.
++ */
++static int tsc2100_set_pll(struct tsc2100_codec *tsc, unsigned int fsref)
++{
++	unsigned int p, j, d;
++	u64 k;
++	int ret;
++
++	for (p = 1; p <= 8; p++) {
++		unsigned int ref = tsc->mclk / p;
++
++		if (ref < 10000000 || ref > 20000000)
++			continue;
++
++		k = div_u64((u64)fsref * 2048 * p * 10000, tsc->mclk);
++		j = div_u64_rem(k, 10000, &d);
++		if (j >= 4 && j <= 11)
++			break;
++	}
++	if (p > 8) {
++		dev_err(tsc->dev, "no PLL setting for MCLK %u Hz, Fsref %u Hz\n",
++			tsc->mclk, fsref);
++		return -EINVAL;
++	}
++
++	dev_dbg(tsc->dev, "PLL: P=%u K=%u.%04u\n", p, j, d);
++
++	ret = regmap_write(tsc->regmap, TSC2100_REG_PLL1,
++			   TSC2100_PLL1_PLLSEL | TSC2100_PLL1_PVAL(p) |
++			   TSC2100_PLL1_JVAL(j));
++	if (ret)
++		return ret;
++
++	return regmap_write(tsc->regmap, TSC2100_REG_PLL2,
++			    TSC2100_PLL2_DVAL(d));
++}
++
++static int tsc2100_hw_params(struct snd_pcm_substream *substream,
++			     struct snd_pcm_hw_params *params,
++			     struct snd_soc_dai *dai)
++{
++	struct snd_soc_component *component = dai->component;
++	struct tsc2100_codec *tsc = snd_soc_component_get_drvdata(component);
++	unsigned int rate = params_rate(params);
++	unsigned int wlen, fsref, div, i;
++	int ret;
++
++	for (i = 0; i < ARRAY_SIZE(tsc2100_rates); i++)
++		if (tsc2100_rates[i].rate == rate)
++			break;
++	if (i == ARRAY_SIZE(tsc2100_rates))
++		return -EINVAL;
++	fsref = tsc2100_rates[i].fsref;
++	div = tsc2100_rates[i].div;
++
++	switch (params_width(params)) {
++	case 16:
++		wlen = TSC2100_CTRL1_WLEN_16;
++		break;
++	case 20:
++		wlen = TSC2100_CTRL1_WLEN_20;
++		break;
++	case 24:
++		wlen = TSC2100_CTRL1_WLEN_24;
++		break;
++	case 32:
++		wlen = TSC2100_CTRL1_WLEN_32;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	if (!tsc->mclk) {
++		dev_err(tsc->dev, "MCLK rate not set\n");
++		return -EINVAL;
++	}
++
++	/* The other direction is running with the same settings */
++	if (snd_soc_component_active(component) > 1 &&
++	    tsc->cur_rate == rate && tsc->cur_wlen == wlen)
++		return 0;
++
++	ret = snd_soc_component_update_bits(component,
++			TSC2100_REG_AUDIO_CTRL1,
++			TSC2100_CTRL1_WLEN_MASK | TSC2100_CTRL1_DATFM_MASK |
++			TSC2100_CTRL1_DACFS_MASK | TSC2100_CTRL1_ADCFS_MASK,
++			wlen | tsc->datfm | TSC2100_CTRL1_DACFS(div) |
++			TSC2100_CTRL1_ADCFS(div));
++	if (ret < 0)
++		return ret;
++
++	ret = snd_soc_component_update_bits(component,
++			TSC2100_REG_AUDIO_CTRL3,
++			TSC2100_CTRL3_REFFS_44K1 | TSC2100_CTRL3_SLVMS,
++			(fsref == 44100 ? TSC2100_CTRL3_REFFS_44K1 : 0) |
++			(tsc->master ? TSC2100_CTRL3_SLVMS : 0));
++	if (ret < 0)
++		return ret;
++
++	ret = tsc2100_set_pll(tsc, fsref);
++	if (ret)
++		return ret;
++
++	tsc->cur_rate = rate;
++	tsc->cur_wlen = wlen;
++
++	return 0;
++}
++
++static int tsc2100_set_sysclk(struct snd_soc_dai *dai, int clk_id,
++			      unsigned int freq, int dir)
++{
++	struct tsc2100_codec *tsc = snd_soc_component_get_drvdata(dai->component);
++
++	/* MCLK range the PLL accepts */
++	if (freq < 2000000 || freq > 50000000)
++		return -EINVAL;
++
++	tsc->mclk = freq;
++	tsc->cur_rate = 0;
++
++	return 0;
++}
++
++static int tsc2100_set_fmt(struct snd_soc_dai *dai, unsigned int fmt)
++{
++	struct tsc2100_codec *tsc = snd_soc_component_get_drvdata(dai->component);
++
++	switch (fmt & SND_SOC_DAIFMT_MASTER_MASK) {
++	case SND_SOC_DAIFMT_CBM_CFM:
++		tsc->master = true;
++		break;
++	case SND_SOC_DAIFMT_CBS_CFS:
++		tsc->master = false;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	switch (fmt & SND_SOC_DAIFMT_FORMAT_MASK) {
++	case SND_SOC_DAIFMT_I2S:
++		tsc->datfm = TSC2100_CTRL1_DATFM_I2S;
++		break;
++	case SND_SOC_DAIFMT_DSP_A:
++		tsc->datfm = TSC2100_CTRL1_DATFM_DSP;
++		break;
++	case SND_SOC_DAIFMT_RIGHT_J:
++		tsc->datfm = TSC2100_CTRL1_DATFM_RIGHTJ;
++		break;
++	case SND_SOC_DAIFMT_LEFT_J:
++		tsc->datfm = TSC2100_CTRL1_DATFM_LEFTJ;
++		break;
++	default:
++		return -EINVAL;
++	}
++
++	if ((fmt & SND_SOC_DAIFMT_INV_MASK) != SND_SOC_DAIFMT_NB_NF)
++		return -EINVAL;
++
++	tsc->cur_rate = 0;
++
++	return 0;
++}
++
++static const struct snd_soc_dai_ops tsc2100_dai_ops = {
++	.hw_params	= tsc2100_hw_params,
++	.set_sysclk	= tsc2100_set_sysclk,
++	.set_fmt	= tsc2100_set_fmt,
++};
++
++#define TSC2100_RATES	(SNDRV_PCM_RATE_8000 | SNDRV_PCM_RATE_11025 | \
++			 SNDRV_PCM_RATE_16000 | SNDRV_PCM_RATE_22050 | \
++			 SNDRV_PCM_RATE_32000 | SNDRV_PCM_RATE_44100 | \
++			 SNDRV_PCM_RATE_48000)
++#define TSC2100_FORMATS	(SNDRV_PCM_FMTBIT_S16_LE | SNDRV_PCM_FMTBIT_S20_3LE | \
++			 SNDRV_PCM_FMTBIT_S24_LE | SNDRV_PCM_FMTBIT_S32_LE)
++
++static struct snd_soc_dai_driver tsc2100_dai = {
++	.name = "tsc2100-hifi",
++	.playback = {
++		.stream_name	= "Playback",
++		.channels_min	= 2,
++		.channels_max	= 2,
++		.rates		= TSC2100_RATES,
++		.formats	= TSC2100_FORMATS,
++	},
++	.capture = {
++		.stream_name	= "Capture",
++		.channels_min	= 2,
++		.channels_max	= 2,
++		.rates		= TSC2100_RATES,
++		.formats	= TSC2100_FORMATS,
++	},
++	.ops = &tsc2100_dai_ops,
++	/* one Fsref and PLL for both directions */
++	.symmetric_rates = 1,
++	.symmetric_samplebits = 1,
++};
++
++/* DAC: 0 to -63.5 dB attenuation; ADC PGA: 0 to 59.5 dB gain */
++static const DECLARE_TLV_DB_SCALE(dac_tlv, -6350, 50, 0);
++static const DECLARE_TLV_DB_SCALE(adc_tlv, 0, 50, 0);
++
++static const struct snd_kcontrol_new tsc2100_snd_controls[] = {
++	/* the stock driver's control name, for userspace that expects it */
++	SOC_DOUBLE_TLV("Master Playback Volume", TSC2100_REG_DAC_GAIN,
++		       TSC2100_DACGAIN_DALVL_SHIFT, TSC2100_DACGAIN_DARVL_SHIFT,
++		       TSC2100_DACGAIN_VOL_MAX, 1, dac_tlv),
++	SOC_DOUBLE("Master Playback Switch", TSC2100_REG_DAC_GAIN, 15, 7, 1, 1),
++	SOC_SINGLE_TLV("Capture Volume", TSC2100_REG_ADC_GAIN,
++		       TSC2100_ADCGAIN_ADPGA_SHIFT, TSC2100_ADCGAIN_ADPGA_MAX,
++		       0, adc_tlv),
++	SOC_SINGLE("Capture Switch", TSC2100_REG_ADC_GAIN, 15, 1, 1),
++};
++
++static const struct snd_soc_dapm_widget tsc2100_dapm_widgets[] = {
++	SND_SOC_DAPM_SUPPLY("Codec Power", TSC2100_REG_POWER, 15, 1, NULL, 0),
++	SND_SOC_DAPM_DAC("DAC", "Playback", TSC2100_REG_POWER, 10, 1),
++	SND_SOC_DAPM_ADC("ADC", "Capture", TSC2100_REG_POWER, 9, 1),
++
++	SND_SOC_DAPM_OUTPUT("HPL"),
++	SND_SOC_DAPM_OUTPUT("HPR"),
++	SND_SOC_DAPM_INPUT("MICIN"),
++	SND_SOC_DAPM_INPUT("AUX"),
++};
++
++static const struct snd_soc_dapm_route tsc2100_dapm_routes[] = {
++	{ "DAC", NULL, "Codec Power" },
++	{ "ADC", NULL, "Codec Power" },
++
++	{ "HPL", NULL, "DAC" },
++	{ "HPR", NULL, "DAC" },
++
++	{ "ADC", NULL, "MICIN" },
++	{ "ADC", NULL, "AUX" },
++};
++
++/* Defaults from the stock driver's reg_* module parameters */
++static const struct reg_sequence tsc2100_defaults[] = {
++	/* everything down until DAPM needs it; high-power driver, no VGND */
++	{ TSC2100_REG_POWER, TSC2100_POWER_PWDNC | TSC2100_POWER_ASTPWD |
++			     TSC2100_POWER_DAODRC | TSC2100_POWER_DAPWDN |
++			     TSC2100_POWER_ADPWDN | TSC2100_POWER_VGPWDN },
++	/* ADC input mux 2 (stock: "single-ended AUX"), 16-bit I2S */
++	{ TSC2100_REG_AUDIO_CTRL1, TSC2100_CTRL1_ADCIN(2) |
++				   TSC2100_CTRL1_WLEN_16 |
++				   TSC2100_CTRL1_DATFM_I2S },
++	/* Fsref 48 kHz, continuous transfer, master, DAC swing code 2 */
++	{ TSC2100_REG_AUDIO_CTRL3, TSC2100_CTRL3_SLVMS |
++				   TSC2100_CTRL3_DAPK2PK(2) },
++	/* ADC unmuted at full PGA gain, AGC target -12 dB, AGC off */
++	{ TSC2100_REG_ADC_GAIN, (TSC2100_ADCGAIN_ADPGA_MAX <<
++				 TSC2100_ADCGAIN_ADPGA_SHIFT) |
++				(3 << TSC2100_ADCGAIN_AGCTG_SHIFT) |
++				(4 << TSC2100_ADCGAIN_AGCTC_SHIFT) },
++	/* DAC unmuted at 0 dB */
++	{ TSC2100_REG_DAC_GAIN, 0 },
++	{ TSC2100_REG_SIDETONE, TSC2100_SIDETONE_ASTMU |
++				TSC2100_SIDETONE_DSTMU },
++	{ TSC2100_REG_AUDIO_CTRL4, 0 },
++	{ TSC2100_REG_AUDIO_CTRL5, TSC2100_CTRL5_DEFAULT },
++};
++
++static int tsc2100_component_probe(struct snd_soc_component *component)
++{
++	struct tsc2100_codec *tsc = snd_soc_component_get_drvdata(component);
++
++	snd_soc_component_init_regmap(component, tsc->regmap);
++
++	return regmap_multi_reg_write(tsc->regmap, tsc2100_defaults,
++				      ARRAY_SIZE(tsc2100_defaults));
++}
++
++static void tsc2100_component_remove(struct snd_soc_component *component)
++{
++	struct tsc2100_codec *tsc = snd_soc_component_get_drvdata(component);
++
++	regmap_update_bits(tsc->regmap, TSC2100_REG_POWER,
++			   TSC2100_POWER_PWDNC, TSC2100_POWER_PWDNC);
++	snd_soc_component_exit_regmap(component);
++}
++
++static const struct snd_soc_component_driver tsc2100_component = {
++	.probe			= tsc2100_component_probe,
++	.remove			= tsc2100_component_remove,
++	.controls		= tsc2100_snd_controls,
++	.num_controls		= ARRAY_SIZE(tsc2100_snd_controls),
++	.dapm_widgets		= tsc2100_dapm_widgets,
++	.num_dapm_widgets	= ARRAY_SIZE(tsc2100_dapm_widgets),
++	.dapm_routes		= tsc2100_dapm_routes,
++	.num_dapm_routes	= ARRAY_SIZE(tsc2100_dapm_routes),
++	.use_pmdown_time	= 1,
++	.endianness		= 1,
++	.non_legacy_dai_naming	= 1,
++};
++
++static int tsc2100_codec_probe(struct platform_device *pdev)
++{
++	struct tsc2100_codec *tsc;
++
++	tsc = devm_kzalloc(&pdev->dev, sizeof(*tsc), GFP_KERNEL);
++	if (!tsc)
++		return -ENOMEM;
++
++	tsc->dev = &pdev->dev;
++	tsc->regmap = dev_get_regmap(pdev->dev.parent, NULL);
++	if (!tsc->regmap) {
++		dev_err(&pdev->dev, "no regmap from the TSC2100 core\n");
++		return -ENODEV;
++	}
++	tsc->master = true;
++	tsc->datfm = TSC2100_CTRL1_DATFM_I2S;
++
++	platform_set_drvdata(pdev, tsc);
++
++	return devm_snd_soc_register_component(&pdev->dev, &tsc2100_component,
++					       &tsc2100_dai, 1);
++}
++
++static struct platform_driver tsc2100_codec_driver = {
++	.driver = {
++		.name = "tsc2100-codec",
++	},
++	.probe = tsc2100_codec_probe,
++};
++module_platform_driver(tsc2100_codec_driver);
++
++MODULE_DESCRIPTION("ASoC TI TSC2100 codec driver");
++MODULE_LICENSE("GPL");
++MODULE_ALIAS("platform:tsc2100-codec");
+diff --git a/sound/soc/fsl/Kconfig b/sound/soc/fsl/Kconfig
+index 1c4ca5ec8..3def908f1 100644
+--- a/sound/soc/fsl/Kconfig
++++ b/sound/soc/fsl/Kconfig
+@@ -310,6 +310,18 @@ config SND_SOC_IMX_MC13783
+ 	select SND_SOC_MC13783
+ 	select SND_SOC_IMX_PCM_DMA
+ 
++config SND_SOC_IMX_TSC2100
++	tristate "SoC Audio support for i.MX21 boards with a TSC2100"
++	depends on SOC_IMX21 || COMPILE_TEST
++	depends on MFD_TSC2100
++	select SND_SOC_TSC2100
++	select SND_SOC_IMX_SSI
++	select SND_SOC_IMX_AUDMUX
++	select SND_SOC_IMX_PCM_DMA
++	help
++	  Say Y or M here for audio on i.MX21 boards with the TI TSC2100
++	  codec on SSI1, such as the Chumby Classic.
++
+ config SND_SOC_FSL_ASOC_CARD
+ 	tristate "Generic ASoC Sound Card with ASRC support"
+ 	depends on OF && I2C
+diff --git a/sound/soc/fsl/Makefile b/sound/soc/fsl/Makefile
+index b835eebf8..671770ea3 100644
+--- a/sound/soc/fsl/Makefile
++++ b/sound/soc/fsl/Makefile
+@@ -66,6 +66,7 @@ snd-soc-imx-es8328-objs := imx-es8328.o
+ snd-soc-imx-sgtl5000-objs := imx-sgtl5000.o
+ snd-soc-imx-spdif-objs := imx-spdif.o
+ snd-soc-imx-mc13783-objs := imx-mc13783.o
++snd-soc-imx-tsc2100-objs := imx-tsc2100.o
+ snd-soc-imx-audmix-objs := imx-audmix.o
+ 
+ obj-$(CONFIG_SND_SOC_EUKREA_TLV320) += snd-soc-eukrea-tlv320.o
+@@ -76,4 +77,5 @@ obj-$(CONFIG_SND_SOC_IMX_ES8328) += snd-soc-imx-es8328.o
+ obj-$(CONFIG_SND_SOC_IMX_SGTL5000) += snd-soc-imx-sgtl5000.o
+ obj-$(CONFIG_SND_SOC_IMX_SPDIF) += snd-soc-imx-spdif.o
+ obj-$(CONFIG_SND_SOC_IMX_MC13783) += snd-soc-imx-mc13783.o
++obj-$(CONFIG_SND_SOC_IMX_TSC2100) += snd-soc-imx-tsc2100.o
+ obj-$(CONFIG_SND_SOC_IMX_AUDMIX) += snd-soc-imx-audmix.o
+diff --git a/sound/soc/fsl/imx-tsc2100.c b/sound/soc/fsl/imx-tsc2100.c
+new file mode 100644
+index 000000000..aa9046cff
+--- /dev/null
++++ b/sound/soc/fsl/imx-tsc2100.c
+@@ -0,0 +1,194 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * ASoC machine driver for i.MX21 boards with a TI TSC2100 codec on the
++ * SSI (Chumby Classic)
++ *
++ * Wiring, from the stock Chumby 2.6.16 driver (drivers/mfd/chumby-tsc2100.c):
++ *  - SSI1 (imx-ssi.0), synchronous, I2S slave: the TSC2100 is the bit and
++ *    frame clock master.  16-bit words in four slots per frame, slots 0
++ *    and 2 carrying left and right.
++ *  - AUDMUX: SSI1 (host port 1) takes its transmit clock and frame sync
++ *    from the SSI2 pins (peripheral port 2) and its receive clock, frame
++ *    sync and data from the SSI1 pins (peripheral port 1); both
++ *    peripheral ports take their data from SSI1.
++ *  - The codec's MCLK is the board's 16 MHz oscillator.
++ *  - The speaker amplifier is switched by a GPIO (KPP column 4 on the
++ *    Chumby): the "speaker" GPIO, logically high when the speaker is on.
++ */
++
++#include <linux/gpio/consumer.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <sound/soc.h>
++
++#include "imx-audmux.h"
++#include "imx-ssi.h"
++
++static unsigned int mclk = 16000000;
++module_param(mclk, uint, 0444);
++MODULE_PARM_DESC(mclk, "TSC2100 MCLK rate in Hz (default 16000000)");
++
++struct imx_tsc2100 {
++	struct snd_soc_card card;
++	struct gpio_desc *spk_gpio;
++};
++
++static int imx_tsc2100_spk_event(struct snd_soc_dapm_widget *w,
++				 struct snd_kcontrol *k, int event)
++{
++	struct imx_tsc2100 *priv = snd_soc_card_get_drvdata(w->dapm->card);
++
++	gpiod_set_value_cansleep(priv->spk_gpio, SND_SOC_DAPM_EVENT_ON(event));
++
++	return 0;
++}
++
++static const struct snd_soc_dapm_widget imx_tsc2100_dapm_widgets[] = {
++	SND_SOC_DAPM_SPK("Speaker", imx_tsc2100_spk_event),
++	SND_SOC_DAPM_HP("Headphone", NULL),
++};
++
++static const struct snd_soc_dapm_route imx_tsc2100_dapm_routes[] = {
++	{ "Speaker", NULL, "HPL" },
++	{ "Speaker", NULL, "HPR" },
++	{ "Headphone", NULL, "HPL" },
++	{ "Headphone", NULL, "HPR" },
++};
++
++static const struct snd_kcontrol_new imx_tsc2100_controls[] = {
++	SOC_DAPM_PIN_SWITCH("Speaker"),
++	SOC_DAPM_PIN_SWITCH("Headphone"),
++};
++
++static int imx_tsc2100_startup(struct snd_pcm_substream *substream)
++{
++	/* the four 16-bit slot frame only carries 16-bit samples */
++	return snd_pcm_hw_constraint_mask64(substream->runtime,
++					    SNDRV_PCM_HW_PARAM_FORMAT,
++					    SNDRV_PCM_FMTBIT_S16_LE);
++}
++
++static const struct snd_soc_ops imx_tsc2100_ops = {
++	.startup = imx_tsc2100_startup,
++};
++
++static int imx_tsc2100_dai_init(struct snd_soc_pcm_runtime *rtd)
++{
++	struct snd_soc_dai *codec_dai = asoc_rtd_to_codec(rtd, 0);
++	struct snd_soc_dai *cpu_dai = asoc_rtd_to_cpu(rtd, 0);
++	int ret;
++
++	ret = snd_soc_dai_set_sysclk(codec_dai, 0, mclk, SND_SOC_CLOCK_IN);
++	if (ret) {
++		dev_err(rtd->dev, "codec MCLK %u Hz rejected: %d\n", mclk, ret);
++		return ret;
++	}
++
++	ret = snd_soc_dai_set_sysclk(cpu_dai, IMX_SSP_SYS_CLK, 0,
++				     SND_SOC_CLOCK_IN);
++	if (ret)
++		return ret;
++
++	/* as the stock driver: DC = 3, STMSK/SRMSK = ~(slot 0 | slot 2) */
++	return snd_soc_dai_set_tdm_slot(cpu_dai, 0x5, 0x5, 4, 16);
++}
++
++SND_SOC_DAILINK_DEFS(hifi,
++	DAILINK_COMP_ARRAY(COMP_CPU("imx-ssi.0")),
++	DAILINK_COMP_ARRAY(COMP_CODEC("tsc2100-codec", "tsc2100-hifi")),
++	DAILINK_COMP_ARRAY(COMP_PLATFORM("imx-ssi.0")));
++
++static struct snd_soc_dai_link imx_tsc2100_dai = {
++	.name		= "TSC2100",
++	.stream_name	= "TSC2100",
++	.init		= imx_tsc2100_dai_init,
++	.ops		= &imx_tsc2100_ops,
++	.dai_fmt	= SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF |
++			  SND_SOC_DAIFMT_CBM_CFM,
++	SND_SOC_DAILINK_REG(hifi),
++};
++
++/* The i.MX21 AUDMUX has the i.MX27's layout, so the MX27_ port names apply */
++static int imx_tsc2100_audmux(void)
++{
++	int ret;
++
++	/* SSI1: Tx clocks from the SSI2 pins, Rx clocks and data from SSI1's */
++	ret = imx_audmux_v1_configure_port(MX27_AUDMUX_HPCR1_SSI0,
++			IMX_AUDMUX_V1_PCR_TFSDIR |
++			IMX_AUDMUX_V1_PCR_TCLKDIR |
++			IMX_AUDMUX_V1_PCR_RFSDIR |
++			IMX_AUDMUX_V1_PCR_RCLKDIR |
++			IMX_AUDMUX_V1_PCR_TFCSEL(MX27_AUDMUX_PPCR2_SSI_PINS_2) |
++			IMX_AUDMUX_V1_PCR_RFCSEL(MX27_AUDMUX_PPCR1_SSI_PINS_1) |
++			IMX_AUDMUX_V1_PCR_RXDSEL(MX27_AUDMUX_PPCR1_SSI_PINS_1));
++	if (ret)
++		return ret;
++
++	/* Both pin groups: clocks are inputs, data out from SSI1 */
++	ret = imx_audmux_v1_configure_port(MX27_AUDMUX_PPCR1_SSI_PINS_1,
++			IMX_AUDMUX_V1_PCR_SYN |
++			IMX_AUDMUX_V1_PCR_TFCSEL(MX27_AUDMUX_HPCR1_SSI0) |
++			IMX_AUDMUX_V1_PCR_RFCSEL(MX27_AUDMUX_HPCR1_SSI0) |
++			IMX_AUDMUX_V1_PCR_RXDSEL(MX27_AUDMUX_HPCR1_SSI0));
++	if (ret)
++		return ret;
++
++	return imx_audmux_v1_configure_port(MX27_AUDMUX_PPCR2_SSI_PINS_2,
++			IMX_AUDMUX_V1_PCR_SYN |
++			IMX_AUDMUX_V1_PCR_TFCSEL(MX27_AUDMUX_HPCR1_SSI0) |
++			IMX_AUDMUX_V1_PCR_RFCSEL(MX27_AUDMUX_HPCR1_SSI0) |
++			IMX_AUDMUX_V1_PCR_RXDSEL(MX27_AUDMUX_HPCR1_SSI0));
++}
++
++static int imx_tsc2100_probe(struct platform_device *pdev)
++{
++	struct imx_tsc2100 *priv;
++	int ret;
++
++	priv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);
++	if (!priv)
++		return -ENOMEM;
++
++	/* speaker off until DAPM turns it on */
++	priv->spk_gpio = devm_gpiod_get_optional(&pdev->dev, "speaker",
++						 GPIOD_OUT_LOW);
++	if (IS_ERR(priv->spk_gpio))
++		return dev_err_probe(&pdev->dev, PTR_ERR(priv->spk_gpio),
++				     "failed to get speaker GPIO\n");
++
++	ret = imx_tsc2100_audmux();
++	if (ret == -ENOSYS)	/* imx-audmux not probed yet */
++		return -EPROBE_DEFER;
++	if (ret) {
++		dev_err(&pdev->dev, "AUDMUX setup failed: %d\n", ret);
++		return ret;
++	}
++
++	priv->card.name = "TSC2100";
++	priv->card.owner = THIS_MODULE;
++	priv->card.dev = &pdev->dev;
++	priv->card.dai_link = &imx_tsc2100_dai;
++	priv->card.num_links = 1;
++	priv->card.controls = imx_tsc2100_controls;
++	priv->card.num_controls = ARRAY_SIZE(imx_tsc2100_controls);
++	priv->card.dapm_widgets = imx_tsc2100_dapm_widgets;
++	priv->card.num_dapm_widgets = ARRAY_SIZE(imx_tsc2100_dapm_widgets);
++	priv->card.dapm_routes = imx_tsc2100_dapm_routes;
++	priv->card.num_dapm_routes = ARRAY_SIZE(imx_tsc2100_dapm_routes);
++	snd_soc_card_set_drvdata(&priv->card, priv);
++
++	return devm_snd_soc_register_card(&pdev->dev, &priv->card);
++}
++
++static struct platform_driver imx_tsc2100_driver = {
++	.driver = {
++		.name = "imx-tsc2100",
++	},
++	.probe = imx_tsc2100_probe,
++};
++module_platform_driver(imx_tsc2100_driver);
++
++MODULE_DESCRIPTION("i.MX21 TSC2100 ASoC machine driver");
++MODULE_LICENSE("GPL");
++MODULE_ALIAS("platform:imx-tsc2100");
