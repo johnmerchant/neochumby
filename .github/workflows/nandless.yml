@@ -29,25 +29,8 @@ jobs:
             libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
             curl xz-utils patch
 
-      - name: Cache QEMU
-        id: qemu-cache
-        uses: actions/cache@v4
-        with:
-          path: emu/qemu/out
-          key: qemu-chumby-v1
-
       - name: Build QEMU
-        if: steps.qemu-cache.outputs.cache-hit != 'true'
         run: emu/qemu/build
-
-      # Buildroot's downloads, toolchain and output.  A cold cache is slow;
-      # later runs rebuild only what changed.
-      - name: Cache Buildroot work
-        id: dist-cache
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/neochumby-dist
-          key: neochumby-dist-v1
 
       - name: Build the NANDLESS image
         env:
