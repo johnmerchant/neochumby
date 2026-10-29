@@ -36,7 +36,7 @@ neochumby-sys.workspace = true
 title = "SOMAFM"
 exec = "neochumby-somafm"
 service = "neochumby-somafm-service"
-colour = "c8462e"
+color = "c8462e"
 player = true
 access = ["screen", "touch", "speaker", "storage"]
 
