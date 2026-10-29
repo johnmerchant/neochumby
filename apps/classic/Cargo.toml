@@ -25,13 +25,15 @@ neochumby-sys.workspace = true
 neochumby.workspace = true
 
 # The start app (start=classic); its service keeps the backlight right
-# while another app is in front. Unjailed, as home is: its pictures are in
-# the Chumby's own /tmp (a jail has a /tmp of its own), its live values
-# read /proc and /psp, and its settings are in /psp.
+# while another app is in front.
 [package.metadata.neochumby]
 exec = "neochumby-classic"
 start = true
 service = "neochumby-classic-service"
+# Unjailed, as home is: its pictures are in the Chumby's own /tmp (a jail
+# has a /tmp of its own), the app and its service share
+# /tmp/neochumby-classic, its live values read /proc and /psp, and its
+# settings are in /psp, which no access word grants yet.
 access = ["root"]
 
 [lints]

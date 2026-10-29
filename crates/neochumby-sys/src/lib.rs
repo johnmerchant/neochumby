@@ -37,6 +37,7 @@
 #![allow(unsafe_code)]
 
 pub mod chan;
+pub mod elf;
 pub mod fd;
 pub mod fs;
 pub mod net;
@@ -48,6 +49,8 @@ pub mod time;
 
 #[cfg(target_os = "linux")]
 pub mod jail;
+#[cfg(target_os = "linux")]
+pub mod klog;
 #[cfg(target_os = "linux")]
 pub mod mm;
 #[cfg(target_os = "linux")]
