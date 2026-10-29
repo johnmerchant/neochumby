@@ -49,7 +49,7 @@ image = { version = "0.25", default-features = false, features = ["jpeg", "png"]
 [package.metadata.neochumby]
 title = "AIRPLAY"
 exec = "neochumby-airplay-screen"
-colour = "8c64dc"
+color = "8c64dc"
 service = "neochumby-airplay"
 companion = "neochumby-airplay-companion"
 neochumbyd = "required"

@@ -83,7 +83,7 @@ mod tests {
     }
 
     #[test]
-    fn colours() {
+    fn colors() {
         assert_eq!(rgb565([255, 255, 255]), 0xffff);
         assert_eq!(rgb565([0, 0, 0]), 0);
         assert_eq!(rgb565([255, 0, 0]), 0xf800);

@@ -81,7 +81,7 @@ impl Canvas {
 
     fn rect(&mut self, x: i32, y: i32, w: i32, h: i32, c: u16) {
         let _ =
-            self.fill_solid(&Rectangle::new(Point::new(x, y), Size::new(w.max(0) as u32, h.max(0) as u32)), colour(c));
+            self.fill_solid(&Rectangle::new(Point::new(x, y), Size::new(w.max(0) as u32, h.max(0) as u32)), color(c));
     }
 }
 
@@ -122,7 +122,7 @@ impl OriginDimensions for Canvas {
     }
 }
 
-fn colour(c: u16) -> Rgb565 {
+fn color(c: u16) -> Rgb565 {
     Rgb565::from(RawU16::new(c))
 }
 
@@ -268,7 +268,7 @@ fn cover(c: &mut Canvas, np: &NowPlaying) {
 fn button(c: &mut Canvas, i: usize, b: Control, playing: bool, enabled: bool, lit: bool) {
     let x = button_x(i);
     c.rect(x, BUTTON_Y, BUTTON_W, BUTTON_H, if lit { BUTTON_LIT } else { BUTTON });
-    let ink = colour(if enabled { TEXT } else { FAINT });
+    let ink = color(if enabled { TEXT } else { FAINT });
     let fill = PrimitiveStyle::with_fill(ink);
     let (cx, cy) = (x + BUTTON_W / 2, BUTTON_Y + BUTTON_H / 2);
     let tri = |c: &mut Canvas, a: (i32, i32), b: (i32, i32), d: (i32, i32)| {
@@ -298,7 +298,7 @@ fn button(c: &mut Canvas, i: usize, b: Control, playing: bool, enabled: bool, li
 }
 
 fn text(c: &mut Canvas, s: &str, font: &MonoFont<'_>, ink: u16, x: i32, y: i32) {
-    let style = MonoTextStyle::new(font, colour(ink));
+    let style = MonoTextStyle::new(font, color(ink));
     let _ = Text::with_baseline(s, Point::new(x, y), style, Baseline::Top).draw(c);
 }
 
