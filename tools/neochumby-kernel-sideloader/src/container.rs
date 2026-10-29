@@ -34,16 +34,20 @@ pub(crate) fn load_container(src: &Mem, initrd: &Mem) -> Option<(u32, u32)> {
     print_str("sideloader: container initramfs=");
     print_dec(initrd_size);
     if kernel_size == 0
-        || initrd_size == 0
         || kernel_off < header_size
-        || initrd_off < header_size
         || kernel_off.checked_add(kernel_size)? > src.len()
-        || initrd_off.checked_add(initrd_size)? > src.len()
+        || (initrd_size != 0 && (initrd_off < header_size || initrd_off.checked_add(initrd_size)? > src.len()))
     {
         return None;
     }
     src.copy_from(0, src, kernel_off, kernel_size);
-    initrd.copy_from(0, src, initrd_off, initrd_size);
-    print_str("sideloader: copied kernel and initramfs\n");
+    if initrd_size != 0 {
+        initrd.copy_from(0, src, initrd_off, initrd_size);
+    }
+    if initrd_size != 0 {
+        print_str("sideloader: copied kernel and initramfs\n");
+    } else {
+        print_str("sideloader: copied kernel (built-in initramfs)\n");
+    }
     Some((kernel_size, initrd_size))
 }

@@ -27,10 +27,12 @@ pub(crate) fn build_atags(mem: &Mem, initrd_start: u32, initrd_size: u32, cmdlin
     put!(ATAG_MEM);
     put!(0x0400_0000); // 64 MiB, size then start
     put!(0xc000_0000);
-    put!(4); // ATAG_INITRD2
-    put!(ATAG_INITRD2);
-    put!(initrd_start);
-    put!(initrd_size);
+    if initrd_size != 0 {
+        put!(4); // ATAG_INITRD2
+        put!(ATAG_INITRD2);
+        put!(initrd_start);
+        put!(initrd_size);
+    }
     let len = cmdline.len() + 1; // include NUL
     let words = len.div_ceil(4);
     put!(2 + words as u32); // ATAG_CMDLINE

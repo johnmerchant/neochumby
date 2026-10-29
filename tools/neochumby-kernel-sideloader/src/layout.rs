@@ -13,7 +13,7 @@ pub(crate) const SRC_VA: u32 = 0x0200_0000;
 pub(crate) const SRC_MAP_LEN: u32 = 0x0070_0000;
 
 pub(crate) const KERNEL_DST_VA: u32 = 0x0200_0000;
-pub(crate) const KERNEL_MAP_LEN: u32 = 0x0060_0000;
+pub(crate) const KERNEL_MAP_LEN: u32 = 0x0070_0000;
 
 pub(crate) const INITRD_DST_PHYS: u32 = 0xc280_0000;
 pub(crate) const INITRD_DST_VA: u32 = 0x0280_0000;
@@ -29,4 +29,4 @@ pub(crate) const STUB_VA: u32 = 0x03f8_0000;
 
 pub(crate) const PAGE: u32 = 0x1000;
 
-pub(crate) const DEFAULT_CMDLINE: &[u8] = b"console=ttymxc0,115200 rdinit=/init";
+pub(crate) const DEFAULT_CMDLINE: &[u8] = b"console=ttymxc0,115200 rdinit=/init neochumby.sideloaded=1";
