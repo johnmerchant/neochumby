@@ -1,16 +1,15 @@
-//! Local sockets on the Chumby: between this app's service and its screen
-//! (the service passes on what the companion says about the track, and the
-//! screen's buttons come back; crate::frames, framed as
-//! neochumby_proto::frame), and from the airplay app's service, which hands
-//! out AirPlay's metadata ([`AIRPLAY`]), as only it may hold its companion.
+//! The service and the screen, on the Chumby: the service keeps the one
+//! connection to the companion (a second would start a second receiver),
+//! and passes what it says about the track to the screen over a local
+//! socket, which carries the screen's buttons back (crate::frames, framed
+//! as neochumby_proto::frame).
 //!
 //! The socket is a Unix socket in Linux's abstract namespace, named
 //! [`NAME`], rather than a file: it needs no directory both can write, so
 //! it works whether the two run as root (today) or jailed with a /tmp each
 //! (#45, where an app's exec and its service share a uid). Any process
-//! can reach an abstract name, so this app's two ends check that the other
-//! runs as their user. The airplay app runs as a user of its own, and only
-//! sends, so its feed isn't checked. Elsewhere (tests on a Mac) it is a file in the temporary
+//! can reach an abstract name, so each end checks that the other runs as
+//! its own user. Elsewhere (tests on a Mac) it is a file in the temporary
 //! directory.
 //!
 //! Neither end waits on the other: the Chumby's kernel lacks the futex
@@ -27,9 +26,7 @@ use neochumby_sys::fd::recv_nowait;
 
 use crate::frames::Reader;
 
-pub const NAME: &str = "neochumby-nowplaying";
-/// The airplay app's metadata feed (apps/airplay's FEED).
-pub const AIRPLAY: &str = "neochumby-airplay-meta";
+pub const NAME: &str = "neochumby-airplay";
 
 /// The longest a write to the other end may take.
 const WRITE: Duration = Duration::from_millis(500);
@@ -58,23 +55,13 @@ pub fn listen(name: &str) -> io::Result<UnixListener> {
     Ok(l)
 }
 
-fn stream(name: &str) -> io::Result<UnixStream> {
-    #[cfg(target_os = "linux")]
-    return UnixStream::connect_addr(&address(name)?);
-    #[cfg(not(target_os = "linux"))]
-    return UnixStream::connect(path(name));
-}
-
 /// The screen's end.
 pub fn connect(name: &str) -> io::Result<Peer> {
-    Peer::new(stream(name)?)
-}
-
-/// The airplay app's feed: read only, from another app's user.
-pub fn feed(name: &str) -> io::Result<Peer> {
-    let s = stream(name)?;
-    s.set_write_timeout(Some(WRITE))?;
-    Ok(Peer { s, frames: Reader::default() })
+    #[cfg(target_os = "linux")]
+    let s = UnixStream::connect_addr(&address(name)?)?;
+    #[cfg(not(target_os = "linux"))]
+    let s = UnixStream::connect(path(name))?;
+    Peer::new(s)
 }
 
 /// A screen the listener has, if one is waiting to connect.
@@ -146,7 +133,7 @@ mod tests {
 
     #[test]
     fn frames_both_ways() {
-        let name = format!("neochumby-nowplaying-test-{}", std::process::id());
+        let name = format!("neochumby-airplay-test-{}", std::process::id());
         let l = listen(&name).unwrap();
         assert!(accept(&l).unwrap().is_none());
         let mut screen = connect(&name).unwrap();

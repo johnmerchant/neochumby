@@ -13,8 +13,7 @@
 #       a real Chumby, paired and set dev=on
 #
 # TREE from tools/tree, with doom and neochumby-sync; NEOCHUMBYD the x86_64
-# neochumbyd built with it; with airplay and nowplaying, dev/emulate-nowplaying
-# too. NEOCHUMBY_CLASSIC_PICTURES (a renderer's output)
+# neochumbyd built with it; with airplay, dev/emulate-airplay too. NEOCHUMBY_CLASSIC_PICTURES (a renderer's output)
 # adds dev/emulate-classic. Each scenario's screenshots and logs go in
 # OUT/<scenario>/, its output in OUT/<scenario>.txt, and the results in
 # OUT/summary.txt. A scenario a backend can't run exits 77: skipped, not
@@ -55,8 +54,8 @@ run() {
 
 run smoke "$dev/emulate-smoke" "$tree" "$out/smoke"
 run powercut "$dev/emulate-powercut" "$tree" "$neochumbyd" "$out/powercut"
-if [ -d "$tree/apps/nowplaying" ]; then
-  run nowplaying "$dev/emulate-nowplaying" "$tree" "$neochumbyd" "$out/nowplaying"
+if [ -d "$tree/apps/airplay" ]; then
+  run airplay "$dev/emulate-airplay" "$tree" "$neochumbyd" "$out/airplay"
 fi
 if [ -n "${NEOCHUMBY_CLASSIC_PICTURES:-}" ]; then
   run classic "$dev/emulate-classic" "$tree" "$NEOCHUMBY_CLASSIC_PICTURES" "$out/classic"

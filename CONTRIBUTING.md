@@ -270,16 +270,14 @@ beside the Chumby is asked to pull the plug; the full-system machine skips
 it until qemu-chumby has USB. (Every cut point of a round, on the host, is
 neochumby-sync's own crash test.)
 
-**Now playing** (`dev/emulate-nowplaying TREE NEOCHUMBYD OUT`, run by CI
-through `dev/e2e`; user mode only). A neochumbyd on the PC runs the airplay
-and nowplaying apps' companions, with `dev/fake-shairport` in
+**AirPlay's now-playing screen** (`dev/emulate-airplay TREE NEOCHUMBYD
+OUT`, run by CI through `dev/e2e`; user mode only). A neochumbyd on the PC
+runs the airplay app's companion with `dev/fake-shairport` in
 shairport-sync's place: made-up metadata, a generated cover, silence, and a
 sender's remote-control server. The emulated Chumby pairs through
 neochumby-home's PAIR, and the script checks that:
-- nowplaying's service reads the airplay app's metadata, and NOW PLAYING,
-  opened from the home screen, is ready for AirPlay;
-- when the fake phone plays, the screen shows the track, with the cover in
-  its box;
+- the stream beginning opens the screen over the home screen, with the
+  cover in its box;
 - play/pause and next on the screen reach the sender as DACP requests,
   with its Active-Remote token, and the screen shows their effect;
 - the stream ending leaves the screen ready for AirPlay.
