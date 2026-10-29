@@ -394,7 +394,7 @@ neochumby = { git = "https://github.com/johnmerchant/neochumby" }
 [package.metadata.neochumby]
 title = "WEATHER"                    # listed in app lists
 exec = "neochumby-weather"           # runs in front when the app is opened
-colour = "4a90d9"                    # optional
+color = "4a90d9"                    # optional; `colour` works too
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
 neochumbyd = "optional"              # "required" | "optional" | absent
@@ -722,9 +722,17 @@ the app:
   over a socket it hands the app (`NEOCHUMBY_COMPANION`). It opens the
   companion of the app it started, named by the app's directory, so an app
   reaches only its own. Run by hand, as root, an app connects itself.
-- **Frames:** `Link::send` and `Link::recv` (`None` once the companion has
-  gone). On the companion's side they arrive on stdin and leave on stdout,
-  a u32 big-endian length then the bytes (`neochumby_proto::frame`).
+- **Messages:** define a type for each direction in the app's library
+  crate, and a `neochumby_proto::channel::Channel` that pairs them (serde
+  derives; postcard on the wire). The Chumby side sends and receives them
+  with `open(...)?.typed::<YourChannel>()`, the companion with
+  `neochumby_proto::channel::stdio::<YourChannel>()`; each end can send
+  only its own direction's type, so halves that disagree don't compile.
+  `apps/logs` does this.
+- **Frames:** for raw bytes instead, `Link::send` and `Link::recv` (`None`
+  once the companion has gone). On the companion's side they arrive on
+  stdin and leave on stdout, a u32 big-endian length then the bytes
+  (`neochumby_proto::frame`); a typed message is one such frame.
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
   and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
   stdin closes.

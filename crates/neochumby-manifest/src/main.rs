@@ -23,7 +23,7 @@ use toml::Value;
 const KEYS: &[&str] = &[
     "title",
     "exec",
-    "colour",
+    "color",
     "service",
     "companion",
     "neochumbyd",
@@ -41,6 +41,10 @@ const KEYS: &[&str] = &[
 ///   `exec` (that's what a MUSIC button opens) and `speaker` (or `root`) in
 ///   its `access`.
 const FLAGS: &[&str] = &["start", "button", "interrupt", "player"];
+
+/// Other spellings a key may have, as (spelling, key): `colour` for
+/// `color`. The key's own spelling wins when both are given.
+const SPELLINGS: &[(&str, &str)] = &[("colour", "color")];
 
 /// What an app may list in `access`, as the session grants it (jail.rs);
 /// without it, an app has only its own directory and a /tmp of its own:
@@ -103,7 +107,8 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
 
     let mut out = String::new();
     for key in KEYS {
-        let Some(v) = meta.get(*key) else { continue };
+        let spelled = SPELLINGS.iter().filter(|(_, k)| k == key).find_map(|(s, _)| meta.get(*s));
+        let Some(v) = meta.get(*key).or(spelled) else { continue };
         let value = match (FLAGS.contains(key), v) {
             (false, Value::Array(a)) if *key == "access" => access(a)?,
             (false, _) if *key == "access" => return Err("access: not a list of strings".into()),
@@ -117,7 +122,8 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         }
         out.push_str(&format!("{key}={value}\n"));
     }
-    if let Some(unknown) = meta.keys().find(|k| !KEYS.contains(&k.as_str())) {
+    let known = |k: &str| KEYS.contains(&k) || SPELLINGS.iter().any(|(s, _)| *s == k);
+    if let Some(unknown) = meta.keys().find(|k| !known(k)) {
         return Err(format!("unknown key {unknown} (known: {})", KEYS.join(", ")));
     }
     match meta.get("neochumbyd").and_then(Value::as_str) {
@@ -174,16 +180,22 @@ mod tests {
             name = "neochumby-quake"
             [package.metadata.neochumby]
             interrupt = false
-            colour = "8c5a28"
+            color = "8c5a28"
             exec = "neochumby-quake"
             button = true
             title = "QUAKE"
             "#,
         )
         .unwrap();
-        assert_eq!(m, "title=QUAKE\nexec=neochumby-quake\ncolour=8c5a28\nbutton=true\ninterrupt=false\n");
+        assert_eq!(m, "title=QUAKE\nexec=neochumby-quake\ncolor=8c5a28\nbutton=true\ninterrupt=false\n");
         let home = "[package]\nname = \"neochumby-home\"\n[package.metadata.neochumby]\nexec = \"neochumby-home\"\nstart = true";
         assert_eq!(manifest(home).unwrap(), "exec=neochumby-home\nstart=true\n");
+    }
+
+    #[test]
+    fn color_or_colour_and_color_wins() {
+        assert_eq!(manifest(&wrap("colour = \"8c5a28\"")).unwrap(), "color=8c5a28\n");
+        assert_eq!(manifest(&wrap("color = \"112233\"\ncolour = \"8c5a28\"")).unwrap(), "color=112233\n");
     }
 
     #[test]

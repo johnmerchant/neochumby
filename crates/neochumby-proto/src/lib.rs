@@ -28,13 +28,31 @@
 //! [`Msg::Log`], and answers [`Msg::Restart`] and [`Msg::Shot`], so that
 //! working on a Chumby needs no shell on it; and, only on a Chumby its
 //! owner set `dev=on`, [`Msg::Tap`] and [`Msg::Button`].
+//!
+//! The protocol has a [`VERSION`], agreed on as each connection starts
+//! ([`version`]), so that each end keeps working with the other's older
+//! builds. A Chumby's settings travel as [`Msg::Config`]'s pairs and are
+//! read as [`Settings`]. What an app and its companion say to each other
+//! is the app's own business; [`channel`] carries it as typed messages.
 
 use std::fmt::Write as _;
 use std::io;
 
+pub mod channel;
 pub mod dev;
 mod msg;
+pub mod settings;
+pub mod version;
 pub use msg::{Msg, SyncEntry};
+pub use settings::{Delivery, Settings};
+
+/// The newest protocol version this build speaks. Version 0 is the
+/// protocol from before versions were numbered; [`version`] has how two
+/// ends agree on one, and [`Msg`] what each version added.
+///
+/// - 1: [`Msg::Version`]; and [`Msg::Unknown`] in place of an error for a
+///   tag not known, skipped where [`Msg`] says.
+pub const VERSION: u16 = 1;
 
 /// A companion's frames, on its stdin and stdout: a u32 big-endian length,
 /// then that many bytes, at most [`MAX_FRAME`].
@@ -225,7 +243,7 @@ mod tests {
         ] {
             assert_eq!(Msg::decode(&m.encode()).unwrap(), m);
         }
-        assert!(Msg::decode(&[200]).is_err());
+        assert_eq!(Msg::decode(&[200]).unwrap(), Msg::Unknown { tag: 200, body: vec![] });
         assert!(Msg::decode(&[0, 9, 0]).is_err());
         assert!(Msg::decode(&[9, 0, 1]).is_err());
         assert!(Msg::decode(&[10, 0]).is_err(), "short hash");
@@ -252,6 +270,107 @@ mod tests {
         assert!(Msg::decode(&[39, 1]).is_err());
         assert!(Msg::decode(&[39, 7, 0, 0]).is_err());
         assert!(Msg::decode(&[39, 0, 0, 2, b'x']).is_err());
+    }
+
+    /// Every message of version 0 as that version encodes it, byte for
+    /// byte: deployed peers decode these, and send them, so they never
+    /// change.
+    fn version_0() -> Vec<(Msg, Vec<u8>)> {
+        let e = |p: &str, size: u64, h: u8| SyncEntry { path: p.into(), size, sha256: [h; 32] };
+        let entry = |p: &[u8], size: u64, h: u8| {
+            [&(p.len() as u16).to_be_bytes()[..], p, &size.to_be_bytes(), &[h; 32]].concat()
+        };
+        vec![
+            (Msg::Hello { name: "den".into() }, b"\x00\x00\x03den".to_vec()),
+            (Msg::Welcome, vec![1]),
+            (Msg::Unpaired, vec![2]),
+            (Msg::Pair { name: "den".into() }, b"\x03\x00\x03den".to_vec()),
+            (Msg::Paired { nfs_port: 2049, path: "/".into() }, b"\x04\x08\x01\x00\x01/".to_vec()),
+            (Msg::Refused, vec![5]),
+            (Msg::Open { app: "logs".into() }, b"\x06\x00\x04logs".to_vec()),
+            (Msg::Data(vec![9, 8]), vec![7, 9, 8]),
+            (Msg::Closed, vec![8]),
+            (
+                Msg::Config(vec![("start".into(), "wx".into()), ("dev".into(), "on".into())]),
+                b"\x09\x00\x02\x00\x05start\x00\x02wx\x00\x03dev\x00\x02on".to_vec(),
+            ),
+            (Msg::SyncHave { live: [3; 32] }, [&[10][..], &[3; 32]].concat()),
+            (Msg::SyncUpToDate, vec![11]),
+            (Msg::SyncWant, vec![12]),
+            (
+                Msg::SyncManifest { entries: vec![e("a", 1, 2)], last: true },
+                [&[13, 1, 0, 1][..], &entry(b"a", 1, 2)].concat(),
+            ),
+            (Msg::SyncFile(e("b", 5, 6)), [&[14][..], &entry(b"b", 5, 6)].concat()),
+            (Msg::SyncData(vec![1]), vec![15, 1]),
+            (Msg::SyncEnd, vec![16]),
+            (Msg::SyncDone { ok: true, detail: "ok".into() }, b"\x11\x01\x00\x02ok".to_vec()),
+            (Msg::SyncProgress { done: 1, total: 2 }, [&[18][..], &1u64.to_be_bytes(), &2u64.to_be_bytes()].concat()),
+            (Msg::Dev, vec![32]),
+            (Msg::Log(vec!["a".into()]), vec![33, 0, 1, 0, 1, b'a']),
+            (Msg::Restart, vec![34]),
+            (Msg::Shot, vec![35]),
+            (Msg::Screen { width: 320, height: 240 }, vec![36, 1, 64, 0, 240]),
+            (Msg::Tap { x: 1, y: 2, hold_ms: 3 }, vec![37, 0, 1, 0, 2, 0, 3]),
+            (Msg::Button { down: true }, vec![38, 1]),
+            (Msg::Done { ok: false, why: "no".into() }, b"\x27\x00\x00\x02no".to_vec()),
+        ]
+    }
+
+    #[test]
+    fn version_0_encodings_are_pinned() {
+        for (m, bytes) in version_0() {
+            assert_eq!(m.since(), Some(0), "{m:?}");
+            assert_eq!(m.encode(), bytes, "{m:?}");
+            assert_eq!(Msg::decode(&bytes).unwrap(), m);
+        }
+    }
+
+    /// A version-0 neochumbyd's decoder refuses a Hello with anything
+    /// after the name, and any tag it doesn't know: why a Chumby says its
+    /// version only after neochumbyd has said its own (crate::version).
+    /// Hello is as version 0 sends it, and so is all a new Chumby sends
+    /// before then.
+    #[test]
+    fn hello_is_as_version_0_sends_it() {
+        let hello = b"\x00\x00\x06lounge".to_vec();
+        assert_eq!(Msg::decode(&hello).unwrap(), Msg::Hello { name: "lounge".into() });
+        assert_eq!(Msg::Hello { name: "lounge".into() }.encode(), hello);
+        // This decoder, as the version-0 one did, refuses bytes after the name.
+        assert!(Msg::decode(&[hello, vec![0, 1]].concat()).is_err());
+    }
+
+    /// What a new neochumbyd sends a version-0 Chumby is only version-0
+    /// messages, `Config` with one pair more: decoded by version 0's
+    /// format, which takes any pairs.
+    #[test]
+    fn config_with_the_version_is_version_0s_format() {
+        let s = Settings { start: Some("wx".into()), ..Default::default() };
+        let m = version::config(&s);
+        assert_eq!(m.since(), Some(0));
+        assert_eq!(m.encode(), b"\x09\x00\x02\x00\x05start\x00\x02wx\x00\x0dproto.version\x00\x011".to_vec());
+    }
+
+    #[test]
+    fn version_1() {
+        assert_eq!(Msg::Version(1).since(), Some(1));
+        assert_eq!(Msg::Version(1).encode(), [40, 0, 1]);
+        assert_eq!(Msg::decode(&[40, 0, 1]).unwrap(), Msg::Version(1));
+        assert!(Msg::decode(&[40, 0]).is_err());
+        assert!(Msg::decode(&[40, 0, 1, 0]).is_err());
+    }
+
+    /// A tag not known is kept, whole, for the receiver to skip; a known
+    /// tag's bad body is still an error.
+    #[test]
+    fn unknown_messages() {
+        for tag in [19, 31, 41, 99, 255] {
+            let m = Msg::decode(&[tag, 1, 2]).unwrap();
+            assert_eq!(m, Msg::Unknown { tag, body: vec![1, 2] });
+            assert_eq!(m.since(), None);
+            assert_eq!(m.encode(), [tag, 1, 2]);
+        }
+        assert!(Msg::decode(&[1, 0]).is_err());
     }
 
     #[test]
