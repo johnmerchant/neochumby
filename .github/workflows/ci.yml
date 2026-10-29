@@ -70,9 +70,18 @@ jobs:
         with:
           targets: armv5te-unknown-linux-musleabi, x86_64-unknown-linux-musl, aarch64-unknown-linux-musl
           components: clippy
+      # Zig's cache (the C it compiles for each target) under a key that
+      # changes only with the lockfile: setup-zig's own saves a new copy every
+      # run, which fills the repository's cache space and evicts Buildroot's.
+      - uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: zig-${{ env.ZIG_VERSION }}-
       - uses: mlugg/setup-zig@v2
         with:
           version: ${{ env.ZIG_VERSION }}
+          use-cache: false
       # Every app, not just the default tree's.
       - name: The Chumby's binaries
         run: |
@@ -164,9 +173,12 @@ jobs:
             libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
             curl xz-utils patch
 
-      - name: Cache QEMU
+      # QEMU and Buildroot's work each restored here and saved as soon as
+      # it's made, not at the end of the job: a later step's failure (or a
+      # timeout) would otherwise throw away a long build.
+      - name: Restore QEMU
         id: qemu-cache
-        uses: actions/cache@v4
+        uses: actions/cache/restore@v4
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
@@ -175,27 +187,69 @@ jobs:
         if: steps.qemu-cache.outputs.cache-hit != 'true'
         run: emu/qemu/build
 
-      # Buildroot's downloads, toolchain and output.  A cold cache is slow;
-      # later runs rebuild only what changed.
-      - name: Cache Buildroot work
-        id: dist-cache
-        uses: actions/cache@v4
+      - name: Save QEMU
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
         with:
-          path: ${{ runner.temp }}/neochumby-dist
-          key: neochumby-dist-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+          path: emu/qemu/out
+          key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
+
+      # Buildroot's work, in two: the downloads and ccache, restored from
+      # the nearest earlier build whatever changed, and the output, only for
+      # exactly these inputs (Buildroot can't rebuild cleanly over a changed
+      # config, but ccache makes the rebuild cheap).
+      - name: Restore Buildroot's downloads and ccache
+        id: dist-ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/neochumby-dist/dl
+            ${{ runner.temp }}/neochumby-dist/ccache
+          key: neochumby-dist-ccache-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+          restore-keys: neochumby-dist-ccache-
+
+      - name: Restore Buildroot's output
+        id: dist-output
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/neochumby-dist/buildroot-*
+            ${{ runner.temp }}/neochumby-dist/output
+          key: neochumby-dist-output-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
 
       - name: Build the sideload image
+        id: dist-build
         env:
           NEOCHUMBY_DIST_WORK: ${{ runner.temp }}/neochumby-dist
         run: dist/build build/sideload-dist
+
+      # The container writes as root; the cache save runs as the runner.
+      - name: Make the Buildroot cache readable
+        if: always()
+        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-dist" || true
+
+      # Whatever was compiled, even by a build that failed.
+      - name: Save Buildroot's downloads and ccache
+        if: always() && steps.dist-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/neochumby-dist/dl
+            ${{ runner.temp }}/neochumby-dist/ccache
+          key: ${{ steps.dist-ccache.outputs.cache-primary-key }}
+
+      # Only a finished build's: its key can't be updated once saved.
+      - name: Save Buildroot's output
+        if: steps.dist-build.outcome == 'success' && steps.dist-output.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/neochumby-dist/buildroot-*
+            ${{ runner.temp }}/neochumby-dist/output
+          key: ${{ steps.dist-output.outputs.cache-primary-key }}
 
       - name: Recovery end-to-end
         run: |
           QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
           KERNEL=$PWD/build/sideload-dist/sideload-zImage \
           python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
-
-      # The container writes as root; the cache save runs as the runner.
-      - name: Make the Buildroot cache readable
-        if: always()
-        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-dist" || true
