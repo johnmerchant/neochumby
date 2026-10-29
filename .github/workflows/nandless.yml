@@ -5,20 +5,7 @@
 name: NANDLESS recovery
 
 on:
-  workflow_dispatch:
-  push:
-    branches: [main]
-    paths:
-      - "dist/**"
-      - "tools/neochumby-kernel-sideloader/**"
-      - "emu/qemu/**"
-      - ".github/workflows/nandless.yml"
   pull_request:
-    paths:
-      - "dist/**"
-      - "tools/neochumby-kernel-sideloader/**"
-      - "emu/qemu/**"
-      - ".github/workflows/nandless.yml"
 
 permissions:
   contents: read
