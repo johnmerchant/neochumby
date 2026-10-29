@@ -106,3 +106,11 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
           sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"
+      # delivery=sync through a power cut mid-round: the same tree paired
+      # with this neochumbyd, a FAT stick image, the real boot hook.
+      - name: delivery=sync through a power cut, under dev/emulate
+        if: matrix.proto == 'tls'
+        timeout-minutes: 8
+        run: |
+          sudo apt-get install -yq --no-install-recommends busybox-static
+          sudo dev/emulate-powercut "$RUNNER_TEMP/tree" target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/powercut"
