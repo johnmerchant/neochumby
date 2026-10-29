@@ -83,6 +83,7 @@ neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
+access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
 ```
 
 An app can use any of these keys:
@@ -122,6 +123,12 @@ An app can use any of these keys:
   stock Chumby, unless the app in front says `button = true`: then it has
   the button. Doom and Quake fire with it. With the start app in front, a
   press is a `button` line on its pipe.
+- **`access`:** each app runs as a user of its own, jailed in a directory
+  holding only its own files, a `/tmp` of its own and what `access` lists:
+  `screen`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
+  `network` and `terminal`. It never sees the Chumby's key. `root`, listed alone, runs
+  it unjailed, as root: only `home` does, as it pairs the Chumby.
+  [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
 
 ## Building
 
