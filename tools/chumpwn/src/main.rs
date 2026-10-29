@@ -619,14 +619,10 @@ unsafe fn load_container(base_va: u32, initrd_dst: u32) -> Option<(u32, u32)> {
     if version != 1 || header_size != core::mem::size_of::<Header>() as u32 {
         return None;
     }
-    print_str("chumpwn: hdr koff=");
-    print_hex(kernel_off);
-    print_str("chumpwn: hdr ksize=");
-    print_hex(kernel_size);
-    print_str("chumpwn: hdr roff=");
-    print_hex(initrd_off);
-    print_str("chumpwn: hdr rsize=");
-    print_hex(initrd_size);
+    print_str("chumpwn: container kernel=");
+    print_dec(kernel_size);
+    print_str("chumpwn: container initramfs=");
+    print_dec(initrd_size);
     if kernel_size == 0
         || initrd_size == 0
         || kernel_off < header_size
@@ -636,11 +632,9 @@ unsafe fn load_container(base_va: u32, initrd_dst: u32) -> Option<(u32, u32)> {
     {
         return None;
     }
-    print_str("chumpwn: copying kernel...\n");
     copy(base_va, base_va + kernel_off, kernel_size);
-    print_str("chumpwn: copying initramfs...\n");
     copy(initrd_dst, base_va + initrd_off, initrd_size);
-    print_str("chumpwn: copies done\n");
+    print_str("chumpwn: copied kernel and initramfs\n");
     Some((kernel_size, initrd_size))
 }
 
@@ -762,8 +756,6 @@ pub unsafe extern "C" fn chumpwn_main(sp: *const u32) -> ! {
     let ms = map_phys(memfd as usize, STUB_VA, STUB_PHYS, PAGE);
     print_str("chumpwn: mmap src=");
     print_hex(msrc as u32);
-    print_str("chumpwn: mmap kernel=");
-    print_hex(mk as u32);
     print_str("chumpwn: mmap initrd=");
     print_hex(mi as u32);
     print_str("chumpwn: mmap atags=");
@@ -854,9 +846,6 @@ pub unsafe extern "C" fn chumpwn_main(sp: *const u32) -> ! {
     build_atags(ATAGS_VA, INITRD_DST_PHYS, initrd_size, cmdline);
     print_str("chumpwn: ATAGS done\n");
     let stub_len = (&stub_blob_end as *const u8 as usize) - (&stub_blob_start as *const u8 as usize);
-    print_str("chumpwn: stub len=");
-    print_dec(stub_len as u32);
-    print_str("chumpwn: copying stub...\n");
     copy_volatile(STUB_VA as *mut u8, &stub_blob_start, stub_len);
     print_str("chumpwn: stub bytes=");
     print_dec(stub_len as u32);

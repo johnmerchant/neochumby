@@ -31,6 +31,19 @@ def sha256(path):
             h.update(b)
     return h.hexdigest()
 
+# chumpwn must never open an MTD device.  The stock 2.6.16 stage reads NAND
+# to boot; the new OS has no MTD driver at all.  This static check catches a
+# regression in the executable before QEMU is started.
+MTD_STRINGS = (b"/dev/mtd", b"mtdblock", b"flash_erase", b"flashcp", b"nandwrite", b"mtd", b"nand")
+
+def assert_no_mtd_strings(path):
+    with open(path, "rb") as f:
+        data = f.read()
+    found = [s.decode() for s in MTD_STRINGS if s in data]
+    if found:
+        sys.exit(f"{path}: contains MTD write-path strings: {', '.join(found)}")
+    print(f"{path}: no MTD/NAND device strings", flush=True)
+
 def main():
     qemu = env("QEMU", "qemu-system-arm")
     stock = env("STOCK_ZIMAGE")
@@ -42,20 +55,26 @@ def main():
     os.makedirs(work, exist_ok=True)
 
     nand_before = sha256(nand_src)
+    assert_no_mtd_strings(chumpwn)
 
-    # A clean PSP tree: only chumpwn and the rcS hook.  This is a scratch
-    # NAND image; the original is read-only.
+    # A clean PSP tree: only chumpwn and the rcS hook.  This writes a
+    # separate scratch NAND image (host-side image preparation); the
+    # original is opened read-only and hashed before/after.
     psp_dir = os.path.join(work, "psp")
     os.makedirs(os.path.join(psp_dir, "rfs1"), exist_ok=True)
+    rcS = (
+        "#!/bin/sh\n"
+        "echo \"chumpwn rcS: start\"\n"
+        "ifconfig lo 127.0.0.1 up\n"
+        f"{os.path.join('/psp', 'chumpwn')} --source 0xc2000000\n"
+        "echo \"chumpwn rcS: app returned $?\"\n"
+        "exec /bin/sh\n"
+    )
+    for token in ("mtd", "nand", "flash_erase", "flashcp", "nandwrite"):
+        if token in rcS.lower():
+            sys.exit(f"generated rcS contains forbidden token: {token}")
     with open(os.path.join(psp_dir, "rfs1", "rcS"), "w") as f:
-        f.write(
-            "#!/bin/sh\n"
-            "echo \"chumpwn rcS: start\"\n"
-            "ifconfig lo 127.0.0.1 up\n"
-            f"{os.path.join('/psp', 'chumpwn')} --source 0xc2000000\n"
-            "echo \"chumpwn rcS: app returned $?\"\n"
-            "exec /bin/sh\n"
-        )
+        f.write(rcS)
     os.chmod(os.path.join(psp_dir, "rfs1", "rcS"), 0o755)
     with open(chumpwn, "rb") as src, open(os.path.join(psp_dir, "chumpwn"), "wb") as dst:
         dst.write(src.read())
@@ -157,13 +176,17 @@ def main():
 
     nand_after = sha256(nand_src)
     scratch_after = sha256(scratch)
-    print(f"\noriginal NAND before: {nand_before}")
+    print("\nchumpwn contains no MTD/NAND device strings (it opens only /dev/mem or user files)")
+    print(f"original NAND before: {nand_before}")
     print(f"original NAND after:  {nand_after}")
     print(f"scratch NAND before:  {scratch_before}")
     print(f"scratch NAND after:   {scratch_after}")
     print(f"log: {log_path}")
     if nand_before != nand_after:
         print("ERROR: original NAND changed", file=sys.stderr)
+        return 1
+    if scratch_before != scratch_after:
+        print("ERROR: scratch NAND changed during the run", file=sys.stderr)
         return 1
     return 0 if ok else 2
 

@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Make a scratch NAND image with a new PSP partition.
+"""Make a host-side scratch NAND image with a new PSP partition.
 
-The input image is the sanitized Chumby NAND dump (528-byte records).  Only
-the PSP partition (offset 0x100000, 2 MiB) is replaced; every other byte,
-including OOB, is copied unchanged.  The input is never opened for writing.
+This is demo image preparation, not a guest or MTD/device write.  The input
+image is the sanitized Chumby NAND dump (528-byte records), opened read-only.
+Only the PSP partition (offset 0x100000, 2 MiB) is replaced in the copied
+bytes; every other byte, including OOB, is copied unchanged.
 """
 import hashlib
 import math
