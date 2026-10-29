@@ -1637,7 +1637,24 @@ def on_mac(argv):
     os.execv(tool, [tool, "shell", "--workdir", here, VM, "sudo"] + cmd)
 
 
+def local_settings():
+    """The checkout's .env.local (never committed): KEY=VALUE lines, such as
+    where your own firmware images are (NEOCHUMBY_EMU_KERNEL, _NAND, _PSP).
+    The environment wins over it, and NEOCHUMBY_ENV_LOCAL names another
+    file (the tests give /dev/null)."""
+    try:
+        with open(os.environ.get("NEOCHUMBY_ENV_LOCAL") or os.path.join(REPO, ".env.local")) as f:
+            lines = f.read().splitlines()
+    except FileNotFoundError:
+        return
+    for line in lines:
+        key, eq, value = line.strip().partition("=")
+        if eq and key and not key.startswith("#"):
+            os.environ.setdefault(key.strip(), os.path.expanduser(value.strip().strip("\"'")))
+
+
 def main(argv):
+    local_settings()
     # The full-system machine (--machine, from #36) is plain QEMU, native on a
     # Mac; only user mode goes to the VM.
     given = argv[argv.index("--machine") + 1] if "--machine" in argv[:-1] else None
