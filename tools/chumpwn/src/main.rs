@@ -90,7 +90,8 @@ pub unsafe extern "C" fn strlen(s: *const u8) -> usize {
 // Layout.  The i.MX21 SDRAM is at 0xc0000000.  The stock 2.6.16 kernel gets
 // the QEMU loader container at 0xc2000000; that area is still free at rcS
 // (verified), and the stock kernel's direct map covers it.  User mappings use
-// low aliases because 0xc0000000 is above the 3 GiB user/kernel split.
+// low aliases because 0xc0000000 is above the 3 GiB user/kernel split.  Every
+// physical address here is SDRAM, not the NAND controller or an MTD device.
 const SRC_PHYS: u32 = 0xc200_0000;
 const SRC_VA: u32 = 0x0200_0000;
 const SRC_MAP_LEN: u32 = 0x0060_0000;

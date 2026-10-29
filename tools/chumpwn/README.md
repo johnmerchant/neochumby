@@ -24,8 +24,10 @@ This is a QEMU demo for the user's own device image/emulator.
   `-snapshot`.
 - **`chumpwn` writes no NAND.**  The only device node it opens is `/dev/mem`
   (`O_RDWR`); the writes through it are to RAM (zImage, initrd, ATAGS and the
-  handoff stub).  It reads the QEMU loader container, or in hardware mode
-  user-supplied kernel/initramfs files read-only.  It never opens
+  handoff stub).  Those mappings are SDRAM addresses (`0xc2000000`,
+  `0xc2800000`, `0xc3f00000`, `0xc3f80000`), not the NAND controller.  It
+  reads the QEMU loader container, or in hardware mode user-supplied
+  kernel/initramfs files read-only.  It never opens
   `/dev/mtd*`, never calls an MTD `ioctl`, and never creates MTD device nodes.
   It contains no `/dev/mtd`, `mtdblock`, `flash_erase`, `flashcp`,
   `nandwrite`, `mtd` or `nand` strings; `run-demo.py` checks this before boot
