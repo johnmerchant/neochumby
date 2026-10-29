@@ -3,6 +3,7 @@ name = "chumpwn"
 version = "0.1.0"
 edition = "2021"
 publish = false
+license = "MIT"
 description = "Stock Chumby 2.6.16 -> NAND-less Linux 5.9.16 chainloader"
 
 [[bin]]

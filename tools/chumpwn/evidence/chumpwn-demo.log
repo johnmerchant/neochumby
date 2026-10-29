@@ -358,8 +358,8 @@ chumpwn: /dev/mem fd=3
 chumpwn: mmap src=0x02000000
 chumpwn: mmap kernel=0x02000000
 chumpwn: mmap initrd=0x02800000
-chumpwn: mmap atags=0x02f00000
-chumpwn: mmap stub=0x02f80000
+chumpwn: mmap atags=0x03f00000
+chumpwn: mmap stub=0x03f80000
 chumpwn: hdr koff=0x00001000
 chumpwn: hdr ksize=0x0043b708
 chumpwn: hdr roff=0x0043c708
@@ -376,7 +376,7 @@ chumpwn: ATAGS done
 chumpwn: stub len=92
 chumpwn: copying stub...
 chumpwn: stub bytes=92
-chumpwn: second trigger -> 0xc2f80000
+chumpwn: second trigger -> 0xc3f80000
 [    0.000000] Booting Linux on physical CPU 0x0
 [    0.000000] Linux version 5.9.16-mx21-nomtd (john@glados) (arm-none-eabi-gcc (GCC) 13.3.0, GNU ld (GNU Binutils) 2.43.1) #1 PREEMPT Thu Oct 29 19:23:06 ACDT 2026
 [    0.000000] CPU: ARM926EJ-S [41069264] revision 4 (ARMv5TEJ), cr=00053177

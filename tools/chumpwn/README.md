@@ -9,7 +9,10 @@ driver, no `/proc/mtd`, no `/dev/mtd*`, and no NAND platform device.
 
 The executable itself is Rust.  Its ELF has a `PT_LOAD` at virtual address 0
 for the fake rtable and the jump payload; the page-zero trick is the same as
-the working C POC, ported to `global_asm!` in `src/main.rs`.
+the working C POC, ported to `global_asm!` in `src/main.rs`.  This is a
+standalone bare-metal tool (`[workspace]` in its `Cargo.toml`), so it uses
+`unsafe` directly rather than living under the workspace's app-contract/unsafe
+rules; it is MIT and never runs inside the neochumby jail.
 
 This is a QEMU demo for the user's own device image/emulator.  It never writes
 NAND: the stock NAND is opened read-only by QEMU with `snapshot=on` and
@@ -29,7 +32,7 @@ chumpwn: uid after=0
 chumpwn: caps eff=0xffffffff
 chumpwn: caps permitted=0xffffffff
 chumpwn: caps inheritable=0xffffffff
-chumpwn: second trigger -> 0xc2f80000
+chumpwn: second trigger -> 0xc3f80000
 [    0.000000] Booting Linux on physical CPU 0x0
 [    0.000000] Linux version 5.9.16-mx21-nomtd ...
 ...
@@ -52,8 +55,8 @@ CHUMPWN_SHELL_OK
 ```text
 original NAND before: 5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86
 original NAND after:  5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86
-scratch NAND before:  11e87b75724d93863adcb71a2d7330be3330a6f177a320ed557c7f4006e94463
-scratch NAND after:   11e87b75724d93863adcb71a2d7330be3330a6f177a320ed557c7f4006e94463
+scratch NAND before:  e364a0d8bdfae08e95974087a3356ff522e30f3742084e246b5a463257f60216
+scratch NAND after:   e364a0d8bdfae08e95974087a3356ff522e30f3742084e246b5a463257f60216
 ```
 
 ## Layout
@@ -71,17 +74,42 @@ The 5.9.16 payload is placed by QEMU, not NAND:
 | chumpwn container | `0xc2000000` | `-device loader,file=payload.bin,addr=0xc2000000` |
 | 5.9.16 zImage | `0xc2000000` | copied forward over the container header; source is byte-offset `+0x1000` |
 | initramfs | `0xc2800000` | copied from the container |
-| ATAGS | `0xc2f00000` | built by chumpwn |
-| handoff stub | `0xc2f80000` | copied by chumpwn |
+| ATAGS | `0xc3f00000` | built by chumpwn (same address as the C chainload) |
+| handoff stub | `0xc3f80000` | copied by chumpwn (same address as the C chainload) |
 
 The container at `0xc2000000` is still free when stock `/psp/rfs1/rcS` runs;
 this was checked by loading the full 5.2 MB container before boot and reading
 it back from rcS.  It is inside the stock kernel's 64 MiB direct map, so the
-stub at `0xc2f80000` executes with the MMU on and continues at the same
+stub at `0xc3f80000` executes with the MMU on and continues at the same
 physical address after the MMU is disabled.
 
 The stock kernel does **not** see the container as NAND or as an initramfs; it
 is just RAM written by QEMU's loader.  chumpwn does not open `/dev/mtd*` at all.
+
+## Faithful to the working C POC
+
+The Rust is a port of the existing, verified C sources, not a new exploit:
+
+| Rust | Working C source | Notes |
+| --- | --- | --- |
+| `link.ld` | `poc2/link.ld` | `PT_LOAD` at vaddr 0 for `.zero`; code at `0x10000` |
+| `kernel_payload` in `global_asm!` | `stage2/payload.S`, `poc2/payload.S` | same uid/gid scan, same capability offsets `+0x24/+0x28/+0x2c` |
+| `trigger()` | `chainload.c trigger_poc()`, `stage2/exploit.c` | same `socket(AF_INET, SOCK_DGRAM)`, two `sendmsg`s, `MSG_MORE|MSG_PROBE` then `0` |
+| `0x74`, `0x100`, `0x104` writes | `chainload.c` / `exploit.c` | fake `rtable.output` and uid/gid values |
+| `build_atags()` | `chainload.c build_atags()` | same ATAG_CORE/MEM/CMDLINE/NONE; added ATAG_INITRD2 for the separate initramfs |
+| `map_phys()`, `cacheflush()` | `chainload.c` | same `mmap2`/`MAP_FIXED` and ARM private `0x0f0002` |
+| `jump_blob` | `chainload-chumby/jump.S` | same I-cache/TLB invalidate and jump |
+| `stub_blob` | `chainload-chumby/stub.S` | same D-cache clean, MMU off, `r0=0`, `r1=851`, `r2=ATAGS`, `pc=zImage` |
+| `chumpwn_main()` | `chainload.c _start()` | same drop-to-1000, first trigger, capget, `/dev/mem`, staging, second trigger |
+
+Differences are deliberate and limited to the NAND-less requirement:
+
+- The zImage comes from a QEMU loader container at `0xc2000000` (or USB files),
+  not from `/dev/mtdblock6`.
+- The initramfs is a separate file at `0xc2800000`, so `ATAG_INITRD2` is added
+  and the cache flush covers it.
+- ATAGS and stub use the C chainload's addresses `0xc3f00000`/`0xc3f80000`.
+- The command line has no `mtdparts=`, because the 5.9.16 kernel has no MTD.
 
 ## Build
 
