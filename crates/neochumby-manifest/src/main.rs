@@ -7,8 +7,8 @@
 //!
 //! Prints the manifest, or fails with what is wrong: a crate not named
 //! neochumby-<name>, no metadata, an unknown key, or a value of the wrong
-//! kind. Values are strings, except `start`, `button` and `interrupt`,
-//! which are true or false. `neochumbyd` is `required` or `optional`
+//! kind. Values are strings, except `start`, `button`, `interrupt` and
+//! `music`, which are true or false. `neochumbyd` is `required` or `optional`
 //! (absent: the app never needs one), and an app with a `companion` must
 //! set it: only a neochumbyd runs companions. It is stated, not inferred
 //! from `companion`.
@@ -19,12 +19,14 @@ use toml::Value;
 
 /// The keys an app may set, as apps.rs reads them on the Chumby.
 const KEYS: &[&str] =
-    &["title", "exec", "colour", "service", "companion", "neochumbyd", "start", "button", "interrupt"];
+    &["title", "exec", "colour", "service", "companion", "neochumbyd", "start", "button", "interrupt", "music"];
 /// The keys among them that are true or false:
 /// - `start`: the app may be the start app;
 /// - `button`: while in front, it gets the top button;
-/// - `interrupt`: false if no service may replace it in front.
-const FLAGS: &[&str] = &["start", "button", "interrupt"];
+/// - `interrupt`: false if no service may replace it in front;
+/// - `music`: a music app, which may be a Chumby's default one. It needs an
+///   `exec`: that's what a MUSIC button opens.
+const FLAGS: &[&str] = &["start", "button", "interrupt", "music"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {
@@ -64,6 +66,11 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
     match meta.get("neochumbyd").and_then(Value::as_str) {
         None | Some("required" | "optional") => {}
         Some(v) => return Err(format!(r#"neochumbyd: {v:?} is not "required" or "optional" (or leave it out)"#)),
+    }
+    // TODO: once `access` is in (#45), refuse a music app without
+    // `speaker` (or `root`) too: it couldn't play.
+    if meta.get("music").and_then(Value::as_bool) == Some(true) && !meta.contains_key("exec") {
+        return Err("music: a music app is opened, so it needs an exec".into());
     }
     if meta.contains_key("companion") && !meta.contains_key("neochumbyd") {
         return Err(r#"companion: only a neochumbyd runs it; set neochumbyd = "required" or "optional""#.into());
@@ -139,6 +146,18 @@ mod tests {
         assert_eq!(manifest(&wrap(r#"neochumbyd = "optional""#)).unwrap(), "neochumbyd=optional\n");
         let e = manifest(&wrap(r#"neochumbyd = "yes""#)).unwrap_err();
         assert!(e.contains(r#"not "required" or "optional""#), "{e}");
+    }
+
+    #[test]
+    fn a_music_app_has_an_exec() {
+        let m = manifest(&wrap("exec = \"neochumby-x\"\nservice = \"neochumby-x-service\"\nmusic = true")).unwrap();
+        assert_eq!(m, "exec=neochumby-x\nservice=neochumby-x-service\nmusic=true\n");
+        assert!(manifest(&wrap("service = \"neochumby-x\"\nmusic = true")).unwrap_err().starts_with("music:"));
+        assert_eq!(
+            manifest(&wrap("service = \"neochumby-x\"\nmusic = false")).unwrap(),
+            "service=neochumby-x\nmusic=false\n"
+        );
+        assert!(manifest(&wrap("exec = \"neochumby-x\"\nmusic = \"yes\"")).is_err());
     }
 
     #[test]

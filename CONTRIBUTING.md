@@ -268,6 +268,7 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
+music = true                         # optional: a music app (below)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -304,6 +305,8 @@ Every app is opened the same way, whoever asked for it.
 - with `NEOCHUMBY_SESSION=<fd>`, its request pipe to the session (below);
 - with `NEOCHUMBY_REASON` when the session has a reason to give: `button`
   when the top button opened it. Ignore values you don't know;
+- with `NEOCHUMBY_MUSIC` naming this Chumby's default music app, when it
+  has one (below);
 - owning the screen until it exits. What's on the screen when it starts is
   whatever was there: draw all of it;
 - sharing the touchscreen: every reader gets every touch. The session
@@ -377,6 +380,51 @@ promises:
 
 Without `start = true`, the session refuses the app as the start app and
 uses `neochumby-home`, so a Chumby can't be left stuck in a game.
+
+**Music apps.** A Chumby has a default music app, which a start app's
+MUSIC button opens and its MUTE button pauses. The owner picks it
+(`music=<app>`, set like `start`); otherwise it's `somafm` if that's in the
+tree, else the first music app by name, else there's none. Declaring
+`music = true` lets your app be picked, and promises:
+- it has an `exec`, which plays music or shows what's playing
+  (`neochumby-manifest` refuses `music` without one);
+- its **service** plays on after the `exec` exits, and acts on two lines
+  from the session: `pause` (stop playing, ready to resume) and `resume`
+  (play again). It ignores lines it doesn't know, as every service does.
+
+The session resolves the default as it starts, as it does the start app: a
+name that isn't a music app here is refused, and the reason logged. It
+sets `NEOCHUMBY_MUSIC=<app>` for everything it runs, and leaves it out when
+there's no music app, so a start app can grey out its MUSIC button. A
+changed `music=` applies at the next session start, as `start=` does.
+
+A start app, and its service, may also write these to the request pipe,
+and carry on (they aren't followed by an exit):
+- `music pause`, `music resume`: the session tells the default music app's
+  service `pause` or `resume`;
+- `music toggle`: `pause` if the session last told it `resume` (or nothing
+  yet: it starts as playing), else `resume`.
+
+From any other app or service, `music` is refused and logged. A line
+that can't be passed on (no music app, no service running, or its pipe
+full) is dropped and logged.
+
+In Rust:
+
+```rust
+use neochumby::session::{self, Music, Pipe};
+
+let mut pipe = Pipe::from_env();
+// MUSIC: open the default music app, if there is one, then exit.
+if let (Some(app), Some(p)) = (session::music(), pipe.as_mut()) {
+    let _ = p.open(&app);
+}
+// MUTE, from a start app: pause or resume it, and carry on.
+if let Some(p) = pipe.as_mut() {
+    let _ = p.music(Music::Toggle);
+}
+// In the music app's service: Notice::Pause and Notice::Resume.
+```
 
 ### Services
 

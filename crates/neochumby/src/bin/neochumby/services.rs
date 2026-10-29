@@ -13,6 +13,9 @@
 //! Chumby is paired (an app that needs a neochumbyd). Pairing asks for a
 //! restart anyway, so that's when a newly paired Chumby starts them.
 //!
+//! The default music app's service is also told `pause` and `resume`, when
+//! the start app asks (run.rs).
+//!
 //! The session's own services (core: neochumby-sync, for delivery=sync)
 //! are run, restarted and stopped the same way, but open no app: they are
 //! never told what is in front, and what they ask for is dropped, so the
@@ -85,12 +88,21 @@ pub struct Events<'a> {
 pub struct Services<'a> {
     list: Vec<Service<'a>>,
     root: &'a Path,
+    /// The default music app, for NEOCHUMBY_MUSIC.
+    music: Option<&'a str>,
 }
 
 impl<'a> Services<'a> {
     /// The service of each app in `apps` that can run here, and each of
-    /// `core`, the session's own; none started yet.
-    pub fn new(apps: &'a [App], core: &'a [App], root: &'a Path, backoff: Backoff) -> Services<'a> {
+    /// `core`, the session's own; none started yet. `music` is the default
+    /// music app.
+    pub fn new(
+        apps: &'a [App],
+        core: &'a [App],
+        root: &'a Path,
+        music: Option<&'a str>,
+        backoff: Backoff,
+    ) -> Services<'a> {
         let now = Instant::now();
         let ours = |a: &'a App, core| {
             Some(Service { app: a, exe: a.service.as_deref()?, running: None, backoff, due: now, core })
@@ -101,7 +113,7 @@ impl<'a> Services<'a> {
             .filter_map(|a| ours(a, false))
             .chain(core.iter().filter_map(|a| ours(a, true)))
             .collect();
-        Services { list, root }
+        Services { list, root, music }
     }
 
     /// Starts each service that is due, with `front` as the app in front;
@@ -112,7 +124,7 @@ impl<'a> Services<'a> {
         for s in &mut self.list {
             let Some(r) = s.running.as_mut() else {
                 if Instant::now() >= s.due {
-                    s.start(self.root, front);
+                    s.start(self.root, self.music, front);
                 }
                 continue;
             };
@@ -155,6 +167,15 @@ impl<'a> Services<'a> {
         }
     }
 
+    /// Tells the service of the app `app` `notice`, if it's running and
+    /// its pipe has room now; why not, if it couldn't. The session never
+    /// waits on a service, and a line that couldn't go isn't kept.
+    pub fn tell(&mut self, app: &str, notice: &Notice) -> Result<(), &'static str> {
+        let s = self.list.iter_mut().find(|s| !s.core && s.app.name == app).ok_or("it has no service here")?;
+        let r = s.running.as_mut().ok_or("its service isn't running")?;
+        if r.pipe.try_send(&notice.line()) { Ok(()) } else { Err("its service's pipe is full") }
+    }
+
     /// Stops every service: SIGTERM to each one's process group, then
     /// SIGKILL to those still running after `patience`.
     pub fn stop(&mut self, patience: Duration) {
@@ -173,8 +194,8 @@ impl<'a> Services<'a> {
 }
 
 impl Service<'_> {
-    fn start(&mut self, root: &Path, front: &str) {
-        match child::spawn(child::command(self.exe, &self.app.dir, root), &[]) {
+    fn start(&mut self, root: &Path, music: Option<&str>, front: &str) {
+        match child::spawn(child::command(self.exe, &self.app.dir, root, music), &[]) {
             Ok((child, pipe)) => {
                 eprintln!("neochumby: service {} started", self.app.name);
                 let mut r = Running { child, pipe, since: Instant::now(), untold: None };

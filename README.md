@@ -83,6 +83,7 @@ neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
+music = true                         # a music app: MUSIC buttons may open it
 ```
 
 An app can use any of these keys:
@@ -122,6 +123,12 @@ An app can use any of these keys:
   stock Chumby, unless the app in front says `button = true`: then it has
   the button. Doom and Quake fire with it. With the start app in front, a
   press is a `button` line on its pipe.
+- **`music`:** a Chumby's default music app is the one a start app's MUSIC
+  button opens (`NEOCHUMBY_MUSIC`), and its MUTE button pauses and resumes
+  (the start app asks the session, which tells the music app's service).
+  It's named by `music=<app>` (`neochumbyd set NAME music=<app>`), else it's
+  `somafm`, else the first app with `music = true`. `neochumbyd pairing`
+  names the music apps in the tree.
 
 ## Building
 

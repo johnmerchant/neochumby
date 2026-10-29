@@ -1,8 +1,10 @@
 //! Starting what the session runs, and ending it.
 //!
 //! Everything the session runs gets NEOCHUMBY_ROOT (the tree), HOME=/tmp
-//! (the root filesystem is read-only, and so is the tree) and its own
-//! request pipe as NEOCHUMBY_SESSION (neochumby::session). It runs in a
+//! (the root filesystem is read-only, and so is the tree), its own
+//! request pipe as NEOCHUMBY_SESSION (neochumby::session) and, when this
+//! Chumby has one, its default music app as NEOCHUMBY_MUSIC (music.rs). It
+//! runs in a
 //! process group of its own, so that it and whatever it started end
 //! together.
 
@@ -20,10 +22,15 @@ use neochumby_sys::process::{Signal, exited, group_alive, kill_group, pass_fds};
 const LINGER: Duration = Duration::from_millis(200);
 
 /// A program the session runs, with its working directory, from the tree
-/// at `root`.
-pub fn command(exe: &Path, dir: &Path, root: &Path) -> Command {
+/// at `root`; `music` is the default music app, if there is one.
+pub fn command(exe: &Path, dir: &Path, root: &Path, music: Option<&str>) -> Command {
     let mut c = Command::new(exe);
     c.current_dir(dir).env("NEOCHUMBY_ROOT", root).env("HOME", "/tmp");
+    // Not inherited from whoever started the session: only the one chosen.
+    c.env_remove(session::MUSIC_ENV);
+    if let Some(m) = music {
+        c.env(session::MUSIC_ENV, m);
+    }
     c
 }
 
