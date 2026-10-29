@@ -12,6 +12,12 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request cancels its runs on the older commits; main's
+# runs each finish, so every commit there keeps its result.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 env:
   CARGO_TERM_COLOR: always
   ZIG_VERSION: 0.17.0
