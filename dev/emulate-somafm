@@ -1,0 +1,141 @@
+#!/bin/sh
+# neochumby-somafm under dev/emulate: the Music screen, and its player
+# through the session. It checks that
+#   - neochumby-home lists SOMAFM, and a tap opens it;
+#   - it draws the screen exactly as `neochumby-somafm render` does on the
+#     host, from the same pictures;
+#   - a station's row selects it and turns the music on: the screen shows
+#     it, the storage holds it, and the service asks the session to play
+#     that station's stream;
+#   - play/pause stops the stream, the slider sets the volume, and skip
+#     moves to the next station;
+#   - DONE goes back to neochumby-home, and the service plays on;
+#   - after a restart the music comes back (the storage lasts), and at
+#     night (a TZ where it's 23:00) the screen is the dark one.
+#
+# dev/emulate runs apps unjailed, as root, so the service sets the mute and
+# the volume itself rather than asking the session: that part of the
+# speaker isn't checked here.
+#
+#   sudo dev/emulate-somafm TREE RENDER OUT
+#
+# TREE from tools/tree, with somafm. RENDER is the host's neochumby-somafm
+# (cargo build -p neochumby-somafm), which draws what the screen should
+# show. Screenshots and the session's log go in OUT. There's no btplay
+# here, so the stream itself isn't heard: the session's log says what it
+# was asked to play.
+set -eu
+tree=${1:?usage: dev/emulate-somafm TREE RENDER OUT}
+render=${2:?usage: dev/emulate-somafm TREE RENDER OUT}
+out=${3:?usage: dev/emulate-somafm TREE RENDER OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+state=$out/state
+emu() { "$dev/emulate" --state "$state" "$@"; }
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the session's log:"
+  emu log || true
+  emu stop || true
+  exit 1
+}
+count() { emu log | grep -c "$1" || true; }
+# The app takes a release within 350 ms of the last as the touchscreen's
+# echo, so taps are spaced.
+tap() {
+  sleep 0.6
+  emu tap "$@"
+}
+
+[ -x "$tree/apps/somafm/neochumby-somafm" ] || fail "the tree has no somafm"
+# Only home and somafm, so that SOMAFM is home's first row.
+rm -rf "$out/tree" "$out/expect" "$out/psp"
+mkdir -p "$out/tree/apps" "$out/expect" "$out/psp"
+storage=$state/psp/apps/somafm
+setting() { cat "$storage/$1" 2>/dev/null || true; }
+for f in "$tree"/*; do
+  [ "$(basename "$f")" = apps ] || cp -R "$f" "$out/tree/"
+done
+cp -R "$tree/apps/home" "$tree/apps/somafm" "$out/tree/apps/"
+files=$out/tree/apps/somafm
+
+# What the screen should show, drawn on the host.
+expect() {
+  name=$1
+  shift
+  "$render" render "$files" "$out/expect/$name.raw" "$@" || fail "render $name"
+}
+expect start volume 65
+expect deepspace station 2 on volume 65
+expect stopped station 2 volume 65
+expect quiet station 2 volume 20
+expect lush station 3 volume 20
+expect night station 3 on volume 20 night
+showing() {
+  emu compare --min 1 --wait 20 --want "^$1\.raw$" "$out"/expect/*.raw || fail "the screen isn't $1"
+}
+
+# A time zone in which it's HOUR o'clock now (the app's night is 19:00 to
+# 07:00): POSIX TZ's offset is west of UTC.
+tz_at() {
+  ahead=$((($1 - $(date -u +%-H) + 24) % 24))
+  [ "$ahead" -le 12 ] || ahead=$((ahead - 24))
+  echo "EMU$((-ahead))"
+}
+
+step "boot, and SOMAFM on home"
+emu start --psp "$out/psp" --env TZ="$(tz_at 12)" "$out/tree"
+emu wait log 'neochumby: service somafm started' 30 || fail "somafm's service didn't start"
+emu wait screen 10 || true
+emu shot "$out/1-home.png"
+tap 160 60
+emu wait log 'neochumby: opening somafm' 10 || fail "home didn't open somafm"
+showing start
+emu shot "$out/2-somafm.png"
+
+step "a station: selected, on, and played"
+tap 60 103 # Deep Space One, the third row
+showing deepspace
+emu shot "$out/3-playing.png"
+emu wait log 'somafm asks to play http://ice6.somafm.com/deepspaceone-128-mp3' 10 ||
+  fail "the service didn't ask for Deep Space One"
+[ "$(setting station)" = 2 ] || fail "the storage hasn't station 2"
+[ "$(setting on)" = 1 ] || fail "the storage hasn't on=1"
+
+step "pause, volume, skip"
+tap 20 225 # play/pause
+showing stopped
+emu wait log 'somafm asks to stop playing' 10 || fail "the service didn't stop the stream"
+tap 114 225 # the slider, at 20%
+showing quiet
+[ "$(setting volume)" = 20 ] || fail "the storage hasn't volume=20"
+tap 52 225 # skip
+showing lush
+emu shot "$out/4-skipped.png"
+tap 20 225 # play: Lush
+emu wait log 'somafm asks to play http://ice6.somafm.com/lush-128-mp3' 10 || fail "the service didn't ask for Lush"
+
+step "DONE: home, and the music plays on"
+tap 290 225
+emu wait log 'neochumby: opening neochumby-home' 10 || fail "DONE didn't go back to home"
+sleep 2
+[ "$(count 'somafm asks to stop playing')" = 1 ] || fail "the music stopped when the app left"
+[ "$(count 'neochumby: service somafm exited')" = 0 ] || fail "somafm's service exited"
+emu shot "$out/5-home-again.png"
+emu stop
+
+step "at night: the dark screen"
+emu start --env TZ="$(tz_at 23)" "$out/tree" # /psp as the last run left it
+emu wait log 'neochumby: service somafm started' 30 || fail "somafm's service didn't start"
+# Playing again: the storage lasted.
+[ "$(setting volume)" = 20 ] || fail "the storage didn't last"
+emu wait log 'somafm asks to play http://ice6.somafm.com/lush-128-mp3' 10 || fail "the music didn't come back"
+emu wait screen 10 || true
+tap 160 60
+showing night
+emu shot "$out/6-night.png"
+emu stop
+
+echo "-- the session's log:"
+emu log | tee "$out/log.txt"
+echo "dev/emulate-somafm: all passed"
