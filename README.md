@@ -153,6 +153,13 @@ cargo chumby          # the session and apps, for the Chumby
 cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux
 ```
 
+The server half also builds for 64-bit ARM Linux, such as a Raspberry Pi
+(`rustup target add aarch64-unknown-linux-musl`, then
+`--target aarch64-unknown-linux-musl`), or natively for the machine
+building it. `tools/deploy` builds for the server it installs on, asking
+it over ssh, and `tools/tree --server-target TRIPLE` takes a Rust target
+triple (CPU, vendor, OS and C library), or `host`.
+
 A Chumby and its neochumbyd talk TLS 1.3. To use Noise instead, build both
 with `--features neochumby-proto/noise`. Nothing is negotiated, so the two
 ends must be built the same way.
