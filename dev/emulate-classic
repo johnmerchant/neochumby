@@ -33,7 +33,9 @@ out=${3:?usage: dev/emulate-classic TREE PICTURES OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 # On a Mac, user mode runs in dev/emulate's Linux, as dev/emulate-smoke
 # does (the other backends run on the Mac itself).
-if [ "$(uname)" = Darwin ] && [ -z "${NEOCHUMBY_EMU_MACHINE:-}${NEOCHUMBY_EMU_DEVICE:-}" ]; then
+# dev/emulate answers which backend from the environment and the settings
+# files it reads (.env.local), here on the Mac.
+if [ "$(uname)" = Darwin ] && [ "$("$dev/emulate" backend)" = user ]; then
   exec "$dev/emulate" vm exec sh "$dev/emulate-classic" "$@"
 fi
 # The emulator's directory: not in OUT, which may be a folder shared from a
