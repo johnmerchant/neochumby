@@ -13,7 +13,7 @@
 //!   button=true                gets the top button while in front (games)
 //!   access=screen,touch        what it reaches beyond its jail (absent:
 //!                              nothing; neochumby-manifest lists the words)
-//!   music=true                 a music app: may be the default one, opened
+//!   player=true                a player: may be the default one, opened
 //!                              by MUSIC buttons; its service takes `pause`
 //!                              and `resume` (see the session)
 //!
@@ -57,10 +57,10 @@ pub struct App {
     /// While it's in front, it has the top button (neochumby::input::Squeeze),
     /// and a press doesn't return to the start app.
     pub button: bool,
-    /// A music app: it may be this Chumby's default music app, which start
-    /// apps open for MUSIC (NEOCHUMBY_MUSIC). It promises that its service
+    /// A player: it may be this Chumby's default player, which start
+    /// apps open for MUSIC (NEOCHUMBY_PLAYER). It promises that its service
     /// pauses and resumes on the session's `pause` and `resume` lines.
-    pub music: bool,
+    pub player: bool,
     /// What it reaches beyond its jail.
     pub access: Access,
 }
@@ -154,7 +154,7 @@ pub fn load(dir: &Path) -> Option<App> {
         start: field("start").as_deref() == Some("true"),
         interrupt: field("interrupt").as_deref() != Some("false"),
         button: field("button").as_deref() == Some("true"),
-        music: field("music").as_deref() == Some("true"),
+        player: field("player").as_deref() == Some("true"),
         access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
     })
 }

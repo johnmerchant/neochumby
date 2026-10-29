@@ -6,7 +6,7 @@
 //!
 //!   neochumbyd serve [options]    the daemon
 //!   neochumbyd pairing            Chumbys paired and asking to pair, and
-//!                                 the start and music apps in the tree
+//!                                 the start and players in the tree
 //!                                 (tree.rs)
 //!   neochumbyd approve CODE       pair the Chumby showing CODE
 //!   neochumbyd refuse CODE
@@ -14,7 +14,7 @@
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
 //!                                  sent to it when it next connects;
 //!                                  KEY= removes it. For `start` and
-//!                                  `music` (the default music app), it
+//!                                  `player` (the default player), it
 //!                                  says which apps in the tree may be
 //!                                  named;
 //!                                  `delivery=sync` keeps the tree on the
@@ -142,7 +142,7 @@ fn main() {
     match a.command.as_str() {
         "serve" => serve(&a, state),
         "pairing" => {
-            let (starts, musics) = (tree::start_apps(&tree_dir), tree::music_apps(&tree_dir));
+            let (starts, players) = (tree::start_apps(&tree_dir), tree::players(&tree_dir));
             for (name, key) in state.pairs().unwrap_or_else(|e| fail(e)) {
                 let config = state.config(&name);
                 let settings: Vec<String> = config.iter().map(|(k, v)| format!("{k}={v}")).collect();
@@ -150,7 +150,7 @@ fn main() {
                 let setting = |key: &str| config.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
                 let notes = [
                     tree::start_note(&name, setting("start"), &starts),
-                    tree::music_note(&name, setting("music"), &musics),
+                    tree::player_note(&name, setting("player"), &players),
                 ];
                 for note in notes.into_iter().flatten() {
                     println!("         {note}");
@@ -160,7 +160,7 @@ fn main() {
                 println!("asking   {}  code {}  from {}  {}", p.name, p.code, p.addr, neochumby_proto::hex(&p.key));
             }
             println!("{}", tree::hint(&starts));
-            println!("{}", tree::music_hint(&musics));
+            println!("{}", tree::player_hint(&players));
         }
         "approve" => {
             let name = state.approve(&operand()).unwrap_or_else(|e| fail(e));
@@ -179,12 +179,12 @@ fn main() {
                 }
                 println!("{}", tree::hint(&starts));
             }
-            if key == "music" {
-                let musics = tree::music_apps(&tree_dir);
-                if let Some(note) = tree::music_note(&operand(), Some(value).filter(|v| !v.is_empty()), &musics) {
+            if key == "player" {
+                let players = tree::players(&tree_dir);
+                if let Some(note) = tree::player_note(&operand(), Some(value).filter(|v| !v.is_empty()), &players) {
                     eprintln!("neochumbyd: {note}");
                 }
-                println!("{}", tree::music_hint(&musics));
+                println!("{}", tree::player_hint(&players));
             }
             if key == INPUT_KEY {
                 let name = operand();

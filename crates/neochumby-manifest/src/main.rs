@@ -8,7 +8,7 @@
 //! Prints the manifest, or fails with what is wrong: a crate not named
 //! neochumby-<name>, no metadata, an unknown key, or a value of the wrong
 //! kind. Values are strings, except `start`, `button`, `interrupt` and
-//! `music`, which are true or false, and `access`, a list of what the app
+//! `player`, which are true or false, and `access`, a list of what the app
 //! reaches beyond its jail ([`ACCESS`]), written as one comma-separated
 //! value. `neochumbyd` is `required` or `optional`
 //! (absent: the app never needs one), and an app with a `companion` must
@@ -30,17 +30,17 @@ const KEYS: &[&str] = &[
     "start",
     "button",
     "interrupt",
-    "music",
+    "player",
     "access",
 ];
 /// The keys among them that are true or false:
 /// - `start`: the app may be the start app;
 /// - `button`: while in front, it gets the top button;
 /// - `interrupt`: false if no service may replace it in front;
-/// - `music`: a music app, which may be a Chumby's default one. It needs an
+/// - `player`: a player, which may be a Chumby's default one. It needs an
 ///   `exec` (that's what a MUSIC button opens) and `speaker` (or `root`) in
 ///   its `access`.
-const FLAGS: &[&str] = &["start", "button", "interrupt", "music"];
+const FLAGS: &[&str] = &["start", "button", "interrupt", "player"];
 
 /// What an app may list in `access`, as the session grants it (jail.rs);
 /// without it, an app has only its own directory and a /tmp of its own:
@@ -124,16 +124,16 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         None | Some("required" | "optional") => {}
         Some(v) => return Err(format!(r#"neochumbyd: {v:?} is not "required" or "optional" (or leave it out)"#)),
     }
-    if meta.get("music").and_then(Value::as_bool) == Some(true) {
+    if meta.get("player").and_then(Value::as_bool) == Some(true) {
         if !meta.contains_key("exec") {
-            return Err("music: a music app is opened, so it needs an exec".into());
+            return Err("player: a player is opened, so it needs an exec".into());
         }
         // Jailed, it plays only through the speaker it lists (or as root).
         let listed = |w: &str| {
             meta.get("access").and_then(Value::as_array).is_some_and(|a| a.iter().any(|v| v.as_str() == Some(w)))
         };
         if !listed("speaker") && !listed("root") {
-            return Err(r#"music: a music app plays, so its access lists "speaker""#.into());
+            return Err(r#"player: a player plays, so its access lists "speaker""#.into());
         }
     }
     if meta.contains_key("companion") && !meta.contains_key("neochumbyd") {
@@ -224,30 +224,30 @@ mod tests {
     }
 
     #[test]
-    fn a_music_app_has_an_exec_and_the_speaker() {
+    fn a_player_has_an_exec_and_the_speaker() {
         let speaker = r#"access = ["speaker"]"#;
         let m = manifest(&wrap(&format!(
-            "exec = \"neochumby-x\"\nservice = \"neochumby-x-service\"\nmusic = true\n{speaker}"
+            "exec = \"neochumby-x\"\nservice = \"neochumby-x-service\"\nplayer = true\n{speaker}"
         )))
         .unwrap();
-        assert_eq!(m, "exec=neochumby-x\nservice=neochumby-x-service\nmusic=true\naccess=speaker\n");
-        let root = manifest(&wrap("exec = \"neochumby-x\"\nmusic = true\naccess = [\"root\"]")).unwrap();
-        assert_eq!(root, "exec=neochumby-x\nmusic=true\naccess=root\n");
+        assert_eq!(m, "exec=neochumby-x\nservice=neochumby-x-service\nplayer=true\naccess=speaker\n");
+        let root = manifest(&wrap("exec = \"neochumby-x\"\nplayer = true\naccess = [\"root\"]")).unwrap();
+        assert_eq!(root, "exec=neochumby-x\nplayer=true\naccess=root\n");
         // No exec, or nothing to play through.
         assert!(
-            manifest(&wrap(&format!("service = \"neochumby-x\"\nmusic = true\n{speaker}")))
+            manifest(&wrap(&format!("service = \"neochumby-x\"\nplayer = true\n{speaker}")))
                 .unwrap_err()
-                .starts_with("music:")
+                .starts_with("player:")
         );
         for access in ["", r#"access = ["screen", "touch"]"#] {
-            let e = manifest(&wrap(&format!("exec = \"neochumby-x\"\nmusic = true\n{access}"))).unwrap_err();
-            assert!(e.starts_with("music:") && e.contains("speaker"), "{e}");
+            let e = manifest(&wrap(&format!("exec = \"neochumby-x\"\nplayer = true\n{access}"))).unwrap_err();
+            assert!(e.starts_with("player:") && e.contains("speaker"), "{e}");
         }
         assert_eq!(
-            manifest(&wrap("service = \"neochumby-x\"\nmusic = false")).unwrap(),
-            "service=neochumby-x\nmusic=false\n"
+            manifest(&wrap("service = \"neochumby-x\"\nplayer = false")).unwrap(),
+            "service=neochumby-x\nplayer=false\n"
         );
-        assert!(manifest(&wrap("exec = \"neochumby-x\"\nmusic = \"yes\"")).is_err());
+        assert!(manifest(&wrap("exec = \"neochumby-x\"\nplayer = \"yes\"")).is_err());
     }
 
     #[test]
