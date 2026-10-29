@@ -257,11 +257,17 @@ lists what's in its userspace so far and what's still to come
 
 ## Run in QEMU
 
+Both demos run on qemu-chumby's `chumby-classic` machine (the submodule
+`emu/qemu/qemu-chumby`, built by `emu/qemu/build`), started and driven
+through its runner, `chumby-machine`, as all of neochumby's emulation is.
+`QEMU` names the `qemu-system-arm` to use (else `emu/qemu/build`'s, or the
+one on `PATH`).
+
 `run-demo.py` prepares a separate scratch NAND image from the sanitized
 original, replacing only the 2 MiB PSP partition with a JFFS2 tree containing
 the sideloader and `rfs1/rcS` (see the no-write section above).  It then
-starts QEMU with the original NAND read-only, the payload via
-`-device loader`, and an interactive serial socket; it sends the NAND checks
+starts the machine with the scratch NAND image (`snapshot=on`) and the
+payload via `-device loader`; it runs the NAND checks
 and shell markers, checks the sideloader binary for MTD device paths and
 write tools, checks that the sideload marker is present and the NAND modules
 are not loaded, fails if `/proc/mtd`, `/dev/mtd*`, `/sys/class/mtd` or NAND
@@ -269,16 +275,15 @@ in dmesg appears, and fails if either the original or the scratch image hash
 changes.
 
 ```sh
-QEMU=/path/to/qemu-system-arm \
 STOCK_ZIMAGE=/path/to/stock/zImage \
 NAND_SRC=/path/to/firmware/nand.img \
-CHUMBY_EMU=/path/to/chumby-emu \
 PAYLOAD=build/sideload-payload.bin \
 python3 tools/neochumby-kernel-sideloader/run-demo.py
 ```
 
-The exact QEMU command used for the captured log is in
-`evidence/qemu-command.txt`; the essential part is:
+The exact QEMU command used for the captured log (before the demos moved
+onto `chumby-machine`, which adds its console and QMP sockets and `-nic
+none`) is in `evidence/qemu-command.txt`; the essential part is:
 
 ```sh
 qemu-system-arm -M chumby-classic \
@@ -314,7 +319,6 @@ qemu-system-arm -M chumby-classic \
 image, so it needs no stock firmware:
 
 ```sh
-QEMU=/path/to/qemu-system-arm \
 KERNEL=build/sideload-zImage \
 python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
 ```
@@ -325,7 +329,7 @@ shell.  The sideloaded path is `run-demo.py`, which needs the user's own
 stock zImage and NAND image.
 
 CI's `sideload` job (`.github/workflows/ci.yml`) runs this recovery test,
-after building the custom QEMU and the sideload image.  It runs on changes
+with the custom QEMU and the image from the `dist` job.  It runs on changes
 under `dist/`, `tools/neochumby-kernel-sideloader/` or `emu/qemu/`, and on
 `workflow_dispatch`, and is skipped otherwise; QEMU and Buildroot work is
 cached, so the first run is slow and later runs rebuild only what changed.
@@ -345,8 +349,8 @@ link.ld                 page-zero PT_LOAD at 0, code at 0x10000
 build.sh                cargo build + copy the binary
 mkpayload.py            QEMU loader container
 mk_psp_nand.py          host-side scratch NAND: replace only the PSP partition
-run-demo.py             QEMU boot, serial interaction, sideload checks
-run-recovery-demo.py    self-contained recovery-path E2E (zeroed NAND, no firmware)
+run-demo.py             the stock boot to the sideload, on chumby-machine; sideload checks
+run-recovery-demo.py    self-contained recovery-path E2E on chumby-machine (zeroed NAND, no firmware)
 kernel/build.sh         sideload-only 5.9.16 zImage build
 kernel/sideload-only.config  CONFIG_MTD=n and friends
 kernel/*.patch          MX21ADS NAND platform guard; macOS host uuid workaround
@@ -355,17 +359,19 @@ evidence/               captured logs, config, hashes, exact command
 
 ## USB / hardware mode
 
-On a real Chumby (or a future QEMU with USB storage), the sideloader can read
-the zImage and initramfs directly instead of using the QEMU loader container:
+On a real Chumby (or the emulated one, with a stick on its USB port), the
+sideloader can read the zImage and initramfs directly instead of using the
+QEMU loader container:
 
 ```sh
 /psp/neochumby-kernel-sideloader --kernel /mnt/usb/sideloader/zImage \
                                  --initramfs /mnt/usb/sideloader/initramfs.cpio.gz
 ```
 
-That mode is implemented (`--kernel`, `--initramfs`) but was not exercised in
-QEMU, because `chumby-classic` models the USB root hub but no storage devices.
-The QEMU demo uses `--source 0xc2000000`, the loader container.
+That mode is implemented (`--kernel`, `--initramfs`) but not yet exercised
+in QEMU: `chumby-classic` now attaches a USB stick (`chumby-machine start
+--stick IMG`), which the stock boot mounts on `/mnt/usb`, but the demo still
+uses `--source 0xc2000000`, the loader container.
 
 ## Limitations / notes
 
@@ -373,10 +379,10 @@ The QEMU demo uses `--source 0xc2000000`, the loader container.
   on NAND and that is the only boot path QEMU/the device has.  The 5.9.16
   image is sideload by default: no NAND driver is built in, and the recovery
   modules are not loaded in the sideloaded path.
-- **QEMU only.**  QEMU's `chumby-classic` models no USB storage, so the
-  hardware-oriented `--kernel FILE --initramfs FILE` mode is implemented but
-  the demo uses the QEMU loader container.  A real Chumby would need the files
-  on a USB stick and the stock USB storage driver.
+- **QEMU only.**  The hardware-oriented `--kernel FILE --initramfs FILE`
+  mode is implemented, but the demo uses the QEMU loader container.  A real
+  Chumby needs the files on a USB stick and the stock USB storage driver,
+  as the emulated one now has.
 - **5.9.16 is EOL.**  i.MX21 was removed in 5.10; 5.9.16 is the last mainline
   with it.  The kernel is a local 5.9.16 build with the sideload config
   (NAND drivers as modules, not built in), not a vendor kernel.

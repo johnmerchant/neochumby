@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
-"""Run the stock 2.6.16 -> 5.9.16 sideload kernel-sideloader demo in QEMU.
+"""Run the stock 2.6.16 -> 5.9.16 sideload kernel-sideloader demo on
+qemu-chumby's machine, through its chumby-machine runner.
 
 The stock kernel still boots from NAND (it has no other boot path).  The
 5.9.16 zImage and initramfs are loaded from outside NAND by QEMU
@@ -7,18 +8,21 @@ The stock kernel still boots from NAND (it has no other boot path).  The
 reserved area before rcS.  The 5.9.16 kernel is built with CONFIG_MTD=n.
 
 Both the original NAND and the scratch image are hashed before and after;
-QEMU uses -snapshot and the drive uses snapshot=on.
+the drive uses snapshot=on.
 """
 import hashlib
 import os
 import re
-import select
-import socket
+import shutil
 import subprocess
 import sys
-import time
+import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
+REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
+sys.dont_write_bytecode = True
+sys.path.insert(0, os.environ.get("CHUMBY_MACHINE_PATH") or os.path.join(REPO, "emu", "qemu", "qemu-chumby"))
+import chumby_machine as cm  # noqa: E402
 def env(name, default=None):
     v = os.environ.get(name, default)
     if v is None:
@@ -48,10 +52,9 @@ def assert_no_mtd_strings(path):
     print(f"{path}: no MTD device paths or write tools", flush=True)
 
 def main():
-    qemu = env("QEMU", "qemu-system-arm")
+    qemu = os.environ.get("QEMU")
     stock = env("STOCK_ZIMAGE")
     nand_src = env("NAND_SRC")
-    chumby_emu = env("CHUMBY_EMU", "chumby-emu")
     sideloader = env("SIDELOADER", os.path.join(HERE, "neochumby-kernel-sideloader"))
     payload = env("PAYLOAD", os.path.join(HERE, "build", "sideload-payload.bin"))
     work = env("WORK", os.path.join(HERE, "build", "demo"))
@@ -85,7 +88,8 @@ def main():
         dst.write(src.read())
     os.chmod(os.path.join(psp_dir, "neochumby-kernel-sideloader"), 0o755)
     psp_jffs2 = os.path.join(work, "psp.jffs2")
-    subprocess.run([chumby_emu, "mkpsp", psp_dir, psp_jffs2], check=True)
+    with open(psp_jffs2, "wb") as f:
+        f.write(cm.jffs2(psp_dir, cm.PARTITIONS["PSP"][1]))
     scratch = os.path.join(work, "nand-scratch.img")
     subprocess.run(
         [sys.executable, os.path.join(HERE, "mk_psp_nand.py"), nand_src, psp_jffs2, scratch],
@@ -93,111 +97,59 @@ def main():
     )
     scratch_before = sha256(scratch)
 
-    sock_path = os.path.join(work, "serial.sock")
-    try:
-        os.unlink(sock_path)
-    except FileNotFoundError:
-        pass
     log_path = env("LOG", os.path.join(work, "sideloader-demo.log"))
-    log = open(log_path, "wb")
-    qemu_args = [
-        qemu, "-M", "chumby-classic", "-kernel", stock,
-        "-drive", f"if=mtd,file={scratch},format=raw,snapshot=on",
-        "-device", f"loader,file={payload},addr=0xc2000000,force-raw=on",
-        "-snapshot", "-display", "none", "-no-reboot", "-monitor", "none",
-        "-serial", f"unix:{sock_path},server=on,wait=off",
-        "-append",
-        "console=ttyS0,38400 root=/dev/mtdblock5 rootfstype=cramfs "
-        "init=/linuxrc chumby_hwversion=3.8",
-        "-icount", "shift=auto,sleep=off",
-    ]
-    p = subprocess.Popen(qemu_args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
-    for _ in range(200):
-        if os.path.exists(sock_path):
-            break
-        time.sleep(0.05)
-    s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-    s.connect(sock_path)
-    s.setblocking(False)
-    buf = bytearray()
-
-    def pump(seconds):
-        end = time.time() + seconds
-        while time.time() < end:
-            r, _, _ = select.select([s], [], [], 0.1)
-            if not r:
-                continue
-            try:
-                d = s.recv(65536)
-            except BlockingIOError:
-                continue
-            if not d:
-                break
-            buf.extend(d)
-            log.write(d)
-            log.flush()
-            sys.stdout.buffer.write(d)
-            sys.stdout.buffer.flush()
-
-    def wait_for_any(needles, timeout):
-        end = time.time() + timeout
-        while time.time() < end:
-            pump(0.2)
-            if any(n in bytes(buf) for n in needles):
-                return True
-        return False
-
-    def send(line):
-        for i in range(0, len(line), 16):
-            s.sendall(line[i:i + 16].encode())
-            time.sleep(0.02)
-        time.sleep(0.05)
-        s.sendall(b"\r")
-        pump(0.6)
-
-    ok = wait_for_any((b"~ # ",), 120)
-    print("\nsideload: got 5.9.16 shell" if ok else "\nsideload: NO 5.9.16 SHELL", file=sys.stderr)
-    if ok:
-        time.sleep(0.5)
-        for cmd in [
-            "uname -a",
-            "cat /proc/version",
-            "cat /proc/cmdline",
-            "cat /proc/mtd; echo MTD_RC=$?",
-            "ls -l /dev/mtd*; echo MTD_DEV_RC=$?",
-            "dmesg | grep -iE 'nand:|mxc_nand|nand device|nand flash'; echo NAND_GREP_RC=$?",
-            "ls -l /sys/class/mtd; echo SYS_MTD_RC=$?",
-            "grep -q 'neochumby.sideloaded=1' /proc/cmdline; echo SIDELOADED_RC=$?",
-            "grep -E '^(mtd|mtdblock|nandcore|mxc_nand) ' /proc/modules; echo NAND_MODULE_RC=$?",
-            "echo SIDELOADER_SHELL_OK",
-        ]:
-            send(cmd)
-        pump(2)
-        text = bytes(buf)
-        guest_checks = [
-            (b"MTD_RC=1", "no /proc/mtd"),
-            (b"MTD_DEV_RC=1", "no /dev/mtd*"),
-            (b"NAND_GREP_RC=1", "no NAND in dmesg"),
-            (b"SYS_MTD_RC=1", "no /sys/class/mtd"),
-            (b"SIDELOADED_RC=0", "sideload marker in /proc/cmdline"),
-            (b"NAND_MODULE_RC=1", "NAND modules not loaded"),
-            (b"SIDELOADER_SHELL_OK", "shell marker"),
-        ]
-        for marker, what in guest_checks:
-            if marker not in text:
-                print(f"ERROR: 5.9.16 check failed: {what}", file=sys.stderr)
-                ok = False
-        if not re.search(rb"^Linux \(none\) 5\.9\.16-mx21-sideload #\d+ .* armv5tejl GNU/Linux\r?$",
-                         text, re.M):
-            print("ERROR: 5.9.16 check failed: uname -a is not the sideload kernel", file=sys.stderr)
-            ok = False
-    p.terminate()
-    time.sleep(0.5)
+    m = cm.Machine(tempfile.mkdtemp(prefix="nc-demo-"))
+    ok, text = False, ""
     try:
-        p.wait(timeout=2)
-    except subprocess.TimeoutExpired:
-        p.kill()
-    log.close()
+        m.start(kernel=stock, nand=scratch, fast=True, qemu=qemu,
+                append="console=ttyS0,38400 root=/dev/mtdblock5 rootfstype=cramfs "
+                       "init=/linuxrc chumby_hwversion=3.8",
+                extra=["-device", f"loader,file={os.path.abspath(payload)},addr=0xc2000000,force-raw=on",
+                       "-no-reboot"])
+        try:
+            m.wait_log("~ # ", 120)
+            ok = True
+        except cm.Error:
+            pass
+        print("sideload: got 5.9.16 shell" if ok else "sideload: NO 5.9.16 SHELL", file=sys.stderr)
+        if ok:
+            for cmd in [
+                "uname -a",
+                "cat /proc/version",
+                "cat /proc/cmdline",
+                "cat /proc/mtd; echo MTD_RC=$?",
+                "ls -l /dev/mtd*; echo MTD_DEV_RC=$?",
+                "dmesg | grep -iE 'nand:|mxc_nand|nand device|nand flash'; echo NAND_GREP_RC=$?",
+                "ls -l /sys/class/mtd; echo SYS_MTD_RC=$?",
+                "grep -q 'neochumby.sideloaded=1' /proc/cmdline; echo SIDELOADED_RC=$?",
+                "grep -E '^(mtd|mtdblock|nandcore|mxc_nand) ' /proc/modules; echo NAND_MODULE_RC=$?",
+                "echo SIDELOADER_SHELL_OK",
+            ]:
+                _, out = m.exec(cmd, 30)
+                text += out
+            guest_checks = [
+                ("MTD_RC=1", "no /proc/mtd"),
+                ("MTD_DEV_RC=1", "no /dev/mtd*"),
+                ("NAND_GREP_RC=1", "no NAND in dmesg"),
+                ("SYS_MTD_RC=1", "no /sys/class/mtd"),
+                ("SIDELOADED_RC=0", "sideload marker in /proc/cmdline"),
+                ("NAND_MODULE_RC=1", "NAND modules not loaded"),
+                ("SIDELOADER_SHELL_OK", "shell marker"),
+            ]
+            for marker, what in guest_checks:
+                if marker not in text:
+                    print(f"ERROR: 5.9.16 check failed: {what}", file=sys.stderr)
+                    ok = False
+            if not re.search(r"^Linux \(none\) 5\.9\.16-mx21-sideload #\d+ .* armv5tejl GNU/Linux$",
+                             text, re.M):
+                print("ERROR: 5.9.16 check failed: uname -a is not the sideload kernel", file=sys.stderr)
+                ok = False
+    finally:
+        m.stop()
+        with open(log_path, "w") as f:
+            f.write(m.log() if os.path.exists(m.at(cm.LOG)) else "")
+        shutil.rmtree(m.path, ignore_errors=True)
+    sys.stdout.write(open(log_path).read())
 
     nand_after = sha256(nand_src)
     scratch_after = sha256(scratch)
