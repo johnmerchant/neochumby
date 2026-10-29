@@ -14,10 +14,36 @@ standalone bare-metal tool (`[workspace]` in its `Cargo.toml`), so it uses
 `unsafe` directly rather than living under the workspace's app-contract/unsafe
 rules; it is MIT and never runs inside the neochumby jail.
 
-This is a QEMU demo for the user's own device image/emulator.  It never writes
-NAND: the stock NAND is opened read-only by QEMU with `snapshot=on` and
-`-snapshot`, and both the original and the scratch image are hashed before and
-after the run.
+This is a QEMU demo for the user's own device image/emulator.
+
+## NAND access and writes
+
+- **Stock 2.6.16 reads NAND to boot.**  Its kernel and root disk are on the
+  stock chip; there is no other first-stage boot path on the device.  That is
+  a read, and QEMU opens the image with `snapshot=on` and runs with
+  `-snapshot`.
+- **`chumpwn` writes no NAND.**  The only device node it opens is `/dev/mem`
+  (`O_RDWR`); the writes through it are to RAM (zImage, initrd, ATAGS and the
+  handoff stub).  It reads the QEMU loader container, or in hardware mode
+  user-supplied kernel/initramfs files read-only.  It never opens
+  `/dev/mtd*`, never calls an MTD `ioctl`, and never creates MTD device nodes.
+  It contains no `/dev/mtd`, `mtdblock`, `flash_erase`, `flashcp`,
+  `nandwrite`, `mtd` or `nand` strings; `run-demo.py` checks this before boot
+  and fails if one appears.
+- **5.9.16 has no NAND driver or device.**  `CONFIG_MTD=n`; the MX21ADS board
+  patch prevents a NAND platform device.  The new OS has no `/proc/mtd`, no
+  `/dev/mtd*`, no `/sys/class/mtd`, and no NAND in dmesg.
+- **The demo has one host-side NAND-image preparation step.**  `mk_psp_nand.py`
+  copies the sanitized original into a separate `nand-scratch.img` and writes
+  the PSP partition in that copy, so the stock boot can find `chumpwn` in
+  `/psp/rfs1/rcS`.  It is not a guest/MTD/device write, it never opens the
+  original for writing, and the original SHA-256 is checked before and after.
+  If host image preparation itself is out of scope, use a pre-made scratch
+  image or a real USB stick; the runtime path (`chumpwn` and 5.9.16) still
+  performs zero NAND writes.
+- The stock rcS has later `flash_eraseall`/`nandwrite` lines, but the
+  `/psp/rfs1/rcS` hook exits before them; QEMU snapshots any incidental stock
+  writes.
 
 ## Result
 
@@ -55,8 +81,8 @@ CHUMPWN_SHELL_OK
 ```text
 original NAND before: 5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86
 original NAND after:  5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86
-scratch NAND before:  e364a0d8bdfae08e95974087a3356ff522e30f3742084e246b5a463257f60216
-scratch NAND after:   e364a0d8bdfae08e95974087a3356ff522e30f3742084e246b5a463257f60216
+scratch NAND before:  c1603f7a76bb969b290169d9b6549ba739848526edb396a86d9f21e9631bdfc1
+scratch NAND after:   c1603f7a76bb969b290169d9b6549ba739848526edb396a86d9f21e9631bdfc1
 ```
 
 ## Layout
@@ -175,11 +201,13 @@ applets and starts a shell.
 
 ## Run in QEMU
 
-`run-demo.py` builds a scratch NAND from the sanitized original, replacing only
-the 2 MiB PSP partition with a JFFS2 tree containing `chumpwn` and
-`rfs1/rcS`.  It then starts QEMU with the original NAND read-only, the payload
-via `-device loader`, and an interactive serial socket; it sends the NAND
-checks and shell markers, and prints the before/after hashes.
+`run-demo.py` prepares a separate scratch NAND image from the sanitized
+original, replacing only the 2 MiB PSP partition with a JFFS2 tree containing
+`chumpwn` and `rfs1/rcS` (see the no-write section above).  It then starts QEMU
+with the original NAND read-only, the payload via `-device loader`, and an
+interactive serial socket; it sends the NAND checks and shell markers, checks
+the `chumpwn` binary for MTD strings, and fails if either the original or the
+scratch image hash changes.
 
 ```sh
 QEMU=/path/to/qemu-system-arm \
@@ -218,7 +246,7 @@ build-initramfs.sh      userspace/ + BusyBox -> gzipped newc cpio
 userspace/init          placeholder init; the userspace swap point
 mkinitramfs.py          newc cpio packer (device nodes without root)
 mkpayload.py            QEMU loader container
-mk_psp_nand.py          scratch NAND: replace only the PSP partition
+mk_psp_nand.py          host-side scratch NAND: replace only the PSP partition
 run-demo.py             QEMU boot, serial interaction, NAND hashes
 kernel/build.sh         5.9.16 NAND-less zImage build
 kernel/nonand.config    CONFIG_MTD=n and friends

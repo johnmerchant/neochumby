@@ -356,25 +356,18 @@ chumpwn: caps permitted=0xffffffff
 chumpwn: caps inheritable=0xffffffff
 chumpwn: /dev/mem fd=3
 chumpwn: mmap src=0x02000000
-chumpwn: mmap kernel=0x02000000
 chumpwn: mmap initrd=0x02800000
 chumpwn: mmap atags=0x03f00000
 chumpwn: mmap stub=0x03f80000
-chumpwn: hdr koff=0x00001000
-chumpwn: hdr ksize=0x0043b708
-chumpwn: hdr roff=0x0043c708
-chumpwn: hdr rsize=0x000c021e
-chumpwn: copying kernel...
-chumpwn: copying initramfs...
-chumpwn: copies done
+chumpwn: container kernel=4437768
+chumpwn: container initramfs=786974
+chumpwn: copied kernel and initramfs
 chumpwn: source container at 0xc2000000
 chumpwn: kernel bytes=4437768
 chumpwn: initramfs bytes=786974
 chumpwn: zImage magic=0x016f2818
 chumpwn: building ATAGS...
 chumpwn: ATAGS done
-chumpwn: stub len=92
-chumpwn: copying stub...
 chumpwn: stub bytes=92
 chumpwn: second trigger -> 0xc3f80000
 [    0.000000] Booting Linux on physical CPU 0x0

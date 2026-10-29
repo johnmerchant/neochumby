@@ -1,10 +1,10 @@
 # Artifacts of the captured QEMU run (2026-10-29, QEMU 11.1.2 chumby-classic).
 # Rebuilds may differ in build timestamps; these hashes identify the evidence.
-ed71b84c08188a3a05645566bffe2380be5651fa01330c80eb565b723b02ea98  chumpwn
+9481feb6b5270dd72ecfb5dd348872c3cf244fd3ea74675b0aa5f63bb28499fa  chumpwn
 ce31857b04096771e6c2818a0090339c73843f15b73cb276045921845fdda2e7  linux-5.9.16-mx21-nomtd-zImage (4437768 bytes)
 a936b15a6ff0c309e0d7309ef3cd747f1ab61b0fd3ec8911685b19713ace72e5  initramfs.cpio.gz (786974 bytes)
 45a2f3bb32c6e789b352e3e4fe7c5d90092a548f9c35c01d9a64db9b8bd702f8  payload.bin (5228840 bytes)
 0fee1760a70e33609e4750bbd5fbf7239e1c121a967a71ded152a712e81d1aaf  stock 2.6.16 zImage
 5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86  original sanitized NAND
-e364a0d8bdfae08e95974087a3356ff522e30f3742084e246b5a463257f60216  scratch NAND (before and after the run)
+c1603f7a76bb969b290169d9b6549ba739848526edb396a86d9f21e9631bdfc1  scratch NAND (before and after the run)
 2d62c79b9b6e48025d4d5ea68689a6322b1a02aa5791b0fe058f340ace3910b6  qemu-system-arm (QEMU 11.1.2 + chumby-classic)

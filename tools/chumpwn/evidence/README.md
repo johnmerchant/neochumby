@@ -15,5 +15,7 @@ sanitized stock NAND image read-only.  The exact command is in
 
 The original NAND SHA-256 is unchanged before and after:
 `5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86`.
-The scratch image is a separate file; only its PSP partition differs from the
-original.  QEMU used `-snapshot` and the drive used `snapshot=on`.
+The scratch image is a separate host file; only its PSP partition differs from
+the original.  `chumpwn` contains no MTD device strings and opens no MTD
+device; `run-demo.py` asserts this before boot.  QEMU used `-snapshot` and the
+drive used `snapshot=on`.

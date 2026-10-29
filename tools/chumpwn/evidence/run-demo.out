@@ -1,4 +1,5 @@
-/private/var/folders/x8/dby7ld814ybfgrjskck3ybbc0000gn/T/opencode/chumpwn/build/demo-final/nand-scratch.img: 69206016 bytes, sha256 e364a0d8bdfae08e95974087a3356ff522e30f3742084e246b5a463257f60216
+/private/var/folders/x8/dby7ld814ybfgrjskck3ybbc0000gn/T/opencode/chumpwn/tools/chumpwn/chumpwn: no MTD/NAND device strings
+/private/var/folders/x8/dby7ld814ybfgrjskck3ybbc0000gn/T/opencode/chumpwn/build/demo-final/nand-scratch.img: 69206016 bytes, sha256 c1603f7a76bb969b290169d9b6549ba739848526edb396a86d9f21e9631bdfc1
 ArchID=0x00000353
 
 output_data: 0xc0184170
@@ -357,25 +358,18 @@ chumpwn: caps permitted=0xffffffff
 chumpwn: caps inheritable=0xffffffff
 chumpwn: /dev/mem fd=3
 chumpwn: mmap src=0x02000000
-chumpwn: mmap kernel=0x02000000
 chumpwn: mmap initrd=0x02800000
 chumpwn: mmap atags=0x03f00000
 chumpwn: mmap stub=0x03f80000
-chumpwn: hdr koff=0x00001000
-chumpwn: hdr ksize=0x0043b708
-chumpwn: hdr roff=0x0043c708
-chumpwn: hdr rsize=0x000c021e
-chumpwn: copying kernel...
-chumpwn: copying initramfs...
-chumpwn: copies done
+chumpwn: container kernel=4437768
+chumpwn: container initramfs=786974
+chumpwn: copied kernel and initramfs
 chumpwn: source container at 0xc2000000
 chumpwn: kernel bytes=4437768
 chumpwn: initramfs bytes=786974
 chumpwn: zImage magic=0x016f2818
 chumpwn: building ATAGS...
 chumpwn: ATAGS done
-chumpwn: stub len=92
-chumpwn: copying stub...
 chumpwn: stub bytes=92
 chumpwn: second trigger -> 0xc3f80000
 [    0.000000] Booting Linux on physical CPU 0x0
@@ -522,8 +516,9 @@ SYS_MTD_RC=1
 chumpwn# echo CHUMPWN_SHELL_OK
 CHUMPWN_SHELL_OK
 chumpwn# 
+chumpwn contains no MTD/NAND device strings (it opens only /dev/mem or user files)
 original NAND before: 5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86
 original NAND after:  5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86
-scratch NAND before:  e364a0d8bdfae08e95974087a3356ff522e30f3742084e246b5a463257f60216
-scratch NAND after:   e364a0d8bdfae08e95974087a3356ff522e30f3742084e246b5a463257f60216
+scratch NAND before:  c1603f7a76bb969b290169d9b6549ba739848526edb396a86d9f21e9631bdfc1
+scratch NAND after:   c1603f7a76bb969b290169d9b6549ba739848526edb396a86d9f21e9631bdfc1
 log: /private/var/folders/x8/dby7ld814ybfgrjskck3ybbc0000gn/T/opencode/chumpwn/tools/chumpwn/evidence/chumpwn-demo.log
