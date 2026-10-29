@@ -212,7 +212,9 @@ pub fn start(
     // What the boot hook gave the session for its apps (the server, say),
     // and the time zone.
     for (k, v) in std::env::vars() {
-        if (k.starts_with("NEOCHUMBY_") && k != OFF_ENV && !env.iter().any(|(e, _)| *e == k)) || k == "TZ" {
+        // Not NEOCHUMBY_MUSIC: only the session's choice (child.rs).
+        let ours = k.starts_with("NEOCHUMBY_") && k != OFF_ENV && k != neochumby::session::MUSIC_ENV;
+        if (ours && !env.iter().any(|(e, _)| *e == k)) || k == "TZ" {
             env.push((k, v));
         }
     }
