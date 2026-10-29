@@ -36,6 +36,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
+| `apps/somafm` | SomaFM's stations, with the 2008 Chumby's Pandora-style Music screen (drawn at build time by `render/render.py`), playing on while other apps are in front | MIT |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
@@ -153,6 +154,7 @@ apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
 apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manifest
 apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
+apps/somafm/               neochumby-somafm, neochumby-somafm-service, manifest, screen.txt, day/, night/
 ```
 
 `tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes

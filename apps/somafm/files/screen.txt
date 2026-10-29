@@ -1,0 +1,10 @@
+# Made by render/render.py: don't edit. Pixels on the 320x240 screen; the
+# pictures are in day/ and night/, RGB565, frames stacked top to bottom.
+stations 6
+rows 7 43 168 27
+card 183 27 130 178
+play 8 212 26 26
+slider 70 212 186 26 10 176 24 24
+hot play 2 210 34 30
+hot skip 36 210 32 30
+hot done 256 210 62 30

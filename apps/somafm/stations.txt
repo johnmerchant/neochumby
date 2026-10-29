@@ -1,0 +1,14 @@
+# SomaFM's stations, in the order they're listed. The app compiles this in
+# (src/stations.rs), and render/render.py draws the screen from it.
+#
+#   id | title | stream | tile colour | glyph | description
+#
+# The stream is SomaFM's plain-HTTP MP3 at 128 kbit/s: btplay, which plays
+# it, has no TLS. The tile is our own drawing (render.py's glyphs), never
+# SomaFM's artwork, and the description is our own words (docs/legal.md).
+groovesalad | Groove Salad | http://ice6.somafm.com/groovesalad-128-mp3 | 4f8f3a | leaf | Downtempo and ambient grooves, all day long.
+dronezone | Drone Zone | http://ice6.somafm.com/dronezone-128-mp3 | 5b4a9e | waves | Slow, spacious ambient textures with no beat to speak of.
+deepspaceone | Deep Space One | http://ice6.somafm.com/deepspaceone-128-mp3 | 1f3a78 | planet | Deep ambient and space music for drifting off.
+lush | Lush | http://ice6.somafm.com/lush-128-mp3 | c0507e | flower | Mellow vocals with a soft electronic edge.
+secretagent | Secret Agent | http://ice6.somafm.com/secretagent-128-mp3 | 3a3a44 | keyhole | Lounge, jazz and spy-film soundtracks.
+spacestation | Space Station Soma | http://ice6.somafm.com/spacestation-128-mp3 | 2a8a8f | satellite | Mid-tempo electronica from low orbit.

@@ -1,0 +1,43 @@
+[package]
+name = "neochumby-somafm"
+description = "SomaFM on the Chumby: six stations, with the 2008 Chumby's Pandora-style Music screen, playing on while other apps are in front"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# Both halves:
+#   neochumby-somafm          the screen (the manifest's exec=), drawn from
+#                             the pictures in files/ (render/render.py)
+#   neochumby-somafm-service  the player (service=): plays what the screen
+#                             chose, for the whole session
+[[bin]]
+name = "neochumby-somafm"
+path = "src/main.rs"
+
+[[bin]]
+name = "neochumby-somafm-service"
+path = "src/bin/service.rs"
+
+[dependencies]
+libc.workspace = true
+
+# Only the Chumby's build uses the device library. On a host the screen,
+# the storage and the player are tested without one.
+[target.'cfg(target_arch = "arm")'.dependencies]
+neochumby.workspace = true
+neochumby-sys.workspace = true
+
+# A music app: the start app's MUSIC opens it, and MUTE pauses its service.
+# Services may replace it in front (an alarm), so `interrupt` is left as it
+# is.
+[package.metadata.neochumby]
+title = "SOMAFM"
+exec = "neochumby-somafm"
+service = "neochumby-somafm-service"
+colour = "c8462e"
+music = true
+access = ["screen", "touch", "speaker", "storage"]
+
+[lints]
+workspace = true

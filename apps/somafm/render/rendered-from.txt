@@ -1,0 +1,6 @@
+# The inputs files/ was made from (FNV-1a 64): see render.py.
+803a7407e9d81979 render/render.py
+c0ea651769300bfd stations.txt
+1515f3bf19a284bf render/fonts/DejaVuSans-Bold.ttf
+cc85294ffaffa270 render/fonts/DejaVuSans.ttf
+5698e150c56589c2 render/fonts/SNPro-Bold.otf

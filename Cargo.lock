@@ -503,6 +503,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-somafm"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "neochumby",
+ "neochumby-sys",
+]
+
+[[package]]
 name = "neochumby-sync"
 version = "0.1.0"
 dependencies = [
