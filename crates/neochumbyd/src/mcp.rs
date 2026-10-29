@@ -19,7 +19,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use neochumby_proto::dev::INPUT_KEY;
+use neochumby_proto::settings::key;
 use serde_json::{Value, json};
 
 use crate::dev;
@@ -212,13 +212,12 @@ impl Server {
         let (starts, players) = (tree::start_apps(&self.tree), tree::players(&self.tree));
         let mut out = String::new();
         for (name, key) in self.state.pairs().map_err(|e| e.to_string())? {
-            let config = self.state.config(&name);
-            let settings: Vec<String> = config.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            out += &format!("paired   {name}  {key}  {}\n", settings.join(" "));
-            let setting = |key: &str| config.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+            let pairs: Vec<String> = self.state.config(&name).iter().map(|(k, v)| format!("{k}={v}")).collect();
+            out += &format!("paired   {name}  {key}  {}\n", pairs.join(" "));
+            let settings = self.state.settings(&name);
             let notes = [
-                tree::start_note(&name, setting("start"), &starts),
-                tree::player_note(&name, setting("player"), &players),
+                tree::start_note(&name, settings.start.as_deref(), &starts),
+                tree::player_note(&name, settings.player.as_deref(), &players),
             ];
             for note in notes.into_iter().flatten() {
                 out += &format!("         {note}\n");
@@ -248,7 +247,7 @@ impl Server {
 
     fn set(&self, name: &str, key: &str, value: &str) -> Result<String, String> {
         // Remote input is the Chumby's owner's to turn on, not a client's.
-        if key == INPUT_KEY {
+        if key == key::DEV {
             return Err(format!(
                 "{key} is set by the Chumby's owner, with `neochumbyd set {name} {key}=on`, not from here"
             ));
@@ -258,14 +257,14 @@ impl Server {
             "" => format!("{name}: {key} removed"),
             _ => format!("{name}: {key}={value}"),
         };
-        if key == "start" {
+        if key == key::START {
             let starts = tree::start_apps(&self.tree);
             if !value.is_empty() && !starts.iter().any(|s| s == value) {
                 out += &format!("\n{value} isn't a start app in the tree; the Chumby will open {}", tree::HOME);
             }
             out += &format!("\n{}", tree::hint(&starts));
         }
-        if key == "player" {
+        if key == key::PLAYER {
             let players = tree::players(&self.tree);
             if let Some(note) = tree::player_note(name, Some(value).filter(|v| !v.is_empty()), &players) {
                 out += &format!("\n{note}");
@@ -351,7 +350,7 @@ mod tests {
         let r = call(&s, "set", json!({"name": "attic", "key": "delivery", "value": "sync"}));
         assert_eq!(r["isError"], true);
         // Remote input stays the owner's to turn on.
-        let r = call(&s, "set", json!({"name": "den", "key": INPUT_KEY, "value": "on"}));
+        let r = call(&s, "set", json!({"name": "den", "key": key::DEV, "value": "on"}));
         assert_eq!(r["isError"], true);
         assert_eq!(s.state.config("den"), [("delivery".to_string(), "sync".to_string())]);
     }

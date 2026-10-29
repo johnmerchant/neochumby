@@ -79,7 +79,7 @@ crate's `Cargo.toml`:
 [package.metadata.neochumby]
 title = "QUAKE"                      # listed in app lists
 exec = "neochumby-quake"             # binaries, by name; exec runs in front
-colour = "8c5a28"                    # optional
+color = "8c5a28"                    # optional; `colour` works too
 service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed

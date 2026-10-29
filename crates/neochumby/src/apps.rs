@@ -3,7 +3,8 @@
 //!
 //!   title=DOOM                 listed in app lists; opens `exec`
 //!   exec=neochumby-doom        runs full-screen, in front, when opened
-//!   colour=dc281e              (its colour, hex RGB; optional)
+//!   color=dc281e               (its color, hex RGB; optional; `colour`,
+//!                              from older trees, is read too)
 //!   service=neochumby-airplay  runs in the background while neochumby does
 //!   companion=...              its server half, which neochumbyd runs
 //!   neochumbyd=required        needs a paired neochumbyd (or `optional`:
@@ -41,7 +42,7 @@ pub struct App {
     pub name: String,
     pub title: Option<String>,
     pub exec: Option<PathBuf>,
-    pub colour: u16,
+    pub color: u16,
     pub service: Option<PathBuf>,
     /// It has a companion: the session opens it for the app
     /// (neochumby::companion).
@@ -123,7 +124,7 @@ impl App {
     }
 }
 
-fn parse_colour(s: &str) -> Option<u16> {
+fn parse_color(s: &str) -> Option<u16> {
     let v = u32::from_str_radix(s.trim_start_matches('#'), 16).ok()?;
     Some(rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
@@ -143,7 +144,7 @@ pub fn load(dir: &Path) -> Option<App> {
         name: dir.file_name()?.to_string_lossy().into_owned(),
         title: field("title"),
         exec: file("exec"),
-        colour: field("colour").and_then(|c| parse_colour(&c)).unwrap_or(rgb(220, 160, 40)),
+        color: field("color").or_else(|| field("colour")).and_then(|c| parse_color(&c)).unwrap_or(rgb(220, 160, 40)),
         service: file("service"),
         companion: field("companion").is_some_and(|c| !c.is_empty()),
         needs: match field("neochumbyd").as_deref() {
