@@ -29,9 +29,9 @@ This is a QEMU demo for the user's own device image/emulator.
   reads the QEMU loader container, or in hardware mode user-supplied
   kernel/initramfs files read-only.  It never opens
   `/dev/mtd*`, never calls an MTD `ioctl`, and never creates MTD device nodes.
-  It contains no `/dev/mtd`, `mtdblock`, `flash_erase`, `flashcp`,
-  `nandwrite`, `mtd` or `nand` strings; `run-demo.py` checks this before boot
-  and fails if one appears.
+  The executable contains no `/dev/mtd`, `mtdblock`, `flash_erase`,
+  `flashcp`, `nandwrite`, `mtd` or `nand` strings; `run-demo.py` checks the
+  binary before boot and fails if one appears.
 - **5.9.16 has no NAND driver or device.**  `CONFIG_MTD=n`; the MX21ADS board
   patch prevents a NAND platform device.  The new OS has no `/proc/mtd`, no
   `/dev/mtd*`, no `/sys/class/mtd`, and no NAND in dmesg.
@@ -51,7 +51,7 @@ Audit of the tree:
 
 | path | NAND/MTD use |
 | --- | --- |
-| `src/main.rs` | opens `/dev/mem` only; maps SDRAM; no MTD strings or MTD ioctl |
+| `src/main.rs` | opens `/dev/mem` only; maps SDRAM; no MTD operation or MTD literals |
 | `userspace/init` | reads `/proc/mtd`, `ls /dev/mtd*` for evidence; `mknod` only console/null |
 | `run-demo.py` | stock root cmdline `/dev/mtdblock5` (read-only mount); scratch `if=mtd` with `snapshot=on`; static/guest MTD checks |
 | `mk_psp_nand.py` | host-side scratch image copy; input opened read-only |
