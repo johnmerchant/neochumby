@@ -1,8 +1,6 @@
-//! Who this process runs as, and who is at the other end of a Unix socket.
+//! Who this process runs as.
 
 use std::io;
-use std::os::fd::AsRawFd;
-use std::os::unix::net::UnixStream;
 
 /// A user and a group, as the kernel numbers them.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -38,51 +36,13 @@ pub fn groups() -> io::Result<Vec<u32>> {
     Ok(g)
 }
 
-/// The user and group of the process at the other end of `s`, as the
-/// kernel recorded them when it connected (SO_PEERCRED on Linux, getpeereid
-/// elsewhere). The group is its effective group only, not its
-/// supplementary ones.
-#[cfg(any(target_os = "linux", target_os = "android"))]
-pub fn peer(s: &UnixStream) -> io::Result<Ids> {
-    let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
-    let mut len = size_of::<libc::ucred>() as libc::socklen_t;
-    // SAFETY: the descriptor is the stream's, open while it is borrowed;
-    // the kernel writes at most `len` bytes into `cred`, a live ucred of
-    // that size, and updates `len`.
-    let r = unsafe {
-        libc::getsockopt(s.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, (&raw mut cred).cast(), &mut len)
-    };
-    if r != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(Ids { uid: cred.uid, gid: cred.gid })
-}
-
-/// The user and group of the process at the other end of `s`, as the
-/// kernel recorded them when it connected (SO_PEERCRED on Linux, getpeereid
-/// elsewhere). The group is its effective group only, not its
-/// supplementary ones.
-#[cfg(not(any(target_os = "linux", target_os = "android")))]
-pub fn peer(s: &UnixStream) -> io::Result<Ids> {
-    let (mut uid, mut gid) = (0, 0);
-    // SAFETY: the descriptor is the stream's, open while it is borrowed;
-    // the kernel writes one uid_t and one gid_t, into live locals.
-    if unsafe { libc::getpeereid(s.as_raw_fd(), &mut uid, &mut gid) } != 0 {
-        return Err(io::Error::last_os_error());
-    }
-    Ok(Ids { uid, gid })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn ours_at_both_ends() {
-        let (a, b) = UnixStream::pair().unwrap();
-        let me = effective();
-        assert_eq!(peer(&a).unwrap(), me);
-        assert_eq!(peer(&b).unwrap(), me);
+    fn ours() {
+        assert_eq!(effective().uid, crate::process::uid());
         groups().unwrap();
     }
 }

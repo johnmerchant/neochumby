@@ -50,7 +50,7 @@
 
   | System | Sandbox |
   | --- | --- |
-  | Linux 5.13 or later, with Landlock on | Landlock: besides the above, it may read only the system (`/usr`, `/etc`, `/proc`, `/sys`, `/run` and so on) and use the null and random devices. It can't ptrace or read the memory of processes outside its sandbox, neochumbyd's included |
+  | Linux 5.13 or later, with Landlock on | Landlock: besides the above, it may read only the system (`/usr`, `/etc`, `/proc`, `/sys`, `/run`, `/var/log` and so on) and use the null and random devices. It can't ptrace or read the memory of processes outside its sandbox, neochumbyd's included |
   | macOS (for development) | Apple's sandbox (`sandbox-exec`): it may write only its own directory, read nothing in the home directory but the tree, and connect to no Unix socket in the state directory. It can read the rest of the system |
   | anything else, or Linux without Landlock | none: neochumbyd starts no companion or server program |
 

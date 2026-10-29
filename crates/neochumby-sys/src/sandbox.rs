@@ -64,6 +64,8 @@ pub struct Confinement<'a> {
 /// and its own directory: the system, not anyone's files. A path that is
 /// (or is above) the state directory gives only what is beside the way
 /// down to it.
+/// `/var/log` is there for apps that show the host's logs (LOGS): what
+/// neochumbyd's user may read of it is the owner's choice, by its groups.
 pub const SYSTEM: &[&str] = &[
     "/usr",
     "/bin",
@@ -78,6 +80,7 @@ pub const SYSTEM: &[&str] = &[
     "/proc",
     "/sys",
     "/run",
+    "/var/log",
 ];
 
 /// Devices it may read and write.
@@ -119,8 +122,8 @@ impl Sandbox {
                 if abi < 6 {
                     g.push("signalling other processes, and their abstract Unix sockets (ABI 6)");
                 }
-                if abi > 6 {
-                    g.push("what this kernel's ABI adds after 6, which neochumbyd doesn't use yet");
+                if abi >= 9 {
+                    g.push("what ABI 9 and later add, such as connecting to Unix sockets by path, which neochumbyd doesn't use yet");
                 }
                 g.push("chmod, chown, utime and extended attributes, of files it can reach");
                 g.push("outbound TCP and UDP");
