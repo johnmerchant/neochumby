@@ -1,11 +1,24 @@
 # The NANDLESS image and its recovery path.  This is a heavier job than CI:
-# it builds the custom QEMU and the Buildroot image, then runs the
-# self-contained recovery test with a zeroed NAND image.  It runs only when
-# the image, the sideloader or the emulator changes, and on demand.
+# it builds the custom QEMU and the Buildroot image from scratch, then runs
+# the self-contained recovery test with a zeroed NAND image.  It runs only
+# when the image, the sideloader or the emulator changes, and on demand.
 name: NANDLESS recovery
 
 on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "dist/**"
+      - "tools/neochumby-kernel-sideloader/**"
+      - "emu/qemu/**"
+      - ".github/workflows/nandless.yml"
   pull_request:
+    paths:
+      - "dist/**"
+      - "tools/neochumby-kernel-sideloader/**"
+      - "emu/qemu/**"
+      - ".github/workflows/nandless.yml"
 
 permissions:
   contents: read
@@ -42,8 +55,3 @@ jobs:
           QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
           KERNEL=$PWD/build/nandless-dist/nandless-zImage \
           python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
-
-      # The container writes as root; the cache save runs as the runner.
-      - name: Make the Buildroot cache readable
-        if: always()
-        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-dist" || true

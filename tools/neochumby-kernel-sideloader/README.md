@@ -327,7 +327,8 @@ stock zImage and NAND image.
 `.github/workflows/nandless.yml` runs this recovery test in CI, after
 building the custom QEMU and the NANDLESS image.  It runs on changes under
 `dist/`, `tools/neochumby-kernel-sideloader/` or `emu/qemu/`, and on
-`workflow_dispatch`; the Buildroot and QEMU work is cached.
+`workflow_dispatch`; QEMU and Buildroot build from scratch, so the job is
+slow and separate from the main CI.
 
 ## Files
 
