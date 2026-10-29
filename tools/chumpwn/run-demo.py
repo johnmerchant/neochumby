@@ -166,6 +166,18 @@ def main():
         ]:
             send(cmd)
         pump(2)
+        text = bytes(buf)
+        guest_checks = [
+            (b"MTD_RC=1", "no /proc/mtd"),
+            (b"MTD_DEV_RC=1", "no /dev/mtd*"),
+            (b"NAND_GREP_RC=1", "no NAND in dmesg"),
+            (b"SYS_MTD_RC=1", "no /sys/class/mtd"),
+            (b"CHUMPWN_SHELL_OK", "shell marker"),
+        ]
+        for marker, what in guest_checks:
+            if marker not in text:
+                print(f"ERROR: 5.9.16 check failed: {what}", file=sys.stderr)
+                ok = False
     p.terminate()
     time.sleep(0.5)
     try:

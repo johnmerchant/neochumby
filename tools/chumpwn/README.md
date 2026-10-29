@@ -206,8 +206,9 @@ original, replacing only the 2 MiB PSP partition with a JFFS2 tree containing
 `chumpwn` and `rfs1/rcS` (see the no-write section above).  It then starts QEMU
 with the original NAND read-only, the payload via `-device loader`, and an
 interactive serial socket; it sends the NAND checks and shell markers, checks
-the `chumpwn` binary for MTD strings, and fails if either the original or the
-scratch image hash changes.
+the `chumpwn` binary for MTD strings, fails if `/proc/mtd`, `/dev/mtd*`,
+`/sys/class/mtd` or NAND in dmesg appears, and fails if either the original or
+the scratch image hash changes.
 
 ```sh
 QEMU=/path/to/qemu-system-arm \

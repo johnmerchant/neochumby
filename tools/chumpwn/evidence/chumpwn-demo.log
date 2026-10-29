@@ -1,8 +1,4 @@
-ArchID=0x00000353
-
-output_data: 0xc0184170
-
-Uncompressing Linux............................................................................................. done, booting the kernel.
+............................................................ done, booting the kernel.
 
 [    0.000000] Linux version 2.6.16-csb (builder@stormbuild) (gcc version 4.3.2 (Sourcery G++ Lite 2008q3-72) ) #1 Mon Nov 14 16:42:16 PST 2011
 

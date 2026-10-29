@@ -1,4 +1,7 @@
 # Captured run: 2026-10-29, QEMU 11.1.2 chumby-classic.
+# The stock 2.6.16 stage reads NAND to boot; the new 5.9.16 kernel has
+# CONFIG_MTD=n.  No guest code writes MTD; -snapshot/snapshot=on discard
+# any incidental guest writes.  run-demo.py checks the original/scratch hashes.
 # run-demo.py created WORK/nand-scratch.img from the original NAND, replacing
 # only the PSP partition, then ran (paths abbreviated here; the script builds
 # the same command):
