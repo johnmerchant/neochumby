@@ -1,0 +1,122 @@
+#!/bin/sh
+# neochumby inside the Chumby's own boot, on the emulated Chumby with its
+# stock firmware (#25's scenarios). It checks that
+#   - the stock boot runs to the boot hook, which runs neochumby from the
+#     stick, and the session opens home;
+#   - PROBE (dev/probe) opens from home and draws its pattern, and a tap
+#     reaches it as a touch where it was made;
+#   - the corner hold ends it and home comes back, and stays: the new home
+#     opens while the corner is still held, and the release mustn't be
+#     taken for a tap;
+#   - CHUMBY MODE ends the session, and the stock software carries on to
+#     its own screens (light and mostly pale blue; nothing of its artwork
+#     is compared or kept).
+# The console and the probe's screen go in OUT.
+#
+#   dev/emulate-stock TREE OUT     (TREE from tools/tree, with ./dev/probe)
+#
+# Only on the full-system machine (NEOCHUMBY_EMU_MACHINE=chumby-classic, your
+# own firmware: emu/README.md), so never in CI; elsewhere it exits 77.
+set -eu
+tree=${1:?usage: dev/emulate-stock TREE OUT}
+out=${2:?usage: dev/emulate-stock TREE OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$out"
+state=$(mktemp -d /var/tmp/neochumby-stock.XXXXXX)
+trap 'rm -rf "$state"' EXIT
+emu() { "$dev/emulate" --state "$state" "$@"; }
+if [ "$(emu backend)" != chumby-classic ]; then
+  echo "dev/emulate-stock: skipped: the stock firmware runs only on --machine chumby-classic"
+  exit 77
+fi
+slow=$(emu scale)
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the console:"
+  emu log || true
+  emu stop || true
+  exit 1
+}
+count() { emu log | grep -c "$1" || true; }
+# The share of the screen's pixels for which the Python expression is true
+# of r, g and b, from the RGB565 picture the last shot left.
+share() {
+  python3 - "$state/fb0" "$1" <<'EOF'
+import sys
+data = open(sys.argv[1], "rb").read()
+n = 0
+for i in range(0, len(data), 2):
+    p = data[i] | data[i + 1] << 8
+    r, g, b = (p >> 11) << 3, (p >> 5 & 63) << 2, (p & 31) << 3
+    n += bool(eval(sys.argv[2]))
+print(round(100 * n / (len(data) // 2)))
+EOF
+}
+
+# PROBE's row on home: as dev/emulate-smoke finds DOOM's.
+index=
+listed=0
+for d in $(ls "$tree/apps"); do
+  m=$tree/apps/$d/manifest
+  grep -q '^title=' "$m" && grep -q '^exec=' "$m" || continue
+  [ "$d" = probe ] && index=$listed
+  listed=$((listed + 1))
+done
+[ -n "$index" ] || fail "the tree needs ./dev/probe"
+[ "$listed" -le 4 ] || fail "keep the tree to four apps, so PROBE is on home's first page"
+probe_y=$((44 + index * 40 + 18))
+
+step "the stock boot, then the hook"
+r=0
+emu start "$tree" || r=$?
+[ "$r" -eq 0 ] || exit "$r"
+emu wait log 'emutest: stick mounted' $((90 * slow)) || fail "the stock boot didn't reach the boot hook"
+emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the session didn't open home"
+emu wait screen $((10 * slow)) || fail "home didn't settle"
+
+step "PROBE"
+emu tap 160 "$probe_y"
+emu wait log 'neochumby-probe: running' $((10 * slow)) || fail "PROBE didn't open"
+emu wait screen $((10 * slow)) || fail "PROBE didn't settle"
+emu shot "$out/1-probe.png"
+case $(emu pixel 5 5) in
+'#f'[89a-f]'00f'[89a-f]) ;;
+*) fail "PROBE's magenta isn't on the screen: $(emu pixel 5 5)" ;;
+esac
+emu tap 200 180
+emu wait log 'neochumby-probe: down 2[0-9][0-9] 1[0-9][0-9]' $((10 * slow)) || fail "the tap didn't reach PROBE near (200, 180)"
+
+step "the corner hold"
+homes=$(count 'neochumby: opening home')
+emu tap 5 5 --hold 4000
+emu wait log 'neochumby: escape: ending probe' $((10 * slow)) || fail "the corner hold didn't end PROBE"
+i=0
+until [ "$(count 'neochumby: opening home')" -gt "$homes" ]; do
+  i=$((i + 1))
+  [ "$i" -lt $((100 * slow)) ] || fail "home didn't come back"
+  sleep 0.1
+done
+sleep $((2 * slow))
+[ "$(count 'neochumby exited')" -eq 0 ] || fail "the session ended after the corner hold"
+
+step "CHUMBY MODE"
+emu tap 160 220
+emu wait log 'neochumby exited: 0' $((20 * slow)) || fail "CHUMBY MODE didn't end the session"
+# wait log gives up once the session has ended: what follows is polled.
+i=0
+until [ "$(count 'emutest: hook returned: 0')" -gt 0 ]; do
+  i=$((i + 1))
+  [ "$i" -lt $((10 * slow)) ] || fail "the boot hook didn't return"
+  sleep 1
+done
+i=0
+until emu shot "$state/stock.png" >/dev/null && [ "$(share 'min(r, g, b) > 150')" -ge 50 ] &&
+  [ "$(share 'b > r + 20 and min(r, g, b) > 120')" -ge 20 ]; do
+  i=$((i + 1))
+  [ "$i" -lt $((60 * slow)) ] || fail "the stock software's screens didn't come up"
+  sleep 1
+done
+emu log > "$out/console.txt"
+emu stop
+echo "dev/emulate-stock: all passed"
