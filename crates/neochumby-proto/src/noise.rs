@@ -62,6 +62,8 @@ pub struct Session {
     buf: Vec<u8>,
     /// Received and not yet a whole Noise message.
     rbuf: Vec<u8>,
+    /// The protocol version agreed with the peer (crate::version).
+    version: u16,
 }
 
 impl Session {
@@ -96,7 +98,7 @@ impl Session {
         let h = hs.get_handshake_hash();
         let code = six_digits([h[0], h[1], h[2], h[3]]);
         let noise = hs.into_transport_mode().map_err(invalid)?;
-        Ok(Session { tcp, noise, peer, code, buf, rbuf: Vec::new() })
+        Ok(Session { tcp, noise, peer, code, buf, rbuf: Vec::new(), version: 0 })
     }
 
     /// The other side's public key, proven in the handshake.
@@ -114,12 +116,29 @@ impl Session {
         &self.tcp
     }
 
+    /// The protocol version agreed with the peer: 0 until
+    /// [`crate::version`] has agreed on another.
+    pub fn version(&self) -> u16 {
+        self.version
+    }
+
+    pub(crate) fn set_version(&mut self, v: u16) {
+        self.version = v;
+    }
+
+    /// Sends `msg`, if the agreed version has it (else
+    /// [`io::ErrorKind::Unsupported`]).
     pub fn send(&mut self, msg: &Msg) -> io::Result<()> {
-        let body = msg.encode();
+        crate::version::sendable(msg, self.version)?;
+        self.send_body(&msg.encode())
+    }
+
+    /// Sends an encoded message as it is.
+    pub(crate) fn send_body(&mut self, body: &[u8]) -> io::Result<()> {
         if body.len() > MAX_MSG {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "message too long"));
         }
-        let n = self.noise.write_message(&body, &mut self.buf).map_err(invalid)?;
+        let n = self.noise.write_message(body, &mut self.buf).map_err(invalid)?;
         send_frame(&mut self.tcp, &self.buf[..n])
     }
 

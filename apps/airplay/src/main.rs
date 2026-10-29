@@ -10,17 +10,14 @@
 //! the speaker is someone else's is dropped, the connection kept, and the
 //! stream plays again once the speaker is free.
 //!
-//! Connects to the paired neochumbyd (/psp/neochumby.conf) and checks its
-//! key against the one pinned there; reconnects, backing off, whenever the
-//! connection goes.
+//! The session opens the companion for it (neochumby::companion); it opens
+//! it again, backing off, whenever the companion goes.
 
 use std::io::{self, Write};
 use std::time::{Duration, Instant};
 
 use neochumby::audio::{self, Speaker};
-use neochumby::companion;
-use neochumby::conf;
-use neochumby_proto::{Identity, Msg, Session};
+use neochumby::companion::{self, Link};
 
 // The companion's frames.
 const AUDIO: u8 = 0;
@@ -42,7 +39,7 @@ const ASKED_RETRY: Duration = Duration::from_millis(250);
 /// /dev/dsp busy with a program outside the handover: when to try again.
 const BUSY_RETRY: Duration = Duration::from_secs(2);
 
-fn play(mut s: Session) -> io::Result<()> {
+fn play(mut link: Link) -> io::Result<()> {
     let mut speaker: Option<Speaker> = None;
     // While the speaker is someone else's: when to try it again.
     let mut busy_until: Option<Instant> = None;
@@ -50,10 +47,8 @@ fn play(mut s: Session) -> io::Result<()> {
     // only once the speaker is free, rather than asking for it.
     let mut yielded = false;
     loop {
-        let frame = match s.recv()? {
-            Msg::Data(f) => f,
-            Msg::Closed => return Err(io::Error::other("the companion has gone")),
-            _ => continue,
+        let Some(frame) = link.recv()? else {
+            return Err(io::Error::other("the companion has gone"));
         };
         match frame.split_first() {
             Some((&AUDIO, pcm)) => {
@@ -103,21 +98,10 @@ fn play(mut s: Session) -> io::Result<()> {
 
 fn main() {
     neochumby::debug::install("neochumby-airplay");
-    let Some(p) = conf::paired() else {
-        eprintln!("neochumby-airplay: not paired");
-        std::process::exit(1);
-    };
-    let me = match Identity::from_secret(&p.secret) {
-        Ok(id) => id,
-        Err(e) => {
-            eprintln!("neochumby-airplay: {}: {e}", conf::KEY);
-            std::process::exit(1);
-        }
-    };
     let mut backoff = 2;
     loop {
         let started = Instant::now();
-        let r = companion::open(neochumby::companion!(), &p, &me).and_then(play);
+        let r = companion::open(neochumby::companion!()).and_then(play);
         // The stream has gone with the connection: so has any wish for the
         // speaker.
         audio::withdraw();

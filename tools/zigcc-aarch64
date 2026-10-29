@@ -1,0 +1,5 @@
+#!/bin/sh
+# tools/zigcc for 64-bit ARM Linux, static musl: the C compiler for
+# neochumbyd's servers on a Raspberry Pi or another ARM machine (rust-lld
+# links them: .cargo/config.toml says why).
+ZIGCC_TARGET=aarch64-linux-musl exec "$(dirname "$0")/zigcc" "$@"

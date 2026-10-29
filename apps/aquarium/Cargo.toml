@@ -22,7 +22,8 @@ rand = "0.8"
 [package.metadata.neochumby]
 title = "AQUARIUM"
 exec = "neochumby-aquarium"
-colour = "3c78c8"
+access = ["screen", "touch", "terminal"]
+color = "3c78c8"
 
 [lints]
 workspace = true

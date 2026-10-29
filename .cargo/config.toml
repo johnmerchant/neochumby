@@ -4,7 +4,10 @@
 #                      delivery=sync) and neochumby-home, for the Chumby's ARM926
 #   cargo neochumbyd   the server, for x86_64 Linux
 #
-# Other apps are built as they are added to a tree (tools/tree).
+# Other apps are built as they are added to a tree (tools/tree). The server
+# half (neochumbyd and companions) builds for 64-bit ARM Linux too
+# (--target aarch64-unknown-linux-musl, or tools/tree --server-target), or
+# natively for the machine building it.
 [alias]
 chumby = "build --release --target armv5te-unknown-linux-musleabi -p neochumby -p neochumby-home"
 neochumbyd = "build --release --target x86_64-unknown-linux-musl -p neochumbyd"
@@ -17,8 +20,17 @@ rustflags = ["-C", "link-self-contained=no", "-C", "target-cpu=arm926ej-s"]
 linker = "tools/zigcc-x86_64"
 rustflags = ["-C", "link-self-contained=no"]
 
+# Linked by Rust's own lld with its own musl, not zig: rustc asks the linker
+# to work around the Cortex-A53's erratum 843419 (a Raspberry Pi 3 has one),
+# which zig's linker can't. zig still compiles the C (tools/zigcc-aarch64).
+[target.aarch64-unknown-linux-musl]
+linker = "rust-lld"
+rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
+
 [env]
 CC_armv5te_unknown_linux_musleabi = { value = "tools/zigcc", relative = true }
 AR_armv5te_unknown_linux_musleabi = { value = "tools/zigar", relative = true }
 CC_x86_64_unknown_linux_musl = { value = "tools/zigcc-x86_64", relative = true }
 AR_x86_64_unknown_linux_musl = { value = "tools/zigar", relative = true }
+CC_aarch64_unknown_linux_musl = { value = "tools/zigcc-aarch64", relative = true }
+AR_aarch64_unknown_linux_musl = { value = "tools/zigar", relative = true }
