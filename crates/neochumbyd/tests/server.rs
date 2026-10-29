@@ -1,7 +1,9 @@
 //! neochumbyd end to end, on loopback, with apps' server programs. One,
 //! `web`, is allowed `pairing` by the owner: it approves a Chumby's pairing
 //! and sets its start app through the admin socket, as the household web
-//! page would. The other, `plain`, isn't, and gets no socket.
+//! page would. The other, `plain`, isn't, and gets no socket. A third,
+//! `echo`, has a companion: the Chumby opens it after its settings, as
+//! every Chumby does, and it answers sandboxed too.
 //!
 //! Both are this test's own binary, copied into the apps' directories: run
 //! with NEOCHUMBY_STATE set, it plays the app that directory names. Where
@@ -27,6 +29,7 @@ fn main() -> ExitCode {
         let result = std::panic::catch_unwind(|| match home.file_name().and_then(|n| n.to_str()) {
             Some("web") => web(&home),
             Some("plain") => plain(&home),
+            Some("echo") => echo(&home),
             other => panic!("no such app: {other:?}"),
         });
         let msg = match result {
@@ -84,13 +87,15 @@ impl Admin {
 /// What any app's program here should find: its directory, its HOME and
 /// TMPDIR, only the environment it's given, and, sandboxed, no way to
 /// neochumbyd's secrets or into the tree.
-fn checks(home: &PathBuf) {
+fn checks(home: &PathBuf, server: bool) {
     assert_eq!(&std::env::current_dir().unwrap(), home, "runs in its own directory");
     assert_eq!(std::env::var_os("HOME").map(PathBuf::from).as_ref(), Some(home));
     assert_eq!(std::env::var_os("TMPDIR").map(PathBuf::from), Some(home.join("tmp")));
     assert!(std::env::var_os("SECRET_IN_NEOCHUMBYDS_SHELL").is_none(), "the environment wasn't cleared");
     assert_eq!(std::env::var("NEOCHUMBY_TEST_PASSED").as_deref(), Ok("yes"), "a NEOCHUMBY_ variable");
-    let tree = PathBuf::from(std::env::var_os("NEOCHUMBY_TREE").expect("NEOCHUMBY_TREE"));
+    // A server program is told where the tree is; a companion isn't.
+    let tree = if server { "NEOCHUMBY_TREE" } else { "NEOCHUMBY_TEST_TREE" };
+    let tree = PathBuf::from(std::env::var_os(tree).expect(tree));
     assert!(tree.join("apps/web/manifest").exists(), "reads the tree");
     std::fs::write(home.join("tmp/scratch"), "x").expect("writes its own directory");
     if std::env::var("NEOCHUMBY_TEST_SANDBOX").as_deref() == Ok("1") {
@@ -102,7 +107,9 @@ fn checks(home: &PathBuf) {
         assert!(std::fs::write(tree.join("apps/web/manifest"), "x").is_err(), "wrote the tree");
         assert!(std::fs::write(state.join("paired/x"), "x").is_err(), "wrote the pairings");
     }
-    if let Ok(p) = std::env::var("NEOCHUMBY_TEST_UNLISTED_PORT") {
+    if let Ok(p) = std::env::var("NEOCHUMBY_TEST_UNLISTED_PORT")
+        && server
+    {
         assert!(TcpListener::bind(format!("127.0.0.1:{p}")).is_err(), "bound a port it didn't list");
     }
 }
@@ -111,7 +118,7 @@ fn checks(home: &PathBuf) {
 fn web(home: &PathBuf) {
     let runs = std::fs::read_to_string(home.join("runs")).unwrap_or_default() + "x";
     std::fs::write(home.join("runs"), &runs).unwrap();
-    checks(home);
+    checks(home, true);
     let mut admin = Admin::inherited();
     if runs.len() > 1 {
         // Started again: forget the Chumby when told, then stay, until
@@ -156,12 +163,22 @@ fn web(home: &PathBuf) {
 /// An app the owner hasn't allowed `pairing`: no admin socket, by name or
 /// by descriptor, and none to find by path.
 fn plain(home: &PathBuf) {
-    checks(home);
+    checks(home, true);
     assert!(std::env::var_os("NEOCHUMBY_ADMIN").is_none());
     assert!(neochumby_sys::fd::handed_over(3).is_none(), "descriptor 3 is open");
     std::fs::write(home.join("done"), "").unwrap();
     loop {
         std::thread::sleep(Duration::from_secs(60));
+    }
+}
+
+/// A companion: its checks, then each frame back with `echo:` before it.
+fn echo(home: &PathBuf) {
+    assert_eq!(std::env::var("NEOCHUMBY_CHUMBY").as_deref(), Ok("kitchen"));
+    checks(home, false);
+    let (mut stdin, mut stdout) = (std::io::stdin().lock(), std::io::stdout().lock());
+    while let Some(f) = neochumby_proto::frame::read(&mut stdin).unwrap() {
+        neochumby_proto::frame::write(&mut stdout, &[b"echo:".as_slice(), &f].concat()).unwrap();
     }
 }
 
@@ -212,6 +229,10 @@ fn end_to_end() {
         std::fs::write(d.join("manifest"), manifest).unwrap();
         std::fs::copy(std::env::current_exe().unwrap(), d.join(format!("{app}-server"))).unwrap();
     }
+    let d = tree.join("apps/echo");
+    std::fs::create_dir_all(&d).unwrap();
+    std::fs::write(d.join("manifest"), "companion=echo-companion\nneochumbyd=required\n").unwrap();
+    std::fs::copy(std::env::current_exe().unwrap(), d.join("echo-companion")).unwrap();
 
     let sandbox = neochumby_sys::sandbox::detect();
     match &sandbox {
@@ -232,6 +253,7 @@ fn end_to_end() {
         .args(["--api", &api, "--nfs", &nfs])
         .env("SECRET_IN_NEOCHUMBYDS_SHELL", "x")
         .env("NEOCHUMBY_TEST_PASSED", "yes")
+        .env("NEOCHUMBY_TEST_TREE", tree.canonicalize().unwrap())
         .env("NEOCHUMBY_TEST_LISTED_PORT", listed.to_string())
         .env("NEOCHUMBY_TEST_SANDBOX", if sandbox.is_ok() { "1" } else { "0" });
     if sandbox.is_err() {
@@ -279,6 +301,24 @@ fn end_to_end() {
         Msg::Config(pairs) => assert!(pairs.contains(&(START.into(), "wx".into())), "{pairs:?}"),
         m => panic!("not its settings: {m:?}"),
     }
+    drop(s);
+
+    // It opens a companion, after its settings, and the companion answers
+    // from its sandbox (or says what failed there).
+    let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby).unwrap();
+    s.send(&Msg::Hello { name: "kitchen".into() }).unwrap();
+    assert_eq!(s.recv().unwrap(), Msg::Welcome);
+    assert!(matches!(s.recv().unwrap(), Msg::Config(_)));
+    s.send(&Msg::Open { app: "echo".into() }).unwrap();
+    s.send(&Msg::Data(b"hi".to_vec())).unwrap();
+    let got = wait_for(20, "the companion's answer", || match s.recv_timeout(Duration::from_millis(100)).unwrap() {
+        Some(Msg::Data(d)) => Some(Ok(d)),
+        Some(Msg::Closed) => {
+            Some(Err(std::fs::read_to_string(state.join("apps/echo/failed")).unwrap_or("closed".into())))
+        }
+        _ => None,
+    });
+    assert_eq!(got, Ok(b"echo:hi".to_vec()));
     drop(s);
 
     // The command line sees the same.
