@@ -36,12 +36,12 @@
 #define HAVE_UNISTD_H 1
 #define MAJOR_IN_SYSMACROS 1
 
+/* No HAVE_OPENAT, HAVE_FSTATAT, HAVE_FACCESSAT, HAVE_READLINKAT or
+ * HAVE_MEMFD_CREATE: musl has them, but the Chumby's 2.6.16 ARM kernel
+ * hasn't the system calls (ENOSYS), and with HAVE_OPENAT htop's process
+ * scan opens /proc with openat(2) and finds no processes. Without them
+ * htop uses the paths (linux/Compat.c), as upstream's CI also builds it. */
 #define HAVE_CLOCK_GETTIME 1
-#define HAVE_FACCESSAT 1
-#define HAVE_FSTATAT 1
-#define HAVE_MEMFD_CREATE 1
-#define HAVE_OPENAT 1
-#define HAVE_READLINKAT 1
 #define HAVE_SCHED_GETSCHEDULER 1
 #define HAVE_SCHED_SETSCHEDULER 1
 #define HAVE_STRNLEN 1
