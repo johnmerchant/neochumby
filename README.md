@@ -419,7 +419,7 @@ container's nameserver isn't answering (seen with Apple's `container`):
 give it one with `NEOCHUMBY_DIST_DNS=1.1.1.1 dist/build ...`.
 
 The initramfs's `/init` is a plain one: it mounts proc, sysfs and devtmpfs,
-logs to the kernel log, and starts busybox's shell (prompt `/ # `). The
+logs to the kernel log, and starts busybox's shell (prompt `~ # `). The
 kernel has no NAND driver built in; `/init` loads the NAND modules only
 when `neochumby.sideloaded=1` is not on the kernel command line, which is
 when the image was flashed rather than handed off from the stock kernel.

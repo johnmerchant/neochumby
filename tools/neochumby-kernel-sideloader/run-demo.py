@@ -155,7 +155,7 @@ def main():
         s.sendall(b"\r")
         pump(0.6)
 
-    ok = wait_for_any((b"/ # ",), 120)
+    ok = wait_for_any((b"~ # ",), 120)
     print("\nsideload: got 5.9.16 shell" if ok else "\nsideload: NO 5.9.16 SHELL", file=sys.stderr)
     if ok:
         time.sleep(0.5)

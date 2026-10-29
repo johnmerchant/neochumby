@@ -13,9 +13,11 @@ is `run-demo.py`, which needs the user's own stock zImage and NAND.
 import os
 import re
 import select
+import shutil
 import socket
 import subprocess
 import sys
+import tempfile
 import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -37,9 +39,9 @@ def main():
     with open(nand, "wb") as f:
         f.truncate(0x4200000)
     log_path = os.path.join(work, "recovery.log")
-    sock_path = os.path.join(work, "serial.sock")
-    if os.path.exists(sock_path):
-        os.unlink(sock_path)
+    # A unix socket's path is limited to about 100 bytes, so not under work.
+    sock_dir = tempfile.mkdtemp(prefix="nc-")
+    sock_path = os.path.join(sock_dir, "serial.sock")
     if os.path.exists(log_path):
         os.unlink(log_path)
 
@@ -96,7 +98,7 @@ def main():
                 return True
         return needle in bytes(buf)
 
-    ok = wait_for(b"/ # ", timeout)
+    ok = wait_for(b"~ # ", timeout)
     if not ok:
         print("ERROR: recovery check failed: no busybox prompt", file=sys.stderr)
     else:
@@ -109,6 +111,7 @@ def main():
     except subprocess.TimeoutExpired:
         p.kill()
     log.close()
+    shutil.rmtree(sock_dir, ignore_errors=True)
     text = bytes(buf)
     for marker, what in checks:
         if marker not in text:
