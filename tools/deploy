@@ -8,13 +8,18 @@
 # each Chumby NAMEd is asked over ssh (`neochumbyd restart NAME` on HOST) to
 # end its apps and start its session again from the new tree. With --tree
 # DIR, a tree tools/tree already built is installed instead (dev/emulate
-# --device does this).
+# --device does this); its companions must be built for HOST.
 #
-#   tools/deploy HOST [APP ...] [--tree DIR] [--restart NAME ...]
+# neochumbyd and the companions are built for HOST's machine, which is asked
+# over ssh (`uname -sm`): x86_64 or 64-bit ARM Linux, or a machine like the
+# one building them. --server-target TRIPLE names it instead (tools/tree).
+#
+#   tools/deploy HOST [APP ...] [--tree DIR] [--server-target TRIPLE]
+#                [--restart NAME ...]
 #                                  NEOCHUMBYD_DIR: default /var/lib/neochumbyd
 #                                  (zig on PATH)
 set -eu
-usage="usage: tools/deploy HOST [APP ...] [--tree DIR] [--restart NAME ...]"
+usage="usage: tools/deploy HOST [APP ...] [--tree DIR] [--server-target TRIPLE] [--restart NAME ...]"
 host=${1:?$usage}
 shift
 dir=${NEOCHUMBYD_DIR:-/var/lib/neochumbyd}
@@ -23,6 +28,7 @@ dir=${NEOCHUMBYD_DIR:-/var/lib/neochumbyd}
 names=
 restart=
 built=
+server_t=
 n=$#
 while [ "$n" -gt 0 ]; do
   a=$1
@@ -30,6 +36,10 @@ while [ "$n" -gt 0 ]; do
   n=$((n - 1))
   if [ "$a" = --tree ] && [ "$n" -gt 0 ]; then
     built=$(cd "$1" && pwd)
+    shift
+    n=$((n - 1))
+  elif [ "$a" = --server-target ] && [ "$n" -gt 0 ]; then
+    server_t=$1
     shift
     n=$((n - 1))
   elif [ "$a" = --restart ]; then
@@ -46,18 +56,38 @@ done
 [ -n "$restart" ] && [ -z "$names" ] && echo "$usage" >&2 && exit 2
 root=$(git rev-parse --show-toplevel)
 cd "$root"
+
+host_t=$(rustc -vV | sed -n 's/^host: //p')
+if [ -z "$server_t" ]; then
+  machine=$(ssh "$host" uname -sm)
+  case $machine in
+    "Linux x86_64") server_t=x86_64-unknown-linux-musl ;;
+    "Linux aarch64" | "Linux arm64") server_t=aarch64-unknown-linux-musl ;;
+    *)
+      # Another kind of machine: only one like this one, natively.
+      if [ "$(uname -sm)" = "$machine" ]; then
+        server_t=$host_t
+      else
+        echo "tools/deploy: $host is $machine: give --server-target (tools/tree lists them)" >&2
+        exit 2
+      fi
+      ;;
+  esac
+fi
+[ "$server_t" = host ] && server_t=$host_t
+
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT
 
 if [ -n "$built" ]; then
   cp -R "$built" "$tmp/tree"
 else
-  tools/tree "$tmp/tree" "$@"
+  tools/tree "$tmp/tree" --server-target "$server_t" "$@"
 fi
-cargo neochumbyd
+cargo build --release --target "$server_t" -p neochumbyd
 # Keeping its time: an unchanged binary is then not sent, nor the daemon
 # restarted.
-cp -p target/x86_64-unknown-linux-musl/release/neochumbyd "$tmp/"
+cp -p "target/$server_t/release/neochumbyd" "$tmp/"
 
 rsync -rlpt --delay-updates "$tmp/tree/" "$host:$dir/tree/"
 rsync -pt --delay-updates "$tmp/neochumbyd" "$host:$dir/neochumbyd"
