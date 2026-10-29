@@ -187,6 +187,27 @@ fn jail_path(p: &str) -> io::Result<&str> {
     Ok(p)
 }
 
+/// Mounts a fresh tmpfs at `path`, `nosuid,nodev` and, with `noexec`,
+/// `noexec`. The session uses it for the speaker's shared handover
+/// directory: that directory is the one host path a jailed app with
+/// `speaker` may write, and it must not be able to put an executable there.
+pub fn mount_tmpfs(path: &Path, size_kib: u32, mode: u32, uid: u32, gid: u32, noexec: bool) -> io::Result<()> {
+    let source = cstring(b"tmpfs")?;
+    let target = cstring(path.as_os_str().as_bytes())?;
+    let fstype = cstring(b"tmpfs")?;
+    let data = cstring(format!("mode={mode:o},uid={uid},gid={gid},size={size_kib}k").as_bytes())?;
+    let mut flags = (libc::MS_NOSUID | libc::MS_NODEV) as libc::c_ulong;
+    if noexec {
+        flags |= libc::MS_NOEXEC as libc::c_ulong;
+    }
+    // SAFETY: mount(2) reads the three NUL-terminated strings and the data
+    // string, all of which outlive the call; it touches no memory of ours.
+    if unsafe { libc::mount(source.as_ptr(), target.as_ptr(), fstype.as_ptr(), flags, data.as_ptr().cast()) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 impl Jail {
     /// A jail whose root is a tmpfs of `size_kib` mounted (in its own
     /// namespace) on `mount_point`, an empty directory on the host that
@@ -242,7 +263,7 @@ impl Jail {
             source: cstring(b"none")?,
             target,
             fstype: Some(cstring(b"tmpfs")?),
-            flags: (libc::MS_NOSUID | libc::MS_NODEV) as libc::c_ulong,
+            flags: (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as libc::c_ulong,
             data: Some(cstring(format!("mode={mode:o},uid={uid},gid={gid},size={size_kib}k").as_bytes())?),
         });
         Ok(self)

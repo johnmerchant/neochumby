@@ -358,7 +358,7 @@ by hand).
 its `service` run as a user of their own (one uid per app, from 20000), in
 a private mount namespace, chrooted into a small tmpfs that holds:
 - your app's directory from the tree, at the same path, read-only;
-- `/tmp`, your app's own (4 MB, `nosuid,nodev`), which is `HOME`;
+- `/tmp`, your app's own (4 MB, `nosuid,nodev,noexec`), which is `HOME`;
 - `/dev/null`, `zero`, `random` and `urandom`;
 - what its `access` lists, and nothing else:
 
@@ -376,6 +376,14 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 It may have 64 processes and 256 open files, and dumps no core. Its users
 can't signal or trace each other, or root, and can't read the Chumby's
 key or write to `/psp`.
+
+**Your binaries.** Each `exec` and `service` must be a static ARM ELF.
+Before it starts one, the session refuses a file with a `PT_LOAD` below
+`0x1000` (page zero), a `PT_INTERP`, or a non-ARM ELF, and it checks every
+executable file in your app's directory the same way. Page zero is where
+the ARM `mmap` check doesn't reach the ELF loader. Put helper programs in
+the app's directory, not in `/tmp`: `/tmp` and the speaker handover are
+`noexec`.
 
 **The network.** The stock kernel can't take the network away from a
 process. Instead, once a second, the session looks for internet sockets in

@@ -36,6 +36,7 @@
 
 #![allow(unsafe_code)]
 
+pub mod elf;
 pub mod fd;
 pub mod fs;
 pub mod net;
