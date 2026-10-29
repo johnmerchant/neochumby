@@ -14,8 +14,10 @@
 #
 # TREE from tools/tree, with doom and neochumby-sync; NEOCHUMBYD the x86_64
 # neochumbyd built with it. NEOCHUMBY_CLASSIC_PICTURES (a renderer's output)
-# adds dev/emulate-classic. Each scenario's screenshots and logs go in
-# OUT/<scenario>/, its output in OUT/<scenario>.txt, and the results in
+# adds dev/emulate-classic. dev/emulate-somafm needs somafm in TREE and
+# NEOCHUMBY_SOMAFM_RENDER, the host's neochumby-somafm, which draws what
+# its screen should show; without them it's skipped. Each scenario's
+# screenshots and logs go in OUT/<scenario>/, its output in OUT/<scenario>.txt, and the results in
 # OUT/summary.txt. A scenario a backend can't run exits 77: skipped, not
 # failed. The exit status is 1 if any failed.
 set -u
@@ -54,6 +56,7 @@ run() {
 
 run smoke "$dev/emulate-smoke" "$tree" "$out/smoke"
 run powercut "$dev/emulate-powercut" "$tree" "$neochumbyd" "$out/powercut"
+run somafm "$dev/emulate-somafm" "$tree" "$out/somafm"
 if [ -n "${NEOCHUMBY_CLASSIC_PICTURES:-}" ]; then
   run classic "$dev/emulate-classic" "$tree" "$NEOCHUMBY_CLASSIC_PICTURES" "$out/classic"
 fi

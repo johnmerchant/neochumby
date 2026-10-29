@@ -28,7 +28,8 @@ libc.workspace = true
 neochumby.workspace = true
 neochumby-sys.workspace = true
 
-# A music app: the start app's MUSIC opens it, and MUTE pauses its service.
+# A player: the start app's MUSIC opens it (NEOCHUMBY_PLAYER, when it's the
+# default player), and MUTE pauses its service.
 # Services may replace it in front (an alarm), so `interrupt` is left as it
 # is.
 [package.metadata.neochumby]
@@ -36,7 +37,7 @@ title = "SOMAFM"
 exec = "neochumby-somafm"
 service = "neochumby-somafm-service"
 colour = "c8462e"
-music = true
+player = true
 access = ["screen", "touch", "speaker", "storage"]
 
 [lints]

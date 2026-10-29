@@ -1,5 +1,5 @@
 #!/bin/sh
-# neochumby-somafm under dev/emulate: the Music screen, and its player
+# neochumby-somafm under dev/emulate: the Music screen, and its service
 # through the session. It checks that
 #   - neochumby-home lists SOMAFM, and a tap opens it;
 #   - it draws the screen exactly as `neochumby-somafm render` does on the
@@ -17,19 +17,70 @@
 # the volume itself rather than asking the session: that part of the
 # speaker isn't checked here.
 #
-#   sudo dev/emulate-somafm TREE RENDER OUT
+#   sudo NEOCHUMBY_SOMAFM_RENDER=RENDER dev/emulate-somafm TREE OUT
 #
-# TREE from tools/tree, with somafm. RENDER is the host's neochumby-somafm
-# (cargo build -p neochumby-somafm), which draws what the screen should
-# show. Screenshots and the session's log go in OUT. There's no btplay
-# here, so the stream itself isn't heard: the session's log says what it
-# was asked to play.
+# dev/e2e runs it. TREE from tools/tree, with somafm. RENDER is the host's
+# neochumby-somafm (cargo build -p neochumby-somafm), which draws what the
+# screen should show; without it, or without somafm in TREE, this is
+# skipped (77). Screenshots and the session's log go in OUT. There's no
+# btplay here, so the stream itself isn't heard: the session's log says
+# what it was asked to play. User mode only: the comparisons need the
+# emulator's own screen and /psp.
 set -eu
-tree=${1:?usage: dev/emulate-somafm TREE RENDER OUT}
-render=${2:?usage: dev/emulate-somafm TREE RENDER OUT}
-out=${3:?usage: dev/emulate-somafm TREE RENDER OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
-state=$out/state
+if [ "$("$dev/emulate" backend)" != user ]; then
+  echo "dev/emulate-somafm: skipped: user mode only"
+  exit 77
+fi
+# On a Mac, dev/emulate-somafm --rendered: the second half, in
+# dev/emulate's Linux, with the pictures already drawn on the Mac.
+rendered=
+if [ "${1:-}" = --rendered ]; then
+  rendered=1
+  shift
+fi
+tree=${1:?usage: dev/emulate-somafm TREE OUT}
+out=${2:?usage: dev/emulate-somafm TREE OUT}
+if [ ! -x "$tree/apps/somafm/neochumby-somafm" ]; then
+  echo "dev/emulate-somafm: skipped: the tree has no somafm"
+  exit 77
+fi
+
+# What the screen should show, drawn by the host's renderer from the tree's
+# pictures (where this was started: on a Mac, the Mac's).
+if [ -z "$rendered" ]; then
+  render=${NEOCHUMBY_SOMAFM_RENDER:-}
+  if [ -z "$render" ]; then
+    echo "dev/emulate-somafm: skipped: NEOCHUMBY_SOMAFM_RENDER (the host's neochumby-somafm) isn't set"
+    exit 77
+  fi
+  rm -rf "$out/expect"
+  mkdir -p "$out/expect"
+  expect() {
+    name=$1
+    shift
+    "$render" render "$tree/apps/somafm" "$out/expect/$name.raw" "$@" || {
+      echo "FAIL: render $name"
+      exit 1
+    }
+  }
+  expect start volume 65
+  expect deepspace station 2 on volume 65
+  expect stopped station 2 volume 65
+  expect quiet station 2 volume 20
+  expect lush station 3 volume 20
+  expect night station 3 on volume 20 night
+  # On a Mac, user mode runs in dev/emulate's Linux, as dev/emulate-smoke
+  # does.
+  if [ "$(uname)" = Darwin ]; then
+    exec "$dev/emulate" vm exec sh "$dev/emulate-somafm" --rendered "$tree" "$out"
+  fi
+fi
+
+# The emulator's directory: not in OUT, which may be a folder shared from a
+# Mac, where its control socket can't be.
+state=$(mktemp -d /var/tmp/neochumby-somafm.XXXXXX)
+trap 'rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
 step() { echo "== $*"; }
 fail() {
@@ -47,30 +98,15 @@ tap() {
   emu tap "$@"
 }
 
-[ -x "$tree/apps/somafm/neochumby-somafm" ] || fail "the tree has no somafm"
 # Only home and somafm, so that SOMAFM is home's first row.
-rm -rf "$out/tree" "$out/expect" "$out/psp"
-mkdir -p "$out/tree/apps" "$out/expect" "$out/psp"
-storage=$state/psp/apps/somafm
-setting() { cat "$storage/$1" 2>/dev/null || true; }
+rm -rf "$out/tree" "$out/psp"
+mkdir -p "$out/tree/apps" "$out/psp"
 for f in "$tree"/*; do
   [ "$(basename "$f")" = apps ] || cp -R "$f" "$out/tree/"
 done
 cp -R "$tree/apps/home" "$tree/apps/somafm" "$out/tree/apps/"
-files=$out/tree/apps/somafm
-
-# What the screen should show, drawn on the host.
-expect() {
-  name=$1
-  shift
-  "$render" render "$files" "$out/expect/$name.raw" "$@" || fail "render $name"
-}
-expect start volume 65
-expect deepspace station 2 on volume 65
-expect stopped station 2 volume 65
-expect quiet station 2 volume 20
-expect lush station 3 volume 20
-expect night station 3 on volume 20 night
+storage=$state/psp/apps/somafm
+setting() { cat "$storage/$1" 2>/dev/null || true; }
 showing() {
   emu compare --min 1 --wait 20 --want "^$1\.raw$" "$out"/expect/*.raw || fail "the screen isn't $1"
 }

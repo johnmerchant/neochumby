@@ -11,9 +11,10 @@
 //! - **A game's sound** (or AirPlay) asks for the speaker: the stream stops
 //!   and the speaker is given up, and once the speaker is free again the
 //!   stream starts again by itself.
-//! - **MUTE** on the start app reaches this service as `pause` and `resume`
-//!   notices (`neochumby::session::Notice`), which the device's loop turns
-//!   into the storage (store.rs keeps what they did).
+//! - **MUTE** on the start app (its `player pause|resume|toggle`) reaches
+//!   this service, the default player's, as `pause` and `resume` notices
+//!   (`neochumby::session::Notice`), which the device's loop turns into
+//!   the storage (store.rs keeps what they did).
 //!
 //! The state machine is classic's (neochumby-classic's svc::Player), moved
 //! here with the music: the stream is the session's to stop now, so it
