@@ -40,10 +40,15 @@
 //!   --tree DIR         the app tree to serve, default <state>/tree
 //!   --nfs ADDR         default 0.0.0.0:2049
 //!   --api ADDR         default 0.0.0.0:7340
+//!   --plugin-uids FIRST-LAST
+//!                      started as root, neochumbyd becomes the user that
+//!                      owns DIR, and runs each app's companions under a uid
+//!                      of the app's own from this range (isolate.rs)
 
 mod api;
 mod companion;
 mod dev;
+mod isolate;
 mod mcp;
 mod nfs;
 mod png;
@@ -83,11 +88,12 @@ struct Args {
     tree: Option<PathBuf>,
     nfs: String,
     api: String,
+    plugin_uids: Option<String>,
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--plugin-uids FIRST-LAST]"
     );
     std::process::exit(2)
 }
@@ -104,6 +110,7 @@ fn args() -> Args {
         tree: None,
         nfs: "0.0.0.0:2049".into(),
         api: format!("0.0.0.0:{}", neochumby_proto::API_PORT),
+        plugin_uids: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -113,6 +120,7 @@ fn args() -> Args {
             "--tree" => a.tree = Some(value().into()),
             "--nfs" => a.nfs = value(),
             "--api" => a.api = value(),
+            "--plugin-uids" => a.plugin_uids = Some(value()),
             "-f" | "--follow" => a.follow = true,
             "--hold" => a.hold = Some(value()),
             _ if arg.starts_with("--") => usage(),
@@ -133,11 +141,18 @@ fn fail(e: impl std::fmt::Display) -> ! {
 
 fn main() {
     let a = args();
+    // Before anything is written or any thread started: as root, this
+    // becomes neochumbyd's own user.
+    let plugins = (a.command == "serve")
+        .then(|| isolate::Plugins::start(&a.state, a.plugin_uids.as_deref()).unwrap_or_else(|e| fail(e)));
+    if a.plugin_uids.is_some() && plugins.is_none() {
+        usage();
+    }
     let state = State::open(a.state.clone()).unwrap_or_else(|e| fail(format!("{}: {e}", a.state.display())));
     let operand = || a.operand.clone().unwrap_or_else(|| usage());
     let tree_dir = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     match a.command.as_str() {
-        "serve" => serve(&a, state),
+        "serve" => serve(&a, state, plugins.expect("made for serve")),
         "pairing" => {
             let starts = tree::start_apps(&tree_dir);
             for (name, key) in state.pairs().unwrap_or_else(|e| fail(e)) {
@@ -277,7 +292,10 @@ fn paired(state: &State, name: &str) -> String {
     name.to_string()
 }
 
-fn serve(a: &Args, state: State) {
+fn serve(a: &Args, state: State, plugins: isolate::Plugins) {
+    // Nothing it makes is for other users: companions may be other users.
+    neochumby_sys::privilege::add_to_umask(0o007);
+    state.secure().unwrap_or_else(|e| fail(format!("{}: {e}", a.state.display())));
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     let nfs_port = a.nfs.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or_else(|| usage());
@@ -296,6 +314,7 @@ fn serve(a: &Args, state: State) {
         nfs_port,
         tree: tree.clone(),
         state_dir: a.state.clone(),
+        plugins,
         hashes: neochumby_sync::serve::Hashes::default(),
         links: Default::default(),
     });

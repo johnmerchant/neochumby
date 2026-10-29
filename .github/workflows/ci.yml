@@ -40,6 +40,13 @@ jobs:
       - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros
       - run: cargo test -p neochumby-proto -p neochumby-sync --features neochumby-proto/noise
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
+      # neochumbyd's companions under uids of their own: the one test that
+      # changes uids, so needs root (passwordless sudo on these runners).
+      - name: Companions under uids of their own, as root
+        run: |
+          bin=$(cargo test -p neochumbyd --no-run --message-format=json |
+            jq -r 'select(.profile.test and .target.kind == ["bin"]) | .executable')
+          sudo "$bin" --ignored --exact isolate::tests::as_root
 
   cross:
     name: Build for the Chumby and the server (${{ matrix.proto }})

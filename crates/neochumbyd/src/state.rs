@@ -9,6 +9,11 @@
 //!                     by name, so a Chumby paired again under its name
 //!                     keeps them
 //!   logs/, dev/       what the developer link keeps and is asked (dev.rs)
+//!   apps/<app>        each app's own, for its companions (isolate.rs)
+//!   plugin-uids       each app's uid, with --plugin-uids (isolate.rs)
+//!
+//! None of it is readable by other users (`secure`), as companions may run
+//! under uids of their own.
 //!
 //! The daemon writes pending/; `neochumbyd approve <code>` (whoever is in
 //! the daemon's group) turns one into paired/, which the daemon, waiting on
@@ -16,7 +21,7 @@
 
 use std::io;
 use std::net::SocketAddr;
-use std::os::unix::fs::OpenOptionsExt;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
 use neochumby_proto::{Identity, PublicKey, hex, unhex_key, valid_name};
@@ -47,6 +52,24 @@ impl State {
         std::fs::create_dir_all(dir.join("pending"))?;
         std::fs::create_dir_all(dir.join("config"))?;
         Ok(State { dir })
+    }
+
+    /// Makes what neochumbyd keeps unreadable to other users, companions
+    /// with uids of their own among them: its key 0600, and its
+    /// directories with no permission for others (the owner's and group's
+    /// stay as they are, for the commands run by its group). Run by `serve`
+    /// as their owner, with a umask that keeps what it makes the same.
+    pub fn secure(&self) -> io::Result<()> {
+        for d in ["paired", "pending", "config", "logs", "dev"] {
+            let path = self.dir.join(d);
+            std::fs::create_dir_all(&path)?;
+            let mode = std::fs::metadata(&path)?.permissions().mode();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o7770))?;
+        }
+        match std::fs::set_permissions(self.dir.join("identity"), std::fs::Permissions::from_mode(0o600)) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            r => r,
+        }
     }
 
     /// Its own key: made on first start.
@@ -224,6 +247,24 @@ mod tests {
         assert!(st.set("kitchen", "start", "w x").is_err());
         assert!(st.set("kitchen", "start", "a\nb=c").is_err());
         assert!(st.config("../kitchen").is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn secured() {
+        let dir = std::env::temp_dir().join(format!("neochumbyd-secure-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = State::open(dir.clone()).unwrap();
+        std::fs::set_permissions(dir.join("paired"), std::fs::Permissions::from_mode(0o2775)).unwrap();
+        std::fs::write(dir.join("identity"), "x").unwrap();
+        std::fs::set_permissions(dir.join("identity"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        st.secure().unwrap();
+        let mode = |p: &str| std::fs::metadata(dir.join(p)).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode("paired"), 0o2770);
+        assert_eq!(mode("identity"), 0o600);
+        for d in ["pending", "config", "logs", "dev"] {
+            assert_eq!(mode(d) & 0o007, 0, "{d}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

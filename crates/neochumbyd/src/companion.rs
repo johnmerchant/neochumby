@@ -1,11 +1,12 @@
 //! Apps' companions: the server half an app may have, named in its
 //! manifest (`companion=<file in the app's directory>`). For each Chumby
-//! that opens it, neochumbyd runs one, as its own process, with
+//! that opens it, neochumbyd runs one, as its own process (under a uid of
+//! the app's own, with --plugin-uids: isolate.rs), with
 //!
 //!   NEOCHUMBY_CHUMBY   the Chumby's name, as it paired
 //!   NEOCHUMBY_STATE    a directory of the app's own, kept across runs
 //!                      (<state>/apps/<app>), which is also its working
-//!                      directory
+//!                      directory (and HOME, under a uid of its own)
 //!
 //! added to neochumbyd's environment (anything an app needs from the host,
 //! such as a port range, comes through it), and relays frames
@@ -16,11 +17,13 @@
 
 use std::io;
 use std::path::Path;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use neochumby_proto::{Msg, Session, frame, valid_name};
+
+use crate::isolate::Plugins;
 
 /// The companion, stopped as above when dropped.
 struct Running {
@@ -48,7 +51,7 @@ fn manifest(dir: &Path, key: &str) -> Option<String> {
 
 /// Runs `app`'s companion for `chumby` and relays between them until
 /// either goes.
-pub fn run(tree: &Path, state: &Path, chumby: &str, app: &str, mut s: Session) -> io::Result<()> {
+pub fn run(tree: &Path, plugins: &Plugins, chumby: &str, app: &str, mut s: Session) -> io::Result<()> {
     let dir = tree.join("apps").join(app);
     // Only a plain name in the app's own directory.
     let exe = valid_name(app)
@@ -58,12 +61,9 @@ pub fn run(tree: &Path, state: &Path, chumby: &str, app: &str, mut s: Session) -
     let Some(exe) = exe else {
         return s.send(&Msg::Closed);
     };
-    let home = state.join("apps").join(app);
-    std::fs::create_dir_all(&home)?;
-    let mut child = Command::new(dir.join(&exe))
-        .current_dir(&home)
+    let mut child = plugins
+        .command(&dir.join(&exe), app)?
         .env("NEOCHUMBY_CHUMBY", chumby)
-        .env("NEOCHUMBY_STATE", &home)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .spawn()?;

@@ -53,6 +53,17 @@ cargo neochumbyd        # the server
 tools/tree /tmp/tree doom quake airplay fetch htop top   # a whole tree, with apps
 ```
 
+One test needs root, as it changes uids: neochumbyd's companions under
+uids of their own (`isolate::tests::as_root`). CI runs it with sudo. On a
+Linux machine, run it as CI does (it leaves a directory in `/tmp`, owned by
+made-up uids, to remove as root):
+
+```sh
+bin=$(cargo test -p neochumbyd --no-run --message-format=json |
+  jq -r 'select(.profile.test and .target.kind == ["bin"]) | .executable')
+sudo "$bin" --ignored --exact isolate::tests::as_root
+```
+
 CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
@@ -437,8 +448,12 @@ the app:
   companion's side they arrive on stdin and leave on stdout, a u32
   big-endian length then the bytes (`neochumby_proto::frame`).
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
-  and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
-  stdin closes.
+  and `NEOCHUMBY_STATE` (a directory of its own, and its working
+  directory). It should exit when its stdin closes.
+- **Its own uid:** with `--plugin-uids`, a companion runs as a uid of its
+  app's own, with `HOME` set to `NEOCHUMBY_STATE`. Keep everything it
+  writes there: it can't write neochumbyd's state, the tree or another
+  app's directory.
 
 `apps/airplay` is a worked example of both halves.
 

@@ -209,6 +209,42 @@ BusyBox's `mount` asks the port mapper on port 111 even when given the
 ports, so the server should refuse port 111 rather than drop it. Otherwise
 the mount hangs.
 
+**Companions under uids of their own.** Started as root with
+`--plugin-uids FIRST-LAST`, neochumbyd becomes the user that owns its state
+directory, and runs each app's companions under a uid of the app's own from
+that range, in `<state>/apps/<app>` (mode 0700, the app's). A companion
+then can't read neochumbyd's key, pairings or settings, change the tree, or
+reach another app's files. Pick a range no user or service has: systemd's
+`DynamicUser=` takes 61184-65519, so for example:
+
+```sh
+sudo chown neochumbyd: /var/lib/neochumbyd && sudo chmod 0711 /var/lib/neochumbyd
+sudo neochumbyd serve --state /var/lib/neochumbyd --plugin-uids 61000-61099
+```
+
+The state directory must be other-executable (companions pass through it to
+their directories and binaries); neochumbyd makes its own files in it
+unreadable to others. Without root or without the flag, companions run as
+neochumbyd's user, and it warns as it starts. Under systemd, a unit along
+these lines keeps neochumbyd's root to the three capabilities it keeps
+(not yet run by us on a systemd host):
+
+```ini
+[Service]
+ExecStart=/var/lib/neochumbyd/neochumbyd serve --state /var/lib/neochumbyd --plugin-uids 61000-61099
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/neochumbyd
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Restart=on-failure
+```
+
 **Pairing** makes a Chumby boot from neochumbyd with no stick:
 
 1. Put a `neochumby.conf` holding `server=<neochumbyd's address>` on a
