@@ -1,10 +1,11 @@
-# Artifacts of the captured QEMU run (2026-10-29, QEMU 11.1.2 chumby-classic).
-# Rebuilds may differ in build timestamps; these hashes identify the evidence.
-9481feb6b5270dd72ecfb5dd348872c3cf244fd3ea74675b0aa5f63bb28499fa  chumpwn
-ce31857b04096771e6c2818a0090339c73843f15b73cb276045921845fdda2e7  linux-5.9.16-mx21-nomtd-zImage (4437768 bytes)
-a936b15a6ff0c309e0d7309ef3cd747f1ab61b0fd3ec8911685b19713ace72e5  initramfs.cpio.gz (786974 bytes)
-45a2f3bb32c6e789b352e3e4fe7c5d90092a548f9c35c01d9a64db9b8bd702f8  payload.bin (5228840 bytes)
+# Artifacts of the captured NANDLESS QEMU run (2026-10-29, QEMU 11.1.2
+# chumby-classic).  Rebuilds may differ in build timestamps; these hashes
+# identify the evidence.
+bd2add65420db4f825d37a566572ae219d987096176b4d65c7593f3e6eed138b  neochumby-kernel-sideloader
+d1999152a554a27660a15e2be43e4efc241e0c8c476565a31591b7d6cdb93d3a  nandless-zImage (with built-in initramfs)
+1a1fd0204102a7489fbb26515b2a31803f7294341ac5f39854dec29ff128dc63  nandless-rootfs.cpio.gz
+338cb4db0e2c4203e2dabbca49cbc00f2574a02ae67b73edad130da0fe1e67be  nandless-payload.bin (zImage only, built-in initramfs)
 0fee1760a70e33609e4750bbd5fbf7239e1c121a967a71ded152a712e81d1aaf  stock 2.6.16 zImage
 5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86  original sanitized NAND
-c1603f7a76bb969b290169d9b6549ba739848526edb396a86d9f21e9631bdfc1  scratch NAND (before and after the run)
+ff57973ffa2d9c47c015fe01d0733b015fefdce955536504693df8284f64b773  scratch NAND (before and after the run)
 2d62c79b9b6e48025d4d5ea68689a6322b1a02aa5791b0fe058f340ace3910b6  qemu-system-arm (QEMU 11.1.2 + chumby-classic)

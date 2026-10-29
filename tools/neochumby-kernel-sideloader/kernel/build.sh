@@ -1,11 +1,12 @@
 #!/bin/sh
-# Build Linux 5.9.16 for the Chumby Classic with no MTD/NAND.
+# Build Linux 5.9.16 for the Chumby Classic, NANDLESS sideload-only
+# (no MTD/NAND at all; not the flashable recovery image).
 #
 #   ./kernel/build.sh
 #
 # Downloads linux-5.9.16.tar.xz (or uses LINUX_TARBALL), applies the
-# NAND-less config fragment and the small MX21ADS patch, and builds
-# build/linux-5.9.16-mx21-nomtd-zImage.
+# NANDLESS config fragment and the small MX21ADS patch, and builds
+# build/linux-5.9.16-mx21-nandless-sideload-zImage.
 #
 # The cross compiler is arm-none-eabi-gcc 13.3 from nixpkgs 24.11.  If
 # arm-none-eabi-gcc is already on PATH, set CROSS_COMPILE=arm-none-eabi-
@@ -17,7 +18,7 @@ ROOT=$(cd "$HERE/.." && pwd)
 BUILD=${BUILD:-$ROOT/build}
 SRC=${LINUX_SRC:-$BUILD/linux-5.9.16}
 TARBALL=${LINUX_TARBALL:-$BUILD/linux-5.9.16.tar.xz}
-OUT=${OUT:-$BUILD/linux-5.9.16-mx21-nomtd-zImage}
+OUT=${OUT:-$BUILD/linux-5.9.16-mx21-nandless-sideload-zImage}
 URL=https://cdn.kernel.org/pub/linux/kernel/v5.x/linux-5.9.16.tar.xz
 SHA=b0d7abae88e5f91893627c645e680a95c818defd1b4fcaf3e2afb4b2b6b4ab86
 NIXPKGS=${NIXPKGS:-github:NixOS/nixpkgs/nixos-24.11}
@@ -67,11 +68,11 @@ kbuild() {
     fi
 }
 kbuild imx_v4_v5_defconfig
-cat "$HERE/nonand.config" >> .config
+cat "$HERE/nandless-sideload.config" >> .config
 kbuild olddefconfig
 kbuild -j"$JOBS" zImage
 
 cp arch/arm/boot/zImage "$OUT"
-echo "$OUT"
+echo "NANDLESS: $OUT (sideload-only; do not flash)"
 ls -l "$OUT"
 if command -v sha256sum >/dev/null; then sha256sum "$OUT"; else shasum -a 256 "$OUT"; fi

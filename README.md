@@ -50,7 +50,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
-| `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> NAND-less Linux 5.9.16 kernel sideloader and QEMU demo (draft) | MIT |
+| `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> NANDLESS Linux 5.9.16 kernel sideloader and QEMU demo (draft) | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
 | `emu/` | The emulator: QEMU's `chumby-classic` machine, from [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit, which boots the stock firmware from your own flash backup; and chumby-emu, a host tool that builds its images | MIT (the machine: GPL-2.0-or-later, like QEMU) |
 

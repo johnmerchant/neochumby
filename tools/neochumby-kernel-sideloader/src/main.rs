@@ -75,7 +75,8 @@ pub(crate) fn run(mut args: Args) -> ! {
         }
     }
 
-    print_str("\nsideloader: start uid=");
+    print_str("\nsideloader: NANDLESS: no NAND access in this path\n");
+    print_str("sideloader: start uid=");
     let mut uid = raw::getuid();
     let mut gid = raw::getgid();
     print_dec(uid);
@@ -248,7 +249,9 @@ pub(crate) fn run(mut args: Args) -> ! {
     print_dec(stub_bytes.len() as u32);
 
     raw::cacheflush(KERNEL_DST_VA, KERNEL_DST_VA + KERNEL_MAP_LEN);
-    raw::cacheflush(INITRD_DST_VA, INITRD_DST_VA + INITRD_MAP_LEN);
+    if initrd_size != 0 {
+        raw::cacheflush(INITRD_DST_VA, INITRD_DST_VA + INITRD_MAP_LEN);
+    }
     raw::cacheflush(ATAGS_VA, ATAGS_VA + PAGE);
     raw::cacheflush(STUB_VA, STUB_VA + PAGE);
 
