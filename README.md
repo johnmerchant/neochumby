@@ -36,6 +36,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
+| `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/somafm` | SomaFM's stations, with the 2008 Chumby's Pandora-style Music screen (drawn at build time by `render/render.py`), playing on while other apps are in front | MIT |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
@@ -84,8 +85,8 @@ neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
-music = true                         # a music app: MUSIC buttons may open it (needs exec and speaker)
 access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
+music = true                         # a music app: MUSIC buttons may open it (needs exec and speaker)
 ```
 
 An app can use any of these keys:
@@ -128,10 +129,11 @@ An app can use any of these keys:
 - **`access`:** each app runs as a user of its own, jailed in a directory
   holding only its own files, a `/tmp` of its own and what `access` lists:
   `screen`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
-  `network`, `terminal` and `storage` (a small directory of its own in
-  `/psp`, kept across boots). The session does for it what only root may:
-  the mute and volume, the stock stream player (`play`), and, for the start
-  app, the backlight (`brightness`). It never sees the Chumby's key. `root`, listed alone, runs
+  `network`, `terminal`, `logs` (the Chumby's logs, read-only) and `storage`
+  (a small directory of its own in `/psp`, kept across boots). The session
+  does for it what only root may: the mute and volume, the stock stream
+  player (`play`), and, for the start app, the backlight (`brightness`). It
+  never sees the Chumby's key. `root`, listed alone, runs
   it unjailed, as root: only `home` does, as it pairs the Chumby.
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
 - **`music`:** a Chumby's default music app is the one a start app's MUSIC
@@ -178,6 +180,7 @@ apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
 apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manifest
+apps/logs/                 neochumby-logs, neochumby-logs-companion, manifest
 apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
 apps/somafm/               neochumby-somafm, neochumby-somafm-service, manifest, screen.txt, day/, night/
 apps/htop/                 neochumby-htop, manifest
@@ -248,6 +251,20 @@ Chumby"), and the Chumby plays the audio. The host provides
 `shairport-sync` on `PATH`, avahi, and the base of eighty ports as
 `NEOCHUMBY_AIRPLAY_PORT` (default 7350): RTSP from the base, UDP from
 base + 10. Each Chumby keeps the same ports.
+
+**Logs** (the logs app): the Chumby's own logs first, then, on a paired
+Chumby, the host's, from its companion. ◀ and ▶ along the top go from
+log to log; dragging scrolls, and at the end it follows. The host's are
+whatever its owner lists in `<state>/apps/logs/sources` (or
+`sources.NAME` for one Chumby), one a line, a file or a command:
+
+```
+syslog=/var/log/syslog
+web=|tail -n 200 -f /srv/web/access.log
+```
+
+Without that file it serves /var/log/syslog or /var/log/messages, and the
+journal where `journalctl` runs.
 
 ### Delivery: NFS or sync
 

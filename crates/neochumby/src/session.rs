@@ -68,9 +68,9 @@
 //!                             without a stick)
 //!   NEOCHUMBY_STORAGE         the app's own directory that lasts across
 //!                             boots, for an app with `access = ["storage"]`
-//! NEOCHUMBY_MUSIC, when set, names this Chumby's default music app (an
-//! app with `music = true`): a start app's MUSIC button opens it. It's
-//! unset when there's none. The session sets it for everything it runs.
+//!   NEOCHUMBY_MUSIC           this Chumby's default music app (an app with
+//!                             `music = true`), which a start app's MUSIC
+//!                             button opens; unset when there's none
 
 use std::fs::File;
 use std::io::{self, Write};

@@ -1606,6 +1606,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-classic"
+version = "0.1.0"
+dependencies = [
+ "libc",
+ "neochumby",
+ "neochumby-sys",
+]
+
+[[package]]
 name = "neochumby-clock"
 version = "0.1.0"
 dependencies = [
@@ -1667,6 +1676,16 @@ dependencies = [
  "cc",
  "neochumby",
  "neochumby-ncurses",
+]
+
+[[package]]
+name = "neochumby-logs"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "neochumby",
+ "neochumby-proto",
+ "neochumby-sys",
 ]
 
 [[package]]

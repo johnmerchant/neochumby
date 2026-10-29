@@ -86,6 +86,8 @@ pub struct Access {
     /// A directory of its own in /psp, lasting across boots, shared by its
     /// exec and its service (NEOCHUMBY_STORAGE).
     pub storage: bool,
+    /// The Chumby's logs, read-only.
+    pub logs: bool,
     /// No jail: root, as the session.
     pub root: bool,
 }
@@ -105,6 +107,7 @@ impl Access {
                 "network" => a.network = true,
                 "terminal" => a.terminal = true,
                 "storage" => a.storage = true,
+                "logs" => a.logs = true,
                 "root" => a.root = true,
                 _ => {}
             }
@@ -151,8 +154,8 @@ pub fn load(dir: &Path) -> Option<App> {
         start: field("start").as_deref() == Some("true"),
         interrupt: field("interrupt").as_deref() != Some("false"),
         button: field("button").as_deref() == Some("true"),
-        access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
         music: field("music").as_deref() == Some("true"),
+        access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
     })
 }
 
@@ -163,6 +166,16 @@ pub fn root() -> PathBuf {
         .map(PathBuf::from)
         .or_else(|| std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)))
         .unwrap_or_else(|| "/mnt/neochumby".into())
+}
+
+/// This program's own binary, to run it again (on a terminal, say): /proc's
+/// link to it, else its absolute argv[0], as the session starts apps. A
+/// jail without `system` has no /proc.
+pub fn exe() -> Option<PathBuf> {
+    std::env::current_exe().ok().or_else(|| {
+        let p = PathBuf::from(std::env::args_os().next()?);
+        p.is_absolute().then_some(p)
+    })
 }
 
 /// Every app in the tree, in name order.

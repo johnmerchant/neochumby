@@ -14,6 +14,8 @@ members = [
     "apps/bonsai",
     "apps/aquarium",
     "apps/home",
+    "apps/logs",
+    "apps/classic",
     "apps/doom",
     "apps/fetch",
     "apps/genact",
