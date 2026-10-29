@@ -262,6 +262,15 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
+**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`, run by CI, user
+mode only). The emulated Chumby taps PAIR against a neochumbyd on the PC,
+and the code it logs must be the one `neochumbyd pairing` lists. A wrong
+code and a six-digit one are turned down, a refusal leaves `/psp` alone,
+and an approval (typed in capitals, without dashes) pins neochumbyd's key
+in the conf, after which the next boot's log reaches `neochumbyd log`. A
+new key under the same name pairs only with `--replace`, and once
+forgotten, the Chumby is turned away.
+
 **A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
 OUT`, run by CI). The emulated Chumby pairs with a neochumbyd on the PC
 through neochumby-home's PAIR, syncs its tree to a FAT stick image
@@ -759,7 +768,7 @@ yet), say which and why. A reviewer may run it on a Chumby for you.
 
 ### Scenarios run everywhere
 
-The automated scenarios (`dev/emulate-smoke`, `dev/emulate-powercut`,
+The automated scenarios (`dev/emulate-smoke`, `dev/emulate-pairing`, `dev/emulate-powercut`,
 `dev/emulate-classic`, `dev/emulate-stock`, and any you add to `dev/e2e`) use only `dev/emulate`'s verbs, `start`, `log`/`wait log`,
 `shot`, `tap`, `button` and `stop`, so the same scenario runs on user
 mode, on the emulator (`--machine chumby-classic`) and on a real Chumby

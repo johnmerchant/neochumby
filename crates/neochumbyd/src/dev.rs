@@ -629,8 +629,7 @@ mod tests {
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || crate::api::serve(l, Arc::new(api)));
 
-        let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby).unwrap();
-        assert_eq!(s.peer(), &server_key);
+        let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &server_key).unwrap();
         s.send(&Msg::Hello { name: "den".into() }).unwrap();
         assert_eq!(s.recv().unwrap(), Msg::Welcome);
         assert!(matches!(s.recv().unwrap(), Msg::Config(_)));

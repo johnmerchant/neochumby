@@ -114,7 +114,7 @@ emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen d
 emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
 emu tap 80 220 # PAIR
 i=0
-until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9]*\).*/\1/p') && [ -n "$code" ]; do
+until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9a-f-]*\).*/\1/p') && [ -n "$code" ]; do
   i=$((i + 1))
   [ "$i" -lt $((300 * slow)) ] || fail "the Chumby didn't ask to pair"
   sleep 0.1
