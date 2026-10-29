@@ -224,9 +224,51 @@ set and flip `current`. A power cut mid-round can be approximated by
 `dev/emulate stop` (SIGKILL) during a large file. That shows the journal
 and resume logic, not FAT's behaviour.
 
-`dev/emulate --help` lists the fake devices and what each does. What it
-can't catch is what full-system emulation (the whole Chumby, its stock
-firmware included, still to come) and real devices are for:
+### The whole Chumby: --machine chumby-classic
+
+`--machine chumby-classic` (or `NEOCHUMBY_EMU_MACHINE=chumby-classic`)
+boots the stock 2.6.16 firmware on QEMU's chumby-classic machine
+(`emu/qemu/build`), with the tree in the NAND's Cache partition as a stick
+and a test boot hook in the settings. It needs no root and runs natively on
+a Mac. The firmware is your own device's (`--kernel`, `--nand`,
+`--factory-psp`, or `NEOCHUMBY_EMU_KERNEL`, `_NAND`, `_PSP`; see
+`emu/README.md`), and it stays on your machine: never in the repository,
+CI or an attachment (`docs/legal.md`). Without it, `start` and the
+scenarios exit 77, skipped.
+
+```sh
+export NEOCHUMBY_EMU_MACHINE=chumby-classic NEOCHUMBY_EMU_KERNEL=... NEOCHUMBY_EMU_NAND=... NEOCHUMBY_EMU_PSP=...
+dev/emulate-smoke /tmp/tree /tmp/smoke     # the same scenario, its user-mode steps skipped
+```
+
+Touches go over QMP (`input-send-event`), screenshots are `screendump`,
+and `log` is the console. The top button, `exec`, `selftest`, `--stick`
+and `--bind` are user mode's only, for now. `python3 dev/test_emulate.py`
+(run by CI) checks its images against `chumby-emu`'s and its control path
+against a stub QEMU.
+
+### A real Chumby: --device NAME
+
+The same scenarios run on a real Chumby, paired with a neochumbyd and set
+`dev=on` (`neochumbyd set NAME dev=on`, which allows remote input), over
+its developer link: `NEOCHUMBY_EMU_DEVICE=NAME dev/emulate-smoke /tmp/tree
+/tmp/smoke`, with `NEOCHUMBY_EMU_HOST=HOST` when neochumbyd runs elsewhere
+(over ssh; its state in `NEOCHUMBYD_DIR`). `start` installs the tree there
+(`tools/deploy --tree`) and restarts the Chumby; `log` is its log from then
+on; `shot`, `tap` and `button` are neochumbyd's (`neochumbyd tap` and
+`button`; an older neochumbyd without them skips those steps). A remote
+press goes where a real one would, so it can't reach an app that reads the
+switch itself (`button = true`, Doom's FIRE): a scenario needing that skips
+on a device. Steps that need hands, like pulling the power, are
+`dev/emulate prompt` lines, shown only with `--device`.
+
+So that one scenario holds on every backend, it asserts on lines the
+session and apps log on purpose, compares only our own screens (with what
+changes masked), scales its waits by `dev/emulate scale`, and exits 77,
+skipped, where a backend can't do a step.
+
+`dev/emulate --help` lists the fake devices and what each does. What user
+mode can't catch is what the full-system machine and real devices are for:
 
 - **The 2.6.16 kernel.** System calls go to the PC's kernel. Futex flags
   that kernel lacks, `nanosleep` failing with `EINVAL` on restart, and newer
