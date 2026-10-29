@@ -401,7 +401,7 @@ fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
         name: "neochumby-sync".into(),
         title: None,
         exec: None,
-        colour: 0,
+        color: 0,
         service: Some(root.join("neochumby-sync")),
         needs: Needs::Required,
         start: false,

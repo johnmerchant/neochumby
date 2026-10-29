@@ -18,7 +18,7 @@ cc = "1"
 title = "BONSAI"
 exec = "neochumby-bonsai"
 access = ["screen", "touch", "terminal"]
-colour = "78a03c"
+color = "78a03c"
 
 [lints]
 workspace = true

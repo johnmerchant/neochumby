@@ -19,7 +19,7 @@ title = "HTOP"
 exec = "neochumby-htop"
 # Reads every process from /proc.
 access = ["screen", "touch", "system", "terminal"]
-colour = "50a03c"
+color = "50a03c"
 
 [lints]
 workspace = true
