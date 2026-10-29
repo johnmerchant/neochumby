@@ -1,0 +1,3 @@
+[submodule "emu/qemu/qemu-chumby"]
+	path = emu/qemu/qemu-chumby
+	url = https://github.com/johnmerchant/qemu-chumby

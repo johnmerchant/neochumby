@@ -8,7 +8,6 @@
 zImage*
 psp*/
 MD5SUMS*
-# QEMU: the build, the fetched qemu-chumby, sockets.
-/qemu/build/
-/qemu/qemu-chumby/
+# QEMU: its build and sockets.
+/qemu/out/
 *.sock

@@ -17,8 +17,8 @@ shift 2
 
 here=$(cd "$(dirname "$0")" && pwd)
 if [ -z "${QEMU:-}" ]; then
-    if [ -x "$here/build/obj/qemu-system-arm" ]; then
-        QEMU=$here/build/obj/qemu-system-arm
+    if [ -x "$here/out/obj/qemu-system-arm" ]; then
+        QEMU=$here/out/obj/qemu-system-arm
     elif command -v qemu-system-arm >/dev/null 2>&1 &&
         qemu-system-arm -machine help 2>/dev/null | grep -q '^chumby-classic '; then
         QEMU=qemu-system-arm

@@ -37,10 +37,10 @@ Install QEMU's build dependencies, then run `emu/qemu/build`:
 
     emu/qemu/build
 
-It fetches qemu-chumby at the commit pinned in the script (git checks the
-commit's hash), and qemu-chumby's own build script fetches QEMU 11.1.2,
-checks its SHA-256, applies the patches and builds only
-`qemu-system-arm`, into `emu/qemu/build/obj/qemu-system-arm`. A rebuild
+qemu-chumby is a submodule, `emu/qemu/qemu-chumby`, at the commit this
+repository pins; `build` checks it out if it isn't already. Its own build
+script fetches QEMU 11.1.2, checks its SHA-256, applies the patches and
+builds only `qemu-system-arm`, into `emu/qemu/out/obj/qemu-system-arm`. A rebuild
 reuses what is there. On macOS the window is Cocoa; on Linux, add the SDL
 or GTK development packages for one (VNC works either way).
 [qemu-chumby's README](https://github.com/johnmerchant/qemu-chumby#building)
