@@ -9,10 +9,12 @@
 #     it holds /dev/switch);
 #   - holding the top-left corner for three seconds restarts the home screen;
 #   - CHUMBY MODE ends the session cleanly;
-#   - the same tree boots from a FAT stick image.
+#   - the same tree boots from a FAT stick image (skipped, and said so, on a
+#     kernel without vfat: Apple's container's).
 # Screenshots, the session's log and the sensors output go in OUT.
 #
 #   sudo dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
+#   dev/emulate-smoke TREE OUT          on a Mac, after dev/emulate vm start
 #
 # The same scenario runs on each of dev/emulate's backends, picked by the
 # environment: NEOCHUMBY_EMU_MACHINE=chumby-classic (the whole emulated
@@ -26,8 +28,16 @@ set -eu
 tree=${1:?usage: dev/emulate-smoke TREE OUT}
 out=${2:?usage: dev/emulate-smoke TREE OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
+# On a Mac, all of user mode runs in dev/emulate's Linux (the other
+# backends, from #36, run on the Mac itself).
+if [ "$(uname)" = Darwin ] && [ -z "${NEOCHUMBY_EMU_MACHINE:-}${NEOCHUMBY_EMU_DEVICE:-}" ]; then
+  exec "$dev/emulate" vm exec sh "$dev/emulate-smoke" "$@"
+fi
 mkdir -p "$out"
-state=$out/state
+# The emulator's directory: not in OUT, which may be a folder shared from a
+# Mac, where its control socket can't be.
+state=$(mktemp -d /var/tmp/neochumby-smoke.XXXXXX)
+trap 'rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
 machine=$(emu backend)
 slow=$(emu scale)
@@ -160,18 +170,26 @@ if [ "$machine" != user ]; then
 fi
 
 step "boot from a stick"
-# Room for every app CI builds: 256 MB, or twice the tree if that's more.
-size=$(du -sm "$tree" | cut -f1)
-emu mkstick --force --size $((size * 2 > 256 ? size * 2 : 256)) "$out/stick.img" "$tree"
-emu start --stick "$out/stick.img"
-opened_home 1 "the home screen didn't open from the stick"
-emu shot "$out/4-stick.png"
-emu tap 160 220
-emu wait exit 20 || fail "CHUMBY MODE didn't end the session from the stick"
-emu log > "$out/log-stick.txt"
+if grep -qw vfat /proc/filesystems || modprobe -q vfat 2>/dev/null; then
+  # Room for every app CI builds: 256 MB, or twice the tree if that's more.
+  size=$(du -sm "$tree" | cut -f1)
+  emu mkstick --force --size $((size * 2 > 256 ? size * 2 : 256)) "$out/stick.img" "$tree"
+  emu start --stick "$out/stick.img"
+  opened_home 1 "the home screen didn't open from the stick"
+  emu shot "$out/4-stick.png"
+  emu tap 160 220
+  emu wait exit 20 || fail "CHUMBY MODE didn't end the session from the stick"
+  emu log > "$out/log-stick.txt"
+  stick=
+else
+  echo "skipped: this kernel has no vfat (on a Mac, NEOCHUMBY_EMU_VM=lima has)"
+  stick=" but the stick"
+fi
 
 echo "-- the session's log, from the tree:"
 cat "$out/log.txt"
-echo "-- and from the stick:"
-cat "$out/log-stick.txt"
-echo "dev/emulate-smoke: all passed"
+if [ -z "$stick" ]; then
+  echo "-- and from the stick:"
+  cat "$out/log-stick.txt"
+fi
+echo "dev/emulate-smoke: all passed$stick"
