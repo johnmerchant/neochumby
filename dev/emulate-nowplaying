@@ -19,7 +19,8 @@
 #
 # TREE from tools/tree, with airplay and nowplaying (companions built for
 # this PC);
-# NEOCHUMBYD the x86_64 neochumbyd. User mode only: it pairs the emulated
+# NEOCHUMBYD the x86_64 neochumbyd. dev/e2e runs it. User mode only (77
+# elsewhere): it pairs the emulated
 # Chumby with that neochumbyd through neochumby-home's PAIR.
 set -eu
 tree=${1:?usage: dev/emulate-nowplaying TREE NEOCHUMBYD OUT}
@@ -57,6 +58,12 @@ tap() {
   emu tap "$@"
 }
 
+case $(emu backend) in
+chumby-classic | device)
+  echo "dev/emulate-nowplaying: skipped: it pairs a user-mode Chumby with a neochumbyd here"
+  exit 77
+  ;;
+esac
 [ -x "$tree/apps/airplay/neochumby-airplay" ] || fail "$tree has no airplay"
 [ -x "$tree/apps/nowplaying/neochumby-nowplaying" ] || fail "$tree has no nowplaying"
 # Where NOW PLAYING is on neochumby-home: rows of apps from y=44, 36 high
@@ -75,9 +82,9 @@ if [ "$listed" -le 4 ]; then page=0 row=$index; else page=$((index / 3)) row=$((
 fake=$out/fake
 rm -rf "$out/nd" "$out/psp0" "$fake"
 mkdir -p "$out/psp0" "$fake"
-api=127.0.0.1:17340
+api=127.0.0.1:17350
 NEOCHUMBY_SHAIRPORT=$dev/fake-shairport NEOCHUMBY_FAKE_AIRPLAY=$fake \
-  "$neochumbyd" serve --state "$out/nd" --tree "$tree" --api "$api" --nfs 127.0.0.1:12049 \
+  "$neochumbyd" serve --state "$out/nd" --tree "$tree" --api "$api" --nfs 127.0.0.1:12059 \
   > "$out/neochumbyd.log" 2>&1 &
 server=$!
 trap 'kill $server 2>/dev/null || true' EXIT

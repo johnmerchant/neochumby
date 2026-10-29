@@ -47,6 +47,9 @@ jobs:
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
       - run: cargo test -p neochumby-nowplaying --lib --bin neochumby-nowplaying-companion
       - run: cargo test -p neochumby-logs
+      # dev/emulate's full-system machine, without firmware: its images
+      # against chumby-emu's, and its control path against a stub QEMU.
+      - run: python3 dev/test_emulate.py
 
   cross:
     name: Build for the Chumby and the server (${{ matrix.proto }})
@@ -98,22 +101,17 @@ jobs:
           tools/tree "$RUNNER_TEMP/tree" doom quake airplay fetch htop top \
             cmatrix clock bonsai pipes aquarium genact classic logs nowplaying
           find "$RUNNER_TEMP/tree" -type f | sort
-      # That tree booted as a Chumby would, under qemu-arm (dev/emulate):
-      # the home screen, a tap on DOOM, the devices, the corner hold, CHUMBY
-      # MODE, and a boot from a stick image.
-      - name: The tree under dev/emulate
+      # The end-to-end scenarios (dev/e2e), on that tree booted as a Chumby
+      # would be under qemu-arm (dev/emulate's user mode): the home screen,
+      # a tap on DOOM, the devices, the corner hold, CHUMBY MODE, a boot
+      # from a stick image; and delivery=sync through a power cut mid-round,
+      # paired with this neochumbyd, with the real boot hook; and the
+      # nowplaying app, with dev/fake-shairport for shairport-sync. Those on
+      # the stock firmware run only locally, on your own (docs/legal.md).
+      - name: End-to-end scenarios under dev/emulate
         if: matrix.proto == 'tls'
-        timeout-minutes: 5
+        timeout-minutes: 15
         run: |
           sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
-          sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"
-      # The nowplaying app: the airplay and nowplaying companions on a
-      # neochumbyd here, with dev/fake-shairport for shairport-sync, and the
-      # emulated Chumby paired with it.
-      - name: Now playing under dev/emulate
-        if: matrix.proto == 'tls'
-        timeout-minutes: 5
-        run: |
-          sudo dev/emulate-nowplaying "$RUNNER_TEMP/tree" \
-            target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/nowplaying"
+          sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools busybox-static
+          sudo dev/e2e "$RUNNER_TEMP/tree" target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/e2e"
