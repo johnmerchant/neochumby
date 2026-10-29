@@ -3,7 +3,7 @@
 `chumpwn` is a static ARM EABI binary that runs on the stock Chumby Linux
 2.6.16.  It uses **CVE-2009-2698** (the NULL `struct rtable` page-zero ELF
 route) to obtain uid 0 and all capabilities, maps `/dev/mem`, stages a Linux
-**5.9.16** zImage and a BusyBox initramfs **outside NAND**, and hands off with
+**5.9.16** zImage and an initramfs **outside NAND**, and hands off with
 the MMU off.  The new kernel is built with `CONFIG_MTD=n`: it has no NAND
 driver, no `/proc/mtd`, no `/dev/mtd*`, and no NAND platform device.
 
@@ -52,7 +52,6 @@ Audit of the tree:
 | path | NAND/MTD use |
 | --- | --- |
 | `src/main.rs` | opens `/dev/mem` only; maps SDRAM; no MTD operation or MTD literals |
-| `userspace/init` | reads `/proc/mtd`, `ls /dev/mtd*` for evidence; `mknod` only console/null |
 | `run-demo.py` | stock root cmdline `/dev/mtdblock5` (read-only mount); scratch `if=mtd` with `snapshot=on`; static/guest MTD checks |
 | `mk_psp_nand.py` | host-side scratch image copy; input opened read-only |
 | `kernel/nonand.config`, `kernel/*.patch` | `CONFIG_MTD=n`; no NAND platform device on MX21ADS |
@@ -117,8 +116,9 @@ The 5.9.16 payload is placed by QEMU, not NAND:
 | handoff stub | `0xc3f80000` | copied by chumpwn (same address as the C chainload) |
 
 The container at `0xc2000000` is still free when stock `/psp/rfs1/rcS` runs;
-this was checked by loading the full 5.2 MB container before boot and reading
-it back from rcS.  It is inside the stock kernel's 64 MiB direct map, so the
+this was checked by loading the full container before boot and reading it
+back from rcS, both with the demo's 5.2 MB container and with a 6.4 MB
+`dist/`-built one.  It is inside the stock kernel's 64 MiB direct map, so the
 stub at `0xc3f80000` executes with the MMU on and continues at the same
 physical address after the MMU is disabled.
 
@@ -191,26 +191,24 @@ The `IMX_HAVE_PLATFORM_MXC_NAND` helper can still be built for other i.MX
 machines, but the MX21ADS board file is guarded by `CONFIG_MTD_NAND_MXC` and
 does not register a NAND device.
 
-### BusyBox initramfs
+### Userspace initramfs
 
-`build-busybox.sh` fetches BusyBox 1.36.1 (SHA-256 in the script) and builds a
-static ARMv5TE BusyBox with zig's musl target.  No BusyBox binary is committed.
-Two small portability workarounds are applied: the `tc` applet is disabled
-(musl headers lack the old CBQ constants) and `libbb/armv5_atomics.S` supplies
-the `__sync_*` helpers that zig's strcmp/compiler-rt references on ARMv5.
+The initramfs is `dist/`'s: the Buildroot external tree (`../../dist`) that
+builds the Chumby's own mainline userspace, not a placeholder.  `dist/build`
+runs Buildroot in a container and writes a zImage and a gzipped newc cpio;
+either can stand in for `kernel/build.sh`'s zImage above, since chumpwn only
+cares that the file starts with a zImage magic and that the initramfs is a
+gzipped cpio.
 
 ```sh
-./build-busybox.sh         # -> build/busybox
-BUSYBOX=build/busybox ./build-initramfs.sh
-# -> build/initramfs.cpio.gz
-python3 mkpayload.py build/linux-5.9.16-mx21-nomtd-zImage \
-    build/initramfs.cpio.gz build/payload.bin
+../../dist/build build      # -> build/zImage, build/rootfs.cpio.gz
+python3 mkpayload.py build/zImage build/rootfs.cpio.gz build/payload.bin
 ```
 
-`userspace/` is the placeholder userspace.  Swapping it is the intended next
-step: replace `userspace/init` (and the tree) and rebuild the cpio; chumpwn
-loads the new `--initramfs` unchanged.  The init script installs BusyBox
-applets and starts a shell.
+`dist/`'s kernel config also sets `CONFIG_MTD=n` (see
+`dist/board/chumby-classic/linux.fragment`), so the no-NAND guarantee holds
+either way.  `dist/README.md` lists what's in its userspace so far and what's
+still to come (`neochumby-init`, the Chumby's own devices).
 
 ## Run in QEMU
 
@@ -255,17 +253,12 @@ ATAGS command line from chumpwn: `console=ttymxc0,115200 rdinit=/init`.
 src/main.rs             Rust entry, syscalls, CVE trigger, loader, ATAGS, handoff
 link.ld                 page-zero PT_LOAD at 0, code at 0x10000
 build.sh                cargo build + copy chumpwn
-build-busybox.sh        BusyBox 1.36.1 static ARM build
-build-initramfs.sh      userspace/ + BusyBox -> gzipped newc cpio
-userspace/init          placeholder init; the userspace swap point
-mkinitramfs.py          newc cpio packer (device nodes without root)
 mkpayload.py            QEMU loader container
 mk_psp_nand.py          host-side scratch NAND: replace only the PSP partition
 run-demo.py             QEMU boot, serial interaction, NAND hashes
 kernel/build.sh         5.9.16 NAND-less zImage build
 kernel/nonand.config    CONFIG_MTD=n and friends
 kernel/*.patch          MX21ADS NAND platform guard; macOS host uuid workaround
-armv5_atomics.S         BusyBox/zig ARMv5 compiler-rt helpers
 evidence/               captured logs, config, hashes, exact command
 ```
 
@@ -297,11 +290,14 @@ The QEMU demo uses `--source 0xc2000000`, the loader container.
   the MX21ADS NAND-platform guard, not a vendor kernel.
 - The loader region at `0xc2000000` is free at rcS for this stock image.  A
   different stock userland could allocate it before rcS; the QEMU demo checks
-  this by loading the full container and reading it back.
+  this by loading the full container and reading it back.  `SRC_MAP_LEN`
+  (the window chumpwn reads the container through) is `0x700000`, matching
+  `mkpayload.py`'s own `LIMIT`; a container that fits under `LIMIT` always
+  fits the read.
 - The page-zero ELF route is intentional and only works on the vulnerable
   stock 2.6.16.  If `chumpwn` is run inside the neochumby jail, the
   `jail/refuse-page-zero-elfs` policy may refuse the ELF; it is meant to run
   from `/psp/rfs1/rcS`, a shell, or a USB stick, outside the jail.
-- **Next step:** replace `userspace/` (BusyBox/init) with the project's own
-  userspace and rebuild the initramfs.  chumpwn already takes `--initramfs`
-  (and `--kernel`/`--initramfs` for USB); only the cpio contents change.
+- **Next step:** `dist/` still needs `neochumby-init` and the Chumby's own
+  devices (see `dist/README.md`); chumpwn itself needs no change as that
+  userspace grows, since only the cpio contents change.
