@@ -1,15 +1,20 @@
 //! The viewer on the Chumby: the screen, the touchscreen, the Chumby's own
 //! logs, and (when paired) the host's, from the companion on a thread of
 //! their own so that a slow server never holds up the screen.
+//!
+//! Jailed, it sees the Chumby's logs through its `logs` access, which binds
+//! each into its jail at its own path, and reads the kernel's ring with
+//! syslog(2) (neochumby_sys::klog), which needs no access at all.
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 
+use neochumby::companion;
 use neochumby::conf;
 use neochumby::fb::Fb;
 use neochumby::input::{Touch, Touchscreen};
-use neochumby_proto::{Identity, Msg};
 use neochumby_sys::chan::{self, Disconnected, Receiver, Sender};
+use neochumby_sys::klog;
 
 use crate::frame as tag;
 use crate::tail::{self, Tail};
@@ -28,7 +33,7 @@ const REDRAW: Duration = Duration::from_millis(150);
 
 enum Kind {
     File(PathBuf),
-    /// dmesg: the kernel's ring.
+    /// The kernel's ring, as dmesg prints it.
     Kernel,
     /// The host's, by its number at the companion.
     Host(u8),
@@ -45,7 +50,7 @@ enum Feed {
     Kernel(Vec<u8>),
     /// The host's: live once the companion has started it.
     Host(bool),
-    /// Nothing more to read (dmesg wouldn't run).
+    /// Nothing more to read (the ring couldn't be).
     Done,
 }
 
@@ -84,22 +89,22 @@ enum FromHost {
 /// off. Each connection starts with the companion's list of logs, after
 /// which the screen asks again for the one it shows. Ends when the
 /// screen's end of either channel goes.
-fn host(p: conf::Paired, me: Identity, show: Receiver<u8>, to: Sender<FromHost>) {
+fn host(show: Receiver<u8>, to: Sender<FromHost>) {
     let mut backoff = 5;
     loop {
         let r: std::io::Result<()> = (|| {
-            let mut s = neochumby::companion::open(neochumby::companion!(), &p, &me)?;
+            let mut link = companion::open(neochumby::companion!())?;
             backoff = 5;
             loop {
                 loop {
                     match show.recv(0) {
-                        Ok(Some(i)) => s.send(&Msg::Data(vec![tag::SHOW, i]))?,
+                        Ok(Some(i)) => link.send(&[tag::SHOW, i])?,
                         Ok(None) => break,
                         Err(Disconnected) => return Ok(()),
                     }
                 }
-                let ev = match s.recv_timeout(Duration::from_millis(100))? {
-                    Some(Msg::Data(f)) => match f.split_first() {
+                let ev = match link.recv_timeout(Duration::from_millis(100))? {
+                    Some(f) => match f.split_first() {
                         Some((&tag::SOURCES, names)) => FromHost::Sources(
                             String::from_utf8_lossy(names)
                                 .split('\n')
@@ -111,8 +116,7 @@ fn host(p: conf::Paired, me: Identity, show: Receiver<u8>, to: Sender<FromHost>)
                         Some((&tag::TEXT, t)) => FromHost::Text(t.to_vec()),
                         _ => continue,
                     },
-                    Some(Msg::Closed) => return Err(std::io::Error::other("the companion has gone")),
-                    _ => continue,
+                    None => continue,
                 };
                 if to.send(ev).is_err() {
                     return Ok(());
@@ -139,14 +143,6 @@ fn host(p: conf::Paired, me: Identity, show: Receiver<u8>, to: Sender<FromHost>)
     }
 }
 
-/// The kernel's ring, as dmesg prints it.
-fn dmesg() -> Result<Vec<u8>, String> {
-    match std::process::Command::new("dmesg").output() {
-        Ok(o) => Ok(o.stdout),
-        Err(e) => Err(format!("logs: dmesg: {e}")),
-    }
-}
-
 pub fn run() -> i32 {
     let mut fb = match Fb::open() {
         Ok(fb) => fb,
@@ -158,17 +154,17 @@ pub fn run() -> i32 {
     let mut touch = Touchscreen::open();
     let mut sources = local();
 
-    // The host's logs, when there is a server to ask.
+    // The host's logs, when there is a server to ask: the session's relay
+    // to it (jailed), or the pairing (run by hand).
     let mut to_host: Option<Sender<u8>> = None;
     let mut from_host: Option<Receiver<FromHost>> = None;
-    if let Some(p) = conf::paired() {
-        match (Identity::from_secret(&p.secret), chan::channel(), chan::channel()) {
-            (Ok(me), Ok((show_tx, show_rx)), Ok((ev_tx, ev_rx))) => {
-                std::thread::spawn(move || host(p, me, show_rx, ev_tx));
+    if std::env::var_os(companion::ENV).is_some() || conf::paired().is_some() {
+        match (chan::channel(), chan::channel()) {
+            (Ok((show_tx, show_rx)), Ok((ev_tx, ev_rx))) => {
+                std::thread::spawn(move || host(show_rx, ev_tx));
                 to_host = Some(show_tx);
                 from_host = Some(ev_rx);
             }
-            (Err(e), ..) => eprintln!("neochumby-logs: {}: {e}", conf::KEY),
             _ => eprintln!("neochumby-logs: no pipe for the server's logs"),
         }
     }
@@ -242,7 +238,7 @@ pub fn run() -> i32 {
             }
             Feed::Kernel(old) if polled.elapsed() >= RING_POLL => {
                 polled = Instant::now();
-                match dmesg() {
+                match klog::read_all() {
                     Ok(new) => {
                         match tail::after(old, &new) {
                             Some(b) => text.push(b),
@@ -255,7 +251,7 @@ pub fn run() -> i32 {
                         *old = new;
                     }
                     Err(e) => {
-                        text.note(&e);
+                        text.note(&format!("logs: the kernel's log: {e}"));
                         feed = Feed::Done;
                         more = true;
                     }

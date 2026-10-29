@@ -41,8 +41,10 @@ const FLAGS: &[&str] = &["start", "button", "interrupt"];
 ///   internet socket open;
 /// - `terminal`: /dev/ptmx and /dev/pts, for a pseudo-terminal
 ///   (neochumby::term);
+/// - `logs`: the Chumby's logs, read-only: the session's, /tmp's *.log
+///   and /var/log's files;
 /// - `root`: no jail: it runs as root, as the session does. Listed alone.
-const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "terminal", "root"];
+const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "terminal", "logs", "root"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {

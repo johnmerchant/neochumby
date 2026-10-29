@@ -26,6 +26,11 @@
 //!             sockets (network.rs)
 //!   terminal  /dev/ptmx and the Chumby's /dev/pts, for pseudo-terminals
 //!             (neochumby::term)
+//!   logs      the Chumby's logs, each file bound at its own path: the
+//!             session's (/tmp/neochumby.log), /tmp's other *.log and
+//!             /var/log's files, as they are when the app starts; only
+//!             plain files, none setuid or setgid, readable as their
+//!             modes say (the session's log is root's, 0644)
 //!
 //! Each app runs as its own uid (from FIRST_UID, in the tree's name order:
 //! an app's exec and its service share one), with a group of the same id
@@ -144,6 +149,26 @@ pub fn offline(app: &App) -> Option<u32> {
     (jailed(app) && !app.access.network).then(|| number(app).ok()).flatten()
 }
 
+/// The Chumby's logs, for `logs`: plain files only, none setuid or setgid
+/// (a bind mount keeps its source's flags, and /var/log may not be
+/// nosuid), so no other kind of file comes into the jail with them.
+fn logs() -> Vec<std::path::PathBuf> {
+    let mut v = Vec::new();
+    for (dir, only_logs) in [("/tmp", true), ("/var/log", false)] {
+        let Ok(rd) = std::fs::read_dir(dir) else { continue };
+        for e in rd.flatten() {
+            let p = e.path();
+            // symlink_metadata: a link isn't followed out of the directory.
+            let plain = std::fs::symlink_metadata(&p).is_ok_and(|m| m.is_file() && m.mode() & 0o6000 == 0);
+            if plain && (!only_logs || p.extension().is_some_and(|x| x == "log")) {
+                v.push(p);
+            }
+        }
+    }
+    v.sort();
+    v
+}
+
 /// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
 /// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment and the
 /// descriptors in `keep`.
@@ -208,6 +233,13 @@ pub fn start(
         // uid's terminals are listed there but closed to this one.
         j.device("/dev/ptmx", Path::new("/dev/ptmx"), 0o666, 0, 0)?;
         j.bind(Path::new("/dev/pts"), "/dev/pts")?;
+    }
+    if a.logs {
+        for f in logs() {
+            if let Some(p) = f.to_str() {
+                j.bind(&f, p)?;
+            }
+        }
     }
     if a.network && !a.system {
         for f in NAMES {
