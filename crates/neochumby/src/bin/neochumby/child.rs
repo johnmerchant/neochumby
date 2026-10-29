@@ -6,8 +6,9 @@
 //! has a companion, a socket to it as NEOCHUMBY_COMPANION
 //! (neochumby::companion). It also gets the Chumby's name
 //! (NEOCHUMBY_NAME), the stick's free space as it starts
-//! (NEOCHUMBY_STICK_FREE_KIB, without a stick unset) and, with
-//! `storage`, its directory in /psp (NEOCHUMBY_STORAGE, storage.rs). It
+//! (NEOCHUMBY_STICK_FREE_KIB, without a stick unset), with `storage` its
+//! directory in /psp (NEOCHUMBY_STORAGE, storage.rs) and, when this Chumby
+//! has one, its default music app (NEOCHUMBY_MUSIC, music.rs). It
 //! runs in a
 //! process group of its own, so that it and whatever it started end
 //! together. An app runs jailed, as jail.rs describes, unless its manifest
@@ -53,14 +54,15 @@ pub struct Launch<'a> {
     env: Vec<(String, String)>,
     keep: Vec<RawFd>,
     storage: Option<PathBuf>,
+    music: Option<&'a str>,
 }
 
 /// `exe` of `app`, as `role`, from the tree at `root`.
 pub fn launch<'a>(app: &'a App, exe: &'a Path, role: Role, root: &'a Path) -> Launch<'a> {
-    Launch { app, exe, role, root, env: Vec::new(), keep: Vec::new(), storage: None }
+    Launch { app, exe, role, root, env: Vec::new(), keep: Vec::new(), storage: None, music: None }
 }
 
-impl Launch<'_> {
+impl<'a> Launch<'a> {
     /// Adds `key`=`value` to its environment.
     pub fn env(&mut self, key: &str, value: impl Into<String>) -> &mut Self {
         self.env.push((key.into(), value.into()));
@@ -71,6 +73,13 @@ impl Launch<'_> {
     /// jail at the same path, and named by NEOCHUMBY_STORAGE.
     pub fn storage(&mut self, dir: PathBuf) -> &mut Self {
         self.storage = Some(dir);
+        self
+    }
+
+    /// Names `music` the default music app (NEOCHUMBY_MUSIC); without
+    /// this, the variable is unset, whatever the session was started with.
+    pub fn music(&mut self, music: Option<&'a str>) -> &mut Self {
+        self.music = music;
         self
     }
 
@@ -92,6 +101,9 @@ impl Launch<'_> {
         if let Some(s) = self.storage.as_ref().and_then(|s| s.to_str()) {
             self.env.push((session::STORAGE_ENV.into(), s.into()));
         }
+        if let Some(m) = self.music {
+            self.env.push((session::MUSIC_ENV.into(), m.into()));
+        }
         let link = if self.app.companion { Some(companion::relay(&self.app.name)?) } else { None };
         if let Some(l) = &link {
             self.keep.push(l.as_raw_fd());
@@ -102,6 +114,7 @@ impl Launch<'_> {
         } else {
             let mut cmd = Command::new(self.exe);
             cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", self.root).env("HOME", "/tmp");
+            cmd.env_remove(session::MUSIC_ENV);
             cmd.envs(self.env).process_group(0);
             pass_fds(&mut cmd, self.keep);
             Process::from(cmd.spawn()?)

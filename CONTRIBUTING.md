@@ -6,7 +6,8 @@ changes easy to take.
 ## Ground rules
 
 - **Rust** for everything we write. Third-party C (Doom's doomgeneric,
-  Quake's engine, fetch's fastfetch) is a git submodule, pinned to an
+  Quake's engine, fetch's fastfetch, htop, procps, ncurses) is a git
+  submodule, pinned to an
   upstream commit and left unchanged, and linked from a Rust crate. Where
   an app needs it to do otherwise, its `build.rs` builds that file with a
   function renamed, so that the app's own takes its place, and says why
@@ -35,7 +36,7 @@ The workspace denies `unsafe` code. Every raw system call lives in
 `crates/neochumby-sys`, behind safe functions, each `unsafe` block with a
 `// SAFETY:` comment saying why it holds; anything else needing one adds a
 function there, and uses std instead wherever std does the job safely. The
-games (Doom, Quake) and fetch are allowed it as FFI to their C. We use libc
+games (Doom, Quake), fetch, htop and top are allowed it as FFI to their C. We use libc
 rather than rustix: rustix calls the kernel directly and needs Linux 3.2,
 the Chumby runs 2.6.16, and its `ioctl` and `mmap` are `unsafe` too (see
 neochumby-sys's documentation).
@@ -43,13 +44,13 @@ neochumby-sys's documentation).
 ## Building and checking
 
 ```sh
-git submodule update --init   # the third-party C: Doom, Quake, fastfetch
+git submodule update --init   # the third-party C: Doom, Quake, fastfetch, htop, procps, ncurses
 rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # zig 0.17 on PATH (the C compiler, linker and musl): https://ziglang.org
 # CMake 3.21 or later, for fetch
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
-tools/tree /tmp/tree doom quake airplay fetch   # a whole tree, with apps
+tools/tree /tmp/tree doom quake airplay fetch htop top   # a whole tree, with apps
 ```
 
 CI runs the same checks on every pull request. To run them yourself:
@@ -267,6 +268,7 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
+music = true                         # optional: a music app (below)
 access = ["screen", "touch"]         # optional: what it reaches beyond its jail
 ```
 
@@ -284,7 +286,11 @@ Binaries named by `exec` and `service` are built for the Chumby
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
 crash reports (`debug`), the request pipe (`session`) and a terminal for a
-program written for one (`term::run`, which `apps/fetch` uses). The screen
+program written for one (`term::run`, which `apps/fetch` uses; the
+touchscreen is its mouse, and `term::run_tapping` makes a tap type a key,
+as `apps/top` quits). A C program that uses curses depends on
+`neochumby-ncurses` and builds against `DEP_NCURSESW_INCLUDE`
+(`apps/htop/build.rs`). The screen
 is 320x240 RGB565, so prerender what you can, and keep in mind that the CPU
 is a 266 MHz ARM926 with no FPU.
 
@@ -308,6 +314,8 @@ Every app is opened the same way, whoever asked for it.
   your app started, when there's a stick (`session::stick_free_kib()`);
 - with `NEOCHUMBY_STORAGE`, your app's lasting directory, when its
   `access` lists `storage` (below);
+- with `NEOCHUMBY_MUSIC` naming this Chumby's default music app, when it
+  has one (below);
 - owning the screen until it exits. What's on the screen when it starts is
   whatever was there: draw all of it;
 - sharing the touchscreen: every reader gets every touch. The session
@@ -463,6 +471,52 @@ promises:
 
 Without `start = true`, the session refuses the app as the start app and
 uses `neochumby-home`, so a Chumby can't be left stuck in a game.
+
+**Music apps.** A Chumby has a default music app, which a start app's
+MUSIC button opens and its MUTE button pauses. The owner picks it
+(`music=<app>`, set like `start`); otherwise it's `somafm` if that's in the
+tree, else the first music app by name, else there's none. Declaring
+`music = true` lets your app be picked, and promises:
+- it has an `exec`, which plays music or shows what's playing, and lists
+  `speaker` (or `root`) in its `access` (`neochumby-manifest` refuses
+  `music` without them);
+- its **service** plays on after the `exec` exits, and acts on two lines
+  from the session: `pause` (stop playing, ready to resume) and `resume`
+  (play again). It ignores lines it doesn't know, as every service does.
+
+The session resolves the default as it starts, as it does the start app: a
+name that isn't a music app here is refused, and the reason logged. It
+sets `NEOCHUMBY_MUSIC=<app>` for everything it runs, and leaves it out when
+there's no music app, so a start app can grey out its MUSIC button. A
+changed `music=` applies at the next session start, as `start=` does.
+
+A start app, and its service, may also write these to the request pipe,
+and carry on (they aren't followed by an exit):
+- `music pause`, `music resume`: the session tells the default music app's
+  service `pause` or `resume`;
+- `music toggle`: `pause` if the session last told it `resume` (or nothing
+  yet: it starts as playing), else `resume`.
+
+From any other app or service, `music` is refused and logged. A line
+that can't be passed on (no music app, no service running, or its pipe
+full) is dropped and logged.
+
+In Rust:
+
+```rust
+use neochumby::session::{self, Music, Pipe};
+
+let mut pipe = Pipe::from_env();
+// MUSIC: open the default music app, if there is one, then exit.
+if let (Some(app), Some(p)) = (session::music(), pipe.as_mut()) {
+    let _ = p.open(&app);
+}
+// MUTE, from a start app: pause or resume it, and carry on.
+if let Some(p) = pipe.as_mut() {
+    let _ = p.music(Music::Toggle);
+}
+// In the music app's service: Notice::Pause and Notice::Resume.
+```
 
 ### Services
 
