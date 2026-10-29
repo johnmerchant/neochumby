@@ -22,6 +22,7 @@ use std::path::Path;
 use std::time::Duration;
 
 use neochumby::{apps, conf, settings};
+use neochumby_proto::Delivery;
 use neochumby_sync::Timing;
 use neochumby_sync::receive::{self, Outcome};
 use neochumby_sync::stick::{Set, Stick};
@@ -82,7 +83,7 @@ fn rounds(forever: bool, log: &mut Log, failed: &mut Option<String>) -> io::Resu
     stick.mounted()?;
     let Some(p) = conf::paired() else { return Ok(None) };
     let (mut s, settings) = settings::connect(&p)?;
-    if settings::get(&settings, "delivery") != Some("sync") {
+    if settings.delivery != Some(Delivery::Sync) {
         return Ok(None);
     }
     s.tcp().set_write_timeout(Some(TIMING.step))?;

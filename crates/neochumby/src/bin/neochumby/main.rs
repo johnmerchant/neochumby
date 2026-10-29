@@ -65,6 +65,7 @@ use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
+use neochumby_proto::{Delivery, Settings};
 
 /// The escape hatch: a touch held this long in this corner. The resistive
 /// touchscreen reports brief releases during a steady hold; one shorter
@@ -327,8 +328,8 @@ fn session() {
     let settings = settings::load();
     let core = core_services(&root, &settings);
     let (local, local_player) = (conf::get(conf::CONF, "start"), conf::get(conf::CONF, "player"));
-    let choice = chosen(&settings, "start", local.as_deref());
-    let player = player::choose(&all, chosen(&settings, "player", local_player.as_deref()));
+    let choice = chosen(settings.start.as_deref(), local.as_deref());
+    let player = player::choose(&all, chosen(settings.player.as_deref(), local_player.as_deref()));
     match player {
         Some(m) => eprintln!("neochumby: the player is {}", m.name),
         None => eprintln!("neochumby: no player here (player = true in a manifest)"),
@@ -379,10 +380,10 @@ fn session() {
     }
 }
 
-/// `key` from the server's settings, else `local` (from /psp/neochumby.conf),
-/// with where it came from.
-fn chosen<'a>(settings: &'a [(String, String)], key: &str, local: Option<&'a str>) -> Option<(&'static str, &'a str)> {
-    match settings::get(settings, key) {
+/// A setting from the server, else `local` (from /psp/neochumby.conf), with
+/// where it came from.
+fn chosen<'a>(server: Option<&'a str>, local: Option<&'a str>) -> Option<(&'static str, &'a str)> {
+    match server {
         Some(s) => Some(("the server's settings", s)),
         None => local.map(|s| (conf::CONF, s)),
     }
@@ -392,8 +393,8 @@ fn chosen<'a>(settings: &'a [(String, String)], key: &str, local: Option<&'a str
 /// no app's: neochumby-sync, when this Chumby's settings say
 /// `delivery=sync`. It opens no app, so it is never told what is in front
 /// and nothing it asks for is done.
-fn core_services(root: &Path, settings: &[(String, String)]) -> Vec<App> {
-    if settings::get(settings, "delivery") != Some("sync") {
+fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
+    if settings.delivery != Some(Delivery::Sync) {
         return Vec::new();
     }
     vec![App {

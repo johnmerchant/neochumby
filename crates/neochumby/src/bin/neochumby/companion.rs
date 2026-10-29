@@ -92,7 +92,8 @@ impl Relay<'_> {
         match s.recv_timeout(POLL) {
             Ok(Some(Msg::Data(f))) => self.send(DATA, &f),
             Ok(Some(Msg::Closed)) | Err(_) => self.gone(),
-            // The settings, after Welcome: not the app's.
+            // Nothing else is the app's: a newer neochumbyd's
+            // `Msg::Unknown` is skipped.
             Ok(Some(_)) | Ok(None) => Ok(()),
         }
     }

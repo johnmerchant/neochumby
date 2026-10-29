@@ -21,6 +21,7 @@ path = "src/companion.rs"
 [dependencies]
 neochumby-proto.workspace = true
 neochumby-sys.workspace = true
+serde.workspace = true
 embedded-graphics = "0.8"
 
 # Only the Chumby's build uses the device library. On the host the text,
