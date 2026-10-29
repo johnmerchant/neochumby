@@ -1644,6 +1644,9 @@ def main(argv):
     native = (given or os.environ.get("NEOCHUMBY_EMU_MACHINE") or "user") != "user"
     # So is a real Chumby (--device, from #36): neochumbyd and ssh, here.
     native = native or "--device" in argv or bool(os.environ.get("NEOCHUMBY_EMU_DEVICE"))
+    # And what only names the backend, its waits, or asks a person.
+    words = [a for i, a in enumerate(argv) if not a.startswith("-") and not (i and argv[i - 1].startswith("--"))]
+    native = native or words[:1] in (["backend"], ["scale"], ["prompt"])
     if sys.platform == "darwin" and not native and argv[:1] not in (["-h"], ["--help"], ["help"]):
         on_mac(argv)
     def flag(args, name, default=None):
