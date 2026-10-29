@@ -166,7 +166,7 @@ apps/top/                  neochumby-top, manifest
 apps/cmatrix/              neochumby-cmatrix, manifest (and so on for clock, bonsai, pipes, aquarium, genact)
 ```
 
-`tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes
+`tools/tree OUT [-d DATA] [--pinned] [APP ...]` builds that tree. It always includes
 the session and neochumby-home, plus the apps you name, from wherever
 they are:
 
@@ -174,8 +174,14 @@ they are:
 | --- | --- |
 | `doom` | `apps/doom` in this repository |
 | `./path`, `/path` | a crate on this machine |
-| `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it prints the commit to pin) |
-| `crate:neochumby-x@1.0.0` | crates.io (unversioned, the newest) |
+| `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it warns and prints the commit to pin) |
+| `crate:neochumby-x@1.0.0` | crates.io, checked against the index's SHA-256 (unversioned, it warns and takes the newest) |
+
+An app from elsewhere runs as root on the Chumby, so pin it: a full commit
+id after `#` (a branch or tag can move), a version after `@`. With
+`--pinned` (`tools/tree OUT --pinned APP ...`, and the same for
+`tools/stick` and `tools/deploy`), an app that isn't pinned is refused
+rather than warned about.
 
 Each app's binaries are built for the Chumby, and its companion for the
 server, with the toolchain above. Its manifest is made from its

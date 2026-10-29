@@ -57,7 +57,11 @@ CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
 crates), and `cargo test -p neochumby-proto -p neochumby-sync -p
-neochumbyd`.
+neochumbyd`. CI also checks what the build takes in: `cargo deny check`
+(advisories, licences, bans and sources, as `deny.toml` sets them) and
+`gitleaks git` over every commit. A new dependency must pass `cargo deny`:
+a licence not yet allowed, or a source other than crates.io, is added to
+`deny.toml` in the same pull request, saying why.
 
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its

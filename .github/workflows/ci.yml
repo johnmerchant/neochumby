@@ -11,22 +11,65 @@ on:
 permissions:
   contents: read
 
+# Every action is pinned to a full commit id, with the version it was in a
+# comment: a tag can be moved to other code, a commit can't. Tools fetched
+# here (cargo-deny, gitleaks) are checked against a SHA-256 pinned here.
 env:
   CARGO_TERM_COLOR: always
   ZIG_VERSION: 0.17.0
+  CARGO_DENY_VERSION: 0.20.2
+  CARGO_DENY_SHA256: 9f12ed4c49936e09b48bf862b595cde2fe64fcbd9d74dfacac6131ca824c8d5f
+  GITLEAKS_VERSION: 8.30.1
+  GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
 
 jobs:
+  # What the build takes in: every crate in Cargo.lock against RustSec's
+  # advisories, licences, bans and sources (deny.toml), and every commit for
+  # secrets (gitleaks).
+  supply-chain:
+    name: Supply chain
+    runs-on: ubuntu-latest
+    steps:
+      # All history, for gitleaks; the submodules, without which cargo
+      # can't load the workspace.
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          submodules: true
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
+        with:
+          toolchain: stable
+      - name: cargo-deny and gitleaks, checked against their SHA-256
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin"
+          cd "$RUNNER_TEMP"
+          deny=cargo-deny-$CARGO_DENY_VERSION-x86_64-unknown-linux-musl
+          curl -fsSLo deny.tgz "https://github.com/EmbarkStudios/cargo-deny/releases/download/$CARGO_DENY_VERSION/$deny.tar.gz"
+          echo "$CARGO_DENY_SHA256  deny.tgz" | sha256sum -c -
+          tar -xzf deny.tgz -C bin --strip-components 1 "$deny/cargo-deny"
+          curl -fsSLo gitleaks.tgz "https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          echo "$GITLEAKS_SHA256  gitleaks.tgz" | sha256sum -c -
+          tar -xzf gitleaks.tgz -C bin gitleaks
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Dependencies (deny.toml)
+        run: cargo deny check
+      - name: Secrets, in every commit
+        run: gitleaks git --no-banner --redact --verbose .
+
   host:
     name: Format, lint, test
     runs-on: ubuntu-latest
     steps:
       # The workspace has members in submodules (aquarium's asciiquarium-rs),
       # without which cargo can't load it.
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
         with:
+          toolchain: stable
           components: rustfmt, clippy
       # Ours, not the third-party crates in submodules that some apps build
       # from (they keep their own formatting).
@@ -50,14 +93,16 @@ jobs:
     steps:
       # The apps' third-party C is in submodules (cmake, which builds
       # fetch's fastfetch, is on the runner).
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           submodules: true
-      - uses: dtolnay/rust-toolchain@stable
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable, 2026-10-16
         with:
+          toolchain: stable
           targets: armv5te-unknown-linux-musleabi, x86_64-unknown-linux-musl
           components: clippy
-      - uses: mlugg/setup-zig@v2
+      - uses: mlugg/setup-zig@d1434d08867e3ee9daa34448df10607b98908d29 # v2.2.1
         with:
           version: ${{ env.ZIG_VERSION }}
       - name: Features

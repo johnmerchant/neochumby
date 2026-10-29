@@ -21,22 +21,40 @@
 #   git+URL[#REV]                 a crate at the root of a git repository,
 #                                 at commit REV (else the default branch's
 #                                 head, whose commit is printed to pin)
-#   crate:NAME[@VERSION]          a crate from crates.io (else its newest)
+#   crate:NAME[@VERSION]          a crate from crates.io (else its newest),
+#                                 checked against the index's SHA-256
+#
+# What an app's binaries are built from runs as root on a Chumby, so pin
+# it: a full commit id for git+ (a branch or tag can move), a version for
+# crate:. Unpinned, tools/tree warns; with --pinned it refuses.
 #
 # Game data is never in the repo: with -d DATA, a tree of the same shape
 # holding your own copies (apps/doom/doom1.wad, apps/quake/id1/pak0.pak),
 # it is copied in on top.
 #
-#   tools/tree OUT [-d DATA] [APP ...]    e.g. tools/tree /tmp/t doom quake
-#                                         (zig, git and curl on PATH)
+#   tools/tree OUT [-d DATA] [--pinned] [APP ...]
+#                         e.g. tools/tree /tmp/t doom quake
+#                         (zig, git, curl and sha256sum or shasum on PATH)
 set -eu
-out=${1:?usage: tools/tree OUT [-d DATA] [APP ...]}
+usage="usage: tools/tree OUT [-d DATA] [--pinned] [APP ...]"
+out=${1:?$usage}
 shift
 data=
-if [ "${1:-}" = -d ]; then
-  data=$2
-  shift 2
-fi
+pinned=
+while :; do
+  case ${1:-} in
+    -d)
+      [ $# -ge 2 ] || { echo "$usage" >&2 && exit 2; }
+      data=$2
+      shift 2
+      ;;
+    --pinned)
+      pinned=1
+      shift
+      ;;
+    *) break ;;
+  esac
+done
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 chumby_t=armv5te-unknown-linux-musleabi
@@ -57,6 +75,34 @@ export CC_x86_64_unknown_linux_musl=$root/tools/zigcc-x86_64 AR_x86_64_unknown_l
 
 field() { sed -n "s/^$2=//p" "$1" | head -n 1; }
 
+# An app that isn't pinned: refused with --pinned, else a warning.
+unpinned() {
+  if [ -n "$pinned" ]; then
+    echo "tools/tree: $1 (refused: --pinned)" >&2
+    exit 1
+  fi
+  echo "tools/tree: warning: $1" >&2
+}
+
+sha256() {
+  if command -v sha256sum > /dev/null; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# Where crates.io's sparse index keeps NAME (lower case): 1/a, 2/ab,
+# 3/a/abc, then ab/cd/abcd...
+index_path() {
+  case ${#1} in
+    1) echo "1/$1" ;;
+    2) echo "2/$1" ;;
+    3) echo "3/$(printf %s "$1" | cut -c1)/$1" ;;
+    *) echo "$(printf %s "$1" | cut -c1-2)/$(printf %s "$1" | cut -c3-4)/$1" ;;
+  esac
+}
+
 # The crate directory an APP names, fetched if need be.
 fetch() {
   case $1 in
@@ -68,6 +114,17 @@ fetch() {
         url=${url%#*}
         ;;
       esac
+      if [ -z "$rev" ]; then
+        unpinned "$1 isn't pinned: add #COMMIT"
+      else
+        # A full commit id (SHA-1 or SHA-256), not a name that can move.
+        full=
+        case $rev in
+          *[!0-9a-f]*) ;;
+          *) case ${#rev} in 40 | 64) full=1 ;; esac ;;
+        esac
+        [ -n "$full" ] || unpinned "$1: #$rev isn't a full commit id, and a branch or tag can move"
+      fi
       dir=$sources/git-$(printf %s "$url" | cksum | cut -d' ' -f1)
       [ -d "$dir/.git" ] || git clone --quiet "$url" "$dir"
       git -C "$dir" fetch --quiet origin
@@ -89,6 +146,7 @@ fetch() {
       esac
       ua="neochumby tools/tree (https://github.com/johnmerchant/neochumby)"
       if [ -z "$version" ]; then
+        unpinned "$1 isn't pinned: add @VERSION"
         version=$(curl -fsS -A "$ua" "https://crates.io/api/v1/crates/$name" |
           sed -n 's/.*"max_stable_version":"\([^"]*\)".*/\1/p')
         [ -n "$version" ] || {
@@ -98,9 +156,26 @@ fetch() {
       fi
       dir=$sources/crate-$name-$version
       if [ ! -d "$dir" ]; then
+        # The index's checksum for this version, and the download's.
+        lower=$(printf %s "$name" | tr '[:upper:]' '[:lower:]')
+        want=$(curl -fsS -A "$ua" "https://index.crates.io/$(index_path "$lower")" |
+          grep -F "\"vers\":\"$version\"," |
+          sed -n 's/.*"cksum":"\([0-9a-f]\{64\}\)".*/\1/p' | head -n 1)
+        [ -n "$want" ] || {
+          echo "tools/tree: $name $version isn't in crates.io's index" >&2
+          exit 1
+        }
+        rm -rf "$dir.tmp" "$dir.crate"
+        curl -fsSL -A "$ua" -o "$dir.crate" "https://crates.io/api/v1/crates/$name/$version/download"
+        got=$(sha256 "$dir.crate")
+        [ "$got" = "$want" ] || {
+          rm -f "$dir.crate"
+          echo "tools/tree: $name $version: SHA-256 $got, but the index says $want" >&2
+          exit 1
+        }
         mkdir -p "$dir.tmp"
-        curl -fsSL -A "$ua" "https://crates.io/api/v1/crates/$name/$version/download" |
-          tar -xzf - -C "$dir.tmp" --strip-components 1
+        tar -xzf "$dir.crate" -C "$dir.tmp" --strip-components 1
+        rm -f "$dir.crate"
         mv "$dir.tmp" "$dir"
       fi
       echo "$dir"

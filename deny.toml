@@ -1,0 +1,80 @@
+# cargo-deny (CI's supply-chain job): known vulnerabilities, licences,
+# duplicate or banned crates, and where crates come from, for every crate in
+# Cargo.lock. Run it as CI does: `cargo deny check`.
+
+[graph]
+# Every target the workspace builds for: the Chumby, the server, and the
+# hosts we test and develop on.
+targets = [
+    "armv5te-unknown-linux-musleabi",
+    "x86_64-unknown-linux-musl",
+    "x86_64-unknown-linux-gnu",
+    "aarch64-apple-darwin",
+]
+all-features = true
+
+[advisories]
+# Vulnerabilities are always errors. Unmaintained crates are errors too,
+# unless listed here with why.
+ignore = [
+    # genact (apps/genact, a toy) reaches these through its dependencies:
+    # instant through genact itself, and zbus's split-out crates through
+    # keepawake, which genact uses to keep a desktop awake (never on a
+    # Chumby). Unmaintained, with no known vulnerability. They go when
+    # genact moves on.
+    { id = "RUSTSEC-2024-0384", reason = "instant: unmaintained, through genact" },
+    { id = "RUSTSEC-2026-0370", reason = "zvariant: merged into zbus 6, through genact's keepawake" },
+    { id = "RUSTSEC-2026-0371", reason = "zbus_names: merged into zbus 6, through genact's keepawake" },
+    { id = "RUSTSEC-2026-0372", reason = "zvariant_derive: merged into zbus 6, through genact's keepawake" },
+]
+
+[licenses]
+# Permissive licences, for any crate. Our own crates are MIT.
+allow = [
+    "0BSD",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MIT",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Unlicense",
+    "WTFPL",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+# Copyleft only where CONTRIBUTING's per-crate rule puts it: the apps that
+# link GPL code, which say so in their own `license` field, and what they
+# link. Any other crate with a GPL licence fails.
+exceptions = [
+    { crate = "neochumby-doom", allow = ["GPL-2.0-only"] },
+    { crate = "neochumby-quake", allow = ["GPL-2.0-or-later"] },
+    { crate = "neochumby-htop", allow = ["GPL-2.0-or-later"] },
+    { crate = "neochumby-top", allow = ["GPL-2.0-or-later"] },
+    { crate = "neochumby-aquarium", allow = ["GPL-2.0-or-later"] },
+    { crate = "asciiquarium-rs", allow = ["GPL-2.0-or-later"] },
+    { crate = "neochumby-bonsai", allow = ["GPL-3.0-only"] },
+    { crate = "neochumby-pipes", allow = ["GPL-3.0-only"] },
+    { crate = "neochumby-cmatrix", allow = ["GPL-3.0-or-later"] },
+    { crate = "neochumby-softfloat", allow = ["GPL-3.0-or-later WITH GCC-exception-3.1"] },
+    { crate = "neochumby-ncurses", allow = ["X11-distribute-modifications-variant"] },
+]
+
+[bans]
+# Two versions of a crate cost build time, not safety: not checked.
+multiple-versions = "allow"
+# A `*` version requirement takes whatever is newest; path dependencies
+# inside the workspace are fine.
+wildcards = "deny"
+allow-wildcard-paths = true
+
+[sources]
+# crates.io only. A git dependency, or another registry, has to be added
+# here by name, so it is seen in review.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []
