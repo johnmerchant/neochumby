@@ -98,7 +98,8 @@ jobs:
       # The end-to-end scenarios (dev/e2e), on that tree booted as a Chumby
       # would be under qemu-arm (dev/emulate's user mode): the home screen,
       # a tap on DOOM, the devices, the corner hold, CHUMBY MODE, a boot
-      # from a stick image; and delivery=sync through a power cut mid-round,
+      # from a stick image; pairing through PAIR (a refusal, an approval,
+      # --replace, forget); and delivery=sync through a power cut mid-round,
       # paired with this neochumbyd, with the real boot hook. Those on the
       # stock firmware run only locally, on your own (docs/legal.md).
       - name: End-to-end scenarios under dev/emulate
