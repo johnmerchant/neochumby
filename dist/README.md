@@ -37,21 +37,37 @@ instead, which Bootlin builds only for x86_64.
 `output/`) in `DIR` instead of the `neochumby-dist` volume; CI uses it to
 cache the work.
 
-## CI
+## A neochumby stick
 
-CI's `sideload` job (`.github/workflows/ci.yml`) builds the custom QEMU and
-this image, then runs `run-recovery-demo.py` with a zeroed NAND image.  It
-runs on changes under `dist/`, `tools/neochumby-kernel-sideloader/` or
-`emu/qemu/`, and on `workflow_dispatch`, and is skipped otherwise.  QEMU and
-Buildroot work is cached; the first run is slow, and later runs rebuild only
-what changed.  The sideloaded path still needs the user's
-own stock firmware, so it stays local (`run-demo.py`).
+Before its shell, `/init` runs a neochumby stick as the stock boot does: it
+waits up to 15 seconds for `/dev/sda1`, mounts it (FAT) on `/mnt/usb`,
+and runs the stick's `userhook2` in the background, its output on the
+console. That is the whole of neochumby on this image so far: its tree, on
+the stick, is the session and the apps.
+
+## Emulated, and CI
+
+All emulation happens through qemu-chumby (`emu/qemu/qemu-chumby`), whose
+`chumby-classic` machine boots this image with no firmware of Chumby's.
+`dev/emulate --profile dist` boots it with a neochumby tree on a USB stick
+(`-device usb-storage`), which `/init` runs as above; CI's `e2e` job runs
+the end-to-end scenarios that pass there so far that way
+(CONTRIBUTING.md, "Scenarios", says which, and why the others don't yet).
+
+CI's `dist` job (`.github/workflows/ci.yml`) builds this image, or restores
+it whole when nothing it's built from changed, and passes it on to the
+`e2e` and `sideload` jobs. Buildroot's work is cached; the first run is
+slow, and later runs rebuild only what changed. The `sideload` job runs
+`run-recovery-demo.py` with a zeroed NAND image, on changes under `dist/`,
+`tools/neochumby-kernel-sideloader/` or `emu/qemu/` and on
+`workflow_dispatch`. The sideloaded path still needs the user's own stock
+firmware, so it stays local (`run-demo.py`).
 
 | Path | What |
 | --- | --- |
 | `configs/chumby_classic_defconfig` | The Buildroot configuration |
 | `board/chumby-classic/linux.fragment` | Our sideload kernel options on top of `imx_v4_v5_defconfig`. `dist/build` fails if any of them didn't make it into the kernel |
-| `board/chumby-classic/rootfs/init` | The sideload init: checks the sideload marker, loads the NAND modules only when it is absent |
+| `board/chumby-classic/rootfs/init` | The sideload init: checks the sideload marker, loads the NAND modules only when it is absent, and runs a neochumby stick |
 | `patches/` | The kernel tarball's hash. Buildroot checks every download |
 | `Containerfile` | The build's Linux |
 
