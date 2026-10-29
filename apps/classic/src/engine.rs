@@ -2644,8 +2644,8 @@ impl<P: Plat> Engine<P> {
 
     /// For a page with clips: picks one (at random, never the same twice
     /// running, or in turn) and starts it. A page none of whose clips will
-    /// play (the directories missing, or every clip refused) is skipped:
-    /// the next page comes on instead.
+    /// play (their files missing, or every clip refused) is skipped: the
+    /// next page comes on instead.
     fn start_clip_page(&mut self) {
         self.clip = None;
         let n = self.npages();
@@ -2654,8 +2654,8 @@ impl<P: Plat> Engine<P> {
             if pg.clips.is_empty() {
                 return;
             }
-            let (dirs, random) = (pg.clips.clone(), pg.clip_random);
-            let mut found = clip::find(&self.dir, &dirs);
+            let (dir, prefixes, random) = (pg.clip_dir.clone(), pg.clips.clone(), pg.clip_random);
+            let mut found = clip::candidates(&self.dir, &dir, &prefixes);
             while !found.is_empty() {
                 let k = if random {
                     if self.clip_rng == 0 {
@@ -3355,8 +3355,8 @@ mod tests {
         std::fs::remove_dir_all(&d).unwrap();
     }
 
-    /// A set with three pages, page 1 playing clips from `clips` (which
-    /// the test fills, or not).
+    /// A set with three pages; `manifest_clip` names page 1's clips, which
+    /// the test writes (or not) in `clips/` or beside the manifest.
     fn clip_set(tag: &str, manifest_clip: &str) -> PathBuf {
         let d = std::env::temp_dir().join(format!("classic-clipset-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -3378,11 +3378,11 @@ mod tests {
     #[test]
     fn a_clip_page_plays_its_clip_in_time() {
         use crate::clip::testclip::{Span, key, record, write};
-        let d = clip_set("play", "clip 1 clips");
+        let d = clip_set("play", "clip 1 . loop");
         // 5 fps: frame 0 all 0x1111; 1 fills row 0; 2 fills row 1; the wrap
         // takes row 1 back, to frame 1's picture.
         let row = |y, c| record(false, &[Span::Fill(0, y, 320, c)]);
-        write(&d.join("clips/loop"), 5, 1, &[key(0x1111), row(0, 0x2222), row(1, 0x3333), row(1, 0x1111)]);
+        write(&d.join("loop"), 5, 1, &[key(0x1111), row(0, 0x2222), row(1, 0x3333), row(1, 0x1111)]);
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
         let mut e = Engine::new(h, d.clone());
         e.start();
@@ -3423,20 +3423,20 @@ mod tests {
     #[test]
     fn a_page_without_a_playable_clip_is_skipped() {
         // The directory is missing.
-        let d = clip_set("missing", "clip 1 nowhere random");
+        let d = clip_set("missing", "clip 1 . absent random");
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
         let mut e = Engine::new(h, d.clone());
         e.start();
         e.ctl_line(b"page 1", e.ms());
         assert_eq!(e.page, 2, "the next page instead");
         // A broken clip only: skipped too.
-        std::fs::write(d.join("clips/bad.idx"), b"NCCLIP01 and then nonsense").unwrap();
-        std::fs::write(d.join("clips/bad.clip"), b"").unwrap();
+        std::fs::write(d.join("absent.idx"), b"NCCLIP01 and then nonsense").unwrap();
+        std::fs::write(d.join("absent.clip"), b"").unwrap();
         e.ctl_line(b"page 1", e.ms());
         assert_eq!(e.page, 2);
         std::fs::remove_dir_all(&d).unwrap();
         // Every page a clip page with nothing to play: it stops trying.
-        let d = clip_set("none", "clip 0 x\nclip 1 x\nclip 2 x");
+        let d = clip_set("none", "clip 0 . x\nclip 1 . x\nclip 2 . x");
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
         let mut e = Engine::new(h, d.clone());
         e.start();
@@ -3449,8 +3449,8 @@ mod tests {
     #[test]
     fn random_clips_never_repeat_running() {
         use crate::clip::testclip::{key, record, write};
-        let d = clip_set("random", "clip 1 clips random");
-        for (n, c) in [("a", 0x0101), ("b", 0x0202)] {
+        let d = clip_set("random", "clip 1 clips pjs_a pjs_b random");
+        for (n, c) in [("pjs_a", 0x0101), ("pjs_b", 0x0202)] {
             write(&d.join(format!("clips/{n}")), 10, 0, &[key(c), record(false, &[])]);
         }
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());

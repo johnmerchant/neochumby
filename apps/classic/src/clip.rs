@@ -26,10 +26,8 @@ pub const MAX_FRAMES: u32 = 65_536;
 /// The largest record taken: a record can't usefully be bigger (a span of
 /// one pixel per pixel is 8 bytes a pixel).
 pub const MAX_RECORD: u32 = 8 * PIXELS as u32 + 8;
-/// Clips a page's directories may offer, and directories a `clip` line
-/// may name.
+/// Clips a `clip` line may name.
 pub const MAX_CLIPS: usize = 64;
-pub const MAX_DIRS: usize = 16;
 
 /// A clip's index, checked.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -160,27 +158,17 @@ pub fn read_range(path: &Path, offset: u64, len: usize) -> Result<Vec<u16>, BadR
     Ok(buf)
 }
 
-/// The clips a page's directories offer: each `NAME.idx` with a
-/// `NAME.clip` beside it, in name order, at most [`MAX_CLIPS`]. A
-/// relative directory is in the picture set; a missing one offers none.
-pub fn find(set: &Path, dirs: &[String]) -> Vec<PathBuf> {
-    let mut out = Vec::new();
-    for d in dirs {
-        let dir = set.join(d);
-        let Ok(rd) = std::fs::read_dir(&dir) else { continue };
-        let mut names: Vec<PathBuf> = rd
-            .flatten()
-            .map(|e| e.path())
-            .filter(|p| p.extension().is_some_and(|e| e == "idx") && p.with_extension("clip").is_file())
-            .collect();
-        names.sort();
-        for n in names {
-            if out.len() < MAX_CLIPS {
-                out.push(n.with_extension(""));
-            }
-        }
-    }
-    out
+/// The clips a `clip` line names that are there: `DIR/PREFIX` for each
+/// PREFIX whose `.idx` and `.clip` both exist, in order. DIR `.` is the
+/// picture set `set`; another relative DIR is inside it.
+pub fn candidates(set: &Path, dir: &str, prefixes: &[String]) -> Vec<PathBuf> {
+    let d = if dir == "." { set.to_path_buf() } else { set.join(dir) };
+    prefixes
+        .iter()
+        .take(MAX_CLIPS)
+        .map(|p| d.join(p))
+        .filter(|b| b.with_extension("idx").is_file() && b.with_extension("clip").is_file())
+        .collect()
 }
 
 /// A clip's index from its files (`base`.idx and `base`.clip), checked;
@@ -476,10 +464,12 @@ mod tests {
         assert!(parse_index(&good, len + 4).is_none(), "the .clip's size");
         assert!(parse_index(&good[..40], len).is_none(), "short");
         assert!(open(&base, 1000).is_none(), "bigger than the budget");
-        // Only complete clips are found, in name order.
+        // Only complete clips are offered, in the line's order.
         write(&d.join("b"), 12, 0, &[key(1), record(false, &[])]);
         std::fs::write(d.join("c.idx"), b"x").unwrap();
-        assert_eq!(find(&d, &[".".into(), "missing".into()]), vec![d.join("a"), d.join("b")]);
+        let names = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(candidates(&d, ".", &names(&["b", "c", "missing", "a"])), vec![d.join("b"), d.join("a")]);
+        assert!(candidates(&d, "nowhere", &names(&["a"])).is_empty());
         std::fs::remove_dir_all(&d).unwrap();
     }
 

@@ -26,7 +26,7 @@
 //! bgscroll PAGE FILE W SPEED
 //! glow PAGE FILE W H Y SPEED [FADE_MS PHASE_MS SWAY_PX SWAY_MS [X0 [ON_MS]]]
 //! glowseq PAGE PREFIX NFRAMES FPS R G B BRIGHT     frames PREFIX_000.l8 ...
-//! clip PAGE DIR [DIR ...] [random]                 a recorded loop (clip.rs)
+//! clip PAGE DIR PREFIX [PREFIX ...] [random]       a recorded loop (clip.rs)
 //! livefont NAME FILE CELLW CELLH [W0..W78]       a glyph strip for live text
 //! live TARGET KEY FONT X Y W H ALIGN BG          a device value as text
 //! ```
@@ -94,7 +94,7 @@ pub const MAXGSQ_FRAMES: i32 = 1000;
 #[cfg_attr(not(test), allow(dead_code))]
 pub const NAME_LEN: usize = 48;
 /// The longest file name, in bytes (`%96s`; the C engine's was 63), and
-/// of a `clip` directory.
+/// of a `clip` directory or prefix.
 pub const FILE_LEN: usize = 96;
 /// The largest manifest.txt and hashes.txt read, in bytes.
 pub const MAX_MANIFEST_BYTES: u64 = 2 << 20;
@@ -182,7 +182,9 @@ pub struct Page {
     pub tap: String,
     /// The app it belongs to (pageapp), or -1: an app of its own.
     pub app: i32,
-    /// Directories of clips it plays (`clip`); empty: none.
+    /// The directory of the clips it plays (`clip`; "." is the picture
+    /// set's), and their file prefixes; empty: none.
+    pub clip_dir: String,
     pub clips: Vec<String>,
     /// Chosen at random each time (else in turn).
     pub clip_random: bool,
@@ -490,6 +492,7 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 nbg: None,
                 tap: String::new(),
                 app: -1,
+                clip_dir: String::new(),
                 clips: Vec::new(),
                 clip_random: false,
             };
@@ -498,8 +501,9 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
             }
         } else if let Some(v) = some(sc("pagenight %d %96s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
             o.pages[v[0].i() as usize].nbg = asset(v[1].s(), Size::Exactly(FRAME_BYTES));
-        } else if let Some((p, dirs, random)) = clip_line(line, o.pages.len()) {
-            o.pages[p].clips = dirs;
+        } else if let Some((p, dir, prefixes, random)) = clip_line(line, o.pages.len()) {
+            o.pages[p].clip_dir = dir;
+            o.pages[p].clips = prefixes;
             o.pages[p].clip_random = random;
         } else if let Some(v) = some(sc("pageapp %d %d"), 2).filter(|v| idx(v[0].i(), o.pages.len()) && v[1].i() >= 0) {
             o.pages[v[0].i() as usize].app = v[1].i();
@@ -832,21 +836,29 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
     o
 }
 
-/// `clip PAGE DIR [DIR ...] [random]`: page PAGE (declared before) plays
-/// one of the clips in the DIRs (relative ones are in the picture set),
-/// chosen at random each time with `random`, else in turn. 1 to 16 DIRs,
-/// each at most FILE_LEN bytes; anything else skips the line.
-fn clip_line(line: &[u8], pages: usize) -> Option<(usize, Vec<String>, bool)> {
+/// `clip PAGE DIR PREFIX [PREFIX ...] [random]`: page PAGE (declared
+/// before) plays one of the clips `DIR/PREFIX.idx` + `DIR/PREFIX.clip`,
+/// chosen at random each time with `random`, else in turn. DIR `.` is the
+/// picture set's own directory (as the renderer writes it); another
+/// relative one is inside the set, and an absolute one is allowed (an
+/// owner's clips, kept elsewhere). 1 to 64 PREFIXes, each a file name (no
+/// `/`), at most FILE_LEN bytes; anything else skips the line.
+fn clip_line(line: &[u8], pages: usize) -> Option<(usize, String, Vec<String>, bool)> {
     let words: Vec<&str> = std::str::from_utf8(line).ok()?.split_ascii_whitespace().collect();
     let (&"clip", rest) = words.split_first()? else { return None };
-    let (page, mut dirs) = rest.split_first()?;
+    let (page, rest) = rest.split_first()?;
+    let (dir, mut prefixes) = rest.split_first()?;
     let p: usize = page.parse().ok().filter(|_| page.bytes().all(|b| b.is_ascii_digit()))?;
-    let random = dirs.last() == Some(&"random");
+    let random = prefixes.last() == Some(&"random");
     if random {
-        dirs = &dirs[..dirs.len() - 1];
+        prefixes = &prefixes[..prefixes.len() - 1];
     }
-    let ok = p < pages && (1..=crate::clip::MAX_DIRS).contains(&dirs.len()) && dirs.iter().all(|d| d.len() <= FILE_LEN);
-    ok.then(|| (p, dirs.iter().map(|d| d.to_string()).collect(), random))
+    let name_ok = |n: &&str| n.len() <= FILE_LEN && !n.contains('/') && *n != "." && *n != "..";
+    let ok = p < pages
+        && dir.len() <= FILE_LEN
+        && (1..=crate::clip::MAX_CLIPS).contains(&prefixes.len())
+        && prefixes.iter().all(name_ok);
+    ok.then(|| (p, dir.to_string(), prefixes.iter().map(|d| d.to_string()).collect(), random))
 }
 
 fn some(v: Vec<V>, n: usize) -> Option<Vec<V>> {
@@ -1057,6 +1069,33 @@ mod tests {
             (Key::Uptime, Align::Center, Some(crate::draw::rgb565(0, 0x80, 0xff)))
         );
         assert_eq!((m.lives[2].on, m.lives[2].key, m.lives[2].w), (Target::PageNight(1), Key::Name, 320));
+    }
+
+    #[test]
+    fn clip_lines() {
+        let m = Files::new(&[]).parse(
+            "page 0 p.raw 5\npage 1 q.raw 5\n\
+             clip 1 . pjs_a pjs_b random\n\
+             clip 0 /mnt/usb/clips loop\n\
+             clip 2 . x\nclip 0 . ../x\nclip 0 . a/b\nclip 0 .\nclip 0 . random\nclip x . a\n",
+        );
+        let p = &m.pages[1];
+        assert_eq!(
+            (p.clip_dir.as_str(), p.clips.clone(), p.clip_random),
+            (".", vec!["pjs_a".into(), "pjs_b".into()], true)
+        );
+        let p = &m.pages[0];
+        assert_eq!(
+            (p.clip_dir.as_str(), p.clips.clone(), p.clip_random),
+            ("/mnt/usb/clips", vec!["loop".into()], false)
+        );
+        // A page not declared, a prefix with a path, no prefix: skipped.
+        assert!(clip_line(b"clip 2 . x", 2).is_none());
+        assert!(clip_line(b"clip 0 . ../x", 2).is_none());
+        assert!(clip_line(b"clip 0 . a/b", 2).is_none());
+        assert!(clip_line(b"clip 0 .", 2).is_none());
+        assert!(clip_line(b"clip 0 . random", 2).is_none());
+        assert!(clip_line(&format!("clip 0 . {}", vec!["a"; 65].join(" ")).into_bytes(), 2).is_none());
     }
 
     #[test]
