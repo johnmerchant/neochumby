@@ -1,9 +1,11 @@
 # Every push and pull request, on GitHub's own runners: formatting, lints
 # and tests on the host, and every binary built for both of its targets
 # (the Chumby's ARM926 and neochumbyd's x86_64). Noise (neochumby-proto's
-# `noise` feature) is neither built nor tested here. And, when the image,
-# the sideloader or the emulator changes (or on demand), the sideload image
-# built and its recovery path tested.
+# `noise` feature) is neither built nor tested here. The dist image (our
+# Linux 5.9.16) built, or restored when its inputs haven't changed, and the
+# end-to-end scenarios run on it, on qemu-chumby's emulated Chumby. And,
+# when the image, the sideloader or the emulator changes (or on demand), the
+# sideload image's recovery path tested.
 name: CI
 
 on:
@@ -53,8 +55,9 @@ jobs:
       - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
       - run: cargo test -p neochumby-logs
-      # dev/emulate's full-system machine, without firmware: its images
-      # against chumby-emu's, and its control path against a stub QEMU.
+      # dev/emulate, without firmware or QEMU: the images it makes (through
+      # qemu-chumby's chumby_machine) against chumby-image's, and its
+      # control path against a stub QEMU.
       - run: python3 dev/test_emulate.py
 
   cross:
@@ -113,22 +116,18 @@ jobs:
           tools/tree "$RUNNER_TEMP/tree" doom quake airplay fetch htop top \
             cmatrix clock bonsai pipes aquarium genact classic logs
           find "$RUNNER_TEMP/tree" -type f | sort
-      # The end-to-end scenarios (dev/e2e), on that tree booted as a Chumby
-      # would be under qemu-arm (dev/emulate's user mode): the home screen,
-      # a tap on DOOM, the devices, the corner hold, CHUMBY MODE, a boot
-      # from a stick image; pairing through PAIR (a refusal, an approval,
-      # --replace, forget); and delivery=sync through a power cut mid-round,
-      # paired with this neochumbyd, with the real boot hook. Those on the
-      # stock firmware run only locally, on your own (docs/legal.md).
-      - name: End-to-end scenarios under dev/emulate
-        timeout-minutes: 15
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools busybox-static
-          sudo dev/e2e "$RUNNER_TEMP/tree" target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/e2e"
+          cp target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/tree.neochumbyd"
+      # For the end-to-end job. (An artifact keeps no modes: it restores them.)
+      - uses: actions/upload-artifact@v4
+        with:
+          name: tree
+          path: |
+            ${{ runner.temp }}/tree
+            ${{ runner.temp }}/tree.neochumbyd
+          retention-days: 3
 
-  # Whether this run needs the sideload job: only when what it builds
-  # changed, on demand, or when there's nothing to compare with (a new
+  # Whether this run needs the sideload job's recovery test: only when what it
+  # tests changed, on demand, or when there's nothing to compare with (a new
   # branch's first push). A skipped job passes, as a required check too.
   changes:
     name: What changed
@@ -150,19 +149,119 @@ jobs:
             echo sideload=false >> "$GITHUB_OUTPUT"
           fi
 
-  # The sideload image and its recovery path: the custom QEMU and the
-  # Buildroot image built, then the self-contained recovery test run with a
-  # zeroed NAND image. The heaviest job, so it runs only when needed.
-  sideload:
-    name: Build sideload image and test recovery
-    needs: changes
-    if: needs.changes.outputs.sideload == 'true'
+  # The dist image, dist/build's sideload-zImage: built when its inputs
+  # change, else restored whole, and passed on to the jobs that boot it.
+  dist:
+    name: Build the dist image
     runs-on: ubuntu-latest
     timeout-minutes: 180
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore the image
+        id: image
+        uses: actions/cache/restore@v4
         with:
-          submodules: true
+          path: build/sideload-dist
+          key: neochumby-dist-image-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+
+      # Buildroot's work, in two: the downloads and ccache, restored from
+      # the nearest earlier build whatever changed, and the output, only for
+      # exactly these inputs (Buildroot can't rebuild cleanly over a changed
+      # config, but ccache makes the rebuild cheap). Each is restored here
+      # and saved as soon as it's made, not at the end of the job: a later
+      # step's failure (or a timeout) would otherwise throw away a long build.
+      - name: Restore Buildroot's downloads and ccache
+        if: steps.image.outputs.cache-hit != 'true'
+        id: dist-ccache
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/neochumby-dist/dl
+            ${{ runner.temp }}/neochumby-dist/ccache
+          key: neochumby-dist-ccache-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+          restore-keys: neochumby-dist-ccache-
+
+      - name: Restore Buildroot's output
+        if: steps.image.outputs.cache-hit != 'true'
+        id: dist-output
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            ${{ runner.temp }}/neochumby-dist/buildroot-*
+            ${{ runner.temp }}/neochumby-dist/output
+          key: neochumby-dist-output-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+
+      - name: Build the sideload image
+        if: steps.image.outputs.cache-hit != 'true'
+        id: dist-build
+        env:
+          NEOCHUMBY_DIST_WORK: ${{ runner.temp }}/neochumby-dist
+        run: dist/build build/sideload-dist
+
+      # The container writes as root; the cache save runs as the runner.
+      - name: Make the Buildroot cache readable
+        if: always() && steps.image.outputs.cache-hit != 'true'
+        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-dist" build || true
+
+      # Whatever was compiled, even by a build that failed.
+      - name: Save Buildroot's downloads and ccache
+        if: always() && steps.image.outputs.cache-hit != 'true' && steps.dist-ccache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/neochumby-dist/dl
+            ${{ runner.temp }}/neochumby-dist/ccache
+          key: ${{ steps.dist-ccache.outputs.cache-primary-key }}
+
+      # Only a finished build's: its key can't be updated once saved.
+      - name: Save Buildroot's output
+        if: steps.dist-build.outcome == 'success' && steps.dist-output.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/neochumby-dist/buildroot-*
+            ${{ runner.temp }}/neochumby-dist/output
+          key: ${{ steps.dist-output.outputs.cache-primary-key }}
+
+      - name: Save the image
+        if: steps.dist-build.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: build/sideload-dist
+          key: ${{ steps.image.outputs.cache-primary-key }}
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist-image
+          path: build/sideload-dist
+          retention-days: 3
+
+  # The end-to-end scenarios (dev/e2e) on qemu-chumby's emulated Chumby,
+  # booting the dist image with the tree on a USB stick (dev/emulate's dist
+  # profile; never the stock firmware, which runs only locally, on your own:
+  # docs/legal.md). Only those that pass on dist so far:
+  #   boot      the stick's hook runs the session, which opens home and draws
+  # Pending on dist, and why:
+  #   smoke     the kernel's framebuffer console blinks its cursor over the
+  #             session's screen, so it seldom settles; and the session reads
+  #             touches from /dev/input/event0, which on 5.9.16 is the top
+  #             button (the touchscreen is event1), so no tap reaches it
+  #   classic   its pictures come from NEOCHUMBY_CLASSIC_PICTURES, and it needs
+  #             what smoke does, and /dev/switch, which 5.9.16 hasn't
+  #   pairing, powercut   need a neochumbyd the Chumby can reach: the
+  #             emulated Chumby has no network (-nic none)
+  #   stock     the stock firmware: local only
+  # The classic profile (Linux 2.6.16 from Chumby's GPL source) is to run
+  # them all once its image is built here.
+  e2e:
+    name: End-to-end scenarios (dist)
+    needs: [cross, dist]
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: git submodule update --init emu/qemu/qemu-chumby
 
       # emu/qemu/qemu-chumby's build dependencies (its README has the list).
       - name: QEMU build dependencies
@@ -173,9 +272,6 @@ jobs:
             libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
             curl xz-utils patch
 
-      # QEMU and Buildroot's work each restored here and saved as soon as
-      # it's made, not at the end of the job: a later step's failure (or a
-      # timeout) would otherwise throw away a long build.
       - name: Restore QEMU
         id: qemu-cache
         uses: actions/cache/restore@v4
@@ -194,59 +290,76 @@ jobs:
           path: emu/qemu/out
           key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
 
-      # Buildroot's work, in two: the downloads and ccache, restored from
-      # the nearest earlier build whatever changed, and the output, only for
-      # exactly these inputs (Buildroot can't rebuild cleanly over a changed
-      # config, but ccache makes the rebuild cheap).
-      - name: Restore Buildroot's downloads and ccache
-        id: dist-ccache
-        uses: actions/cache/restore@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: |
-            ${{ runner.temp }}/neochumby-dist/dl
-            ${{ runner.temp }}/neochumby-dist/ccache
-          key: neochumby-dist-ccache-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
-          restore-keys: neochumby-dist-ccache-
-
-      - name: Restore Buildroot's output
-        id: dist-output
-        uses: actions/cache/restore@v4
+          name: tree
+          path: ${{ runner.temp }}
+      - uses: actions/download-artifact@v4
         with:
-          path: |
-            ${{ runner.temp }}/neochumby-dist/buildroot-*
-            ${{ runner.temp }}/neochumby-dist/output
-          key: neochumby-dist-output-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+          name: dist-image
+          path: build/sideload-dist
 
-      - name: Build the sideload image
-        id: dist-build
+      - name: End-to-end scenarios on the dist profile
+        timeout-minutes: 30
         env:
-          NEOCHUMBY_DIST_WORK: ${{ runner.temp }}/neochumby-dist
-        run: dist/build build/sideload-dist
+          NEOCHUMBY_EMU_PROFILE: dist
+          E2E_SCENARIOS: boot
+        run: |
+          find "$RUNNER_TEMP/tree" -type f -path '*/neochumby*' -exec chmod +x {} +
+          chmod +x "$RUNNER_TEMP/tree.neochumbyd"
+          dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/e2e"
 
-      # The container writes as root; the cache save runs as the runner.
-      - name: Make the Buildroot cache readable
-        if: always()
-        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-dist" || true
+      # Its screenshots are neochumby's own screens, never the stock software's.
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e
+          path: ${{ runner.temp }}/e2e
+          retention-days: 7
 
-      # Whatever was compiled, even by a build that failed.
-      - name: Save Buildroot's downloads and ccache
-        if: always() && steps.dist-ccache.outputs.cache-hit != 'true'
+  # The sideload image's recovery path: the dist image booted on
+  # qemu-chumby's machine with a zeroed NAND image. Only when needed.
+  sideload:
+    name: Test the sideload image's recovery
+    needs: [changes, dist]
+    if: needs.changes.outputs.sideload == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - run: git submodule update --init emu/qemu/qemu-chumby
+
+      # emu/qemu/qemu-chumby's build dependencies (its README has the list).
+      - name: QEMU build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential python3 python3-venv ninja-build pkg-config \
+            libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
+            curl xz-utils patch
+
+      - name: Restore QEMU
+        id: qemu-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: emu/qemu/out
+          key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
+
+      - name: Build QEMU
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        run: emu/qemu/build
+
+      - name: Save QEMU
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
-          path: |
-            ${{ runner.temp }}/neochumby-dist/dl
-            ${{ runner.temp }}/neochumby-dist/ccache
-          key: ${{ steps.dist-ccache.outputs.cache-primary-key }}
+          path: emu/qemu/out
+          key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
 
-      # Only a finished build's: its key can't be updated once saved.
-      - name: Save Buildroot's output
-        if: steps.dist-build.outcome == 'success' && steps.dist-output.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+      - uses: actions/download-artifact@v4
         with:
-          path: |
-            ${{ runner.temp }}/neochumby-dist/buildroot-*
-            ${{ runner.temp }}/neochumby-dist/output
-          key: ${{ steps.dist-output.outputs.cache-primary-key }}
+          name: dist-image
+          path: build/sideload-dist
 
       - name: Recovery end-to-end
         run: |
