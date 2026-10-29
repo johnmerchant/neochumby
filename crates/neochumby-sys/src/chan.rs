@@ -33,7 +33,10 @@ pub struct Receiver<T> {
 /// Its pipe's descriptors stay inside the two ends, marked close-on-exec,
 /// so only the Sender writes to it, and only whole pointers it made from a
 /// `Box<T>` and gave up. Values still in the pipe when the Receiver is
-/// dropped are freed then; a value sent after that is handed back.
+/// dropped are freed then. A value sent after that is handed back, once
+/// the pipe has no reader left: a child that another thread is starting
+/// holds a copy of every descriptor from its fork until its exec, so for
+/// that moment a send can still succeed (and its value is never freed).
 pub fn channel<T: Send>() -> io::Result<(Sender<T>, Receiver<T>)> {
     let mut fd: [libc::c_int; 2] = [0; 2];
     // SAFETY: pipe(2) writes two descriptors into the two-int array.
@@ -139,6 +142,16 @@ mod tests {
         tx.send("a".into()).unwrap();
         tx.send("b".into()).unwrap();
         drop(rx); // frees "b" and "a"
-        assert_eq!(tx.send("c".into()), Err("c".to_string()));
+        // Handed back once nothing reads the pipe. Other tests start
+        // processes, and a child between its fork and its exec still holds
+        // the read end, so the first sends may succeed: try for a while.
+        let gone = (0..1000).any(|_| {
+            let r = tx.send("c".into());
+            if r.is_ok() {
+                crate::time::sleep_ms(10);
+            }
+            r == Err("c".to_string())
+        });
+        assert!(gone, "a send to a dropped receiver was never handed back");
     }
 }

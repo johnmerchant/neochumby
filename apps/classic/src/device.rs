@@ -6,7 +6,6 @@
 
 use std::collections::VecDeque;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touchscreen};
@@ -27,12 +26,6 @@ pub struct Device {
     last: (i32, i32),
     /// The monotonic clock's origin.
     t0: std::time::Instant,
-}
-
-/// Runs a command line through sh in the background, its arguments as
-/// $1, $2...: nothing from the manifest is ever parsed by the shell.
-fn sh(script: &str, args: &[&str]) {
-    let _ = Command::new("sh").arg("-c").arg(script).arg("sh").args(args).status();
 }
 
 impl Plat for Device {
@@ -80,10 +73,6 @@ impl Plat for Device {
     }
 
     fn volume(&mut self, _vol: i32) {}
-
-    fn music_quit(&mut self) {
-        sh("btplay --passthru=quit >/dev/null 2>&1", &[]);
-    }
 
     fn state_path(&self, name: &str) -> PathBuf {
         Path::new("/psp").join(name)

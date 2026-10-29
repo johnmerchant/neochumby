@@ -42,6 +42,7 @@ pub mod fs;
 pub mod net;
 pub mod process;
 pub mod pty;
+pub mod signal;
 pub mod speaker;
 pub mod time;
 

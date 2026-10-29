@@ -895,8 +895,8 @@ mod tests {
         hot home 0 0 10 10 station 3\n\
         slider home e.raw f.raw k.raw 120 26 196 22 12 106 24 24\n\
         secsopts 8 12 0 20\n\
-        station 0 groovesalad http://ice6.somafm.com/groovesalad-128-mp3\n\
-        station 2 lush http://ice6.somafm.com/lush-128-mp3\n\
+        station 0 groovesalad http://example.org/groovesalad\n\
+        station 2 lush http://example.org/lush\n\
         clock clock.raw 14 16 314 22 9 9 9 9 9 9 9 9 9 9 6 5 11 10 13\n\
         ticker ticker.raw 5709 24 216 2\n\
         clocknight clock_night.raw\n\
@@ -946,11 +946,7 @@ mod tests {
         assert_eq!(m.secs_opt, vec![8, 12, 20]);
         assert_eq!(
             m.stations,
-            vec![
-                "http://ice6.somafm.com/groovesalad-128-mp3".to_string(),
-                String::new(),
-                "http://ice6.somafm.com/lush-128-mp3".into()
-            ]
+            vec!["http://example.org/groovesalad".to_string(), String::new(), "http://example.org/lush".into()]
         );
         assert_eq!(m.clock.wd, [9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 6, 5, 11, 10, 13]);
         assert_eq!((m.clock.cw, m.clock.ch, m.clock.right, m.clock.y), (14, 16, 314, 22));

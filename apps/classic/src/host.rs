@@ -160,10 +160,6 @@ impl Plat for Host {
         eprintln!("[music] volume {vol}%");
     }
 
-    fn music_quit(&mut self) {
-        eprintln!("[music] quit");
-    }
-
     fn state_path(&self, name: &str) -> PathBuf {
         self.state.join(name)
     }

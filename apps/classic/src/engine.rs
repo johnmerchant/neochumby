@@ -62,8 +62,7 @@
 //! shows and the directory is looked at again every second.
 
 use std::collections::VecDeque;
-use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::cache::{self, Asset, Cache, State};
 use crate::draw::{KEY, add_light, sin};
@@ -73,7 +72,7 @@ use crate::manifest::{self, Align, FPS, H, Ix, MAXASSET, Manifest, NFX, Size, Sl
 use crate::plat::{Plat, Touch, local_hms};
 use crate::scan::{atoi, scan};
 use crate::session::{Ask, Heard, Session, valid_app};
-use crate::state::{self, mtime, read_int, read_nofollow, resolve_dir, save_int, write_nofollow};
+use crate::state::{self, mtime, read_int, read_nofollow, resolve_dir, save_int};
 use crate::values::{self, Key};
 
 const WIPE_FRAMES: i32 = 10;
@@ -174,6 +173,13 @@ struct Inflight {
     t0: i64,
 }
 
+/// The waiting screen's built-in choices.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Fallback {
+    ChumbyMode,
+    Apps,
+}
+
 /// load() found no usable manifest: the last good set (if any) stays up.
 #[derive(Debug, PartialEq, Eq)]
 pub struct NoManifest;
@@ -257,6 +263,9 @@ pub struct Engine<P: Plat> {
     stat_path: Option<PathBuf>,
     /// No usable manifest yet: the waiting screen is up.
     waiting: bool,
+    /// On the waiting screen: the built-in menu's choice awaiting its
+    /// second tap, and until when (ms).
+    armed: Option<(Fallback, i64)>,
 
     // The frame loop's own.
     tx: i32,
@@ -272,32 +281,22 @@ pub struct Engine<P: Plat> {
     last_sec: i64,
 }
 
-/// The private directory for the default control and stats files.
-const RUN_DIR: &str = "/tmp/neochumby-classic";
-
 /// The most memory the cache may hold, whatever is on screen: twice its
 /// budget, and at least 8 MB (the aurora page alone is about 2 MB).
 pub fn ceiling(budget: usize) -> usize {
     (budget * 2).max(8 << 20)
 }
 
-/// A file named by `var`, else `name` in [`RUN_DIR`], which is made (or
-/// kept) a real directory of ours, mode 0700. None if it can't be.
+/// A file named by `var`, else `name` in state::RUN_DIR (state::run_dir).
 fn run_path(var: &str, name: &str) -> Option<PathBuf> {
     if let Some(p) = std::env::var_os(var) {
         return Some(PathBuf::from(p));
     }
-    let d = Path::new(RUN_DIR);
-    let _ = std::fs::DirBuilder::new().mode(0o700).create(d);
-    let ok = std::fs::symlink_metadata(d).is_ok_and(|m| {
-        use std::os::unix::fs::MetadataExt;
-        m.is_dir() && m.uid() == neochumby_sys::process::uid()
-    });
-    if !ok || std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).is_err() {
-        eprintln!("{RUN_DIR} isn't a directory of ours: no {name} file");
-        return None;
+    let d = state::run_dir();
+    if d.is_none() {
+        eprintln!("{} isn't a directory of ours: no {name} file", state::RUN_DIR);
     }
-    Some(d.join(name))
+    Some(d?.join(name))
 }
 
 impl<P: Plat> Engine<P> {
@@ -369,6 +368,7 @@ impl<P: Plat> Engine<P> {
             ctl_path: run_path("NEOCHUMBY_CLASSIC_CTL", "ctl"),
             stat_path: run_path("NEOCHUMBY_CLASSIC_STAT", "stat"),
             waiting: false,
+            armed: None,
             tx: 0,
             ty: 0,
             dragging: false,
@@ -1926,9 +1926,11 @@ impl<P: Plat> Engine<P> {
             }
             "night" => {
                 // For now: until the next sunrise or sunset.
+                // wx_night first, then how long it holds: the service never
+                // sees the override with the old state.
                 let until = self.next_sun_change(self.plat.wall());
-                self.set_override(until);
                 self.apply_night((self.night == 0) as i32);
+                self.set_override(until);
             }
             "nightmode" => self.set_nightmode(self.nightmode + 1),
             "pin" => self.pin = (self.pin == 0) as i32,
@@ -1947,6 +1949,71 @@ impl<P: Plat> Engine<P> {
     fn set_override(&mut self, until: i64) {
         self.night_override_until = until;
         state::save_time(&self.st("wx_night_until"), until);
+    }
+
+    /// The waiting screen, with the built-in menu: a start app always
+    /// offers CHUMBY MODE and a way to the other apps (proposal 0002), even
+    /// before the feeder has sent the screens that do.
+    fn wait_screen(&mut self) {
+        let dir = self.base_dir.display().to_string();
+        self.plat.message(&[
+            "Waiting for pictures",
+            &format!("in {dir}"),
+            "",
+            "Tap the top half for CHUMBY MODE,",
+            "the bottom half for the apps.",
+        ]);
+    }
+
+    /// The waiting screen's taps: one tap picks (top half: CHUMBY MODE;
+    /// bottom: the apps, in neochumby-home), a second in the same half
+    /// within 10 s does it, anywhere else goes back.
+    fn fallback_menu(&mut self, t: i64) {
+        if self.armed.is_some_and(|(_, until)| t > until) {
+            self.armed = None;
+            self.wait_screen();
+        }
+        while let Some(ev) = self.next_touch() {
+            let Touch::Up(_, y) = ev else { continue };
+            if t - self.last_tap < TAP_ECHO_MS {
+                continue;
+            }
+            self.last_tap = t;
+            let pick = if y < H / 2 { Fallback::ChumbyMode } else { Fallback::Apps };
+            match self.armed.take() {
+                Some((a, _)) if a == pick => {
+                    match pick {
+                        Fallback::ChumbyMode => self.ask_and_leave(Ask::ChumbyMode),
+                        Fallback::Apps => self.open_app("home"),
+                    }
+                    if !self.leave {
+                        self.wait_screen();
+                    }
+                    return;
+                }
+                Some(_) => self.wait_screen(),
+                None => {
+                    self.armed = Some((pick, t + 10_000));
+                    self.plat.message(match pick {
+                        Fallback::ChumbyMode => {
+                            &["CHUMBY MODE?", "", "Tap the top half again", "to leave neochumby;", "elsewhere to stay."]
+                        }
+                        Fallback::Apps => {
+                            &["The apps?", "", "Tap the bottom half again", "to open them;", "elsewhere to stay."]
+                        }
+                    });
+                }
+            }
+        }
+    }
+
+    /// Asks the session for something, and leaves once it has asked.
+    fn ask_and_leave(&mut self, a: Ask) {
+        match self.session.as_mut().map(|s| s.ask(&a)) {
+            Some(true) => self.leave = true,
+            Some(false) => eprintln!("couldn't ask the session for {a:?}"),
+            None => eprintln!("{a:?}: not started by the session"),
+        }
     }
 
     /// Gives the engine the session's pipe; `reason_button`: the session
@@ -2105,10 +2172,7 @@ impl<P: Plat> Engine<P> {
             self.fx_hold_us,
         );
         let Some(path) = &self.stat_path else { return };
-        let tmp = path.with_extension("tmp");
-        if write_nofollow(&tmp, out.as_bytes()).is_ok() {
-            let _ = std::fs::rename(&tmp, path);
-        }
+        let _ = state::write_setting(path, out.as_bytes());
     }
 
     fn end_window(&mut self, now: i64) {
@@ -2160,8 +2224,8 @@ impl<P: Plat> Engine<P> {
                 };
                 if on != self.night {
                     let until = self.next_sun_change(self.plat.wall());
-                    self.set_override(until);
                     self.apply_night(on);
+                    self.set_override(until);
                 }
             }
             "nightmode" => {
@@ -2271,8 +2335,7 @@ impl<P: Plat> Engine<P> {
         // Nothing to show yet (the pictures haven't been delivered): say so,
         // and look again every second.
         self.waiting = true;
-        let dir = self.base_dir.display().to_string();
-        self.plat.message(&["Waiting for pictures in", &dir]);
+        self.wait_screen();
         let now = self.ms();
         self.last_check = now;
         self.next = now;
@@ -2338,10 +2401,15 @@ impl<P: Plat> Engine<P> {
             if self.frame_no.is_multiple_of(5) {
                 self.poll_ctl(t);
             }
+            self.fallback_menu(t);
+            if self.leave {
+                return false;
+            }
             if t - self.last_check >= 1000 || std::mem::take(&mut self.want_reload) {
                 self.last_check = t;
                 if self.load().is_ok() {
                     self.waiting = false;
+                    self.armed = None;
                     self.inj.clear();
                     self.inj_button = false;
                     self.begin();
@@ -2422,10 +2490,8 @@ impl<P: Plat> Engine<P> {
                 if let Some(h) = hit
                     && self.do_action(h, t)
                 {
+                    // The service stops the music (on the session's SIGTERM).
                     println!("chumby: back to the Chumby");
-                    if self.music_on != 0 {
-                        self.plat.music_quit();
-                    }
                     self.set_night(0);
                     if let Some(s) = &mut self.session {
                         s.ask(&Ask::ChumbyMode);
@@ -2714,6 +2780,7 @@ mod tests {
     use super::*;
     use crate::host::Host;
     use std::cell::RefCell;
+    use std::path::Path;
     use std::rc::Rc;
 
     /// An engine on `manifest` and files of the given sizes (filled with a
@@ -3181,6 +3248,33 @@ mod tests {
         e.ctl_line(b"app quake", e.ms());
         assert!(!e.frame());
         assert_eq!(*s.asked.borrow(), vec![Ask::Open("quake".into())]);
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn the_waiting_screen_offers_chumby_mode_and_the_apps() {
+        let d = std::env::temp_dir().join(format!("classic-fallback-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(&d).unwrap();
+        let run = |taps: &[(i32, i32)]| {
+            let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+            let mut e = Engine::new(h, d.clone());
+            let s = FakeSession::default();
+            e.set_session(Box::new(s.clone()), false);
+            e.start();
+            assert!(e.waiting);
+            let mut left = false;
+            for &(x, y) in taps {
+                let line = format!("tap {x} {y}");
+                e.ctl_line(line.as_bytes(), e.ms());
+                left |= leaves(&mut e, 15);
+            }
+            (left, s.asked.borrow().clone())
+        };
+        assert_eq!(run(&[(10, 10), (300, 20)]), (true, vec![Ask::ChumbyMode]), "two taps up top");
+        assert_eq!(run(&[(10, 200), (10, 230)]), (true, vec![Ask::Open("home".into())]), "two below");
+        assert_eq!(run(&[(10, 10), (10, 200)]), (false, vec![]), "a tap elsewhere goes back");
+        assert_eq!(run(&[(10, 10)]), (false, vec![]), "one tap does nothing yet");
         std::fs::remove_dir_all(&d).unwrap();
     }
 

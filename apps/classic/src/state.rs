@@ -23,10 +23,6 @@ pub fn read_nofollow(path: &Path, cap: u64) -> Option<Vec<u8>> {
     (b.len() as u64 <= cap).then_some(b)
 }
 
-pub fn write_nofollow(path: &Path, data: &[u8]) -> std::io::Result<()> {
-    open_nofollow(OpenOptions::new().write(true).create(true).truncate(true).mode(0o600)).open(path)?.write_all(data)
-}
-
 pub fn read_int(path: &Path, dflt: i32) -> i32 {
     match read_nofollow(path, 64) {
         Some(b) if !b.is_empty() => atoi(&b[..b.len().min(11)]),
@@ -34,8 +30,27 @@ pub fn read_int(path: &Path, dflt: i32) -> i32 {
     }
 }
 
+/// Writes a setting whole or not at all: `name.tmp`, made new (never
+/// through a link), then renamed over the setting. Whoever reads it (the
+/// service, every half second) sees the old value or the new one, never an
+/// empty file, and a power cut keeps one of them.
+pub fn write_setting(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let mut tmp = path.as_os_str().to_owned();
+    tmp.push(".tmp");
+    let tmp = PathBuf::from(tmp);
+    // A leftover from a run that died mid-write (removing a link removes
+    // the link, not what it points at).
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = open_nofollow(OpenOptions::new().write(true).create_new(true).mode(0o644)).open(&tmp)?;
+    let r = f.write_all(data).and_then(|()| std::fs::rename(&tmp, path));
+    if r.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    r
+}
+
 pub fn save_int(path: &Path, v: i32) {
-    let _ = write_nofollow(path, format!("{v}\n").as_bytes());
+    let _ = write_setting(path, format!("{v}\n").as_bytes());
 }
 
 pub fn mtime(m: &std::fs::Metadata) -> i64 {
@@ -71,13 +86,30 @@ pub fn resolve_dir(base: &Path) -> PathBuf {
     base.to_path_buf()
 }
 
+/// The private directory for the control and stats files, and the
+/// service's record of what it plays.
+pub const RUN_DIR: &str = "/tmp/neochumby-classic";
+
+/// [`RUN_DIR`], made (or kept) a real directory of ours, mode 0700; None if
+/// it can't be (another user's, or a link).
+pub fn run_dir() -> Option<PathBuf> {
+    use std::os::unix::fs::{DirBuilderExt, MetadataExt, PermissionsExt};
+    let d = Path::new(RUN_DIR);
+    let _ = std::fs::DirBuilder::new().mode(0o700).create(d);
+    let ok = std::fs::symlink_metadata(d).is_ok_and(|m| m.is_dir() && m.uid() == neochumby_sys::process::uid());
+    if !ok || std::fs::set_permissions(d, std::fs::Permissions::from_mode(0o700)).is_err() {
+        return None;
+    }
+    Some(d.to_path_buf())
+}
+
 /// A setting that is a time (seconds since the epoch); 0 if unset.
 pub fn read_time(path: &Path) -> i64 {
     read_nofollow(path, 64).and_then(|b| std::str::from_utf8(&b).ok()?.trim().parse().ok()).unwrap_or(0)
 }
 
 pub fn save_time(path: &Path, t: i64) {
-    let _ = write_nofollow(path, format!("{t}\n").as_bytes());
+    let _ = write_setting(path, format!("{t}\n").as_bytes());
 }
 
 /// Whether it is dark (in the feeder's town): 1 or 0; -1 without sun data.
@@ -176,11 +208,20 @@ mod tests {
 
     #[test]
     fn what_the_service_reads() {
-        let (sun, st) = feed(b"page 0 p.raw 5\nsun 1 2\nstation 2 lush http://x/lush\nstation 99 x y\nsun 3 4\n");
+        let (sun, st) =
+            feed(b"page 0 p.raw 5\nsun 1 2\nstation 2 lush http://example.org/lush\nstation 99 x y\nsun 3 4\n");
         assert_eq!(sun, vec![(1, 2), (3, 4)]);
-        assert_eq!(st, vec![String::new(), String::new(), "http://x/lush".into()]);
+        assert_eq!(st, vec![String::new(), String::new(), "http://example.org/lush".into()]);
         let d = std::env::temp_dir().join(format!("classic-state-{}", std::process::id()));
         std::fs::create_dir_all(&d).unwrap();
+        save_time(&d.join("t"), 1793178706);
+        // Written whole, by a rename: nothing is left beside it.
+        assert!(!d.join("t.tmp").exists());
+        // A stale temporary file, even a link, is replaced, not followed.
+        std::os::unix::fs::symlink(d.join("elsewhere"), d.join("t.tmp")).unwrap();
+        save_time(&d.join("t"), 5);
+        assert_eq!(read_time(&d.join("t")), 5);
+        assert!(!d.join("elsewhere").exists());
         save_time(&d.join("t"), 1793178706);
         assert_eq!(read_time(&d.join("t")), 1793178706);
         assert_eq!(read_time(&d.join("missing")), 0);

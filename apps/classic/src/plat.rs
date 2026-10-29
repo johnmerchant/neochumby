@@ -27,8 +27,6 @@ pub trait Plat {
     /// Plays a stream at a volume (0-100), or stops (None).
     fn music(&mut self, url: Option<&str>, vol: i32);
     fn volume(&mut self, vol: i32);
-    /// On exit, so the Chumby's own software starts clean.
-    fn music_quit(&mut self);
     /// Where a setting persists (`wx_music` and so on).
     fn state_path(&self, name: &str) -> PathBuf;
     /// Monotonic time, in microseconds.
