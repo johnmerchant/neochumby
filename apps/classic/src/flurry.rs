@@ -328,9 +328,11 @@ pub struct Options {
 
 /// The most puffs released a second over all a scene's streams, unless a
 /// `rate=` says otherwise: the classic preset's 5 x 60. A preset with more
-/// streams releases fewer from each, each brighter, to keep the Chumby at
-/// its frame rate (measured on one: 25 fps at about half its CPU).
-pub const RELEASES: i32 = 300;
+/// streams, or thicker ones, releases fewer from each, each brighter, to
+/// keep the Chumby at its frame rate (measured on one: classic at 25 fps in
+/// about half its CPU). A stream counts as 1 + thickness / 20000 of one:
+/// its puffs are that much wider, on average over their lives.
+pub const RELEASES: i64 = 300;
 
 impl Default for Options {
     fn default() -> Options {
@@ -387,8 +389,10 @@ impl Options {
 
     /// Puffs a second per stream, for these flurries.
     pub fn rate_for(&self, specs: &[Spec]) -> i32 {
-        let streams: usize = specs.iter().map(|s| s.streams).sum();
-        self.rate.unwrap_or((RELEASES / streams.max(1) as i32).clamp(20, 60))
+        let weight: i64 = specs.iter().map(|s| s.streams as i64 * (20000 + s.thickness.max(0) as i64)).sum();
+        let w = weight.max(1);
+        let auto = ((RELEASES * 20000 + w - 1) / w).clamp(15, 60) as i32;
+        self.rate.unwrap_or(auto)
     }
 
     /// The flurries to run, for a scene seeded with `seed`.
@@ -1273,6 +1277,15 @@ mod tests {
                 assert!((got - want).abs() <= want * 0.002 + 1.0, "r {r} ks {ks}: {got} want {want}");
             }
         }
+    }
+
+    #[test]
+    fn release_rates() {
+        let o = Options::default();
+        let rate = |p: &str| o.rate_for(PRESETS.iter().find(|(n, _)| *n == p).unwrap().1);
+        assert_eq!(rate("classic"), 60, "the original's own");
+        assert_eq!((rate("psychedelic"), rate("rgb"), rate("water"), rate("fire")), (30, 34, 34, 17));
+        assert_eq!(Options { rate: Some(45), ..o }.rate_for(PRESETS[3].1), 45);
     }
 
     #[test]
