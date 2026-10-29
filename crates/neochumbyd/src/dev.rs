@@ -239,7 +239,7 @@ pub fn run(api: &Api, name: &str, mut s: Session) -> io::Result<()> {
     let mut shot: Option<(Instant, Option<ShotIn>)> = None;
     // A tap or button sent and not yet answered: by when it must be.
     let mut input: Option<Instant> = None;
-    log.append(&format!("-- neochumbyd: {name} connected"))?;
+    log.append(&format!("-- neochumbyd: {name} connected, protocol version {}", s.version()))?;
 
     while api.links.current(name, id) && api.state.paired(s.peer()).as_deref() == Some(name) {
         match s.recv_timeout(TICK)? {
@@ -703,7 +703,8 @@ mod tests {
         assert_eq!(
             kept,
             [
-                "-- neochumbyd: den connected",
+                // A Chumby from before versions: version 0.
+                "-- neochumbyd: den connected, protocol version 0",
                 "neochumby: opening home",
                 "?[2Jboo",
                 "-- neochumbyd: restart asked",
