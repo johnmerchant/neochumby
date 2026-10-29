@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Automated end-to-end test for the NANDLESS recovery path.
+"""Automated end-to-end test for the sideload recovery path.
 
-Boots the NANDLESS zImage directly (no sideloader, no marker) with a
+Boots the sideload zImage directly (no sideloader, no marker) with a
 synthetic zeroed NAND image.  The built-in initramfs must see no
 `neochumby.sideloaded=1` marker, load the NAND modules, and print
 `/proc/mtd` and `/dev/mtdblock0`.
@@ -25,7 +25,7 @@ def env(name, default=None):
 
 def main():
     qemu = env("QEMU", "qemu-system-arm")
-    kernel = env("KERNEL", os.path.normpath(os.path.join(HERE, "..", "..", "build", "nandless-zImage")))
+    kernel = env("KERNEL", os.path.normpath(os.path.join(HERE, "..", "..", "build", "sideload-zImage")))
     work = env("WORK", os.path.join(HERE, "build", "recovery-demo"))
     timeout = int(env("TIMEOUT", "120"))
     os.makedirs(work, exist_ok=True)
@@ -38,24 +38,24 @@ def main():
         os.unlink(log_path)
 
     if not os.path.exists(kernel):
-        sys.exit(f"{kernel}: no NANDLESS zImage (run dist/build first)")
+        sys.exit(f"{kernel}: no sideload zImage (run dist/build first)")
     qemu_args = [
         qemu, "-M", "chumby-classic", "-kernel", kernel,
         "-drive", f"if=mtd,file={nand},format=raw,snapshot=on",
         "-snapshot", "-display", "none", "-no-reboot", "-monitor", "none",
         "-serial", f"file:{log_path}",
-        "-append", "console=ttymxc0,115200 rdinit=/init",
+        "-append", "console=ttymxc0,115200 rdinit=/init loglevel=7",
         "-icount", "shift=auto,sleep=off",
     ]
     p = subprocess.Popen(qemu_args, stdout=subprocess.DEVNULL, stderr=subprocess.STDOUT)
     checks = [
-        (b"NANDLESS: no sideload marker; this kernel was flashed", "no marker -> flashed"),
-        (b"NANDLESS: loading the NAND recovery modules", "NAND modules loaded"),
-        (b"5.9.16-mx21-nandless", "NANDLESS kernel version"),
-        (b"mtd0:", "/proc/mtd has mtd0"),
-        (b"/dev/mtdblock0", "/dev/mtdblock0 exists"),
-        (b"mxc_nand", "mxc_nand module is live"),
-        (b"### NANDLESS: starting shell ###", "recovery shell started"),
+        (b"init: no sideload marker; this kernel was flashed", "no marker -> flashed"),
+        (b"init: loading the NAND recovery modules", "NAND modules loaded"),
+        (b"5.9.16-mx21-sideload", "sideload kernel version"),
+        (b"init: /proc/mtd: mtd0:", "/proc/mtd has mtd0"),
+        (b"init: /dev/mtdblock0", "/dev/mtdblock0 exists"),
+        (b"init: module mxc_nand loaded", "mxc_nand module is live"),
+        (b"init: starting shell", "recovery shell started"),
     ]
     ok = False
     deadline = time.time() + timeout
@@ -83,7 +83,7 @@ def main():
         if marker not in text:
             print(f"ERROR: recovery check failed: {what}", file=sys.stderr)
             ok = False
-    print(f"NANDLESS recovery demo: {'PASS' if ok else 'FAIL'}")
+    print(f"sideload recovery demo: {'PASS' if ok else 'FAIL'}")
     print(f"log: {log_path}")
     return 0 if ok else 1
 

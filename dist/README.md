@@ -1,4 +1,4 @@
-# dist: neochumby's NANDLESS userspace on mainline Linux
+# dist: neochumby's sideload userspace on mainline Linux
 
 A [Buildroot](https://buildroot.org) external tree (`BR2_EXTERNAL`) for a
 Chumby Classic on Linux 5.9.16, the last release with the i.MX21's board
@@ -6,7 +6,7 @@ files. userhook2 kexecs into it from the stock 2.6.16, so nothing on the
 Chumby changes: a reboot goes back to the stock firmware, which kexecs
 again.
 
-**NANDLESS.**  The kernel has no NAND driver built in.  The NAND drivers are
+**sideload.**  The kernel has no NAND driver built in.  The NAND drivers are
 modules in the initramfs, and `/init` loads them only when the kernel was
 booted without the sideloader's `neochumby.sideloaded=1` marker — that is,
 when the image was flashed instead of handed off.  A normal sideload never
@@ -19,13 +19,13 @@ mistaken flash is recoverable.  Root can still load them deliberately; the
 normal init policy does not.
 
 ```
-dist/build OUT        # OUT/nandless-zImage and OUT/nandless-rootfs.cpio.gz
+dist/build OUT        # OUT/sideload-zImage and OUT/sideload-rootfs.cpio.gz
 ```
 
-`nandless-zImage` has the initramfs built in, so it boots when flashed and is
-what the sideloader hands off.  `nandless-rootfs.cpio.gz` is the same
+`sideload-zImage` has the initramfs built in, so it boots when flashed and is
+what the sideloader hands off.  `sideload-rootfs.cpio.gz` is the same
 initramfs beside it, for userhook2 or another kexec path.  Both carry the
-`NANDLESS` label; `uname -r` reports `5.9.16-mx21-nandless`.
+`sideload` label; `uname -r` reports `5.9.16-mx21-sideload`.
 
 It runs Buildroot (2026.02.3, pinned with its hash) in a container: Apple's
 container, docker or podman. The first build makes the cross toolchain
@@ -36,7 +36,7 @@ uses it to cache the work.
 
 ## CI
 
-CI's `nandless` job (`.github/workflows/ci.yml`) builds the custom QEMU and
+CI's `sideload` job (`.github/workflows/ci.yml`) builds the custom QEMU and
 this image, then runs `run-recovery-demo.py` with a zeroed NAND image.  It
 runs on changes under `dist/`, `tools/neochumby-kernel-sideloader/` or
 `emu/qemu/`, and on `workflow_dispatch`, and is skipped otherwise.  QEMU and
@@ -47,8 +47,8 @@ own stock firmware, so it stays local (`run-demo.py`).
 | Path | What |
 | --- | --- |
 | `configs/chumby_classic_defconfig` | The Buildroot configuration |
-| `board/chumby-classic/linux.fragment` | Our NANDLESS kernel options on top of `imx_v4_v5_defconfig`. `dist/build` fails if any of them didn't make it into the kernel |
-| `board/chumby-classic/rootfs/init` | The NANDLESS init: checks the sideload marker, loads the NAND modules only when it is absent |
+| `board/chumby-classic/linux.fragment` | Our sideload kernel options on top of `imx_v4_v5_defconfig`. `dist/build` fails if any of them didn't make it into the kernel |
+| `board/chumby-classic/rootfs/init` | The sideload init: checks the sideload marker, loads the NAND modules only when it is absent |
 | `patches/` | The kernel tarball's hash. Buildroot checks every download |
 | `Containerfile` | The build's Linux |
 
