@@ -12,14 +12,15 @@
 //!   and the speaker is given up, and once the speaker is free again the
 //!   stream starts again by itself.
 //! - **MUTE** on the start app reaches this service as `pause` and `resume`
-//!   lines (store.rs keeps what they did).
+//!   notices (`neochumby::session::Notice`), which the device's loop turns
+//!   into the storage (store.rs keeps what they did).
 //!
 //! The state machine is classic's (neochumby-classic's svc::Player), moved
 //! here with the music: the stream is the session's to stop now, so it
 //! needs no record of its own for a killed run. The device's side is
 //! behind [`Effects`], so all of it is tested on a host.
 
-use crate::store::{Settings, Store};
+use crate::store::Settings;
 
 /// How often the storage is looked at, in ms.
 pub const POLL_MS: u32 = 500;
@@ -159,17 +160,6 @@ impl Player {
 /// `volume`, while it's on.
 pub fn wants(s: &Settings) -> Option<(&'static str, u32)> {
     s.on.then(|| crate::stations::url(s.station)).flatten().map(|u| (u, s.volume))
-}
-
-/// A line from the session: `pause` and `resume` (MUTE) change the
-/// storage; anything else is someone else's (`front <app>` is logged by
-/// the caller).
-pub fn control(line: &str, store: &Store) {
-    match line {
-        "pause" => store.pause(),
-        "resume" => store.resume(),
-        _ => {}
-    }
 }
 
 #[cfg(test)]
@@ -314,7 +304,7 @@ mod tests {
         let d = std::env::temp_dir().join(format!("somafm-player-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
-        let store = Store::new(d.clone(), crate::stations::all().len());
+        let store = crate::store::Store::new(d.clone(), crate::stations::all().len());
         let mut fx = Log { free: true, ..Log::default() };
         let mut p = Player::new(&mut fx);
         let step = |p: &mut Player, fx: &mut Log| p.step(fx, wants(&store.load()), 0);
@@ -326,11 +316,10 @@ mod tests {
         step(&mut p, &mut fx);
         assert_eq!(fx.take(), ["take 40", "play http://ice6.somafm.com/deepspaceone-128-mp3"]);
         // MUTE: paused, then playing again.
-        control("front doom", &store);
-        control("pause", &store);
+        store.pause();
         step(&mut p, &mut fx);
         assert_eq!(fx.take(), ["play off", "release"]);
-        control("resume", &store);
+        store.resume();
         step(&mut p, &mut fx);
         assert_eq!(fx.take(), ["take 40", "play http://ice6.somafm.com/deepspaceone-128-mp3"]);
         std::fs::remove_dir_all(&d).unwrap();

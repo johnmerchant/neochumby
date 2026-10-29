@@ -173,10 +173,12 @@ pub fn service() -> i32 {
         if let Some(p) = &mut pipe {
             let r = p.receive();
             for l in &r.lines {
-                if let Some(Notice::Front(app)) = Notice::parse(l) {
-                    eprintln!("{ME}: {app} in front");
-                } else if let Some(s) = &store {
-                    player::control(l, s);
+                match (Notice::parse(l), &store) {
+                    (Some(Notice::Front(app)), _) => eprintln!("{ME}: {app} in front"),
+                    // MUTE on the start app, relayed by the session.
+                    (Some(Notice::Pause), Some(s)) => s.pause(),
+                    (Some(Notice::Resume), Some(s)) => s.resume(),
+                    _ => {}
                 }
             }
             if r.closed {

@@ -31,13 +31,12 @@ neochumby-sys.workspace = true
 # A music app: the start app's MUSIC opens it, and MUTE pauses its service.
 # Services may replace it in front (an alarm), so `interrupt` is left as it
 # is.
-# TODO(#54): `music = true` once #54 (the key) and #56 (`storage`, `play`)
-# are both in: neochumby-manifest refuses a key it doesn't know.
 [package.metadata.neochumby]
 title = "SOMAFM"
 exec = "neochumby-somafm"
 service = "neochumby-somafm-service"
 colour = "c8462e"
+music = true
 access = ["screen", "touch", "speaker", "storage"]
 
 [lints]
