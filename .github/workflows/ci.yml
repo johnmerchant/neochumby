@@ -127,10 +127,10 @@ jobs:
           sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools busybox-static
           sudo dev/e2e "$RUNNER_TEMP/tree" target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/e2e"
 
-  # Whether this run needs the sideload and classic jobs: only when what
-  # they build changed, on demand, or when there's nothing to compare with
-  # (a new branch's first push). A skipped job passes, as a required check
-  # too.
+  # Whether this run needs the sideload job, and the classic job's tests:
+  # only when what they build changed, on demand, or when there's nothing
+  # to compare with (a new branch's first push). A skipped job passes, as a
+  # required check too.
   changes:
     name: What changed
     runs-on: ubuntu-latest
@@ -263,23 +263,96 @@ jobs:
           python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
 
   # The open-source 2.6.16 image (classic/): Chumby's GPL kernel and our
-  # BusyBox initramfs, built and booted on the chumby-classic machine with
-  # its drivers and devices checked from QMP, then with a stick whose
-  # userhook2 the image must run. No proprietary firmware anywhere.
+  # BusyBox initramfs. Every run uploads it as the classic-image artifact,
+  # for other jobs to boot: from a cache of the image itself when its
+  # inputs haven't changed (seconds), else built. When they have changed
+  # (or the image wasn't cached), it's also booted on the chumby-classic
+  # machine, its drivers and devices checked from QMP, then with a stick
+  # whose userhook2 it must run. No proprietary firmware anywhere.
   classic:
-    name: Build the open-source 2.6.16 image and boot it
+    name: Open-source 2.6.16 image
     needs: changes
-    if: needs.changes.outputs.classic == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      # Only the submodules this job uses: QEMU's, and the kernel's at its
-      # pinned commit alone (classic/build fetches it; `update = none`
-      # keeps it out of the other jobs' checkouts).
+      # No submodules yet: QEMU's only if it's booted, and the kernel's at
+      # its pinned commit only if it's built (classic/build fetches it;
+      # `update = none` keeps it out of the other jobs' checkouts).
       - uses: actions/checkout@v4
-      - run: git submodule update --init emu/qemu/qemu-chumby
+
+      - name: Inputs of the image
+        id: inputs
+        run: echo "linux=$(git ls-files -s classic/linux | awk '{print $2}')" >> "$GITHUB_OUTPUT"
+
+      # The image alone (a few MB), for exactly these inputs.
+      - name: Restore the image
+        id: image-cache
+        uses: actions/cache/restore@v4
+        with:
+          path: build/classic
+          key: neochumby-classic-image-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**') }}
+
+      # classic/build's work (the toolchain, the downloads and the build
+      # trees), restored from the nearest earlier build whatever changed:
+      # the build checks its inputs and rebuilds what they touch.
+      - name: Restore the image's build
+        id: classic-cache
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/restore@v4
+        with:
+          path: ${{ runner.temp }}/neochumby-classic
+          key: neochumby-classic-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**') }}
+          restore-keys: neochumby-classic-
+
+      - name: Build the image
+        id: classic-build
+        if: steps.image-cache.outputs.cache-hit != 'true'
+        env:
+          NEOCHUMBY_CLASSIC_WORK: ${{ runner.temp }}/neochumby-classic
+        run: classic/build build/classic
+
+      # The container writes as root; the cache saves run as the runner.
+      - name: Make the build readable
+        if: always() && steps.image-cache.outputs.cache-hit != 'true'
+        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-classic" build/classic || true
+
+      - name: Save the image's build
+        if: always() && steps.image-cache.outputs.cache-hit != 'true' && steps.classic-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: ${{ runner.temp }}/neochumby-classic
+          key: ${{ steps.classic-cache.outputs.cache-primary-key }}
+
+      - name: Save the image
+        if: steps.classic-build.outcome == 'success'
+        uses: actions/cache/save@v4
+        with:
+          path: build/classic
+          key: ${{ steps.image-cache.outputs.cache-primary-key }}
+
+      # Uploaded before it's tested, so that a later job can use it: the
+      # tests below fail this job if it doesn't boot.
+      - uses: actions/upload-artifact@v4
+        with:
+          name: classic-image
+          path: build/classic/
+          if-no-files-found: error
+
+      - name: Whether to boot it
+        id: test
+        run: |
+          if [ "${{ needs.changes.outputs.classic }}" = true ] || [ "${{ steps.image-cache.outputs.cache-hit }}" != true ]; then
+            echo boot=true >> "$GITHUB_OUTPUT"
+          else
+            echo boot=false >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: QEMU's submodule
+        if: steps.test.outputs.boot == 'true'
+        run: git submodule update --init emu/qemu/qemu-chumby
 
       - name: QEMU build dependencies
+        if: steps.test.outputs.boot == 'true'
         run: |
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends \
@@ -290,72 +363,42 @@ jobs:
       # The same cache as the sideload job's QEMU.
       - name: Restore QEMU
         id: qemu-cache
+        if: steps.test.outputs.boot == 'true'
         uses: actions/cache/restore@v4
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
 
       - name: Build QEMU
-        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        if: steps.test.outputs.boot == 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         run: emu/qemu/build
 
       - name: Save QEMU
-        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        if: steps.test.outputs.boot == 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: emu/qemu/out
           key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
 
-      # classic/build's work (the toolchain, the downloads and the build
-      # trees), restored from the nearest earlier build whatever changed:
-      # the build checks its inputs and rebuilds what they touch.
-      - name: Inputs of the image
-        id: inputs
-        run: echo "linux=$(git ls-files -s classic/linux | awk '{print $2}')" >> "$GITHUB_OUTPUT"
-
-      - name: Restore the image's build
-        id: classic-cache
-        uses: actions/cache/restore@v4
-        with:
-          path: ${{ runner.temp }}/neochumby-classic
-          key: neochumby-classic-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**') }}
-          restore-keys: neochumby-classic-
-
-      - name: Build the image
-        id: classic-build
-        env:
-          NEOCHUMBY_CLASSIC_WORK: ${{ runner.temp }}/neochumby-classic
-        run: classic/build build/classic
-
-      # The container writes as root; the cache save runs as the runner.
-      - name: Make the build readable
-        if: always()
-        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-classic" || true
-
-      - name: Save the image's build
-        if: always() && steps.classic-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
-        with:
-          path: ${{ runner.temp }}/neochumby-classic
-          key: ${{ steps.classic-cache.outputs.cache-primary-key }}
-
       - name: Boot it
-        run: classic/boot-test emu/qemu/out/obj/qemu-system-arm build/classic/classic-zImage --log build/classic/console.log
+        if: steps.test.outputs.boot == 'true'
+        run: classic/boot-test emu/qemu/out/obj/qemu-system-arm build/classic/classic-zImage --log "$RUNNER_TEMP/console.log"
 
       # A stick as tools/stick lays one out, with a userhook2 that only
       # reports where it ran: the image's part of running a tree.
       - name: Boot it with a stick
+        if: steps.test.outputs.boot == 'true'
         run: |
           printf '#!/bin/sh\necho "hook: on $(uname -r), from $0"\nls /mnt/usb\n' > "$RUNNER_TEMP/userhook2"
           mkfs.vfat -C "$RUNNER_TEMP/stick.img" 16384
           mcopy -i "$RUNNER_TEMP/stick.img" "$RUNNER_TEMP/userhook2" ::userhook2
           classic/boot-test emu/qemu/out/obj/qemu-system-arm build/classic/classic-zImage \
             --stick "$RUNNER_TEMP/stick.img" --want 'hook: on 2.6.16-csb, from /mnt/usb/userhook2' \
-            --log build/classic/console-stick.log
+            --log "$RUNNER_TEMP/console-stick.log"
 
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: failure() && steps.test.outputs.boot == 'true'
         with:
-          name: classic-image
-          path: build/classic/
+          name: classic-console
+          path: ${{ runner.temp }}/console*.log
           if-no-files-found: ignore

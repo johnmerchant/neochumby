@@ -103,13 +103,19 @@ runtime's doesn't answer.
 
 ## CI
 
-CI's `classic` job builds the image (its work cached), then runs
-`boot-test` twice: once bare, checking that the kernel is the stock
+CI's `classic` job runs on every push and uploads the image as the
+`classic-image` artifact (`classic-zImage`, `classic-rootfs.cpio.gz`,
+`classic-config`), for other jobs to boot. When its inputs haven't changed
+it comes from a cache of the image itself; otherwise it's built (the
+build's work cached too). When something under `classic/`, `emu/qemu/`
+or `.gitmodules` changed, on `workflow_dispatch`, or when the image wasn't
+cached, the job also runs `boot-test` twice: once bare, checking that the
+kernel is the stock
 release, that the modules are loaded and the built-in drivers probed, and
 that the devices answer to the machine's controls over QMP (`/dev/switch`
 to the button, `/proc/sys/sense1/hpin` to the headphones, `/dev/accel` to
 a tilt, `/dev/input/event0` to the pen, `/dev/fb0` to the screen as QEMU
 draws it, `/dev/dsp` to QEMU's audio output); and once with a stick whose
-`userhook2` must run from `/mnt/usb`. The image is
-uploaded as the `classic-image` artifact. It runs on changes under
-`classic/` or `emu/qemu/`, and on `workflow_dispatch`.
+`userhook2` must run from `/mnt/usb`. The artifact is uploaded before
+these tests, so a job that needs it can start as soon as it's there; a
+failed test still fails the job.
