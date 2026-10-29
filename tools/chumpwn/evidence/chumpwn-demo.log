@@ -1,0 +1,514 @@
+ArchID=0x00000353
+
+output_data: 0xc0184170
+
+Uncompressing Linux............................................................................................. done, booting the kernel.
+
+[    0.000000] Linux version 2.6.16-csb (builder@stormbuild) (gcc version 4.3.2 (Sourcery G++ Lite 2008q3-72) ) #1 Mon Nov 14 16:42:16 PST 2011
+
+[    0.000000] CPU: ARM926EJ-Sid(wb) [41069264] revision 4 (ARMv5TEJ)
+
+[    0.000000] Machine: Freescale MX21ADS
+
+[    0.000000] Memory policy: ECC disabled, Data cache writeback
+
+[    0.000000] CPU0: D VIVT write-through cache
+
+[    0.000000] CPU0: I cache: 4096 bytes, associativity 4, 32 byte lines, 32 sets
+
+[    0.000000] CPU0: D cache: 65536 bytes, associativity 4, 32 byte lines, 512 sets
+
+[    0.000000] Built 1 zonelists
+
+[    0.000000] Kernel command line: console=ttyS0,38400 root=/dev/mtdblock5 rootfstype=cramfs init=/linuxrc chumby_hwversion=3.8
+
+[    0.000000] Chumby hardware version (from kernel command line): 38
+
+[    0.000000] PID hash table entries: 512 (order: 9, 8192 bytes)
+
+[    0.000000] Console: colour dummy device 80x30
+
+[    0.000000] enabling PU's on UART3
+
+[    0.000000] Dentry cache hash table entries: 16384 (order: 4, 65536 bytes)
+
+[    0.000000] Inode-cache hash table entries: 8192 (order: 3, 32768 bytes)
+
+[    0.000000] Memory: 64MB = 64MB total
+
+[    0.000000] Memory: 61824KB available (2405K code, 511K data, 100K init)
+
+[    0.260000] Mount-cache hash table entries: 512
+
+[    0.260000] CPU: Testing write buffer coherency: ok
+
+[    0.260000] NET: Registered protocol family 16
+
+[    0.260000] Initializing system clocks
+
+[    0.260000] CSCR: 0x14010607
+
+[    0.260000] MPCTL0: 0x00191403
+
+[    0.260000] MPCTL1: 0x00008000
+
+[    0.260000] SPCTL0: 0x000c1407
+
+[    0.260000] SPCTL1: 0x00008000
+
+[    0.260000] OSC26MCTL: 0x00003f00
+
+[    0.260000] PCDR0: 0x5c160000
+
+[    0.260000] PCDR1: 0x04070a15
+
+[    0.260000] PCCR0: 0xffffffff
+
+[    0.260000] PCCR1: 0x6e000000
+
+[    0.260000] CCSR: 0x00000000
+
+[    0.260000] WKGDCTL: 0x00000000
+
+[    0.260000] mx21ads_init:290
+
+[    0.260000] ...usb
+
+[    0.260000] DDIR(1): 3E000000
+
+[    0.260000] OCR2(1): 00000000
+
+[    0.260000] ICONFA2(1): 00000000
+
+[    0.260000] GIUS(1): 00000000
+
+[    0.260000] PUEN(1): FA800000
+
+[    0.260000] GPR(1): 00000000
+
+[    0.260000] PUEN(3): 01F80000
+
+[    0.260000] PUEN(2): 00003F00
+
+[    0.260000] SCSI subsystem initialized
+
+[    0.260000] usbcore: registered new driver usbfs
+
+[    0.260000] usbcore: registered new driver hub
+
+[    0.260000] NetWinder Floating Point Emulator V0.97 (double precision)
+
+[    0.260000] JFFS2 version 2.2. (NAND) (SUMMARY)  (C) 2001-2003 Red Hat, Inc.
+
+[    0.260000] Initializing Cryptographic API
+
+[    0.260000] io scheduler noop registered
+
+[    0.260000] io scheduler anticipatory registered (default)
+
+[    0.260000] io scheduler deadline registered
+
+[    0.260000] io scheduler cfq registered
+
+[    0.260000] i.MX Framebuffer driver
+
+[    0.260000] imxfb_init_fbinfo
+
+[    0.260000] imxfbov_init_fbinfo
+
+[    0.260000] var->bits_per_pixel=16
+
+[    0.260000] RGBT length = 5:6:5:0
+
+[    0.260000] RGBT offset = 11:5:0:0
+
+[    0.260000] var->bits_per_pixel=16
+
+[    0.260000] RGBT length = 5:6:5:0
+
+[    0.260000] RGBT offset = 11:5:0:0
+
+[    0.260000] set_par
+
+[    0.260000] imxfb_activate_var!
+
+[    0.260000] var: xres=320 hslen=1 lm=15 rm=6
+
+[    0.260000] var: yres=240 vslen=1 um=9 bm=7
+
+[    0.260000] set_par
+
+[    0.260000] imxfbov_activate_var
+
+[    0.260000] Enabling LCD controller
+
+[    0.260000] LCDC register set:
+
+[    0.260000] LCDbase + 0x00: C3D40000
+
+[    0.260000] LCDbase + 0x04: 014000F0
+
+[    0.260000] LCDbase + 0x08: 000000A0
+
+[    0.260000] LCDbase + 0x0C: 00000000
+
+[    0.260000] LCDbase + 0x10: 00000000
+
+[    0.260000] LCDbase + 0x14: 00000000
+
+[    0.260000] LCDbase + 0x18: CAD80084
+
+[    0.260000] LCDbase + 0x1C: 0800133E
+
+[    0.260000] LCDbase + 0x20: 10001204
+
+[    0.260000] LCDbase + 0x24: 00000000
+
+[    0.260000] LCDbase + 0x28: 00000000
+
+[    0.260000] LCDbase + 0x2C: 00A903C0
+
+[    0.260000] LCDbase + 0x30: 00030008
+
+[    0.260000] LCDbase + 0x34: 00000000
+
+[    0.260000] LCDbase + 0x38: 00000000
+
+[    0.260000] LCDbase + 0x3C: 00000000
+
+[    0.260000] LCDbase + 0x40: 00000021
+
+[    0.260000] LCDbase + 0x44: 00000000
+
+[    0.260000] LCDbase + 0x48: 00000000
+
+[    0.260000] LCDbase + 0x4C: 00000000
+
+[    0.260000] LCDbase + 0x50: 00000000
+
+[    0.260000] LCDbase + 0x54: 014000F0
+
+[    0.260000] LCDbase + 0x58: 00000000
+
+[    0.260000] LCDbase + 0x5C: 00000000
+
+[    0.260000] LCDbase + 0x60: 00000000
+
+[    0.260000] LCDbase + 0x64: 00000000
+
+[    0.260000] Enabling LCD controller
+
+[    0.260000] imxfb_setup_gpio
+
+[    0.280000] Serial: IMX driver
+
+[    0.280000] imx-uart.0: ttyS0 at MMIO 0xa000 (irq = 20) is a IMX
+
+[    0.280000] imx-uart.1: ttyS1 at MMIO 0xb000 (irq = 19) is a IMX
+
+[    0.280000] imx-uart.2: ttyS2 at MMIO 0xc000 (irq = 18) is a IMX
+
+[    0.280000] RAMDISK driver initialized: 16 RAM disks of 8192K size 1024 blocksize
+
+[    0.280000] loop: loaded (max 8 devices)
+
+[    0.280000] SCSI Media Changer driver v0.25 
+
+[    0.280000] NFTL driver: nftlcore.c $Revision: 1.98 $, nftlmount.c $Revision: 1.41 $
+
+[    0.280000] MX2 NAND: 8-bit i/o mode
+
+[    0.280000] NAND device: Manufacturer ID: 0xad, Chip ID: 0x76 (Hynix NAND 64MiB 3,3V 8-bit)
+
+[    0.280000] Scanning device for bad blocks
+
+[    0.370000] Creating 8 MTD partitions on "mx21ads-nand":
+
+[    0.370000] 0x00000000-0x00100000 : "Boot Loader"
+
+[    0.370000] ftl_cs: FTL header not found.
+
+[    0.370000] 0x00100000-0x00300000 : "PSP"
+
+[    0.380000] ftl_cs: FTL header not found.
+
+[    0.380000] 0x00300000-0x00580000 : "Kernel2"
+
+[    0.380000] ftl_cs: FTL header not found.
+
+[    0.380000] 0x00580000-0x00d80000 : "Root Disk2"
+
+[    0.380000] ftl_cs: FTL header not found.
+
+[    0.380000] 0x00d80000-0x01080000 : "Kernel1"
+
+[    0.380000] ftl_cs: FTL header not found.
+
+[    0.380000] 0x01080000-0x02680000 : "Root Disk1"
+
+[    0.390000] ftl_cs: FTL header not found.
+
+[    0.390000] 0x02680000-0x03e80000 : "Cache"
+
+[    0.390000] ftl_cs: FTL header not found.
+
+[    0.390000] 0x03f80000-0x04000000 : "MSP"
+
+[    0.390000] ftl_cs: FTL header not found.
+
+[    0.390000] usbmon: debugfs is not available
+
+[    0.390000] imx21-hc imx21-hc.0: IMX21 USB Host Controller
+
+[    0.390000] imx21-hc imx21-hc.0: new USB bus registered, assigned bus number 1
+
+[    0.390000] imx21-hc imx21-hc.0: irq 55, io base 0x00000000
+
+[    0.390000] usb usb1: configuration #1 chosen from 1 choice
+
+[    0.390000] hub 1-0:1.0: USB hub found
+
+[    0.390000] hub 1-0:1.0: 3 ports detected
+
+[    0.500000] imx21_probe(): round robin USB ETD scheduling, immediate interrupts and one copy transfer.
+
+[    0.500000] Initializing USB Mass Storage driver...
+
+[    0.500000] usbcore: registered new driver usb-storage
+
+[    0.500000] USB Mass Storage support registered.
+
+[    0.500000] usbcore: registered new driver libusual
+
+[    0.500000] ts: Compaq touchscreen protocol output
+
+[    0.500000] i2c /dev entries driver
+
+[    0.500000] Advanced Linux Sound Architecture Driver Version 1.0.11rc2 (Wed Jan 04 08:57:20 2006 UTC).
+
+[    0.500000] ALSA device list:
+
+[    0.500000]   No soundcards found.
+
+[    0.500000] NET: Registered protocol family 2
+
+[    0.590000] IP route cache hash table entries: 1024 (order: 0, 4096 bytes)
+
+[    0.590000] TCP established hash table entries: 4096 (order: 2, 16384 bytes)
+
+[    0.590000] TCP bind hash table entries: 4096 (order: 2, 16384 bytes)
+
+[    0.590000] TCP: Hash tables configured (established 4096 bind 4096)
+
+[    0.590000] TCP reno registered
+
+[    0.590000] TCP bic registered
+
+[    0.590000] NET: Registered protocol family 1
+
+[    0.590000] NET: Registered protocol family 17
+
+[    0.590000] ieee80211: 802.11 data/management/control stack, git-1.1.7
+
+[    0.590000] ieee80211: Copyright (C) 2004-2005 Intel Corporation <jketreno@linux.intel.com>
+
+[    0.590000] cramfs with NAND flash bad block extensions.
+
+[    0.590000] Please remember to size your partitions with adequate margins for bad blocks.
+
+[    0.590000] cramfs_init_badblock: found start of cramfs at addr 0x0
+
+[    0.590000] VFS: Mounted root (cramfs filesystem) readonly.
+
+[    0.590000] Freeing init memory: 100K
+
+/linuxrc v0.41 $Rev: 662 $
+Parsing /etc/init.d/linuxrc.config
+Executing scripted actions (including 7 setenv statements)
+[MOUNT] proc (type proc) on /proc
+[MOUNT] sysfs (type sysfs) on /sys
+Scripted execution complete, 2 actions with 0 failures
+environ[0]: HOME=/
+environ[1]: TERM=linux
+Adding /psp/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/chumby/scripts
+[SETENV] CNPLATFORM=ironforge
+[SETENV] CONFIGNAME=ironforge
+[SETENV] VIDEO_RES=320x240
+[SETENV] VIDEO_X_RES=320
+[SETENV] VIDEO_Y_RES=240
+[SETENV] HAS_CP=1
+[SETENV] LANGUAGE=en_US
+Starting /sbin/init (cwd=/) (envcount=10)
+Chumby Rootdisk - RFS1 (ken@chumby.com)
+makedevs : 1.1.1.1 $
+makedevs: creating device nodes at /dev using mknod
+Alarm was set for 2147483647 seconds from now
+chumpwn rcS: start
+
+chumpwn: start uid=0
+chumpwn: dropped to uid=1000
+chumpwn: stock kernel 2.6.16-csb
+chumpwn: first trigger r=0
+chumpwn: uid after=0
+chumpwn: capget=0
+chumpwn: caps eff=0xffffffff
+chumpwn: caps permitted=0xffffffff
+chumpwn: caps inheritable=0xffffffff
+chumpwn: /dev/mem fd=3
+chumpwn: mmap src=0x02000000
+chumpwn: mmap initrd=0x02800000
+chumpwn: mmap atags=0x03f00000
+chumpwn: mmap stub=0x03f80000
+chumpwn: container kernel=4437768
+chumpwn: container initramfs=786974
+chumpwn: copied kernel and initramfs
+chumpwn: source container at 0xc2000000
+chumpwn: kernel bytes=4437768
+chumpwn: initramfs bytes=786974
+chumpwn: zImage magic=0x016f2818
+chumpwn: building ATAGS...
+chumpwn: ATAGS done
+chumpwn: stub bytes=92
+chumpwn: second trigger -> 0xc3f80000
+[    0.000000] Booting Linux on physical CPU 0x0
+[    0.000000] Linux version 5.9.16-mx21-nomtd (john@glados) (arm-none-eabi-gcc (GCC) 13.3.0, GNU ld (GNU Binutils) 2.43.1) #1 PREEMPT Thu Oct 29 19:23:06 ACDT 2026
+[    0.000000] CPU: ARM926EJ-S [41069264] revision 4 (ARMv5TEJ), cr=00053177
+[    0.000000] CPU: VIVT data cache, VIVT instruction cache
+[    0.000000] Machine: Freescale i.MX21ADS
+[    0.000000] Memory policy: Data cache writeback
+[    0.000000] Zone ranges:
+[    0.000000]   Normal   [mem 0x00000000c0000000-0x00000000c3ffffff]
+[    0.000000] Movable zone start for each node
+[    0.000000] Early memory node ranges
+[    0.000000]   node   0: [mem 0x00000000c0000000-0x00000000c3ffffff]
+[    0.000000] Initmem setup node 0 [mem 0x00000000c0000000-0x00000000c3ffffff]
+[    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 16256
+[    0.000000] Kernel command line: console=ttymxc0,115200 rdinit=/init
+[    0.000000] Dentry cache hash table entries: 8192 (order: 3, 32768 bytes, linear)
+[    0.000000] Inode-cache hash table entries: 4096 (order: 2, 16384 bytes, linear)
+[    0.000000] mem auto-init: stack:off, heap alloc:off, heap free:off
+[    0.000000] Memory: 54724K/65536K available (6962K kernel code, 547K rwdata, 1340K rodata, 252K init, 125K bss, 10812K reserved, 0K cma-reserved)
+[    0.000000] rcu: Preemptible hierarchical RCU implementation.
+[    0.000000] rcu: 	RCU event tracing is enabled.
+[    0.000000] 	Trampoline variant of Tasks RCU enabled.
+[    0.000000] rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.
+[    0.000000] NR_IRQS: 16, nr_irqs: 16, preallocated irqs: 16
+[    0.000000] MXC IRQ initialized
+[    0.000000] random: get_random_bytes called from start_kernel+0x30c/0x524 with crng_init=0
+[    0.000000] Switching to timer-based delay loop, resolution 82ns
+[    0.000010] sched_clock: 32 bits at 12MHz, resolution 82ns, wraps every 177611416534ns
+[    0.000042] clocksource: mxc_timer1: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 158074160411 ns
+[    0.000726] Console: colour dummy device 80x30
+[    0.000757] Calibrating delay loop (skipped), value calculated using timer frequency.. 24.18 BogoMIPS (lpj=120909)
+[    0.000780] pid_max: default: 32768 minimum: 301
+[    0.001022] Mount-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.001044] Mountpoint-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.001858] CPU: Testing write buffer coherency: ok
+[    0.002423] Setting up static identity map for 0xc0008400 - 0xc000847c
+[    0.002512] rcu: Hierarchical SRCU implementation.
+[    0.002770] devtmpfs: initialized
+[    0.004155] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604462750000 ns
+[    0.004175] futex hash table entries: 256 (order: -1, 3072 bytes, linear)
+[    0.004281] pinctrl core: initialized pinctrl subsystem
+[    0.005063] NET: Registered protocol family 16
+[    0.005388] DMA: preallocated 256 KiB pool for atomic coherent allocations
+[    0.035770] SCSI subsystem initialized
+[    0.036186] usbcore: registered new interface driver usbfs
+[    0.036242] usbcore: registered new interface driver hub
+[    0.036315] usbcore: registered new device driver usb
+[    0.036495] mc: Linux media interface: v0.10
+[    0.036550] videodev: Linux video capture interface: v2.00
+[    0.036620] pps_core: LinuxPPS API ver. 1 registered
+[    0.036634] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    0.036664] PTP clock support registered
+[    0.036959] Advanced Linux Sound Architecture Driver Initialized.
+[    0.037862] clocksource: Switched to clocksource mxc_timer1
+[    0.536765] NET: Registered protocol family 2
+[    0.537591] tcp_listen_portaddr_hash hash table entries: 512 (order: 0, 4096 bytes, linear)
+[    0.537633] TCP established hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.537683] TCP bind hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.537721] TCP: Hash tables configured (established 1024 bind 1024)
+[    0.537786] UDP hash table entries: 256 (order: 0, 4096 bytes, linear)
+[    0.537823] UDP-Lite hash table entries: 256 (order: 0, 4096 bytes, linear)
+[    0.538033] NET: Registered protocol family 1
+[    0.538421] RPC: Registered named UNIX socket transport module.
+[    0.538434] RPC: Registered udp transport module.
+[    0.538447] RPC: Registered tcp transport module.
+[    0.538460] RPC: Registered tcp NFSv4.1 backchannel transport module.
+[    0.538707] Unpacking initramfs...
+[    0.655078] Freeing initrd memory: 772K
+[    0.655913] workingset: timestamp_bits=30 max_order=14 bucket_order=0
+[    0.656801] io scheduler mq-deadline registered
+[    0.656814] io scheduler kyber registered
+[    0.657174] imx-fb imx21-fb.0: i.MX Framebuffer driver
+[    0.660247] Console: switching to colour frame buffer device 30x40
+[    0.662373] imx-fb imx21-fb.0: incomplete constraints, dummy supplies not allowed
+[    0.662912] Serial: 8250/16550 driver, 4 ports, IRQ sharing disabled
+[    0.664244] imx21-uart.0: ttymxc0 at MMIO 0x1000a000 (irq = 36, base_baud = 755681) is a IMX
+[    0.665204] printk: console [ttymxc0] enabled
+[    0.665581] imx21-uart.2: ttymxc2 at MMIO 0x1000c000 (irq = 34, base_baud = 755681) is a IMX
+[    0.665976] imx21-uart.3: ttymxc3 at MMIO 0x1000d000 (irq = 33, base_baud = 755681) is a IMX
+[    0.667508] libphy: Fixed MDIO Bus: probed
+[    0.668078] ehci_hcd: USB 2.0 'Enhanced' Host Controller (EHCI) Driver
+[    0.668098] ehci-mxc: Freescale On-Chip EHCI Host driver
+[    0.668211] usbcore: registered new interface driver usb-storage
+[    0.668561] udc-core: couldn't find an available UDC - added [g_ether] to list of pending drivers
+[    0.669053] Driver for 1-wire Dallas network protocol.
+[    0.669572] sdhci: Secure Digital Host Controller Interface driver
+[    0.669590] sdhci: Copyright(c) Pierre Ossman
+[    0.669606] sdhci-pltfm: SDHCI platform and OF driver helper
+[    0.669920] usbcore: registered new interface driver usbhid
+[    0.669937] usbhid: USB HID core driver
+[    0.670983] NET: Registered protocol family 17
+[    0.671217] oprofile: no performance counters
+[    0.671375] oprofile: using timer interrupt.
+[    0.671563] i.MX/MPC512x SDHC driver
+[    0.671714] mxc-mmc imx21-mmc.0: incomplete constraints, dummy supplies not allowed
+[    0.671744] mxc-mmc imx21-mmc.0: incomplete constraints, dummy supplies not allowed
+[    0.678000] mxc-mmc: probe of imx21-mmc.0 failed with error -2
+[    0.678878] ALSA device list:
+[    0.678893]   No soundcards found.
+[    0.680044] Freeing unused kernel memory: 252K
+[    0.680060] Kernel memory protection not selected by kernel config.
+[    0.680084] Run /init as init process
+
+### chumpwn: Linux 5.9.16 userspace reached ###
+Linux (none) 5.9.16-mx21-nomtd #1 PREEMPT Thu Oct 29 19:23:06 ACDT 2026 armv5tejl GNU/Linux
+--- /proc/version ---
+Linux version 5.9.16-mx21-nomtd (john@glados) (arm-none-eabi-gcc (GCC) 13.3.0, GNU ld (GNU Binutils) 2.43.1) #1 PREEMPT Thu Oct 29 19:23:06 ACDT 2026
+--- /proc/cmdline ---
+console=ttymxc0,115200 rdinit=/init
+--- /proc/mtd ---
+absent: no /proc/mtd
+--- /dev/mtd* ---
+absent: no /dev/mtd*
+--- dmesg | grep -i nand ---
+absent: no NAND in dmesg
+--- /sys/class/mtd ---
+absent: no /sys/class/mtd
+--- NAND platform devices ---
+absent: no NAND platform device
+### chumpwn: starting shell (replace this initramfs with your userspace) ###
+chumpwn# [   21.447871] random: fast init done
+[   31.207895] LCD: incomplete constraints, leaving on
+[  230.547972] random: crng init done
+uname -a
+Linux (none) 5.9.16-mx21-nomtd #1 PREEMPT Thu Oct 29 19:23:06 ACDT 2026 armv5tejl GNU/Linux
+chumpwn# cat /proc/version
+Linux version 5.9.16-mx21-nomtd (john@glados) (arm-none-eabi-gcc (GCC) 13.3.0, GNU ld (GNU Binutils) 2.43.1) #1 PREEMPT Thu Oct 29 19:23:06 ACDT 2026
+chumpwn# cat /proc/cmdline
+console=ttymxc0,115200 rdinit=/init
+chumpwn# cat /proc/mtd; echo MTD_RC=$?
+cat: can't open '/proc/mtd': No such file or directory
+MTD_RC=1
+chumpwn# ls -l /dev/mtd*; echo MTD_DEV_RC=$?
+ls: /dev/mtd*: No such file or directory
+MTD_DEV_RC=1
+chumpwn# dmesg | grep -i nand; echo NAND_GREP_RC=$?
+NAND_GREP_RC=1
+chumpwn# ls -l /sys/class/mtd; echo SYS_MTD_RC=$?
+ls: /sys/class/mtd: No such file or directory
+SYS_MTD_RC=1
+chumpwn# echo CHUMPWN_SHELL_OK
+CHUMPWN_SHELL_OK
+chumpwn# 
