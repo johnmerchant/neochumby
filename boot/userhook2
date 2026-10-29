@@ -1,4 +1,7 @@
 #!/bin/sh
+# neochumby-hook-version=1
+# (Raise it with every change: the session replaces an installed hook only
+# with a higher version, so a rollback to an older set never downgrades it.)
 # neochumby's boot hook. The same script goes in two places, and the stock
 # boot (/etc/init.d/rcS) runs both, in this order, once the network is up
 # and before the Chumby's own software starts:
@@ -7,8 +10,9 @@
 #   /psp/rfs1/userhook2    on a paired Chumby (pairing writes it)
 #
 # The first to run starts neochumby; the other sees that and returns. Apps
-# come from the stick's neochumby/ tree if it has one, otherwise from the
-# paired neochumbyd over NFS. The neochumbyd (the stick's neochumby.conf,
+# come from a set synced to the stick (delivery=sync, below) if there is a
+# complete one, else from the stick's neochumby/ tree if it has one,
+# otherwise from the paired neochumbyd over NFS. The neochumbyd (the stick's neochumby.conf,
 # else /psp/neochumby.conf) is passed on to the apps either way, for its
 # services. CHUMBY MODE, or any failure, returns and the stock boot carries
 # on.
@@ -77,16 +81,69 @@ if [ -n "$conf" ]; then
   echo "neochumbyd: ${server:-none} (from $conf)"
 fi
 
-if [ -x "$STICK/neochumby/neochumby" ]; then
+# delivery=sync (neochumby-sync): the stick's neochumby/ holds two whole
+# trees, a/ and b/, and `current` names the live one. Each set's marker,
+# <set>.complete, is written last and carries its manifest. A set runs only
+# if its marker is whole (its first and last lines are checked here) and
+# the set's own `neochumby check-set` finds every file the marker names, at
+# its size. Nothing is hashed at boot: the stick reads at under 1 MB/s.
+# `current` is not trusted alone, since a rename on FAT can tear: the other
+# set is tried next, and a flip cut short leaves current.new. check-set
+# runs the set's own session binary, so a set whose binary is damaged fails
+# too. Both sets share one 30-second budget for it, so a slow stick holds
+# up the boot by half a minute at most.
+SETS=$STICK/neochumby
+budget=30
+set_complete() {
+  m=$SETS/$1.complete
+  [ -f "$m" ] && [ -x "$SETS/$1/neochumby" ] || return 1
+  [ "$(sed -n 1p "$m")" = "neochumby-set 1" ] || return 1
+  [ -n "$(sed -n '$s/^end [0-9][0-9]* [0-9a-f]\{64\}$/ok/p' "$m")" ] || return 1
+  [ "$budget" -gt 0 ] || {
+    echo "no time left to check set $1"
+    return 1
+  }
+  n=0
+  deadline "$budget" "$SETS/$1/neochumby" check-set "$SETS/$1"
+  ok=$?
+  # deadline counted the seconds it waited in n.
+  budget=$((budget - n))
+  return $ok
+}
+
+root=
+# Only while this Chumby's settings, as its neochumbyd last sent them, say
+# sync: switched back to nfs, it mounts the tree again.
+if [ "$(conf_get /psp/neochumby.settings delivery 2>/dev/null)" = sync ]; then
+  cur=$(sed -n '1s/^\([ab]\)$/\1/p' "$SETS/current" 2>/dev/null)
+  [ -n "$cur" ] || cur=$(sed -n '1s/^\([ab]\)$/\1/p' "$SETS/current.new" 2>/dev/null)
+  case "$cur" in
+  b) sets="b a" ;;
+  *) sets="a b" ;;
+  esac
+  for s in $sets; do
+    if set_complete "$s"; then
+      root=$SETS/$s
+      echo "apps from the stick's set $s"
+      break
+    fi
+    echo "set $s: not complete"
+  done
+fi
+
+if [ -n "$root" ]; then
+  :
+elif [ -x "$STICK/neochumby/neochumby" ]; then
   root=$STICK/neochumby
   echo "apps from the stick"
 elif [ -n "$server" ]; then
   deadline 20 sh -c "until ping -c 1 $server >/dev/null 2>&1; do sleep 1; done" || exit 0
   mkdir -p "$MNT"
   # No port mapper (ports given), no lock manager (nolock), TCP; soft with
-  # short timeouts so a lost network fails reads instead of hanging.
+  # short timeouts so a lost network fails reads instead of hanging;
+  # nosuid,nodev: nothing in the tree hands out another uid, or a device.
   deadline 15 mount -t nfs \
-    -o "ro,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0" \
+    -o "ro,nosuid,nodev,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0" \
     "$server:${path:-/}" "$MNT" || {
     echo "mount failed"
     exit 0

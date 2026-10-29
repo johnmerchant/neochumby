@@ -4,14 +4,39 @@
 # What is already there and not in this tree (game data, other apps) is
 # left alone. rsync puts each file in under a temporary name and renames
 # them all at the end; a Chumby running a replaced binary is told its file
-# went stale, so stop what it runs first.
+# went stale, so stop what it runs first, or restart it: with --restart,
+# each Chumby NAMEd is asked over ssh (`neochumbyd restart NAME` on HOST) to
+# end its apps and start its session again from the new tree.
 #
-#   tools/deploy HOST [APP ...]    NEOCHUMBYD_DIR: default /var/lib/neochumbyd
+#   tools/deploy HOST [APP ...] [--restart NAME ...]
+#                                  NEOCHUMBYD_DIR: default /var/lib/neochumbyd
 #                                  (zig on PATH)
 set -eu
-host=${1:?usage: tools/deploy HOST [APP ...]}
+usage="usage: tools/deploy HOST [APP ...] [--restart NAME ...]"
+host=${1:?$usage}
 shift
 dir=${NEOCHUMBYD_DIR:-/var/lib/neochumbyd}
+
+# The APPs stay in "$@"; the NAMEs after --restart are collected apart.
+names=
+restart=
+n=$#
+while [ "$n" -gt 0 ]; do
+  a=$1
+  shift
+  n=$((n - 1))
+  if [ "$a" = --restart ]; then
+    restart=1
+  elif [ -n "$restart" ]; then
+    case $a in
+    *[!a-z0-9_-]* | '') echo "$usage: not a Chumby's name: $a" >&2 && exit 2 ;;
+    esac
+    names="$names $a"
+  else
+    set -- "$@" "$a"
+  fi
+done
+[ -n "$restart" ] && [ -z "$names" ] && echo "$usage" >&2 && exit 2
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 tmp=$(mktemp -d)
@@ -25,3 +50,9 @@ cp -p target/x86_64-unknown-linux-musl/release/neochumbyd "$tmp/"
 
 rsync -rlpt --delay-updates "$tmp/tree/" "$host:$dir/tree/"
 rsync -pt --delay-updates "$tmp/neochumbyd" "$host:$dir/neochumbyd"
+
+# A restarted daemon (a new binary) takes a few seconds before each Chumby
+# is back; neochumbyd restart waits for it.
+for name in $names; do
+  ssh "$host" "'$dir/neochumbyd' restart $name --state '$dir'"
+done

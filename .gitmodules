@@ -1,3 +1,36 @@
+[submodule "apps/fetch/third_party/fastfetch"]
+	path = apps/fetch/third_party/fastfetch
+	url = https://github.com/fastfetch-cli/fastfetch
+[submodule "apps/doom/third_party/doomgeneric"]
+	path = apps/doom/third_party/doomgeneric
+	url = https://github.com/ozkl/doomgeneric
+[submodule "apps/quake/third_party/quake"]
+	path = apps/quake/third_party/quake
+	url = https://github.com/id-Software/Quake
+[submodule "crates/neochumby-ncurses/third_party/ncurses"]
+	path = crates/neochumby-ncurses/third_party/ncurses
+	url = https://github.com/ThomasDickey/ncurses-snapshots
+[submodule "apps/htop/third_party/htop"]
+	path = apps/htop/third_party/htop
+	url = https://github.com/htop-dev/htop
+[submodule "apps/top/third_party/procps"]
+	path = apps/top/third_party/procps
+	url = https://gitlab.com/procps-ng/procps.git
+[submodule "apps/cmatrix/third_party/cmatrix"]
+	path = apps/cmatrix/third_party/cmatrix
+	url = https://github.com/abishekvashok/cmatrix
+[submodule "apps/tty-clock/third_party/tty-clock"]
+	path = apps/clock/third_party/tty-clock
+	url = https://github.com/xorg62/tty-clock
+[submodule "apps/bonsai/third_party/cbonsai"]
+	path = apps/bonsai/third_party/cbonsai
+	url = https://gitlab.com/jallbrit/cbonsai
+[submodule "apps/pipes/third_party/pipes-rs"]
+	path = apps/pipes/third_party/pipes-rs
+	url = https://github.com/dnorhoj/pipes-rs
+[submodule "apps/aquarium/third_party/asciiquarium-rs"]
+	path = apps/aquarium/third_party/asciiquarium-rs
+	url = https://github.com/cablehead/asciiquarium-rs
 [submodule "emu/qemu/qemu-chumby"]
 	path = emu/qemu/qemu-chumby
 	url = https://github.com/johnmerchant/qemu-chumby

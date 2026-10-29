@@ -1,6 +1,6 @@
 [package]
 name = "neochumby-home"
-description = "neochumby's home screen: the installed apps, pairing, the time, and back to the Chumby"
+description = "neochumby's app list: the installed apps, pairing, the time, and back to the Chumby"
 license = "MIT"
 version.workspace = true
 edition.workspace = true
@@ -12,7 +12,10 @@ neochumby-proto.workspace = true
 neochumby-sys.workspace = true
 
 [package.metadata.neochumby]
-home = "neochumby-home"
+exec = "neochumby-home"
+start = true
+# It pairs the Chumby (writing /psp) and lists every app in the tree.
+access = ["root"]
 
 [lints]
 workspace = true
