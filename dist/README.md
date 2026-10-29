@@ -29,10 +29,13 @@ initramfs beside it, for userhook2 or another kexec path.  Both carry the
 
 It runs Buildroot (2026.02.3, pinned with its hash) in a container: Apple's
 container, docker or podman. The first build makes the cross toolchain
-(gcc 13, static musl, ARM926EJ-S soft float) and takes a while, and later
-ones rebuild only what changed.  `NEOCHUMBY_DIST_WORK=DIR` keeps Buildroot's
-downloads and output in `DIR` instead of the `neochumby-dist` volume; CI
-uses it to cache the work.
+(gcc 13, static musl, ARM926EJ-S soft float) and takes a while; later ones
+rebuild only what changed, and compiles go through ccache. On an x86_64
+host (CI) it uses Bootlin's prebuilt armv5-eabi musl toolchain (gcc 14)
+instead, which Bootlin builds only for x86_64.
+`NEOCHUMBY_DIST_WORK=DIR` keeps Buildroot's work (`dl/`, `ccache/`,
+`output/`) in `DIR` instead of the `neochumby-dist` volume; CI uses it to
+cache the work.
 
 ## CI
 
