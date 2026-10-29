@@ -110,6 +110,8 @@ pub fn run(
         while let Ok(p) = rx.try_recv() {
             match p {
                 Progress::Code(code) => {
+                    // In the log too, for dev/emulate-pairing to compare.
+                    eprintln!("neochumby-home: pairing with {server}, showing {code}");
                     // Eight groups of four: four to a line.
                     let (first, second) = code.split_at(code.len().min(19));
                     let second = second.trim_start_matches('-');
@@ -128,6 +130,10 @@ pub fn run(
                     );
                 }
                 Progress::Done(r) => {
+                    match &r {
+                        Ok(()) => eprintln!("neochumby-home: paired with {server}"),
+                        Err(e) => eprintln!("neochumby-home: not paired: {e}"),
+                    }
                     let ok = r.is_ok();
                     let msg = match &r {
                         Ok(()) => "remove any stick, restart".to_string(),
