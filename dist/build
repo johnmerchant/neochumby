@@ -1,0 +1,82 @@
+#!/bin/sh
+# Builds the userspace a Chumby runs on mainline Linux, with Buildroot: a
+# zImage (5.9.16) and the initramfs beside it, which userhook2 kexecs
+# into, written to OUT:
+#
+#   OUT/zImage
+#   OUT/rootfs.cpio.gz
+#
+# Buildroot needs Linux, so this runs it in a container (dist/Containerfile)
+# with Apple's container, docker or podman (NEOCHUMBY_DIST_RUNTIME picks).
+# Its work (the download cache, the toolchain, the build) stays in a volume,
+# neochumby-dist, on the container's own disk: the kernel's tree has files
+# whose names differ only by case, which macOS's disk can't hold. A second
+# run rebuilds only what changed; `$runtime volume rm neochumby-dist` starts
+# over.
+#
+#   dist/build OUT
+set -eu
+VERSION=2026.02.3
+SHA256=5a59e7501b0b4ec52c41f4bfa79412320e0b37eae5f719605a258e8d0c6fc7fb
+
+# In the container: Buildroot itself, then the checks and the copy out.
+if [ "${1:-}" = --inside ]; then
+  root=$2
+  out=$3
+  br=/work/buildroot-$VERSION
+  if [ ! -d "$br" ]; then
+    wget -nv -O /work/br.tar.xz "https://buildroot.org/downloads/buildroot-$VERSION.tar.xz"
+    echo "$SHA256  /work/br.tar.xz" | sha256sum -c -
+    tar xJf /work/br.tar.xz -C /work
+    rm /work/br.tar.xz
+  fi
+  make -C "$br" O=/work/output BR2_EXTERNAL="$root/dist" chumby_classic_defconfig
+  make -C "$br" O=/work/output
+  # Kconfig drops an option whose dependencies aren't met, silently: every
+  # line of the fragment has to be in the kernel's .config as written.
+  # (A kernel from a tarball of our choosing builds in linux-custom.)
+  config=/work/output/build/linux-custom/.config
+  missing=0
+  grep -E '^(CONFIG_|# CONFIG_)' "$root/dist/board/chumby-classic/linux.fragment" |
+    while IFS= read -r line; do
+      grep -qxF "$line" "$config" || {
+        echo "dist/build: not in the kernel's .config: $line" >&2
+        exit 1
+      }
+    done || missing=1
+  mkdir -p "$out"
+  cp /work/output/images/zImage /work/output/images/rootfs.cpio.gz "$out/"
+  [ "$missing" = 0 ] || exit 1
+  exit 0
+fi
+
+out=${1:?usage: dist/build OUT}
+root=$(git rev-parse --show-toplevel)
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+runtime=${NEOCHUMBY_DIST_RUNTIME:-}
+if [ -z "$runtime" ]; then
+  for r in container docker podman; do
+    command -v "$r" >/dev/null && {
+      runtime=$r
+      break
+    }
+  done
+fi
+[ -n "$runtime" ] || {
+  echo "dist/build: needs Apple's container, docker or podman" >&2
+  exit 2
+}
+"$runtime" build -t neochumby-dist -f "$root/dist/Containerfile" "$root/dist"
+"$runtime" volume inspect neochumby-dist >/dev/null 2>&1 ||
+  "$runtime" volume create neochumby-dist >/dev/null
+# Apple's container gives a container 1 GB and 4 CPUs unless told.
+size=
+[ "$runtime" = container ] && size="-c 8 -m 8G"
+# A nameserver for the build's downloads, if the runtime's own doesn't
+# answer (seen with Apple's container): NEOCHUMBY_DIST_DNS=<ip>.
+dns=
+[ -n "${NEOCHUMBY_DIST_DNS:-}" ] && dns="--dns $NEOCHUMBY_DIST_DNS"
+# shellcheck disable=SC2086
+exec "$runtime" run --rm $size $dns -v neochumby-dist:/work -v "$root:$root" -v "$out:$out" \
+  neochumby-dist sh "$root/dist/build" --inside "$root" "$out"

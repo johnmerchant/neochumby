@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the stock 2.6.16 -> 5.9.16 chumpwn demo in QEMU and capture evidence.
+"""Run the stock 2.6.16 -> 5.9.16 kernel-sideloader demo in QEMU and capture evidence.
 
 The stock kernel still boots from NAND (it has no other boot path).  The
 5.9.16 zImage and initramfs are loaded from outside NAND by QEMU
@@ -31,9 +31,9 @@ def sha256(path):
             h.update(b)
     return h.hexdigest()
 
-# chumpwn must never open an MTD device.  The stock 2.6.16 stage reads NAND
-# to boot; the new OS has no MTD driver at all.  This static check catches a
-# regression in the executable before QEMU is started.
+# The sideloader must never open an MTD device.  The stock 2.6.16 stage reads
+# NAND to boot; the new OS has no MTD driver at all.  This static check catches
+# a regression in the executable before QEMU is started.
 MTD_STRINGS = (b"/dev/mtd", b"mtdblock", b"flash_erase", b"flashcp", b"nandwrite", b"mtd", b"nand")
 
 def assert_no_mtd_strings(path):
@@ -49,25 +49,25 @@ def main():
     stock = env("STOCK_ZIMAGE")
     nand_src = env("NAND_SRC")
     chumby_emu = env("CHUMBY_EMU", "chumby-emu")
-    chumpwn = env("CHUMPWN", os.path.join(HERE, "chumpwn"))
+    sideloader = env("SIDELOADER", os.path.join(HERE, "neochumby-kernel-sideloader"))
     payload = env("PAYLOAD", os.path.join(HERE, "build", "payload.bin"))
     work = env("WORK", os.path.join(HERE, "build", "demo"))
     os.makedirs(work, exist_ok=True)
 
     nand_before = sha256(nand_src)
-    assert_no_mtd_strings(chumpwn)
+    assert_no_mtd_strings(sideloader)
 
-    # A clean PSP tree: only chumpwn and the rcS hook.  This writes a
+    # A clean PSP tree: only the sideloader and the rcS hook.  This writes a
     # separate scratch NAND image (host-side image preparation); the
     # original is opened read-only and hashed before/after.
     psp_dir = os.path.join(work, "psp")
     os.makedirs(os.path.join(psp_dir, "rfs1"), exist_ok=True)
     rcS = (
         "#!/bin/sh\n"
-        "echo \"chumpwn rcS: start\"\n"
+        "echo \"sideloader rcS: start\"\n"
         "ifconfig lo 127.0.0.1 up\n"
-        f"{os.path.join('/psp', 'chumpwn')} --source 0xc2000000\n"
-        "echo \"chumpwn rcS: app returned $?\"\n"
+        f"{os.path.join('/psp', 'neochumby-kernel-sideloader')} --source 0xc2000000\n"
+        "echo \"sideloader rcS: app returned $?\"\n"
         "exec /bin/sh\n"
     )
     for token in ("mtd", "nand", "flash_erase", "flashcp", "nandwrite"):
@@ -76,9 +76,11 @@ def main():
     with open(os.path.join(psp_dir, "rfs1", "rcS"), "w") as f:
         f.write(rcS)
     os.chmod(os.path.join(psp_dir, "rfs1", "rcS"), 0o755)
-    with open(chumpwn, "rb") as src, open(os.path.join(psp_dir, "chumpwn"), "wb") as dst:
+    with open(sideloader, "rb") as src, open(
+        os.path.join(psp_dir, "neochumby-kernel-sideloader"), "wb"
+    ) as dst:
         dst.write(src.read())
-    os.chmod(os.path.join(psp_dir, "chumpwn"), 0o755)
+    os.chmod(os.path.join(psp_dir, "neochumby-kernel-sideloader"), 0o755)
     psp_jffs2 = os.path.join(work, "psp.jffs2")
     subprocess.run([chumby_emu, "mkpsp", psp_dir, psp_jffs2], check=True)
     scratch = os.path.join(work, "nand-scratch.img")
@@ -93,7 +95,7 @@ def main():
         os.unlink(sock_path)
     except FileNotFoundError:
         pass
-    log_path = env("LOG", os.path.join(work, "chumpwn-demo.log"))
+    log_path = env("LOG", os.path.join(work, "sideloader-demo.log"))
     log = open(log_path, "wb")
     qemu_args = [
         qemu, "-M", "chumby-classic", "-kernel", stock,
@@ -150,8 +152,8 @@ def main():
         s.sendall(b"\r")
         pump(0.6)
 
-    ok = wait_for(b"chumpwn# ", 120)
-    print("\nchumpwn: got 5.9.16 shell" if ok else "\nchumpwn: NO 5.9.16 SHELL", file=sys.stderr)
+    ok = wait_for(b"sideloader# ", 120)
+    print("\nsideloader: got 5.9.16 shell" if ok else "\nsideloader: NO 5.9.16 SHELL", file=sys.stderr)
     if ok:
         time.sleep(0.5)
         for cmd in [
@@ -162,7 +164,7 @@ def main():
             "ls -l /dev/mtd*; echo MTD_DEV_RC=$?",
             "dmesg | grep -i nand; echo NAND_GREP_RC=$?",
             "ls -l /sys/class/mtd; echo SYS_MTD_RC=$?",
-            "echo CHUMPWN_SHELL_OK",
+            "echo SIDELOADER_SHELL_OK",
         ]:
             send(cmd)
         pump(2)
@@ -173,7 +175,7 @@ def main():
             (b"MTD_DEV_RC=1", "no /dev/mtd*"),
             (b"NAND_GREP_RC=1", "no NAND in dmesg"),
             (b"SYS_MTD_RC=1", "no /sys/class/mtd"),
-            (b"CHUMPWN_SHELL_OK", "shell marker"),
+            (b"SIDELOADER_SHELL_OK", "shell marker"),
         ]
         for marker, what in guest_checks:
             if marker not in text:
@@ -189,7 +191,7 @@ def main():
 
     nand_after = sha256(nand_src)
     scratch_after = sha256(scratch)
-    print("\nchumpwn contains no MTD/NAND device strings (it opens only /dev/mem or user files)")
+    print("\nsideloader contains no MTD/NAND device strings (it opens only /dev/mem or user files)")
     print(f"original NAND before: {nand_before}")
     print(f"original NAND after:  {nand_after}")
     print(f"scratch NAND before:  {scratch_before}")
