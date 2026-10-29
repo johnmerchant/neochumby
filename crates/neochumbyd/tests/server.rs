@@ -17,12 +17,9 @@ use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
+use neochumby_proto::settings::key::START;
 use neochumby_proto::{Identity, Msg, Session};
 use neochumby_sys::process::{self, Signal};
-
-/// The setting that names the app a Chumby starts with. This test uses it
-/// only through this, so a rename is one line.
-const START: &str = "start";
 
 fn main() -> ExitCode {
     if let Some(home) = std::env::var_os("NEOCHUMBY_STATE") {
@@ -278,7 +275,10 @@ fn end_to_end() {
     let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby).unwrap();
     s.send(&Msg::Hello { name: "kitchen".into() }).unwrap();
     assert_eq!(s.recv().unwrap(), Msg::Welcome);
-    assert_eq!(s.recv().unwrap(), Msg::Config(vec![(START.into(), "wx".into())]));
+    match s.recv().unwrap() {
+        Msg::Config(pairs) => assert!(pairs.contains(&(START.into(), "wx".into())), "{pairs:?}"),
+        m => panic!("not its settings: {m:?}"),
+    }
     drop(s);
 
     // The command line sees the same.

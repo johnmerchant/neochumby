@@ -30,6 +30,7 @@ use std::net::SocketAddr;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 
+use neochumby_proto::settings::{self, Settings};
 use neochumby_proto::{Identity, PublicKey, hex, unhex_key, valid_name};
 
 /// What the owner may allow an app's server program: the admin socket,
@@ -298,7 +299,12 @@ impl State {
         Ok(())
     }
 
-    /// `name`'s settings, in the order they were set.
+    /// `name`'s settings, as sent to it.
+    pub fn settings(&self, name: &str) -> Settings {
+        Settings::from_pairs(self.config(name))
+    }
+
+    /// `name`'s settings as pairs, in the order they were set.
     pub fn config(&self, name: &str) -> Vec<(String, String)> {
         if !valid_name(name) {
             return Vec::new();
@@ -306,7 +312,7 @@ impl State {
         let s = std::fs::read_to_string(self.dir.join("config").join(name)).unwrap_or_default();
         s.lines()
             .filter_map(|l| l.split_once('='))
-            .filter(|(k, v)| valid_setting(k, v))
+            .filter(|(k, v)| settings::valid(k, v))
             .map(|(k, v)| (k.to_string(), v.to_string()))
             .collect()
     }
@@ -316,9 +322,9 @@ impl State {
         if !self.pairs()?.iter().any(|(n, _)| n == name) {
             return Err(bad("no Chumby paired under that name"));
         }
-        if !(value.is_empty() && valid_setting(key, "x")) && !valid_setting(key, value) {
-            return Err(bad("bad setting: keys are a-z and _, values A-Z a-z 0-9 . : / _ -"));
-        }
+        // An empty value removes the key, whatever it is.
+        let check = if value.is_empty() { Settings::check_key(key) } else { Settings::check(key, value) };
+        check.map_err(|e| bad(&e))?;
         let mut c = self.config(name);
         c.retain(|(k, _)| k != key);
         if !value.is_empty() {
@@ -337,15 +343,6 @@ fn random_token() -> io::Result<String> {
     let mut b = [0u8; 16];
     std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
     Ok(hex(&b))
-}
-
-/// A setting the Chumby will take: a short lower-case key, and a value of
-/// the characters its /psp files accept (neochumby::conf::valid_value).
-fn valid_setting(key: &str, value: &str) -> bool {
-    (1..=32).contains(&key.len())
-        && key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
-        && (1..=128).contains(&value.len())
-        && value.bytes().all(|b| b.is_ascii_alphanumeric() || b".:/_-".contains(&b))
 }
 
 #[cfg(test)]
@@ -371,6 +368,15 @@ mod tests {
         assert!(st.set("kitchen", "Home", "wx").is_err());
         assert!(st.set("kitchen", "start", "w x").is_err());
         assert!(st.set("kitchen", "start", "a\nb=c").is_err());
+        // Typed settings take only their own values.
+        assert!(st.set("kitchen", "delivery", "usb").is_err());
+        assert!(st.set("kitchen", "dev", "yes").is_err());
+        st.set("kitchen", "dev", "on").unwrap();
+        assert!(st.settings("kitchen").dev);
+        st.set("kitchen", "dev", "").unwrap();
+        // Keys of its own are an owner's to add.
+        st.set("kitchen", "theme", "dark").unwrap();
+        assert_eq!(st.settings("kitchen").other, [("theme".to_string(), "dark".to_string())]);
         assert!(st.config("../kitchen").is_empty());
         std::fs::remove_dir_all(&dir).unwrap();
     }

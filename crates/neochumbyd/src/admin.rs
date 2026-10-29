@@ -157,9 +157,7 @@ mod tests {
     use super::*;
     use neochumby_proto::Identity;
 
-    /// The setting that names the app a Chumby starts with. The tests use
-    /// it only through this, so a rename is one line.
-    const START: &str = "start";
+    use neochumby_proto::settings::key::{DELIVERY, DEV, START};
 
     fn temp_state(what: &str) -> (std::path::PathBuf, State) {
         let dir = std::env::temp_dir().join(format!("neochumbyd-admin-{what}-{}", std::process::id()));
@@ -187,12 +185,18 @@ mod tests {
         // Every change needs the token.
         assert_eq!(request(&st, &format!("set kitchen {START}=wx")), "error set: wrong number of words\n");
         assert_eq!(request(&st, &format!("set kitchen {START}=wx nope")), "error wrong token\n");
-        assert_eq!(request(&st, "set kitchen dev=on nope"), "error wrong token\n");
+        assert_eq!(request(&st, &format!("set kitchen {DEV}=on nope")), "error wrong token\n");
         assert_eq!(request(&st, "paired"), format!("paired kitchen {}\nok\n", hex(&key)));
         assert_eq!(request(&st, &format!("set kitchen {START}=wx {token}")), "ok\n");
-        assert_eq!(request(&st, &format!("set kitchen delivery=sync {token}")), "ok\n");
-        assert_eq!(request(&st, "paired"), format!("paired kitchen {} {START}=wx delivery=sync\nok\n", hex(&key)));
-        assert_eq!(request(&st, &format!("set kitchen delivery= {token}")), "ok\n");
+        assert_eq!(request(&st, &format!("set kitchen {DELIVERY}=sync {token}")), "ok\n");
+        assert_eq!(request(&st, "paired"), format!("paired kitchen {} {START}=wx {DELIVERY}=sync\nok\n", hex(&key)));
+        // Main's Settings::check, through State::set.
+        assert!(request(&st, &format!("set kitchen {DELIVERY}=carrier-pigeon {token}")).starts_with("error"));
+        assert!(
+            request(&st, &format!("set kitchen {START}=No.App {token}"))
+                .starts_with(&format!("error {START} names an app"))
+        );
+        assert_eq!(request(&st, &format!("set kitchen {DELIVERY}= {token}")), "ok\n");
         assert_eq!(request(&st, &format!("set kitchen {START} {token}")), "error set NAME KEY=VALUE TOKEN\n");
         assert!(request(&st, &format!("set kitchen {START}=a!b {token}")).starts_with("error"));
         assert!(request(&st, &format!("set lounge {START}=wx {token}")).starts_with("error no Chumby"));

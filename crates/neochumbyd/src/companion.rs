@@ -120,7 +120,8 @@ pub fn run(tree: &Path, state: &Path, confine: &Confine, chumby: &str, app: &str
                 return s.send(&Msg::Closed);
             }
         }
-        // ...and from the Chumby.
+        // ...and from the Chumby, which sends nothing else once open (a
+        // newer one's `Msg::Unknown` is skipped).
         if let Some(Msg::Data(d)) = s.recv_timeout(Duration::from_millis(10))?
             && let Some(stdin) = run.stdin.as_mut()
         {
