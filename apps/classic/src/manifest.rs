@@ -40,8 +40,9 @@
 //! A `flurry` page is drawn by flurry.rs over the whole screen, in place of
 //! its file (which must still be there: black, as the feeder writes it).
 //! Its words are flurry::Options::parse's: a preset (classic, rgb, water,
-//! fire, psychedelic or random) and `streams=`, `colour=`, `speed=`,
-//! `thickness=`, `bright=`, `seed=`, `puffs=`, `rate=`.
+//! fire, psychedelic or random) and `streams=`, `color=` (`colour=` is
+//! still read; `color=` wins), `speed=`, `thickness=`, `bright=`, `seed=`,
+//! `puffs=`, `rate=`.
 //!
 //! A line that doesn't parse, or names a file that is missing or the wrong
 //! size, is skipped. Pages are numbered in the order they come; the N in

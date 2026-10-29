@@ -357,12 +357,14 @@ fn parse_q8(t: &str) -> Option<i32> {
 }
 
 impl Options {
-    /// The words after `flurry PAGE`: `[PRESET] [streams=N] [colour=NAME]
+    /// The words after `flurry PAGE`: `[PRESET] [streams=N] [color=NAME]
     /// [speed=X] [thickness=N] [bright=X] [seed=N] [puffs=N] [rate=N]`. None (skip
     /// the line) for an unknown preset or a value out of range; an unknown
     /// key is ignored, so a later engine's options don't break this one.
+    /// `colour=` is still read, as in manifests, and `color=` wins over it.
     pub fn parse<'a>(words: impl Iterator<Item = &'a str>) -> Option<Options> {
         let mut o = Options::default();
+        let mut color = false;
         for (i, w) in words.enumerate() {
             let Some((k, v)) = w.split_once('=') else {
                 if i > 0 {
@@ -374,7 +376,16 @@ impl Options {
             let num = || v.parse::<i64>().ok().filter(|_| v.bytes().all(|b| b.is_ascii_digit()));
             match k {
                 "streams" => o.streams = Some(num().filter(|n| (1..=MAX_STREAMS as i64).contains(n))? as usize),
-                "colour" | "color" => o.colour = Some(Colour::parse(v)?),
+                "color" => {
+                    o.colour = Some(Colour::parse(v)?);
+                    color = true;
+                }
+                "colour" => {
+                    let c = Colour::parse(v)?;
+                    if !color {
+                        o.colour = Some(c);
+                    }
+                }
                 "speed" => o.speed = Some(parse_q8(v).filter(|s| *s <= 4 * 256)?),
                 "thickness" => o.thickness = Some(num().filter(|n| (1..=20000).contains(n))? as i32),
                 "bright" => o.bright = Some(parse_q8(v).filter(|b| (16..=4 * 256).contains(b))?),
@@ -1293,7 +1304,7 @@ mod tests {
         let p = |s: &str| Options::parse(s.split_whitespace());
         assert_eq!(p(""), Some(Options::default()));
         assert_eq!(p("classic").unwrap().specs(1), vec![spec(5, Colour::Tiedye, 100, 256)]);
-        let o = p("water streams=2 colour=rainbow speed=0.5 seed=7 later=1").unwrap();
+        let o = p("water streams=2 color=rainbow speed=0.5 seed=7 later=1").unwrap();
         assert_eq!(o.seed, Some(7));
         assert_eq!(o.specs(0).len(), 9);
         assert!(o.specs(0).iter().all(|s| s.streams == 2 && s.colour == Colour::Rainbow && s.speed == 128));
@@ -1301,7 +1312,12 @@ mod tests {
         assert_eq!(p("nonesuch"), None);
         assert_eq!(p("streams=0"), None);
         assert_eq!(p("streams=99"), None);
+        assert_eq!(p("color=plaid"), None);
         assert_eq!(p("colour=plaid"), None);
+        let colour = |s: &str| p(s).unwrap().colour;
+        assert_eq!(colour("colour=red"), Some(Colour::Red), "colour= is still read");
+        assert_eq!(colour("color=blue colour=red"), Some(Colour::Blue), "color= wins");
+        assert_eq!(colour("colour=red color=blue"), Some(Colour::Blue), "color= wins");
         assert_eq!(p("classic rgb"), None);
         assert_eq!(p("puffs=10"), None);
         assert_eq!(p("speed=-1"), None);
