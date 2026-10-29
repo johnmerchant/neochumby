@@ -1,13 +1,16 @@
 # Every push and pull request, on GitHub's own runners: formatting, lints
 # and tests on the host, and every binary built for both of its targets
 # (the Chumby's ARM926 and neochumbyd's x86_64). Noise (neochumby-proto's
-# `noise` feature) is neither built nor tested here.
+# `noise` feature) is neither built nor tested here. And, when the image,
+# the sideloader or the emulator changes (or on demand), the NANDLESS image
+# built and its recovery path tested.
 name: CI
 
 on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
 
 permissions:
   contents: read
@@ -114,3 +117,85 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools busybox-static
           sudo dev/e2e "$RUNNER_TEMP/tree" target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/e2e"
+
+  # Whether this run needs the NANDLESS job: only when what it builds
+  # changed, on demand, or when there's nothing to compare with (a new
+  # branch's first push). A skipped job passes, as a required check too.
+  changes:
+    name: What changed
+    runs-on: ubuntu-latest
+    outputs:
+      nandless: ${{ steps.diff.outputs.nandless }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: |
+          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+            || git diff --name-only "$BASE...$GITHUB_SHA" | grep -qE '^(dist/|tools/neochumby-kernel-sideloader/|emu/qemu/|\.github/workflows/ci\.yml$)'; then
+            echo nandless=true >> "$GITHUB_OUTPUT"
+          else
+            echo nandless=false >> "$GITHUB_OUTPUT"
+          fi
+
+  # The NANDLESS image and its recovery path: the custom QEMU and the
+  # Buildroot image built, then the self-contained recovery test run with a
+  # zeroed NAND image. The heaviest job, so it runs only when needed.
+  nandless:
+    name: Build NANDLESS image and test recovery
+    needs: changes
+    if: needs.changes.outputs.nandless == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+
+      # emu/qemu/qemu-chumby's build dependencies (its README has the list).
+      - name: QEMU build dependencies
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential python3 python3-venv ninja-build pkg-config \
+            libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
+            curl xz-utils patch
+
+      - name: Cache QEMU
+        id: qemu-cache
+        uses: actions/cache@v4
+        with:
+          path: emu/qemu/out
+          key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
+
+      - name: Build QEMU
+        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        run: emu/qemu/build
+
+      # Buildroot's downloads, toolchain and output.  A cold cache is slow;
+      # later runs rebuild only what changed.
+      - name: Cache Buildroot work
+        id: dist-cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/neochumby-dist
+          key: neochumby-dist-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+
+      - name: Build the NANDLESS image
+        env:
+          NEOCHUMBY_DIST_WORK: ${{ runner.temp }}/neochumby-dist
+        run: dist/build build/nandless-dist
+
+      - name: Recovery end-to-end
+        run: |
+          QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
+          KERNEL=$PWD/build/nandless-dist/nandless-zImage \
+          python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+
+      # The container writes as root; the cache save runs as the runner.
+      - name: Make the Buildroot cache readable
+        if: always()
+        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-dist" || true
