@@ -203,6 +203,8 @@ pub struct Session {
     code: String,
     /// Received and not yet a whole message.
     rbuf: Vec<u8>,
+    /// The protocol version agreed with the peer (crate::version).
+    version: u16,
 }
 
 impl Session {
@@ -222,7 +224,7 @@ impl Session {
             s.conn.complete_io(&mut s.sock)?;
         }
         let (peer, code) = finish(&s.conn)?;
-        Ok(Session { stream: Stream::Client(s), peer, code, rbuf: Vec::new() })
+        Ok(Session { stream: Stream::Client(s), peer, code, rbuf: Vec::new(), version: 0 })
     }
 
     /// neochumbyd's side.
@@ -239,7 +241,7 @@ impl Session {
             s.conn.complete_io(&mut s.sock)?;
         }
         let (peer, code) = finish(&s.conn)?;
-        Ok(Session { stream: Stream::Server(s), peer, code, rbuf: Vec::new() })
+        Ok(Session { stream: Stream::Server(s), peer, code, rbuf: Vec::new(), version: 0 })
     }
 
     /// The other side's public key, proven in the handshake.
@@ -260,14 +262,31 @@ impl Session {
         }
     }
 
+    /// The protocol version agreed with the peer: 0 until
+    /// [`crate::version`] has agreed on another.
+    pub fn version(&self) -> u16 {
+        self.version
+    }
+
+    pub(crate) fn set_version(&mut self, v: u16) {
+        self.version = v;
+    }
+
+    /// Sends `msg`, if the agreed version has it (else
+    /// [`io::ErrorKind::Unsupported`]).
     pub fn send(&mut self, msg: &Msg) -> io::Result<()> {
-        let body = msg.encode();
+        crate::version::sendable(msg, self.version)?;
+        self.send_body(&msg.encode())
+    }
+
+    /// Sends an encoded message as it is.
+    pub(crate) fn send_body(&mut self, body: &[u8]) -> io::Result<()> {
         if body.len() > MAX_MSG {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "message too long"));
         }
         let mut f = Vec::with_capacity(4 + body.len());
         f.extend_from_slice(&(body.len() as u32).to_be_bytes());
-        f.extend_from_slice(&body);
+        f.extend_from_slice(body);
         match &mut self.stream {
             Stream::Client(s) => s.write_all(&f).and_then(|_| s.flush()),
             Stream::Server(s) => s.write_all(&f).and_then(|_| s.flush()),

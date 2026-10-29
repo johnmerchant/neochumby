@@ -3,13 +3,13 @@
 //! host's logs as its owner lists them (neochumby_logs::config): it sends
 //! their names, then follows whichever the Chumby asks for, a file as
 //! `tail -f` would (from its last 64 KB, starting again if it is truncated
-//! or replaced) or a command's output, stopping the last. The frames are
-//! in lib.rs.
+//! or replaced) or a command's output, stopping the last. Its messages
+//! are lib.rs's [`Logs`].
 //!
 //! From the environment: NEOCHUMBY_CHUMBY and NEOCHUMBY_STATE
 //! (neochumbyd's). Exits when its stdin closes: the Chumby has gone.
 
-use std::io::{self, Read, Write};
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::Arc;
@@ -18,8 +18,9 @@ use std::sync::mpsc::{self, Sender};
 use std::time::Duration;
 
 use neochumby_logs::config::{self, Feed, Source};
-use neochumby_logs::frame as tag;
 use neochumby_logs::tail::Tail;
+use neochumby_logs::{FromCompanion, FromViewer, Logs};
+use neochumby_proto::channel::{self, OVERHEAD};
 use neochumby_proto::{frame, valid_name};
 
 /// How often a file is looked at for more.
@@ -129,19 +130,22 @@ fn run() -> io::Result<()> {
         if help.is_some() { vec!["setup"] } else { sources.iter().map(|s| s.name.as_str()).collect() };
     eprintln!("neochumby-logs: {} for {name}", names.join(", "));
 
-    let mut out = io::stdout().lock();
-    let mut f = vec![tag::SOURCES];
-    f.extend_from_slice(names.join("\n").as_bytes());
-    frame::write(&mut out, &f)?;
-    out.flush()?;
+    let (mut from_viewer, mut out) = channel::stdio::<Logs>();
+    out.send(&FromCompanion::Sources(names.iter().map(|n| n.to_string()).collect()))?;
 
     let (tx, rx) = mpsc::channel();
     let from_chumby = tx.clone();
     std::thread::spawn(move || {
-        let mut stdin = io::stdin().lock();
-        while let Ok(Some(f)) = frame::read(&mut stdin) {
-            if let [tag::SHOW, i] = f[..] {
-                let _ = from_chumby.send(Event::Show(i));
+        loop {
+            match from_viewer.recv() {
+                Ok(Some(FromViewer::Show(i))) => {
+                    let _ = from_chumby.send(Event::Show(i));
+                }
+                Ok(None) => break,
+                Err(e) => {
+                    eprintln!("neochumby-logs companion: from the Chumby: {e}");
+                    break;
+                }
             }
         }
         let _ = from_chumby.send(Event::Gone);
@@ -154,27 +158,21 @@ fn run() -> io::Result<()> {
             Ok(Event::Show(i)) => {
                 following = None;
                 n += 1;
-                frame::write(&mut out, &[tag::START, i])?;
+                out.send(&FromCompanion::Start(i))?;
                 if let Some(h) = &help {
-                    let mut f = vec![tag::TEXT];
-                    f.extend_from_slice(h.as_bytes());
-                    frame::write(&mut out, &f)?;
+                    out.send(&FromCompanion::Text(h.as_bytes().to_vec()))?;
                 } else if let Some(s) = sources.get(i as usize) {
                     following = Some(follow(s, n, &tx));
                 }
             }
             Ok(Event::Text(of, text)) if of == n && following.is_some() => {
-                for chunk in text.chunks(frame::MAX_FRAME - 1) {
-                    let mut f = Vec::with_capacity(1 + chunk.len());
-                    f.push(tag::TEXT);
-                    f.extend_from_slice(chunk);
-                    frame::write(&mut out, &f)?;
+                for chunk in text.chunks(frame::MAX_FRAME - OVERHEAD) {
+                    out.send(&FromCompanion::Text(chunk.to_vec()))?;
                 }
             }
             Ok(Event::Text(..)) => {}
             Ok(Event::Gone) | Err(_) => return Ok(()),
         }
-        out.flush()?;
     }
 }
 
