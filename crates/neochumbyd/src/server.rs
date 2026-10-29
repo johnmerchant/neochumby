@@ -88,7 +88,7 @@ pub fn start(tree: &Path, state_dir: &Path, state: &State, confine: &Confine) ->
         eprintln!("neochumbyd: server {app}: {plan}{pairing}");
         let listen = manifest_value(&tree.join("apps").join(&app), "listen").unwrap_or_default();
         let s = Server {
-            listen: listen.split_whitespace().filter_map(|p| p.parse().ok()).collect(),
+            listen: listen.split(',').filter_map(|p| p.trim().parse().ok()).collect(),
             home: state_dir.join("apps").join(&app),
             state: state.clone(),
             app,

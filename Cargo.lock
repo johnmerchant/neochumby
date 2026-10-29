@@ -1679,6 +1679,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-logs"
+version = "0.1.0"
+dependencies = [
+ "embedded-graphics",
+ "neochumby",
+ "neochumby-proto",
+ "neochumby-sys",
+]
+
+[[package]]
 name = "neochumby-macros"
 version = "0.1.0"
 dependencies = [

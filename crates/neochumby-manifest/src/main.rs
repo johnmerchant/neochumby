@@ -8,13 +8,13 @@
 //! Prints the manifest, or fails with what is wrong: a crate not named
 //! neochumby-<name>, no metadata, an unknown key, or a value of the wrong
 //! kind. Values are strings, except `start`, `button` and `interrupt`,
-//! which are true or false, and `listen`, a list of TCP ports, written
-//! space-separated. `neochumbyd` is
-//! `required` or `optional` (absent: the app never needs one), and an app
-//! with a `companion` must set it: only a neochumbyd runs companions. It is
-//! stated, not inferred from `companion`. `listen` is for a `server`
-//! program: the TCP ports it may bind. Nothing in the manifest gives an
-//! app access to neochumbyd's admin socket; only its owner does
+//! which are true or false, and the lists `access`, what the app reaches
+//! beyond its jail ([`ACCESS`]), and `listen`, the TCP ports a `server`
+//! program may bind, each written as one comma-separated value.
+//! `neochumbyd` is `required` or `optional` (absent: the app never needs
+//! one), and an app with a `companion` must set it: only a neochumbyd runs
+//! companions. It is stated, not inferred from `companion`. Nothing in the
+//! manifest gives an app neochumbyd's admin socket; only its owner does
 //! (`neochumbyd allow <app> pairing`).
 
 use std::process::ExitCode;
@@ -35,6 +35,7 @@ const KEYS: &[&str] = &[
     "start",
     "button",
     "interrupt",
+    "access",
 ];
 /// The keys among them that are true or false:
 /// - `start`: the app may be the start app;
@@ -42,9 +43,46 @@ const KEYS: &[&str] = &[
 /// - `interrupt`: false if no service may replace it in front.
 const FLAGS: &[&str] = &["start", "button", "interrupt"];
 
+/// What an app may list in `access`, as the session grants it (jail.rs);
+/// without it, an app has only its own directory and a /tmp of its own:
+/// - `screen`: /dev/fb0, for its `exec` (in front), never its service;
+/// - `touch`: the touchscreen and its calibration, likewise;
+/// - `speaker`: /dev/dsp and the speaker's handover; the mute and the
+///   volume are the session's, asked for over the request pipe;
+/// - `accel`: the accelerometer;
+/// - `system`: /proc, /sys and /etc, as the app's own user sees them;
+/// - `network`: the names it needs to look hosts up (/etc/resolv.conf and
+///   /etc/hosts); without it, the session ends an app it finds with an
+///   internet socket open;
+/// - `terminal`: /dev/ptmx and /dev/pts, for a pseudo-terminal
+///   (neochumby::term);
+/// - `logs`: the Chumby's logs, read-only: the session's, /tmp's *.log
+///   and /var/log's files;
+/// - `root`: no jail: it runs as root, as the session does. Listed alone.
+const ACCESS: &[&str] = &["screen", "touch", "speaker", "accel", "system", "network", "terminal", "logs", "root"];
+
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {
     !s.is_empty() && !s.contains(['\n', '\r', '='])
+}
+
+/// `access`'s list, checked, as one value.
+fn access(list: &[Value]) -> Result<String, String> {
+    let mut words: Vec<&str> = Vec::new();
+    for v in list {
+        match v.as_str() {
+            Some(w) if words.contains(&w) => return Err(format!("access: {w} twice")),
+            Some(w) if ACCESS.contains(&w) => words.push(w),
+            _ => return Err(format!("access: {v} is not one of {}", ACCESS.join(", "))),
+        }
+    }
+    if words.contains(&"root") && words.len() > 1 {
+        return Err("access: root is everything already; list it alone".into());
+    }
+    if words.is_empty() {
+        return Err("access: an empty list; leave it out".into());
+    }
+    Ok(words.join(","))
 }
 
 fn manifest(cargo_toml: &str) -> Result<String, String> {
@@ -67,9 +105,11 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
             (_, Value::Array(a)) if *key == "listen" => {
                 let ports = a.iter().map(|p| p.as_integer().filter(|p| (1..=65535).contains(p)));
                 let ports: Option<Vec<String>> = ports.map(|p| p.map(|p| p.to_string())).collect();
-                ports.ok_or("listen: a list of TCP ports, 1 to 65535")?.join(" ")
+                ports.ok_or("listen: a list of TCP ports, 1 to 65535")?.join(",")
             }
             (_, _) if *key == "listen" => return Err("listen: not a list".into()),
+            (false, Value::Array(a)) if *key == "access" => access(a)?,
+            (false, _) if *key == "access" => return Err("access: not a list of strings".into()),
             (false, Value::String(s)) => s.clone(),
             (false, _) => return Err(format!("{key}: not a string")),
             (true, Value::Boolean(b)) => b.to_string(),
@@ -146,7 +186,7 @@ mod tests {
             manifest("[package]\nname = \"neochumby-web\"\n[package.metadata.neochumby]\nserver = \"neochumby-web\"\n");
         assert_eq!(m.unwrap(), "server=neochumby-web\n");
         let m = manifest(&wrap("server = \"w\"\nlisten = [8080, 8443]"));
-        assert_eq!(m.unwrap(), "server=w\nlisten=8080 8443\n");
+        assert_eq!(m.unwrap(), "server=w\nlisten=8080,8443\n");
         // The owner grants pairing; an app can't take it.
         assert!(manifest(&wrap("server = \"w\"\naccess = [\"pairing\"]")).is_err());
         assert!(manifest(&wrap("server = \"w\"\nlisten = [0]")).is_err());
@@ -179,6 +219,16 @@ mod tests {
         assert_eq!(manifest(&wrap(r#"neochumbyd = "optional""#)).unwrap(), "neochumbyd=optional\n");
         let e = manifest(&wrap(r#"neochumbyd = "yes""#)).unwrap_err();
         assert!(e.contains(r#"not "required" or "optional""#), "{e}");
+    }
+
+    #[test]
+    fn access_is_a_list_of_what_the_session_grants() {
+        assert_eq!(manifest(&wrap(r#"access = ["screen", "touch"]"#)).unwrap(), "access=screen,touch\n");
+        assert_eq!(manifest(&wrap(r#"access = ["root"]"#)).unwrap(), "access=root\n");
+        for bad in [r#"access = "screen""#, r#"access = ["disk"]"#, r#"access = ["screen", "screen"]"#, "access = []"] {
+            assert!(manifest(&wrap(bad)).unwrap_err().starts_with("access:"), "{bad}");
+        }
+        assert!(manifest(&wrap(r#"access = ["root", "screen"]"#)).unwrap_err().contains("alone"));
     }
 
     #[test]

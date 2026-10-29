@@ -30,6 +30,10 @@ neochumby.workspace = true
 exec = "neochumby-classic"
 start = true
 service = "neochumby-classic-service"
+# Unjailed, as home is: the app and its service share /tmp/neochumby-classic,
+# and they set the backlight and the volume and keep state in /psp, which
+# no access word grants yet.
+access = ["root"]
 
 [lints]
 workspace = true
