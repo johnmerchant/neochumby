@@ -153,7 +153,7 @@ fn idle(c: &mut Canvas, np: &NowPlaying) {
     let (head, lines): (&str, &[&str]) = if !np.linked {
         (
             "Waiting for AirPlay",
-            &["This shows what the AIRPLAY", "app plays, once it and this", "Chumby's server answer."],
+            &["This shows what AirPlay plays,", "once the airplay app and this", "Chumby's server answer."],
         )
     } else {
         ("Ready for AirPlay", &["Play from an iPhone, iPad or Mac,", "and choose this Chumby", "as the speaker."])
