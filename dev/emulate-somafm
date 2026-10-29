@@ -117,7 +117,12 @@ emu wait log 'somafm asks to play http://ice6.somafm.com/lush-128-mp3' 10 || fai
 
 step "DONE: home, and the music plays on"
 tap 290 225
-emu wait log 'neochumby: opening neochumby-home' 10 || fail "DONE didn't go back to home"
+i=0
+until [ "$(count 'neochumby: opening home$')" = 2 ]; do
+  i=$((i + 1))
+  [ "$i" -lt 100 ] || fail "DONE didn't go back to home"
+  sleep 0.1
+done
 sleep 2
 [ "$(count 'somafm asks to stop playing')" = 1 ] || fail "the music stopped when the app left"
 [ "$(count 'neochumby: service somafm exited')" = 0 ] || fail "somafm's service exited"
