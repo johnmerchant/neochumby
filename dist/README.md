@@ -39,10 +39,10 @@ uses it to cache the work.
 `.github/workflows/nandless.yml` builds the custom QEMU and this image, then
 runs `run-recovery-demo.py` with a zeroed NAND image.  It runs on changes
 under `dist/`, `tools/neochumby-kernel-sideloader/` or `emu/qemu/`, and on
-`workflow_dispatch`.  QEMU and Buildroot build from scratch on the runner,
-so the job is slow; it is path-filtered rather than part of the main CI.  The
-sideloaded path still needs the user's own stock firmware, so it stays local
-(`run-demo.py`).
+`workflow_dispatch`.  QEMU and Buildroot work is cached; the first run is
+slow, and later runs rebuild only what changed.  The job is path-filtered
+rather than part of the main CI.  The sideloaded path still needs the user's
+own stock firmware, so it stays local (`run-demo.py`).
 
 | Path | What |
 | --- | --- |
