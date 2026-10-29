@@ -640,3 +640,75 @@ which has `sed` but no `sha256sum`, `printf`, `od` or `head -c`. Anything
 it can't do goes in the session binary as a subcommand, like `neochumby
 check-set`. Raise its `neochumby-hook-version` line with every change: the
 session replaces the hook installed in `/psp` only with a higher version.
+
+### Test on a Chumby, or an emulated one, and show it
+
+CI builds and unit-tests everything, but it can't tell whether a change
+works on a Chumby. So a pull request that changes what runs on the Chumby
+(`crates/neochumby`, `crates/neochumby-sys`, `apps/`, `boot/`) is
+approved only once its description, or a comment, shows it running. There
+are three ways, from quickest to most faithful:
+
+1. **`dev/emulate`** (user mode, on Linux, or a Linux VM on a Mac): your
+   tree's binaries against fake devices, on the PC's kernel. `sudo dev/e2e
+   TREE NEOCHUMBYD OUT` runs every scenario, as CI does, or drive it by
+   hand with `start`, `tap`, `button`, `shot` and `log`. Enough for most
+   app and session changes.
+2. **The emulator** (`emu/`, QEMU with the Chumby Classic machine): the
+   Chumby's stock 2.6.16 kernel and firmware, from **your own device's**
+   flash backup (`emu/README.md` says how to build the images; they never
+   leave your machine). Use it for anything that depends on the kernel,
+   the flash, FAT, the boot or the handover to the stock software:
+   `NEOCHUMBY_EMU_MACHINE=chumby-classic dev/e2e TREE NEOCHUMBYD OUT` runs
+   the same scenarios on it. CI can't, having no firmware (and it never
+   will), so this suite is yours to run locally, and its results are the
+   evidence.
+3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
+   `neochumbyd shot` (see [On a Chumby](#on-a-chumby)). Needed for what no
+   emulator models: timing, the touchscreen's noise, a USB stick's own
+   behaviour, power cuts.
+
+**The evidence to include:**
+- which of the three, and the commit you tested;
+- the commands you ran, and what they reported: `dev/e2e`'s
+  `OUT/summary.txt` (each scenario ok, skipped or FAILED), or a short log
+  excerpt showing the behaviour;
+- screenshots of **neochumby's** screens or your app's, as PNG, showing
+  the change.
+
+**Never attach:**
+- the stock software's screens or artwork (the control panel, the Chumby
+  logo or octopus, widgets), firmware, images, or anything from a
+  device's settings ([docs/legal.md](docs/legal.md));
+- anything that identifies you, your network or your device: addresses,
+  host and network names, Wi-Fi names, a device's name or serial. Cut
+  them from logs before pasting.
+
+If you couldn't test something (no Chumby, or a path no emulator covers
+yet), say which and why. A reviewer may run it on a Chumby for you.
+
+### Scenarios run everywhere
+
+The automated scenarios (`dev/emulate-smoke`, `dev/emulate-powercut`,
+`dev/emulate-classic`, and any you add to `dev/e2e`) use only `dev/emulate`'s verbs, `start`, `log`/`wait log`,
+`shot`, `tap`, `button` and `stop`, so the same scenario runs on user
+mode, on the emulator (`--machine chumby-classic`) and on a real Chumby
+(`--device NAME`, through `neochumbyd`; remote input needs that Chumby set
+`dev=on`). Write them so they pass on all three:
+
+1. **Assert on log lines** the session and apps print on purpose
+   (`opening home`, `escape: ending …`), not on timing or on the order of
+   unrelated lines. If a scenario needs to see something happen, print a
+   line for it.
+2. **Compare screenshots by regions of our own screens**, masking what
+   changes (the clock, time-dependent pictures). Never compare against, or
+   commit, the stock software's screens.
+3. **Wait with timeouts the backend scales**: user mode is fast, a real
+   Chumby and the emulator in real time are not.
+4. **What a backend can't do is skipped there, not failed**, with the
+   reason: remote input can't reach an app that holds the top button
+   itself (`button = true`), and there's no stick on the emulator until
+   it models USB.
+5. **Physical steps** (pull the power, plug in a stick) are prompts the
+   runner shows and waits on, checked from the log afterwards; they run
+   only with `--device` and someone there.
