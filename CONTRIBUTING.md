@@ -50,7 +50,7 @@ rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 # CMake 3.21 or later, for fetch
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
-tools/tree /tmp/tree doom quake airplay fetch htop top   # a whole tree, with apps
+tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 ```
 
 CI runs the same checks on every pull request. To run them yourself:
@@ -492,7 +492,8 @@ the app:
   and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
   stdin closes.
 
-`apps/airplay` is a worked example of both halves.
+`apps/airplay` is a worked example of both halves, and `apps/logs` one
+whose companion is optional.
 
 ## Files in the tree
 
