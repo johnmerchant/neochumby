@@ -153,6 +153,16 @@ pub fn root() -> PathBuf {
         .unwrap_or_else(|| "/mnt/neochumby".into())
 }
 
+/// This program's own binary, to run it again (on a terminal, say): /proc's
+/// link to it, else its absolute argv[0], as the session starts apps. A
+/// jail without `system` has no /proc.
+pub fn exe() -> Option<PathBuf> {
+    std::env::current_exe().ok().or_else(|| {
+        let p = PathBuf::from(std::env::args_os().next()?);
+        p.is_absolute().then_some(p)
+    })
+}
+
 /// Every app in the tree, in name order.
 pub fn all(root: &Path) -> Vec<App> {
     let mut dirs: Vec<PathBuf> =

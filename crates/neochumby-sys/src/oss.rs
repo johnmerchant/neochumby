@@ -32,11 +32,13 @@ impl Setting {
 const GETOSPACE: u32 = 0x8010_500c;
 
 /// The driver's playback buffer, in bytes: what is written and not yet
-/// played, and what can be written without blocking.
+/// played, what can be written without blocking, and the size of its
+/// fragments (a driver may play none of one until it is full).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Space {
     pub queued: usize,
     pub free: usize,
+    pub fragment: usize,
 }
 
 /// `dsp`'s playback buffer (SNDCTL_DSP_GETOSPACE).
@@ -50,7 +52,7 @@ pub fn space(dsp: &File) -> io::Result<Space> {
         return Err(io::Error::last_os_error());
     }
     let [_, total, size, free] = info.map(|v| v.max(0) as usize);
-    Ok(Space { queued: (total * size).saturating_sub(free), free })
+    Ok(Space { queued: (total * size).saturating_sub(free), free, fragment: size })
 }
 
 /// Sets one of `dsp`'s settings (an ioctl on /dev/dsp). The driver may pick

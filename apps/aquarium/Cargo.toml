@@ -1,0 +1,29 @@
+[package]
+name = "neochumby-aquarium"
+description = "asciiquarium-rs on the Chumby Classic, on neochumby's terminal, as a neochumby app"
+# asciiquarium-rs is GPL-2.0-or-later (as asciiquarium is), and this binary
+# is built from it.
+license = "GPL-2.0-or-later"
+version.workspace = true
+# asciiquarium-rs's: its main.rs uses rand 0.8's gen_range, and gen is a
+# keyword in 2024.
+edition = "2021"
+publish.workspace = true
+
+[dependencies]
+neochumby.workspace = true
+asciiquarium-rs = { path = "third_party/asciiquarium-rs" }
+# asciiquarium-rs's.
+clap = { version = "4", features = ["derive"] }
+crossterm = "0.28"
+ctrlc = { version = "3", features = ["termination"] }
+rand = "0.8"
+
+[package.metadata.neochumby]
+title = "AQUARIUM"
+exec = "neochumby-aquarium"
+access = ["screen", "touch", "terminal"]
+colour = "3c78c8"
+
+[lints]
+workspace = true
