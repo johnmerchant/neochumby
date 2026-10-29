@@ -50,7 +50,8 @@ binaries are static (musl), so they don't depend on its userland.
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
-| `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> NANDLESS Linux 5.9.16 kernel sideloader and QEMU demo (draft) | MIT |
+| `dist/` | The sideload image: a Buildroot build of Linux 5.9.16 with an initramfs built in (`sideload-zImage`), and the same initramfs on its own (`sideload-rootfs.cpio.gz`) | MIT |
+| `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> sideload Linux 5.9.16 kernel sideloader and QEMU demo (draft) | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
 | `emu/` | The emulator: QEMU's `chumby-classic` machine, from [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit, which boots the stock firmware from your own flash backup; and chumby-emu, a host tool that builds its images | MIT (the machine: GPL-2.0-or-later, like QEMU) |
 
@@ -395,6 +396,48 @@ emu/qemu/qemu-chumby/chumby-ctl qmp.sock shot screen.png  # screenshot
 The NAND image is written as the Chumby writes its flash; add `-snapshot`
 to keep it unchanged, and `-icount shift=auto,sleep=off` to boot in a few
 seconds rather than in real time.
+
+## The sideload image
+
+`dist/build` builds the Linux 5.9.16 zImage that the kernel sideloader
+hands off to, with Buildroot. Buildroot needs Linux, so it runs in a
+container, which can be Apple's `container`, `docker` or `podman`:
+`dist/build` uses the first it finds, in that order, and
+`NEOCHUMBY_DIST_RUNTIME` overrides it. The first build downloads and
+compiles a toolchain and the kernel, which takes a long while; the work is
+kept in a volume, `neochumby-dist`, so a second build rebuilds only what
+changed (`<runtime> volume rm neochumby-dist` starts over). The volume
+holds the kernel tree because macOS's disk can't: it has files whose names
+differ only by case.
+
+```sh
+dist/build build/sideload-dist   # -> sideload-zImage, sideload-rootfs.cpio.gz
+```
+
+If the downloads fail with `unable to resolve host address`, the
+container's nameserver isn't answering (seen with Apple's `container`):
+give it one with `NEOCHUMBY_DIST_DNS=1.1.1.1 dist/build ...`.
+
+The initramfs's `/init` is a plain one: it mounts proc, sysfs and devtmpfs,
+logs to the kernel log, and starts busybox's shell (prompt `~ # `). The
+kernel has no NAND driver built in; `/init` loads the NAND modules only
+when `neochumby.sideloaded=1` is not on the kernel command line, which is
+when the image was flashed rather than handed off from the stock kernel.
+
+The end-to-end tests are in `tools/neochumby-kernel-sideloader` and need
+the emulator's QEMU (`emu/qemu/build`, above). Each boots the image, waits
+for the busybox prompt and checks `uname -a` for `5.9.16-mx21-sideload`:
+
+```sh
+# The flashed path: no stock firmware needed. CI runs this.
+QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
+KERNEL=$PWD/build/sideload-dist/sideload-zImage \
+python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+```
+
+`run-demo.py` is the sideloaded path, from the stock 2.6.16 kernel. It
+needs your own stock zImage and NAND backup; the sideloader's
+[README](tools/neochumby-kernel-sideloader/README.md) has the details.
 
 ## Game data
 

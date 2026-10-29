@@ -5,7 +5,7 @@
 # Our static armv5te binaries' atomics go through the kernel's user helpers.
 CONFIG_KUSER_HELPERS=y
 
-# NANDLESS: the kernel has no NAND driver built in.  The NAND drivers are
+# sideload: the kernel has no NAND driver built in.  The NAND drivers are
 # modules in the initramfs; /init loads them only when the kernel was booted
 # without the sideloader's marker (i.e. when this image was flashed).
 CONFIG_MODULES=y
@@ -14,7 +14,7 @@ CONFIG_MTD_RAW_NAND=m
 CONFIG_MTD_NAND_MXC=m
 CONFIG_MTD_BLOCK=m
 CONFIG_MTD_CMDLINE_PARTS=m
-CONFIG_LOCALVERSION="-mx21-nandless"
+CONFIG_LOCALVERSION="-mx21-sideload"
 
 CONFIG_BLK_DEV_INITRD=y
 CONFIG_DEVTMPFS=y

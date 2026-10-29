@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the stock 2.6.16 -> 5.9.16 NANDLESS kernel-sideloader demo in QEMU.
+"""Run the stock 2.6.16 -> 5.9.16 sideload kernel-sideloader demo in QEMU.
 
 The stock kernel still boots from NAND (it has no other boot path).  The
 5.9.16 zImage and initramfs are loaded from outside NAND by QEMU
@@ -11,6 +11,7 @@ QEMU uses -snapshot and the drive uses snapshot=on.
 """
 import hashlib
 import os
+import re
 import select
 import socket
 import subprocess
@@ -34,7 +35,7 @@ def sha256(path):
 # The sideloader must never open an MTD device.  The stock 2.6.16 stage reads
 # NAND to boot; the new OS has no MTD driver at all.  This static check catches
 # a regression in the executable before QEMU is started.
-# The NANDLESS label is allowed; these are the MTD device paths and write
+# The sideload label is allowed; these are the MTD device paths and write
 # tools the sideloader must never contain.
 MTD_STRINGS = (b"/dev/mtd", b"mtdblock", b"flash_erase", b"flashcp", b"nandwrite")
 
@@ -44,7 +45,7 @@ def assert_no_mtd_strings(path):
     found = [s.decode() for s in MTD_STRINGS if s in data]
     if found:
         sys.exit(f"{path}: contains MTD device paths or write tools: {', '.join(found)}")
-    print(f"{path}: no MTD device paths or write tools (NANDLESS label allowed)", flush=True)
+    print(f"{path}: no MTD device paths or write tools", flush=True)
 
 def main():
     qemu = env("QEMU", "qemu-system-arm")
@@ -52,7 +53,7 @@ def main():
     nand_src = env("NAND_SRC")
     chumby_emu = env("CHUMBY_EMU", "chumby-emu")
     sideloader = env("SIDELOADER", os.path.join(HERE, "neochumby-kernel-sideloader"))
-    payload = env("PAYLOAD", os.path.join(HERE, "build", "nandless-payload.bin"))
+    payload = env("PAYLOAD", os.path.join(HERE, "build", "sideload-payload.bin"))
     work = env("WORK", os.path.join(HERE, "build", "demo"))
     os.makedirs(work, exist_ok=True)
 
@@ -154,8 +155,8 @@ def main():
         s.sendall(b"\r")
         pump(0.6)
 
-    ok = wait_for_any((b"nandless# ", b"sideloader# "), 120)
-    print("\nnandless: got 5.9.16 shell" if ok else "\nnandless: NO 5.9.16 SHELL", file=sys.stderr)
+    ok = wait_for_any((b"~ # ",), 120)
+    print("\nsideload: got 5.9.16 shell" if ok else "\nsideload: NO 5.9.16 SHELL", file=sys.stderr)
     if ok:
         time.sleep(0.5)
         for cmd in [
@@ -174,20 +175,22 @@ def main():
         pump(2)
         text = bytes(buf)
         guest_checks = [
-            (b"Linux (none) 5.9.16-mx21-nandless", "uname 5.9.16-mx21-nandless"),
             (b"MTD_RC=1", "no /proc/mtd"),
             (b"MTD_DEV_RC=1", "no /dev/mtd*"),
             (b"NAND_GREP_RC=1", "no NAND in dmesg"),
             (b"SYS_MTD_RC=1", "no /sys/class/mtd"),
             (b"SIDELOADED_RC=0", "sideload marker in /proc/cmdline"),
             (b"NAND_MODULE_RC=1", "NAND modules not loaded"),
-            (b"NANDLESS: sideloaded", "NANDLESS init marker"),
             (b"SIDELOADER_SHELL_OK", "shell marker"),
         ]
         for marker, what in guest_checks:
             if marker not in text:
                 print(f"ERROR: 5.9.16 check failed: {what}", file=sys.stderr)
                 ok = False
+        if not re.search(rb"^Linux \(none\) 5\.9\.16-mx21-sideload #\d+ .* armv5tejl GNU/Linux\r?$",
+                         text, re.M):
+            print("ERROR: 5.9.16 check failed: uname -a is not the sideload kernel", file=sys.stderr)
+            ok = False
     p.terminate()
     time.sleep(0.5)
     try:
@@ -198,7 +201,7 @@ def main():
 
     nand_after = sha256(nand_src)
     scratch_after = sha256(scratch)
-    print("\nsideloader contains no MTD device paths or write tools (NANDLESS label allowed)")
+    print("\nsideloader contains no MTD device paths or write tools")
     print(f"original NAND before: {nand_before}")
     print(f"original NAND after:  {nand_after}")
     print(f"scratch NAND before:  {scratch_before}")

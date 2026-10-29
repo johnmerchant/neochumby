@@ -46,7 +46,7 @@ BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
 BR2_PACKAGE_LINUX_FIRMWARE=y
 BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT73=y
 
-# NANDLESS: the initramfs is built into the kernel as well as shipped
+# sideload: the initramfs is built into the kernel as well as shipped
 # beside it.  A flashed zImage therefore still boots, and /init can load the
 # NAND recovery modules when the sideload marker is absent.
 BR2_TARGET_ROOTFS_INITRAMFS=y

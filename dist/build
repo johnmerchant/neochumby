@@ -1,10 +1,10 @@
 #!/bin/sh
-# Builds the NANDLESS userspace a Chumby runs on mainline Linux, with
+# Builds the sideload userspace a Chumby runs on mainline Linux, with
 # Buildroot: a zImage (5.9.16) with the initramfs built in, and the same
 # initramfs beside it for userhook2 to kexec, written to OUT:
 #
-#   OUT/nandless-zImage
-#   OUT/nandless-rootfs.cpio.gz
+#   OUT/sideload-zImage
+#   OUT/sideload-rootfs.cpio.gz
 #
 # The NAND drivers are modules in the initramfs; /init loads them only when
 # the kernel was booted without the sideloader's marker (i.e. when flashed).
@@ -61,19 +61,19 @@ if [ "${1:-}" = --inside ]; then
       }
     done || missing=1
   test -x /work/output/target/init || {
-    echo "dist/build: /init missing from the NANDLESS rootfs" >&2
+    echo "dist/build: /init missing from the sideload rootfs" >&2
     exit 1
   }
   find /work/output/target/lib/modules -name mxc_nand.ko | grep -q . || {
-    echo "dist/build: mxc_nand.ko missing from the NANDLESS initramfs" >&2
+    echo "dist/build: mxc_nand.ko missing from the sideload initramfs" >&2
     exit 1
   }
   mkdir -p "$out"
-  cp /work/output/images/zImage "$out/nandless-zImage"
-  cp /work/output/images/rootfs.cpio.gz "$out/nandless-rootfs.cpio.gz"
+  cp /work/output/images/zImage "$out/sideload-zImage"
+  cp /work/output/images/rootfs.cpio.gz "$out/sideload-rootfs.cpio.gz"
   [ "$missing" = 0 ] || exit 1
-  echo "NANDLESS: $out/nandless-zImage (initramfs built in)"
-  echo "NANDLESS: $out/nandless-rootfs.cpio.gz (external initramfs)"
+  echo "sideload: $out/sideload-zImage (initramfs built in)"
+  echo "sideload: $out/sideload-rootfs.cpio.gz (external initramfs)"
   exit 0
 fi
 
