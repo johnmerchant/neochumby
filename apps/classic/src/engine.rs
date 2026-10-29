@@ -65,6 +65,7 @@ use std::collections::VecDeque;
 use std::path::PathBuf;
 
 use crate::cache::{self, Asset, Cache, State};
+use crate::clip;
 use crate::draw::{KEY, add_light, sin};
 use crate::loader::{self, Fail, Loader};
 use crate::logo::{self, FX_LOOP_GAP, FX_OUT_GAP, FX_SHINE, Logo};
@@ -259,6 +260,16 @@ pub struct Engine<P: Plat> {
     vals_t: i64,
     /// Each live box's text as drawn; None: not drawn yet.
     live_shown: Vec<Option<String>>,
+    /// The clip the page on screen plays (`clip`), if it has one.
+    clip: Option<clip::Play>,
+    /// The thread that reads clips' records ahead, started with the first
+    /// clip (none on the host, which reads them in the frame).
+    clip_reader: Option<clip::Reader>,
+    /// For choosing clips: a random state, the last one played, and the
+    /// next in turn.
+    clip_rng: u32,
+    clip_last: Option<PathBuf>,
+    clip_turn: usize,
     ctl_path: Option<PathBuf>,
     stat_path: Option<PathBuf>,
     /// No usable manifest yet: the waiting screen is up.
@@ -365,6 +376,11 @@ impl<P: Plat> Engine<P> {
             vals: Default::default(),
             vals_t: 0,
             live_shown: Vec::new(),
+            clip: None,
+            clip_reader: None,
+            clip_rng: 0,
+            clip_last: None,
+            clip_turn: 0,
             ctl_path: run_path("NEOCHUMBY_CLASSIC_CTL", "ctl"),
             stat_path: run_path("NEOCHUMBY_CLASSIC_STAT", "stat"),
             waiting: false,
@@ -1503,7 +1519,10 @@ impl<P: Plat> Engine<P> {
         let p = self.page as usize;
         let bgi = self.page_bgi(self.page);
         let (pano, pano_w, pano_speed) = (self.m.pages[p].pano, self.m.pages[p].pano_w, self.m.pages[p].pano_speed);
-        if self.page_has_glows() {
+        if let Some(c) = self.clip.as_ref().filter(|_| !self.m.pages[p].clips.is_empty()) {
+            // A clip owns the picture under the page's layers.
+            self.back.copy_from_slice(&c.pic);
+        } else if self.page_has_glows() {
             // Cached: blending is the expensive part.
             let key = t * FPS as i64 / 1000 / GLOW_DIV;
             if key != self.glow_key || self.glow_page != self.page {
@@ -1560,6 +1579,15 @@ impl<P: Plat> Engine<P> {
     /// Advances the animated things on the current page; only changed
     /// rectangles reach the screen.
     fn animate_page(&mut self, t: i64) {
+        if !self.m.pages[self.page as usize].clips.is_empty() {
+            // A clip: its next record when due, and the page redrawn on it.
+            if let Some(c) = &mut self.clip {
+                c.step(self.clip_reader.as_ref(), t);
+            }
+            self.compose_page(t);
+            self.blit(0, 0, W, H);
+            return;
+        }
         if self.m.pages[self.page as usize].fullframe {
             // Everything overlaps: redraw it all.
             self.compose_page(t);
@@ -1777,6 +1805,7 @@ impl<P: Plat> Engine<P> {
         if self.m.pages.is_empty() {
             return;
         }
+        self.start_clip_page();
         let t0 = self.us();
         self.ret_page = -1;
         // The logo's page coming on (not a reload while it is up): a new
@@ -1802,6 +1831,7 @@ impl<P: Plat> Engine<P> {
         if s < 0 {
             return;
         }
+        self.clip = None; // a screen: the clip stops, and frees its memory
         let t0 = self.us();
         self.scr = s;
         self.ss_page = -1;
@@ -2610,6 +2640,53 @@ impl<P: Plat> Engine<P> {
 }
 
 impl<P: Plat> Engine<P> {
+    // ------------------------------------------------------------ clips
+
+    /// For a page with clips: picks one (at random, never the same twice
+    /// running, or in turn) and starts it. A page none of whose clips will
+    /// play (the directories missing, or every clip refused) is skipped:
+    /// the next page comes on instead.
+    fn start_clip_page(&mut self) {
+        self.clip = None;
+        let n = self.npages();
+        for _ in 0..n {
+            let pg = &self.m.pages[self.page as usize];
+            if pg.clips.is_empty() {
+                return;
+            }
+            let (dirs, random) = (pg.clips.clone(), pg.clip_random);
+            let mut found = clip::find(&self.dir, &dirs);
+            while !found.is_empty() {
+                let k = if random {
+                    if self.clip_rng == 0 {
+                        self.clip_rng = self.us() as u32 | 1;
+                    }
+                    let mut k = logo::rand(&mut self.clip_rng, 0) as usize % found.len();
+                    if found.len() > 1 && self.clip_last.as_ref() == Some(&found[k]) {
+                        k = (k + 1) % found.len();
+                    }
+                    k
+                } else {
+                    self.clip_turn % found.len()
+                };
+                let base = found.remove(k);
+                let budget = self.c.budget;
+                if let Some(p) = clip::open(&base, budget).and_then(|ix| clip::Play::start(&base, ix, self.ms())) {
+                    self.clip_turn = self.clip_turn.wrapping_add(1);
+                    self.clip_last = Some(base);
+                    if self.clip_reader.is_none() && !self.plat.sync_prefetch() {
+                        self.clip_reader = clip::Reader::start();
+                    }
+                    self.clip = Some(p);
+                    return;
+                }
+                eprintln!("clip {}: not a playable clip", base.display());
+            }
+            eprintln!("page {}: no clip to play; skipped", self.page);
+            self.page = (self.page + 1) % n;
+        }
+    }
+
     // ------------------------------------------------------------ pageapp
 
     /// Which app a page belongs to (pageapp); a page without one is an app
@@ -3275,6 +3352,117 @@ mod tests {
         assert_eq!(run(&[(10, 200), (10, 230)]), (true, vec![Ask::Open("home".into())]), "two below");
         assert_eq!(run(&[(10, 10), (10, 200)]), (false, vec![]), "a tap elsewhere goes back");
         assert_eq!(run(&[(10, 10)]), (false, vec![]), "one tap does nothing yet");
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    /// A set with three pages, page 1 playing clips from `clips` (which
+    /// the test fills, or not).
+    fn clip_set(tag: &str, manifest_clip: &str) -> PathBuf {
+        let d = std::env::temp_dir().join(format!("classic-clipset-{tag}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&d);
+        std::fs::create_dir_all(d.join("clips")).unwrap();
+        for (n, b) in [("p0.raw", 0x10u8), ("p1.raw", 0x20), ("p2.raw", 0x30)] {
+            std::fs::write(d.join(n), vec![b; manifest::FRAME_BYTES]).unwrap();
+        }
+        std::fs::write(
+            d.join("manifest.txt"),
+            format!(
+                "page 0 p0.raw 60 noclock noticker\npage 1 p1.raw 60 noclock noticker\n\
+                 page 2 p2.raw 60 noclock noticker\n{manifest_clip}\n"
+            ),
+        )
+        .unwrap();
+        d
+    }
+
+    #[test]
+    fn a_clip_page_plays_its_clip_in_time() {
+        use crate::clip::testclip::{Span, key, record, write};
+        let d = clip_set("play", "clip 1 clips");
+        // 5 fps: frame 0 all 0x1111; 1 fills row 0; 2 fills row 1; the wrap
+        // takes row 1 back, to frame 1's picture.
+        let row = |y, c| record(false, &[Span::Fill(0, y, 320, c)]);
+        write(&d.join("clips/loop"), 5, 1, &[key(0x1111), row(0, 0x2222), row(1, 0x3333), row(1, 0x1111)]);
+        let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+        let mut e = Engine::new(h, d.clone());
+        e.start();
+        e.ctl_line(b"page 1", e.ms());
+        // The page's wipe, then the clip, frame by frame.
+        let state = |e: &mut Engine<Host>| {
+            let fb = e.plat.fb();
+            (fb[0], fb[320], fb[2 * 320])
+        };
+        let mut seen: Vec<((u16, u16, u16), i64)> = Vec::new();
+        for _ in 0..80 {
+            assert!(e.frame());
+            let s = state(&mut e);
+            if seen.last().is_none_or(|l| l.0 != s) {
+                seen.push((s, e.ms()));
+            }
+        }
+        assert_eq!(e.page, 1);
+        let states: Vec<_> = seen.iter().map(|x| x.0).collect();
+        let (a, b, c) = (0x1111, 0x2222, 0x3333);
+        assert_eq!(
+            states[..6],
+            [(a, a, a), (b, a, a), (b, c, a), (b, a, a), (b, c, a), (b, a, a)],
+            "frame 0, 1, 2, the wrap to 1, 2, 1..."
+        );
+        // After the first, every change is one record, 200 ms apart.
+        for w in seen[1..6].windows(2) {
+            assert_eq!(w[1].1 - w[0].1, 200, "{seen:?}");
+        }
+        // A screen stops the clip; the page again starts it from frame 0.
+        e.ctl_line(b"page 0", e.ms());
+        assert!(e.clip.is_none());
+        e.ctl_line(b"page 1", e.ms());
+        assert!(e.clip.is_some());
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn a_page_without_a_playable_clip_is_skipped() {
+        // The directory is missing.
+        let d = clip_set("missing", "clip 1 nowhere random");
+        let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+        let mut e = Engine::new(h, d.clone());
+        e.start();
+        e.ctl_line(b"page 1", e.ms());
+        assert_eq!(e.page, 2, "the next page instead");
+        // A broken clip only: skipped too.
+        std::fs::write(d.join("clips/bad.idx"), b"NCCLIP01 and then nonsense").unwrap();
+        std::fs::write(d.join("clips/bad.clip"), b"").unwrap();
+        e.ctl_line(b"page 1", e.ms());
+        assert_eq!(e.page, 2);
+        std::fs::remove_dir_all(&d).unwrap();
+        // Every page a clip page with nothing to play: it stops trying.
+        let d = clip_set("none", "clip 0 x\nclip 1 x\nclip 2 x");
+        let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+        let mut e = Engine::new(h, d.clone());
+        e.start();
+        for _ in 0..20 {
+            assert!(e.frame());
+        }
+        std::fs::remove_dir_all(&d).unwrap();
+    }
+
+    #[test]
+    fn random_clips_never_repeat_running() {
+        use crate::clip::testclip::{key, record, write};
+        let d = clip_set("random", "clip 1 clips random");
+        for (n, c) in [("a", 0x0101), ("b", 0x0202)] {
+            write(&d.join(format!("clips/{n}")), 10, 0, &[key(c), record(false, &[])]);
+        }
+        let h = Host::new("unused", vec![1 << 40], 0, d.clone());
+        let mut e = Engine::new(h, d.clone());
+        e.start();
+        let mut last = None;
+        for _ in 0..10 {
+            e.ctl_line(b"page 1", e.ms());
+            let now = e.clip.as_ref().map(|c| c.pic[0]);
+            assert!(now.is_some() && now != last, "{now:?} twice running");
+            last = now;
+        }
         std::fs::remove_dir_all(&d).unwrap();
     }
 

@@ -10,6 +10,7 @@
 //! front. They share the settings in /psp (state.rs).
 
 pub mod cache;
+pub mod clip;
 #[cfg(target_arch = "arm")]
 pub mod device;
 pub mod draw;

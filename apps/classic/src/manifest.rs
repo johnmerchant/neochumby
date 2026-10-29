@@ -26,6 +26,7 @@
 //! bgscroll PAGE FILE W SPEED
 //! glow PAGE FILE W H Y SPEED [FADE_MS PHASE_MS SWAY_PX SWAY_MS [X0 [ON_MS]]]
 //! glowseq PAGE PREFIX NFRAMES FPS R G B BRIGHT     frames PREFIX_000.l8 ...
+//! clip PAGE DIR [DIR ...] [random]                 a recorded loop (clip.rs)
 //! livefont NAME FILE CELLW CELLH [W0..W78]       a glyph strip for live text
 //! live TARGET KEY FONT X Y W H ALIGN BG          a device value as text
 //! ```
@@ -92,8 +93,8 @@ pub const MAXGSQ_FRAMES: i32 = 1000;
 /// the formats against it.
 #[cfg_attr(not(test), allow(dead_code))]
 pub const NAME_LEN: usize = 48;
-/// The longest file name, in bytes (`%96s`; the C engine's was 63).
-#[cfg_attr(not(test), allow(dead_code))]
+/// The longest file name, in bytes (`%96s`; the C engine's was 63), and
+/// of a `clip` directory.
 pub const FILE_LEN: usize = 96;
 /// The largest manifest.txt and hashes.txt read, in bytes.
 pub const MAX_MANIFEST_BYTES: u64 = 2 << 20;
@@ -181,6 +182,10 @@ pub struct Page {
     pub tap: String,
     /// The app it belongs to (pageapp), or -1: an app of its own.
     pub app: i32,
+    /// Directories of clips it plays (`clip`); empty: none.
+    pub clips: Vec<String>,
+    /// Chosen at random each time (else in turn).
+    pub clip_random: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -485,12 +490,17 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 nbg: None,
                 tap: String::new(),
                 app: -1,
+                clips: Vec::new(),
+                clip_random: false,
             };
             if p.bg.is_some() {
                 o.pages.push(p);
             }
         } else if let Some(v) = some(sc("pagenight %d %96s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
             o.pages[v[0].i() as usize].nbg = asset(v[1].s(), Size::Exactly(FRAME_BYTES));
+        } else if let Some((p, dirs, random)) = clip_line(line, o.pages.len()) {
+            o.pages[p].clips = dirs;
+            o.pages[p].clip_random = random;
         } else if let Some(v) = some(sc("pageapp %d %d"), 2).filter(|v| idx(v[0].i(), o.pages.len()) && v[1].i() >= 0) {
             o.pages[v[0].i() as usize].app = v[1].i();
         } else if let Some(v) = some(sc("pagetap %d %48s"), 2).filter(|v| idx(v[0].i(), o.pages.len())) {
@@ -820,6 +830,23 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
         }
     }
     o
+}
+
+/// `clip PAGE DIR [DIR ...] [random]`: page PAGE (declared before) plays
+/// one of the clips in the DIRs (relative ones are in the picture set),
+/// chosen at random each time with `random`, else in turn. 1 to 16 DIRs,
+/// each at most FILE_LEN bytes; anything else skips the line.
+fn clip_line(line: &[u8], pages: usize) -> Option<(usize, Vec<String>, bool)> {
+    let words: Vec<&str> = std::str::from_utf8(line).ok()?.split_ascii_whitespace().collect();
+    let (&"clip", rest) = words.split_first()? else { return None };
+    let (page, mut dirs) = rest.split_first()?;
+    let p: usize = page.parse().ok().filter(|_| page.bytes().all(|b| b.is_ascii_digit()))?;
+    let random = dirs.last() == Some(&"random");
+    if random {
+        dirs = &dirs[..dirs.len() - 1];
+    }
+    let ok = p < pages && (1..=crate::clip::MAX_DIRS).contains(&dirs.len()) && dirs.iter().all(|d| d.len() <= FILE_LEN);
+    ok.then(|| (p, dirs.iter().map(|d| d.to_string()).collect(), random))
 }
 
 fn some(v: Vec<V>, n: usize) -> Option<Vec<V>> {
