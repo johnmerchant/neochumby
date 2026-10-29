@@ -4,9 +4,9 @@
 //! other name as its `start` setting and opens `home` instead, so the
 //! settings suggest these (`neochumbyd set`, `neochumbyd pairing`).
 //!
-//! Likewise its music apps, for the `music` setting: those whose manifest
-//! says `music=true` and has an `exec`. A Chumby refuses any other name,
-//! and uses [`DEFAULT_MUSIC`] if it's one, else the first by name.
+//! Likewise its players, for the `player` setting: those whose manifest
+//! says `player=true` and has an `exec`. A Chumby refuses any other name,
+//! and uses [`DEFAULT_PLAYER`] if it's one, else the first by name.
 
 use std::path::Path;
 
@@ -14,8 +14,8 @@ use neochumby_proto::valid_name;
 
 /// The app a Chumby opens when its `start` names no start app.
 pub const HOME: &str = "home";
-/// The music app a Chumby uses when its `music` names none, if it's here.
-pub const DEFAULT_MUSIC: &str = "somafm";
+/// The player a Chumby uses when its `player` names none, if it's here.
+pub const DEFAULT_PLAYER: &str = "somafm";
 
 /// The start apps in `tree`, in name order.
 pub fn start_apps(tree: &Path) -> Vec<String> {
@@ -26,9 +26,9 @@ pub fn start_apps(tree: &Path) -> Vec<String> {
     })
 }
 
-/// The music apps in `tree`, in name order.
-pub fn music_apps(tree: &Path) -> Vec<String> {
-    apps_where(tree, |m| field(m, "music") == Some("true") && field(m, "exec").is_some_and(|e| !e.is_empty()))
+/// The players in `tree`, in name order.
+pub fn players(tree: &Path) -> Vec<String> {
+    apps_where(tree, |m| field(m, "player") == Some("true") && field(m, "exec").is_some_and(|e| !e.is_empty()))
 }
 
 /// The apps in `tree` whose manifest passes `test`, in name order.
@@ -57,26 +57,26 @@ pub fn hint(apps: &[String]) -> String {
     }
 }
 
-/// The music app a Chumby uses when its `music` names none of `apps`.
-pub fn default_music(apps: &[String]) -> Option<&str> {
-    apps.iter().find(|a| *a == DEFAULT_MUSIC).or(apps.first()).map(String::as_str)
+/// The player a Chumby uses when its `player` names none of `apps`.
+pub fn default_player(apps: &[String]) -> Option<&str> {
+    apps.iter().find(|a| *a == DEFAULT_PLAYER).or(apps.first()).map(String::as_str)
 }
 
-/// The music apps, as a line for a person.
-pub fn music_hint(apps: &[String]) -> String {
-    match default_music(apps) {
-        None => "no music apps in the tree (music = true in a manifest); MUSIC buttons do nothing".into(),
-        Some(d) => format!("music apps in the tree: {} (unless music= names one, {d})", apps.join(", ")),
+/// The players, as a line for a person.
+pub fn player_hint(apps: &[String]) -> String {
+    match default_player(apps) {
+        None => "no players in the tree (player = true in a manifest); MUSIC buttons do nothing".into(),
+        Some(d) => format!("players in the tree: {} (unless player= names one, {d})", apps.join(", ")),
     }
 }
 
-/// What to tell the owner about Chumby `name`'s `music` setting: None if
-/// it's unset, or names a music app here.
-pub fn music_note(name: &str, music: Option<&str>, apps: &[String]) -> Option<String> {
-    let m = music.filter(|m| !apps.iter().any(|a| a == m))?;
-    let uses = default_music(apps).map_or("none".to_string(), |d| format!("{d} instead"));
+/// What to tell the owner about Chumby `name`'s `player` setting: None if
+/// it's unset, or names a player here.
+pub fn player_note(name: &str, player: Option<&str>, apps: &[String]) -> Option<String> {
+    let m = player.filter(|m| !apps.iter().any(|a| a == m))?;
+    let uses = default_player(apps).map_or("none".to_string(), |d| format!("{d} instead"));
     Some(format!(
-        "music={m} isn't a music app in the tree, so it uses {uses}; to choose one: neochumbyd set {name} music=<app>"
+        "player={m} isn't a player in the tree, so it uses {uses}; to choose one: neochumbyd set {name} player=<app>"
     ))
 }
 
@@ -144,34 +144,34 @@ mod tests {
     }
 
     #[test]
-    fn finds_music_apps_and_the_default() {
-        let tree = std::env::temp_dir().join(format!("neochumbyd-music-{}", std::process::id()));
+    fn finds_players_and_the_default() {
+        let tree = std::env::temp_dir().join(format!("neochumbyd-player-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&tree);
         for (app, manifest) in [
-            ("somafm", "exec=neochumby-somafm\nservice=neochumby-somafm-service\nmusic=true\n"),
-            ("jazz", "exec=neochumby-jazz\nmusic=true\n"),
-            // Not music apps: nothing to open, or not saying so.
-            ("airplay", "service=neochumby-airplay\nmusic=true\n"),
-            ("doom", "exec=neochumby-doom\nmusic=false\n"),
+            ("somafm", "exec=neochumby-somafm\nservice=neochumby-somafm-service\nplayer=true\n"),
+            ("jazz", "exec=neochumby-jazz\nplayer=true\n"),
+            // Not players: nothing to open, or not saying so.
+            ("airplay", "service=neochumby-airplay\nplayer=true\n"),
+            ("doom", "exec=neochumby-doom\nplayer=false\n"),
         ] {
             std::fs::create_dir_all(tree.join("apps").join(app)).unwrap();
             std::fs::write(tree.join("apps").join(app).join("manifest"), manifest).unwrap();
         }
-        let apps = music_apps(&tree);
+        let apps = players(&tree);
         assert_eq!(apps, ["jazz", "somafm"]);
-        assert_eq!(default_music(&apps), Some("somafm"));
-        assert_eq!(default_music(&apps[..1]), Some("jazz"));
-        assert_eq!(default_music(&[]), None);
-        assert_eq!(music_hint(&apps), "music apps in the tree: jazz, somafm (unless music= names one, somafm)");
-        assert!(music_hint(&[]).starts_with("no music apps"));
+        assert_eq!(default_player(&apps), Some("somafm"));
+        assert_eq!(default_player(&apps[..1]), Some("jazz"));
+        assert_eq!(default_player(&[]), None);
+        assert_eq!(player_hint(&apps), "players in the tree: jazz, somafm (unless player= names one, somafm)");
+        assert!(player_hint(&[]).starts_with("no players"));
 
-        assert_eq!(music_note("kitchen", None, &apps), None);
-        assert_eq!(music_note("kitchen", Some("jazz"), &apps), None);
+        assert_eq!(player_note("kitchen", None, &apps), None);
+        assert_eq!(player_note("kitchen", Some("jazz"), &apps), None);
         assert_eq!(
-            music_note("kitchen", Some("doom"), &apps).unwrap(),
-            "music=doom isn't a music app in the tree, so it uses somafm instead; to choose one: neochumbyd set kitchen music=<app>"
+            player_note("kitchen", Some("doom"), &apps).unwrap(),
+            "player=doom isn't a player in the tree, so it uses somafm instead; to choose one: neochumbyd set kitchen player=<app>"
         );
-        assert!(music_note("kitchen", Some("doom"), &[]).unwrap().contains("so it uses none;"));
+        assert!(player_note("kitchen", Some("doom"), &[]).unwrap().contains("so it uses none;"));
         let _ = std::fs::remove_dir_all(&tree);
     }
 }
