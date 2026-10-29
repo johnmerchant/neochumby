@@ -82,8 +82,19 @@ fi
   exit 2
 }
 "$runtime" build -t neochumby-dist -f "$root/dist/Containerfile" "$root/dist"
-"$runtime" volume inspect neochumby-dist >/dev/null 2>&1 ||
-  "$runtime" volume create neochumby-dist >/dev/null
+# NEOCHUMBY_DIST_WORK=DIR keeps Buildroot's downloads and output in DIR
+# instead of a named volume; CI caches DIR.  A named volume is the default
+# because macOS's disk can't hold the kernel tree's case-different names.
+work=${NEOCHUMBY_DIST_WORK:-}
+if [ -n "$work" ]; then
+  mkdir -p "$work"
+  work=$(cd "$work" && pwd)
+  work_mount="-v $work:/work"
+else
+  "$runtime" volume inspect neochumby-dist >/dev/null 2>&1 ||
+    "$runtime" volume create neochumby-dist >/dev/null
+  work_mount="-v neochumby-dist:/work"
+fi
 # Apple's container gives a container 1 GB and 4 CPUs unless told.
 size=
 [ "$runtime" = container ] && size="-c 8 -m 8G"
@@ -92,5 +103,5 @@ size=
 dns=
 [ -n "${NEOCHUMBY_DIST_DNS:-}" ] && dns="--dns $NEOCHUMBY_DIST_DNS"
 # shellcheck disable=SC2086
-exec "$runtime" run --rm $size $dns -v neochumby-dist:/work -v "$root:$root" -v "$out:$out" \
+exec "$runtime" run --rm $size $dns $work_mount -v "$root:$root" -v "$out:$out" \
   neochumby-dist sh "$root/dist/build" --inside "$root" "$out"

@@ -30,7 +30,18 @@ initramfs beside it, for userhook2 or another kexec path.  Both carry the
 It runs Buildroot (2026.02.3, pinned with its hash) in a container: Apple's
 container, docker or podman. The first build makes the cross toolchain
 (gcc 13, static musl, ARM926EJ-S soft float) and takes a while, and later
-ones rebuild only what changed.
+ones rebuild only what changed.  `NEOCHUMBY_DIST_WORK=DIR` keeps Buildroot's
+downloads and output in `DIR` instead of the `neochumby-dist` volume; CI
+uses it to cache the work.
+
+## CI
+
+`.github/workflows/nandless.yml` builds the custom QEMU and this image, then
+runs `run-recovery-demo.py` with a zeroed NAND image.  It runs on changes
+under `dist/`, `tools/neochumby-kernel-sideloader/` or `emu/qemu/`, and on
+`workflow_dispatch`.  The Buildroot and QEMU work is cached; the first run
+is slow.  The sideloaded path still needs the user's own stock firmware, so
+it stays local (`run-demo.py`).
 
 | Path | What |
 | --- | --- |

@@ -324,6 +324,11 @@ It fails unless the log shows the no-marker path, the NAND modules loading,
 shell.  The sideloaded path is `run-demo.py`, which needs the user's own
 stock zImage and NAND image.
 
+`.github/workflows/nandless.yml` runs this recovery test in CI, after
+building the custom QEMU and the NANDLESS image.  It runs on changes under
+`dist/`, `tools/neochumby-kernel-sideloader/` or `emu/qemu/`, and on
+`workflow_dispatch`; the Buildroot and QEMU work is cached.
+
 ## Files
 
 ```text
