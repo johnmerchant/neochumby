@@ -22,14 +22,6 @@ use std::path::{Path, PathBuf};
 /// The volume until one is chosen, as classic's.
 pub const DEFAULT_VOLUME: u32 = 65;
 
-/// The variable naming the app's storage.
-pub const ENV: &str = "NEOCHUMBY_STORAGE";
-
-/// The storage directory, if the session gave one.
-pub fn dir() -> Option<PathBuf> {
-    std::env::var_os(ENV).filter(|d| !d.is_empty()).map(PathBuf::from)
-}
-
 /// The settings, as they are in the storage.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Settings {

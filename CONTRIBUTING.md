@@ -185,6 +185,21 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
+**neochumby-somafm** (`dev/emulate-somafm TREE RENDER OUT`; CI runs it).
+RENDER is the host's `neochumby-somafm` (`cargo build -p
+neochumby-somafm`), which draws what the screen should show from the same
+pictures. Home opens SOMAFM, and the script checks that:
+- the screen is exactly the host's drawing, after each tap: a station, play
+  and pause, the volume slider, skip;
+- the storage (`/psp/apps/somafm`) holds what was chosen, and the service
+  asks the session to play that station's stream, and to stop it;
+- after DONE, home is back and the stream plays on;
+- after a restart the music comes back, and at night (a TZ where it's
+  23:00) the screen is the dark one.
+
+There's no btplay here: the session's log says what it was asked to play.
+Apps run unjailed, so the speaker's `speaker <v>` requests aren't checked.
+
 **Sync** (manual, not in CI). It needs a paired Chumby and neochumbyd's
 side of a round, so it waits until `delivery=sync` (#10) and the session
 PRs are both in `main`. Then, as root on one Linux PC (not yet run, so

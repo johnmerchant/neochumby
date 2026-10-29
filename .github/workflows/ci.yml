@@ -87,3 +87,11 @@ jobs:
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends qemu-user-binfmt dosfstools
           sudo dev/emulate-smoke "$RUNNER_TEMP/tree" "$RUNNER_TEMP/smoke"
+      # SomaFM in that tree: its screen drawn as the host draws it, the
+      # taps, the storage, and the streams it asks the session to play.
+      - name: SomaFM under dev/emulate
+        if: matrix.proto == 'tls'
+        timeout-minutes: 5
+        run: |
+          cargo build -p neochumby-somafm --bin neochumby-somafm
+          sudo dev/emulate-somafm "$RUNNER_TEMP/tree" "$PWD/target/debug/neochumby-somafm" "$RUNNER_TEMP/somafm"

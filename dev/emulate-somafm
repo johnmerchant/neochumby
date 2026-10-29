@@ -105,7 +105,7 @@ emu wait log 'somafm asks to play http://ice6.somafm.com/deepspaceone-128-mp3' 1
 step "pause, volume, skip"
 tap 20 225 # play/pause
 showing stopped
-emu wait log 'somafm asks to stop playing' 10 || fail "the service didn't stop the stream"
+emu wait log "neochumby: stopping somafm's stream: it asked" 10 || fail "the service didn't stop the stream"
 tap 114 225 # the slider, at 20%
 showing quiet
 [ "$(setting volume)" = 20 ] || fail "the storage hasn't volume=20"
@@ -124,7 +124,7 @@ until [ "$(count 'neochumby: opening home$')" = 2 ]; do
   sleep 0.1
 done
 sleep 2
-[ "$(count 'somafm asks to stop playing')" = 1 ] || fail "the music stopped when the app left"
+[ "$(count "stopping somafm's stream")" = 1 ] || fail "the music stopped when the app left"
 [ "$(count 'neochumby: service somafm exited')" = 0 ] || fail "somafm's service exited"
 emu shot "$out/5-home-again.png"
 emu stop

@@ -7,12 +7,12 @@ use std::time::{Duration, Instant};
 use neochumby::audio::{self, Unmuted};
 use neochumby::fb::Fb;
 use neochumby::input::{Touch, Touchscreen};
-use neochumby::session::{Notice, Pipe, Request};
+use neochumby::session::{self, Notice, Pipe, Request};
 
 use crate::app::{App, Finger, Outcome, Redraw, night_at};
 use crate::player::{self, Effects, POLL_MS, Player, Take};
 use crate::screen::{H, Screen, W};
-use crate::store::{self, Store};
+use crate::store::Store;
 
 fn night_now() -> bool {
     night_at(neochumby_sys::time::local_time().hour)
@@ -20,9 +20,9 @@ fn night_now() -> bool {
 
 /// The app's storage, or None, said once.
 fn storage(who: &str, stations: usize) -> Option<Store> {
-    let s = store::dir().map(|d| Store::new(d, stations));
+    let s = session::storage().map(|d| Store::new(d, stations));
     if s.is_none() {
-        eprintln!("{who}: no storage ({} unset): nothing is saved or played", store::ENV);
+        eprintln!("{who}: no storage ({} unset): nothing is saved or played", session::STORAGE_ENV);
     }
     s
 }
@@ -104,23 +104,24 @@ struct Device {
 }
 
 impl Device {
-    fn ask(&mut self, line: &str) {
+    /// Sends a request to the session, saying `what` if it fails.
+    fn ask(&mut self, what: &str, f: impl FnOnce(&mut Pipe) -> std::io::Result<()>) {
         let r = match &mut self.pipe {
-            Some(p) => p.send(line),
+            Some(p) => f(p),
             None => Err(std::io::Error::other("no session to ask")),
         };
         if let Err(e) = r {
-            eprintln!("neochumby-somafm-service: asking for {}: {e}", line.trim_end());
+            eprintln!("neochumby-somafm-service: asking for {what}: {e}");
         }
     }
 }
 
 impl Effects for Device {
     fn start_player(&mut self, url: &str) {
-        self.ask(&format!("play {url}\n"));
+        self.ask(url, |p| p.play(Some(url)));
     }
     fn stop_player(&mut self) {
-        self.ask("play off\n");
+        self.ask("the stream to stop", |p| p.play(None));
     }
     fn set_volume(&mut self, v: u32) {
         // Jailed, only the session sets the volume.
@@ -129,7 +130,7 @@ impl Effects for Device {
                 eprintln!("neochumby-somafm-service: volume: {e}");
             }
         } else {
-            self.ask(&Request::Speaker(Some(v)).line());
+            self.ask("the volume", |p| p.send(&Request::Speaker(Some(v)).line()));
         }
     }
     fn take_speaker(&mut self, vol: u32) -> Take {
