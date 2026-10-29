@@ -23,7 +23,7 @@ rand = "0.8"
 title = "AQUARIUM"
 exec = "neochumby-aquarium"
 access = ["screen", "touch", "terminal"]
-colour = "3c78c8"
+color = "3c78c8"
 
 [lints]
 workspace = true

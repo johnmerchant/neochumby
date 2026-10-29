@@ -3,7 +3,8 @@
 //! message a line. Its tools are the commands a developer runs:
 //!
 //!   chumbys      the paired Chumbys, their settings, those asking to pair
-//!                and the start apps in the tree (`neochumbyd pairing`)
+//!                and the start and players in the tree (`neochumbyd
+//!                pairing`)
 //!   log          the end of a Chumby's log (`neochumbyd log`)
 //!   restart      its session starts again from the tree (`neochumbyd restart`)
 //!   screenshot   its screen, as an image (`neochumbyd shot`)
@@ -18,7 +19,7 @@ use std::io::{self, BufRead, Write};
 use std::path::PathBuf;
 use std::time::Duration;
 
-use neochumby_proto::dev::INPUT_KEY;
+use neochumby_proto::settings::key;
 use serde_json::{Value, json};
 
 use crate::dev;
@@ -77,7 +78,7 @@ fn tools() -> Value {
     json!([
         {
             "name": "chumbys",
-            "description": "The Chumbys paired with this neochumbyd and their settings, those asking to pair, and the apps in the tree that may be a start app",
+            "description": "The Chumbys paired with this neochumbyd and their settings, those asking to pair, and the apps in the tree that may be a start app or the player",
             "inputSchema": {"type": "object", "properties": {}},
             "annotations": {"readOnlyHint": true},
         },
@@ -108,7 +109,7 @@ fn tools() -> Value {
         },
         {
             "name": "set",
-            "description": "Sets one of a paired Chumby's settings, sent to it when it next connects: `start` (its start app; see chumbys for those in the tree) or `delivery` (`nfs` or `sync`). An empty value removes the setting. Not `dev` (remote input), which is the owner's to turn on",
+            "description": "Sets one of a paired Chumby's settings, sent to it when it next connects: `start` (its start app; see chumbys for those in the tree), `player` (its default player, which MUSIC buttons open; likewise) or `delivery` (`nfs` or `sync`). An empty value removes the setting. Not `dev` (remote input), which is the owner's to turn on",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -208,20 +209,23 @@ impl Server {
     }
 
     fn chumbys(&self) -> Result<String, String> {
-        let starts = tree::start_apps(&self.tree);
+        let (starts, players) = (tree::start_apps(&self.tree), tree::players(&self.tree));
         let mut out = String::new();
         for (name, key) in self.state.pairs().map_err(|e| e.to_string())? {
-            let config = self.state.config(&name);
-            let settings: Vec<String> = config.iter().map(|(k, v)| format!("{k}={v}")).collect();
-            out += &format!("paired   {name}  {key}  {}\n", settings.join(" "));
-            let start = config.iter().find(|(k, _)| k == "start").map(|(_, v)| v.as_str());
-            if let Some(note) = tree::start_note(&name, start, &starts) {
+            let pairs: Vec<String> = self.state.config(&name).iter().map(|(k, v)| format!("{k}={v}")).collect();
+            out += &format!("paired   {name}  {key}  {}\n", pairs.join(" "));
+            let settings = self.state.settings(&name);
+            let notes = [
+                tree::start_note(&name, settings.start.as_deref(), &starts),
+                tree::player_note(&name, settings.player.as_deref(), &players),
+            ];
+            for note in notes.into_iter().flatten() {
                 out += &format!("         {note}\n");
             }
         }
         for p in self.state.pending().map_err(|e| e.to_string())? {
             out += &format!(
-                "asking   {}  code {}  from {} (approve it on the server, after comparing the code on the Chumby's screen)\n",
+                "asking   {}  code {}  from {} (approve it on the server, typing the code from the Chumby's screen)\n",
                 p.name, p.code, p.addr
             );
         }
@@ -229,6 +233,7 @@ impl Server {
             out += "no Chumbys paired or asking\n";
         }
         out += &tree::hint(&starts);
+        out += &format!("\n{}", tree::player_hint(&players));
         Ok(out)
     }
 
@@ -242,7 +247,7 @@ impl Server {
 
     fn set(&self, name: &str, key: &str, value: &str) -> Result<String, String> {
         // Remote input is the Chumby's owner's to turn on, not a client's.
-        if key == INPUT_KEY {
+        if key == key::DEV {
             return Err(format!(
                 "{key} is set by the Chumby's owner, with `neochumbyd set {name} {key}=on`, not from here"
             ));
@@ -252,12 +257,19 @@ impl Server {
             "" => format!("{name}: {key} removed"),
             _ => format!("{name}: {key}={value}"),
         };
-        if key == "start" {
+        if key == key::START {
             let starts = tree::start_apps(&self.tree);
             if !value.is_empty() && !starts.iter().any(|s| s == value) {
                 out += &format!("\n{value} isn't a start app in the tree; the Chumby will open {}", tree::HOME);
             }
             out += &format!("\n{}", tree::hint(&starts));
+        }
+        if key == key::PLAYER {
+            let players = tree::players(&self.tree);
+            if let Some(note) = tree::player_note(name, Some(value).filter(|v| !v.is_empty()), &players) {
+                out += &format!("\n{note}");
+            }
+            out += &format!("\n{}", tree::player_hint(&players));
         }
         Ok(out)
     }
@@ -338,7 +350,7 @@ mod tests {
         let r = call(&s, "set", json!({"name": "attic", "key": "delivery", "value": "sync"}));
         assert_eq!(r["isError"], true);
         // Remote input stays the owner's to turn on.
-        let r = call(&s, "set", json!({"name": "den", "key": INPUT_KEY, "value": "on"}));
+        let r = call(&s, "set", json!({"name": "den", "key": key::DEV, "value": "on"}));
         assert_eq!(r["isError"], true);
         assert_eq!(s.state.config("den"), [("delivery".to_string(), "sync".to_string())]);
     }

@@ -23,7 +23,7 @@
 //!   dev/<name>/input.done, .err    the Chumby did it, or why not
 //!
 //! Input goes only to a Chumby whose settings say `dev=on`
-//! (neochumby_proto::dev::accepts_input), checked by the command, by the
+//! (neochumby_proto::Settings::dev), checked by the command, by the
 //! daemon as it takes the request, and by the Chumby, to which the daemon
 //! sends its settings again first. Off by default: pairing a Chumby lets
 //! its server see what it does, and drive it only once its owner says so.
@@ -46,7 +46,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use neochumby_proto::dev::{MAX_HOLD_MS, ShotIn, accepts_input, clean_line};
+use neochumby_proto::dev::{MAX_HOLD_MS, ShotIn, clean_line};
 use neochumby_proto::{Msg, Session, valid_name};
 
 use crate::api::Api;
@@ -239,7 +239,7 @@ pub fn run(api: &Api, name: &str, mut s: Session) -> io::Result<()> {
     let mut shot: Option<(Instant, Option<ShotIn>)> = None;
     // A tap or button sent and not yet answered: by when it must be.
     let mut input: Option<Instant> = None;
-    log.append(&format!("-- neochumbyd: {name} connected"))?;
+    log.append(&format!("-- neochumbyd: {name} connected, protocol version {}", s.version()))?;
 
     while api.links.current(name, id) && api.state.paired(s.peer()).as_deref() == Some(name) {
         match s.recv_timeout(TICK)? {
@@ -289,6 +289,8 @@ pub fn run(api: &Api, name: &str, mut s: Session) -> io::Result<()> {
                     std::fs::write(asks.join("input.err"), format!("{name}: {}", clean_line(&why)))?;
                 }
             }
+            // A newer Chumby's, that this neochumbyd may ignore.
+            Some(Msg::Unknown { .. }) => {}
             Some(m) => return Err(invalid(format!("unexpected {m:?}"))),
         }
         if shot.as_ref().is_some_and(|(at, _)| at.elapsed() > SHOT_TIMEOUT) {
@@ -303,14 +305,14 @@ pub fn run(api: &Api, name: &str, mut s: Session) -> io::Result<()> {
             && let Ok(line) = std::fs::read_to_string(asks.join("input"))
         {
             let _ = std::fs::remove_file(asks.join("input"));
-            let config = api.state.config(name);
+            let settings = api.state.settings(name);
             match parse_input(&line) {
                 Err(e) => std::fs::write(asks.join("input.err"), e)?,
-                Ok(_) if !accepts_input(&config) => std::fs::write(asks.join("input.err"), input_off(name))?,
+                Ok(_) if !settings.dev => std::fs::write(asks.join("input.err"), input_off(name))?,
                 Ok(m) => {
                     log.append(&format!("-- neochumbyd: {}", line.trim()))?;
                     // What the Chumby goes by: its settings as they are now.
-                    s.send(&Msg::Config(config))?;
+                    s.send(&Msg::Config(settings.to_pairs()))?;
                     s.send(&m)?;
                     let hold = if let Msg::Tap { hold_ms, .. } = m { hold_ms } else { 0 };
                     input = Some(Instant::now() + Duration::from_millis(hold.into()) + INPUT_ANSWER);
@@ -627,8 +629,7 @@ mod tests {
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || crate::api::serve(l, Arc::new(api)));
 
-        let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby).unwrap();
-        assert_eq!(s.peer(), &server_key);
+        let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &server_key).unwrap();
         s.send(&Msg::Hello { name: "den".into() }).unwrap();
         assert_eq!(s.recv().unwrap(), Msg::Welcome);
         assert!(matches!(s.recv().unwrap(), Msg::Config(_)));
@@ -701,7 +702,8 @@ mod tests {
         assert_eq!(
             kept,
             [
-                "-- neochumbyd: den connected",
+                // A Chumby from before versions: version 0.
+                "-- neochumbyd: den connected, protocol version 0",
                 "neochumby: opening home",
                 "?[2Jboo",
                 "-- neochumbyd: restart asked",

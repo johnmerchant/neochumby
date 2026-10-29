@@ -21,6 +21,7 @@ path = "src/companion.rs"
 [dependencies]
 neochumby-proto.workspace = true
 neochumby-sys.workspace = true
+serde.workspace = true
 embedded-graphics = "0.8"
 
 # Only the Chumby's build uses the device library. On the host the text,
@@ -32,7 +33,7 @@ neochumby.workspace = true
 [package.metadata.neochumby]
 title = "LOGS"
 exec = "neochumby-logs"
-colour = "7890a8"
+color = "7890a8"
 companion = "neochumby-logs-companion"
 neochumbyd = "optional"
 # The Chumby's logs, read-only, in its jail.

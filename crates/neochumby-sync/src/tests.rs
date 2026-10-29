@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::Instant;
 
-use neochumby_proto::{Identity, Msg, Session};
+use neochumby_proto::{Identity, Msg, Session, Unverified};
 
 use crate::Timing;
 use crate::manifest::tests::entry;
@@ -22,8 +22,12 @@ const T: Timing = Timing { step: WAIT, round: Duration::from_secs(60) };
 fn sessions() -> (Session, Session) {
     let l = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = l.local_addr().unwrap();
-    let t = std::thread::spawn(move || Session::accept(l.accept().unwrap().0, &Identity::generate().unwrap()).unwrap());
-    let c = Session::connect(TcpStream::connect(addr).unwrap(), &Identity::generate().unwrap()).unwrap();
+    let server = Identity::generate().unwrap();
+    let server_key = server.public();
+    let t = std::thread::spawn(move || {
+        Unverified::accept(l.accept().unwrap().0, &server).unwrap().verify(|_| true).unwrap()
+    });
+    let c = Session::connect(TcpStream::connect(addr).unwrap(), &Identity::generate().unwrap(), &server_key).unwrap();
     (t.join().unwrap(), c)
 }
 
