@@ -11,7 +11,7 @@
 #
 # Buildroot needs Linux, so this runs it in a container (dist/Containerfile)
 # with Apple's container, docker or podman (NEOCHUMBY_DIST_RUNTIME picks).
-# Its work (the download cache, the toolchain, the build) stays in a volume,
+# Its work (the downloads, ccache, the build) stays in a volume,
 # neochumby-dist, on the container's own disk: the kernel's tree has files
 # whose names differ only by case, which macOS's disk can't hold. A second
 # run rebuilds only what changed; `$runtime volume rm neochumby-dist` starts
@@ -27,6 +27,9 @@ if [ "${1:-}" = --inside ]; then
   root=$2
   out=$3
   br=/work/buildroot-$VERSION
+  # Downloads and ccache's objects apart from the output, so CI can keep
+  # them when the output is stale.
+  export BR2_DL_DIR=/work/dl BR2_CCACHE_DIR=/work/ccache
   if [ ! -d "$br" ]; then
     wget -nv -O /work/br.tar.xz "https://buildroot.org/downloads/buildroot-$VERSION.tar.xz"
     echo "$SHA256  /work/br.tar.xz" | sha256sum -c -
@@ -34,6 +37,16 @@ if [ "${1:-}" = --inside ]; then
     rm /work/br.tar.xz
   fi
   make -C "$br" O=/work/output BR2_EXTERNAL="$root/dist" chumby_classic_defconfig
+  # Bootlin's toolchain where it runs (x86_64, so CI), over the defconfig's.
+  # Kconfig would drop it silently anywhere else, so check it took.
+  if [ "$(uname -m)" = x86_64 ]; then
+    cat "$root/dist/board/chumby-classic/bootlin.config" >>/work/output/.config
+    make -C "$br" O=/work/output olddefconfig
+    grep -qx BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_ARMV5_EABI_MUSL_STABLE=y /work/output/.config || {
+      echo "dist/build: Bootlin's toolchain didn't take" >&2
+      exit 1
+    }
+  fi
   make -C "$br" O=/work/output
   # Kconfig drops an option whose dependencies aren't met, silently: every
   # line of the fragment has to be in the kernel's .config as written.

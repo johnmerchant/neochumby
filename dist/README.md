@@ -29,19 +29,22 @@ initramfs beside it, for userhook2 or another kexec path.  Both carry the
 
 It runs Buildroot (2026.02.3, pinned with its hash) in a container: Apple's
 container, docker or podman. The first build makes the cross toolchain
-(gcc 13, static musl, ARM926EJ-S soft float) and takes a while, and later
-ones rebuild only what changed.  `NEOCHUMBY_DIST_WORK=DIR` keeps Buildroot's
-downloads and output in `DIR` instead of the `neochumby-dist` volume; CI
-uses it to cache the work.
+(gcc 13, static musl, ARM926EJ-S soft float) and takes a while; later ones
+rebuild only what changed, and compiles go through ccache. On an x86_64
+host (CI) it uses Bootlin's prebuilt armv5-eabi musl toolchain (gcc 14)
+instead, which Bootlin builds only for x86_64.
+`NEOCHUMBY_DIST_WORK=DIR` keeps Buildroot's work (`dl/`, `ccache/`,
+`output/`) in `DIR` instead of the `neochumby-dist` volume; CI uses it to
+cache the work.
 
 ## CI
 
-`.github/workflows/nandless.yml` builds the custom QEMU and this image, then
-runs `run-recovery-demo.py` with a zeroed NAND image.  It runs on changes
-under `dist/`, `tools/neochumby-kernel-sideloader/` or `emu/qemu/`, and on
-`workflow_dispatch`.  QEMU and Buildroot work is cached; the first run is
-slow, and later runs rebuild only what changed.  The job is path-filtered
-rather than part of the main CI.  The sideloaded path still needs the user's
+CI's `nandless` job (`.github/workflows/ci.yml`) builds the custom QEMU and
+this image, then runs `run-recovery-demo.py` with a zeroed NAND image.  It
+runs on changes under `dist/`, `tools/neochumby-kernel-sideloader/` or
+`emu/qemu/`, and on `workflow_dispatch`, and is skipped otherwise.  QEMU and
+Buildroot work is cached; the first run is slow, and later runs rebuild only
+what changed.  The sideloaded path still needs the user's
 own stock firmware, so it stays local (`run-demo.py`).
 
 | Path | What |

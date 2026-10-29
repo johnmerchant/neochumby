@@ -5,12 +5,19 @@ BR2_ARM_EABI=y
 BR2_ARM_SOFT_FLOAT=y
 
 # Static musl, like the apps. gcc 13 is this Buildroot's oldest, so 5.9
-# has to build with it.
+# has to build with it. (On an x86_64 host dist/build swaps in Bootlin's
+# prebuilt toolchain instead: board/chumby-classic/bootlin.config.)
 BR2_TOOLCHAIN_BUILDROOT_MUSL=y
 BR2_GCC_VERSION_13_X=y
 BR2_KERNEL_HEADERS_AS_KERNEL=y
 BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_5_9=y
 BR2_STATIC_LIBS=y
+
+# Compiles go through ccache, so a build whose output was thrown away (a
+# config change, a cold CI cache) still reuses what it compiled before.
+# dist/build puts the cache in its work, beside the downloads.
+BR2_CCACHE=y
+BR2_CCACHE_INITIAL_SETUP="--max-size=1G"
 
 # Every download checked against a hash; the kernel's are ours (patches/).
 BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
