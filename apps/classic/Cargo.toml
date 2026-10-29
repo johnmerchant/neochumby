@@ -1,7 +1,9 @@
 [package]
 name = "neochumby-classic"
 description = "The 2008 Chumby's look as an app: pages and screens a feeder prerenders, shown with wipes, panes, tap zones and animation"
-license = "MIT"
+# Ours is MIT; src/flurry.rs is a port of Calum Robinson's Flurry, under
+# its BSD licence (NOTICE, beside this file, and the top of flurry.rs).
+license = "MIT AND BSD-3-Clause"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true

@@ -5,7 +5,8 @@
 //! - **slideshow**: pages that rotate with a 90s wipe. A page may have
 //!   animated sprites, actors (sprite sheets moving along a path), a clock,
 //!   a scrolling ticker, light layers (glow, glowseq), a panning panorama
-//!   and a logo intro.
+//!   and a logo intro. A `flurry` page is the one thing drawn here rather
+//!   than by the feeder: the Flurry screensaver (flurry.rs), live.
 //! - **screens**: interactive pages (Home, Music, Settings): a background,
 //!   panes that show the frame matching a state variable, tap zones with
 //!   actions, and a volume slider.
@@ -205,6 +206,9 @@ pub struct Engine<P: Plat> {
     glow_runs: Vec<Option<Vec<u32>>>,
     logo_ix: Option<logo::Index>,
     gsq_shown: Vec<i32>,
+    /// The Flurry running, and the page it is for: made when its page
+    /// comes up, dropped when it goes (it holds about 700 KB).
+    flurry: Option<(i32, Box<crate::flurry::Scene>)>,
 
     base_dir: PathBuf,
     dir: PathBuf,
@@ -323,6 +327,7 @@ impl<P: Plat> Engine<P> {
             glow_runs: Vec::new(),
             logo_ix: None,
             gsq_shown: Vec::new(),
+            flurry: None,
             dir: base_dir.clone(),
             base_dir,
             loaded_dir: PathBuf::new(),
@@ -1118,6 +1123,7 @@ impl<P: Plat> Engine<P> {
         self.glow_runs = vec![None; self.m.glows.len()];
         self.live_shown = vec![None; self.m.lives.len()];
         self.gsq_shown = vec![-1; self.m.gsqs.len()];
+        self.flurry = None; // its line may have changed
         // Derived data for the files that were kept.
         for i in 0..self.c.assets.len() {
             if self.c.state(i) == State::Ready {
@@ -1498,12 +1504,44 @@ impl<P: Plat> Engine<P> {
         }
     }
 
+    /// This page's `flurry` line, if it has one.
+    fn flurry_line(&self) -> Option<usize> {
+        self.m.flurries.iter().rposition(|f| f.page == self.page)
+    }
+
+    /// Whether anything is drawn over this page's Flurry: then it is
+    /// composed whole each frame, rather than only its lit rows copied.
+    fn flurry_covered(&self) -> bool {
+        let p = self.page;
+        let on = self.page_target(p);
+        self.m.sprites.iter().any(|s| s.page == p)
+            || self.m.actors.iter().any(|a| a.page == p)
+            || self.m.panes.iter().any(|q| q.on == on)
+            || self.m.lives.iter().any(|l| l.on == on)
+            || self.m.logo.page == p
+            || self.m.scroller.page == p
+    }
+
+    /// A frame of this page's Flurry into the back buffer, the scene made
+    /// first if it isn't running. Every row if `all`; returns the rows drawn.
+    fn draw_flurry(&mut self, f: usize, t: i64, all: bool) -> crate::flurry::Rows {
+        if self.flurry.as_ref().is_none_or(|(p, _)| *p != self.page) {
+            let seed = self.plat.now_us() as u32 ^ self.plat.wall() as u32;
+            self.flurry = Some((self.page, Box::new(crate::flurry::Scene::new(&self.m.flurries[f].opt, seed))));
+        }
+        let plat = &self.plat;
+        let (_, scene) = self.flurry.as_mut()?;
+        scene.frame(t, &mut self.back, all, || plat.now_us())
+    }
+
     /// The whole slideshow page into the back buffer.
     fn compose_page(&mut self, t: i64) {
         let p = self.page as usize;
         let bgi = self.page_bgi(self.page);
         let (pano, pano_w, pano_speed) = (self.m.pages[p].pano, self.m.pages[p].pano_w, self.m.pages[p].pano_speed);
-        if self.page_has_glows() {
+        if let Some(f) = self.flurry_line() {
+            self.draw_flurry(f, t, true);
+        } else if self.page_has_glows() {
             // Cached: blending is the expensive part.
             let key = t * FPS as i64 / 1000 / GLOW_DIV;
             if key != self.glow_key || self.glow_page != self.page {
@@ -1560,6 +1598,18 @@ impl<P: Plat> Engine<P> {
     /// Advances the animated things on the current page; only changed
     /// rectangles reach the screen.
     fn animate_page(&mut self, t: i64) {
+        if let Some(f) = self.flurry_line() {
+            if self.flurry_covered() {
+                self.compose_page(t);
+                self.blit(0, 0, W, H);
+            } else if let Some((y0, y1)) = self.draw_flurry(f, t, false) {
+                // Only rows with light in them change.
+                self.blit(0, y0 as i32, W, (y1 - y0 + 1) as i32);
+            }
+            // The clock is drawn over it each frame, as the rows under it change.
+            self.draw_clock();
+            return;
+        }
         if self.m.pages[self.page as usize].fullframe {
             // Everything overlaps: redraw it all.
             self.compose_page(t);
@@ -1789,6 +1839,9 @@ impl<P: Plat> Engine<P> {
         self.ss_page = self.page;
         self.scr = -1;
         self.clock_left = W;
+        if self.flurry.as_ref().is_some_and(|(p, _)| *p != self.page) {
+            self.flurry = None;
+        }
         self.need(Kind::Page, self.page);
         self.read_values(t);
         self.compose_page(t);
@@ -1806,6 +1859,7 @@ impl<P: Plat> Engine<P> {
         self.scr = s;
         self.ss_page = -1;
         self.wipe = 0;
+        self.flurry = None;
         self.need(Kind::Screen, s);
         let t = self.ms();
         self.read_values(t);
@@ -2106,6 +2160,7 @@ impl<P: Plat> Engine<P> {
         let span = if lw.start != 0 { WIN_MS } else { 0 };
         let s = &self.s;
         let fx = &self.fxs_last;
+        let fc = self.flurry.as_ref().map(|(_, s)| s.cost).unwrap_or_default();
         let out = format!(
             "why={why}\npid={}\nloader_pid={}\ntime={}\nmode={}\nview={}\npage={}\nnight={}\nnightmode={}\npin={}\nbench={}\n\
              fps_x10={}\nframe_work_us_min={}\nframe_work_us_avg={}\nframe_work_us_max={}\nframe_gap_us_max={}\n\
@@ -2115,7 +2170,8 @@ impl<P: Plat> Engine<P> {
              glowseq_late={}\nlast_transition={}\nlast_transition_ms={}\nlast_transition_load_ms={}\n\
              last_transition_hit={}\ndir={}\nfx_page={}\nfx={}\nfx_loop={}\nfx_force={}\nfx_last={}\nfx_last_frames={}\n\
              fx_last_work_us_avg={}\nfx_last_work_us_max={}\nfx_last_fps_x10={}\nfx_last_logo_us_avg={}\n\
-             fx_last_logo_us_max={}\nfx_hold_logo_us={}\n",
+             fx_last_logo_us_max={}\nfx_hold_logo_us={}\nflurry={}\nflurry_model_us={}\nflurry_draw_us={}\n\
+             flurry_pass_us={}\nflurry_puffs={}\nflurry_pixels={}\n",
             std::process::id(),
             // The loader is a thread of this process.
             if self.loader.is_some() { std::process::id() as i64 } else { -1 },
@@ -2170,6 +2226,12 @@ impl<P: Plat> Engine<P> {
             fx.logo_avg,
             fx.logo_max,
             self.fx_hold_us,
+            self.flurry.as_ref().map_or(-1, |(p, _)| *p),
+            fc.model_us,
+            fc.draw_us,
+            fc.pass_us,
+            fc.puffs,
+            fc.pixels,
         );
         let Some(path) = &self.stat_path else { return };
         let _ = state::write_setting(path, out.as_bytes());
@@ -2822,6 +2884,57 @@ mod tests {
             assert_eq!(held, e.c.bytes, "the cache's count is off");
         }
         std::fs::remove_dir_all(d).unwrap();
+    }
+
+    /// A flurry page: drawn live while it shows, dropped when it goes, and
+    /// bad lines skipped.
+    #[test]
+    fn flurry_page() {
+        let (mut e, d) = hostile(
+            "flurry",
+            "page 1 p.raw 12 noclock noticker\n\
+             flurry 1 classic seed=5 streams=3\n\
+             flurry 7 classic\n\
+             flurry 0 nonesuch\n\
+             flurry 0 classic streams=99\n",
+            &[],
+            4096,
+        );
+        assert_eq!(e.m.flurries.len(), 1, "only the good line");
+        assert_eq!(e.m.flurries[0].opt.streams, Some(3));
+        e.ctl_line(b"page 1", e.ms());
+        for _ in 0..150 {
+            assert!(e.frame());
+        }
+        assert_eq!(e.flurry.as_ref().map(|(p, _)| *p), Some(1));
+        let lit = e.plat.fb().iter().filter(|&&p| p != 0).count();
+        assert!(lit > 300, "the Flurry drew {lit} pixels");
+        assert!(e.plat.fb().iter().all(|&p| p != 0x2121), "none of the page's own file");
+        e.ctl_line(b"show home", e.ms());
+        assert!(e.frame());
+        assert!(e.flurry.is_none(), "dropped for a screen");
+        e.ctl_line(b"page 1", e.ms());
+        assert!(e.frame());
+        assert!(e.flurry.is_some());
+        e.ctl_line(b"page 0", e.ms());
+        assert!(e.frame());
+        assert!(e.flurry.is_none(), "dropped for another page");
+        std::fs::remove_dir_all(&d).unwrap();
+
+        // With a sprite over it, it is composed whole, and still runs.
+        let (mut e, d) = hostile(
+            "flurry2",
+            "page 1 p.raw 12\nflurry 1 water seed=2\nsprite 1 s.raw 4 4 1 10 10 8\n",
+            &[("s.raw", 32)],
+            4096,
+        );
+        e.ctl_line(b"page 1", e.ms());
+        for _ in 0..80 {
+            assert!(e.frame());
+        }
+        assert!(e.flurry_covered());
+        assert!(e.flurry.is_some());
+        std::fs::remove_dir_all(&d).unwrap();
     }
 
     #[test]

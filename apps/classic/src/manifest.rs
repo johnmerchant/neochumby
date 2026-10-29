@@ -26,6 +26,7 @@
 //! bgscroll PAGE FILE W SPEED
 //! glow PAGE FILE W H Y SPEED [FADE_MS PHASE_MS SWAY_PX SWAY_MS [X0 [ON_MS]]]
 //! glowseq PAGE PREFIX NFRAMES FPS R G B BRIGHT     frames PREFIX_000.l8 ...
+//! flurry PAGE [PRESET] [KEY=VALUE ...]          the Flurry screensaver, drawn live
 //! livefont NAME FILE CELLW CELLH [W0..W78]       a glyph strip for live text
 //! live TARGET KEY FONT X Y W H ALIGN BG          a device value as text
 //! ```
@@ -35,6 +36,12 @@
 //! values.rs reads them. A page's `pagenight:N` panes and live boxes are
 //! drawn instead of its `page:N` ones while it shows its pagenight file,
 //! if it has any.
+//!
+//! A `flurry` page is drawn by flurry.rs over the whole screen, in place of
+//! its file (which must still be there: black, as the feeder writes it).
+//! Its words are flurry::Options::parse's: a preset (classic, rgb, water,
+//! fire, psychedelic or random) and `streams=`, `colour=`, `speed=`,
+//! `thickness=`, `bright=`, `seed=`, `puffs=`, `rate=`.
 //!
 //! A line that doesn't parse, or names a file that is missing or the wrong
 //! size, is skipped. Pages are numbered in the order they come; the N in
@@ -86,6 +93,8 @@ pub const MAXSECS: usize = 12;
 pub const MAXGLOW: usize = 32;
 /// Glowseq clips, and frames in each.
 pub const MAXGSQ: usize = 8;
+/// Flurry pages (each a line: the scene is made only while its page shows).
+pub const MAXFLURRY: usize = 8;
 pub const MAXGSQ_FRAMES: i32 = 1000;
 /// The longest name of a screen, font or tap-zone argument, in bytes (the
 /// `%48s` in the formats below; the C engine's was 23). The tests check
@@ -345,6 +354,13 @@ pub struct GlowSeq {
     pub lut: [u16; 256],
 }
 
+/// A `flurry` line: page `page` is the Flurry screensaver.
+#[derive(Clone, Debug)]
+pub struct FlurryPage {
+    pub page: i32,
+    pub opt: crate::flurry::Options,
+}
+
 #[derive(Clone, Debug, Default)]
 pub struct Manifest {
     pub pages: Vec<Page>,
@@ -364,6 +380,7 @@ pub struct Manifest {
     pub scroller: Scroller,
     pub glows: Vec<Glow>,
     pub gsqs: Vec<GlowSeq>,
+    pub flurries: Vec<FlurryPage>,
     pub fonts: Vec<Font>,
     pub lives: Vec<Live>,
     /// Screen names to indices (the first screen of a name), so lookups
@@ -795,6 +812,16 @@ pub fn parse(m: &[u8], mut asset: impl FnMut(&str, Size) -> Ix) -> Manifest {
                 (o.target(v[0].s()), Key::parse(v[1].s()), font, align, bg)
             {
                 o.lives.push(Live { on, key, font, x: v[3].i(), y: v[4].i(), w: v[5].i(), h: v[6].i(), align, bg });
+            }
+        } else if let Some(v) = some(sc("flurry %d"), 1).filter(|v| idx(v[0].i(), o.pages.len())) {
+            // The words after the page; a later line for the page replaces it.
+            let words = std::str::from_utf8(line).ok().map(|l| l.split_whitespace().skip(2));
+            if let Some(opt) = words.and_then(crate::flurry::Options::parse) {
+                let page = v[0].i();
+                o.flurries.retain(|f| f.page != page);
+                if o.flurries.len() < MAXFLURRY {
+                    o.flurries.push(FlurryPage { page, opt });
+                }
             }
         } else if let Some(v) = some(sc("sun %ld %ld"), 2).filter(|_| o.sun.len() < MAXSUN) {
             o.sun.push((v[0].l(), v[1].l()));

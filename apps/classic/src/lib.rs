@@ -14,6 +14,7 @@ pub mod cache;
 pub mod device;
 pub mod draw;
 pub mod engine;
+pub mod flurry;
 pub mod host;
 pub mod loader;
 pub mod logo;
