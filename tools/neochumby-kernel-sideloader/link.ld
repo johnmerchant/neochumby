@@ -1,7 +1,7 @@
 /* Page-zero ELF for CVE-2009-2698 on the stock 2.6.16 ARM kernel.
  * The first PT_LOAD is at virtual address 0 and holds the fake struct
  * rtable (output at 0x74) and the jump payload at 0x80.  The code is
- * loaded at 0x10000, as in the working C POC. */
+ * loaded at 0x10000, as in the earlier C implementation. */
 ENTRY(_start)
 PHDRS
 {

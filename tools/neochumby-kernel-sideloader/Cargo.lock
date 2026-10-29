@@ -3,5 +3,5 @@
 version = 4
 
 [[package]]
-name = "chumpwn"
+name = "neochumby-kernel-sideloader"
 version = "0.1.0"

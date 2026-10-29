@@ -1,20 +1,21 @@
-# chumpwn: stock 2.6.16 -> NAND-less Linux 5.9.16
+# neochumby-kernel-sideloader: stock 2.6.16 -> NAND-less Linux 5.9.16
 
-`chumpwn` is a static ARM EABI binary that runs on the stock Chumby Linux
-2.6.16.  It uses **CVE-2009-2698** (the NULL `struct rtable` page-zero ELF
-route) to obtain uid 0 and all capabilities, maps `/dev/mem`, stages a Linux
-**5.9.16** zImage and an initramfs **outside NAND**, and hands off with
-the MMU off.  The new kernel is built with `CONFIG_MTD=n`: it has no NAND
-driver, no `/proc/mtd`, no `/dev/mtd*`, and no NAND platform device.
+`neochumby-kernel-sideloader` is a static ARM EABI binary that runs on the
+stock Chumby Linux 2.6.16.  It uses **CVE-2009-2698** (the NULL `struct
+rtable` page-zero ELF route) to obtain uid 0 and all capabilities, maps
+`/dev/mem`, stages a Linux **5.9.16** zImage and an initramfs **outside
+NAND**, and hands off with the MMU off.  The new kernel is built with
+`CONFIG_MTD=n`: it has no NAND driver, no `/proc/mtd`, no `/dev/mtd*`, and
+no NAND platform device.
 
-The executable itself is Rust.  Its ELF has a `PT_LOAD` at virtual address 0
-for the fake rtable and the jump payload; the page-zero trick is the same as
-the working C POC, ported to `global_asm!` in `src/main.rs`.  This is a
-standalone bare-metal tool (`[workspace]` in its `Cargo.toml`), so it uses
+The executable is Rust.  Its ELF has a `PT_LOAD` at virtual address 0 for the
+fake rtable and the jump payload; the page-zero route is the same as the
+earlier C implementation, ported to `global_asm!` in `src/asm.rs`.  This is a
+standalone bare-metal tool (`[workspace]` in `Cargo.toml`), so it uses
 `unsafe` directly rather than living under the workspace's app-contract/unsafe
 rules; it is MIT and never runs inside the neochumby jail.
 
-This is a QEMU demo for the user's own device image/emulator.
+The demo is for the user's own device image and emulator.
 
 ## NAND access and writes
 
@@ -22,12 +23,12 @@ This is a QEMU demo for the user's own device image/emulator.
   stock chip; there is no other first-stage boot path on the device.  That is
   a read, and QEMU opens the image with `snapshot=on` and runs with
   `-snapshot`.
-- **`chumpwn` writes no NAND.**  The only device node it opens is `/dev/mem`
-  (`O_RDWR`); the writes through it are to RAM (zImage, initrd, ATAGS and the
-  handoff stub).  Those mappings are SDRAM addresses (`0xc2000000`,
-  `0xc2800000`, `0xc3f00000`, `0xc3f80000`), not the NAND controller.  It
-  reads the QEMU loader container, or in hardware mode user-supplied
-  kernel/initramfs files read-only.  It never opens
+- **The sideloader writes no NAND.**  The only device node it opens is
+  `/dev/mem` (`O_RDWR`); the writes through it are to RAM (zImage, initrd,
+  ATAGS and the handoff stub).  Those mappings are SDRAM addresses
+  (`0xc2000000`, `0xc2800000`, `0xc3f00000`, `0xc3f80000`), not the NAND
+  controller.  It reads the QEMU loader container, or in hardware mode
+  user-supplied kernel/initramfs files read-only.  It never opens
   `/dev/mtd*`, never calls an MTD `ioctl`, and never creates MTD device nodes.
   The executable contains no `/dev/mtd`, `mtdblock`, `flash_erase`,
   `flashcp`, `nandwrite`, `mtd` or `nand` strings; `run-demo.py` checks the
@@ -37,12 +38,12 @@ This is a QEMU demo for the user's own device image/emulator.
   `/dev/mtd*`, no `/sys/class/mtd`, and no NAND in dmesg.
 - **The demo has one host-side NAND-image preparation step.**  `mk_psp_nand.py`
   copies the sanitized original into a separate `nand-scratch.img` and writes
-  the PSP partition in that copy, so the stock boot can find `chumpwn` in
+  the PSP partition in that copy, so the stock boot can find the sideloader in
   `/psp/rfs1/rcS`.  It is not a guest/MTD/device write, it never opens the
   original for writing, and the original SHA-256 is checked before and after.
   If host image preparation itself is out of scope, use a pre-made scratch
-  image or a real USB stick; the runtime path (`chumpwn` and 5.9.16) still
-  performs zero NAND writes.
+  image or a real USB stick; the runtime path (the sideloader and 5.9.16)
+  still performs zero NAND writes.
 - The stock rcS has later `flash_eraseall`/`nandwrite` lines, but the
   `/psp/rfs1/rcS` hook exits before them; QEMU snapshots any incidental stock
   writes.
@@ -51,7 +52,8 @@ Audit of the tree:
 
 | path | NAND/MTD use |
 | --- | --- |
-| `src/main.rs` | opens `/dev/mem` only; maps SDRAM; no MTD operation or MTD literals |
+| `src/main.rs`, `src/container.rs` | opens `/dev/mem` only; maps SDRAM; no MTD operation or MTD literals |
+| `src/asm.rs` | page-zero entry and handoff payloads; no device access |
 | `run-demo.py` | stock root cmdline `/dev/mtdblock5` (read-only mount); scratch `if=mtd` with `snapshot=on`; static/guest MTD checks |
 | `mk_psp_nand.py` | host-side scratch image copy; input opened read-only |
 | `kernel/nonand.config`, `kernel/*.patch` | `CONFIG_MTD=n`; no NAND platform device on MX21ADS |
@@ -59,9 +61,10 @@ Audit of the tree:
 
 ## Result
 
-`evidence/chumpwn-demo.log` is one serial stream.  It contains the stock
-2.6.16 boot, the chumpwn exploit/load messages, the 5.9.16 boot log, the
-initramfs `/init`, and an interactive shell.  The key lines:
+`evidence/sideloader-demo.log` is one serial stream.  It contains the stock
+2.6.16 boot, the loader messages, the 5.9.16 boot log, the initramfs `/init`,
+and an interactive shell.  The log is from the build that was then named
+`chumpwn`; its lines still use that prefix.  The key lines:
 
 ```text
 chumpwn: start uid=0
@@ -109,11 +112,11 @@ The 5.9.16 payload is placed by QEMU, not NAND:
 | item | physical | how |
 | --- | --- | --- |
 | stock 2.6.16 zImage | QEMU load address | `-kernel`; stock kernel reads NAND |
-| chumpwn container | `0xc2000000` | `-device loader,file=payload.bin,addr=0xc2000000` |
+| loader container | `0xc2000000` | `-device loader,file=payload.bin,addr=0xc2000000` |
 | 5.9.16 zImage | `0xc2000000` | copied forward over the container header; source is byte-offset `+0x1000` |
 | initramfs | `0xc2800000` | copied from the container |
-| ATAGS | `0xc3f00000` | built by chumpwn (same address as the C chainload) |
-| handoff stub | `0xc3f80000` | copied by chumpwn (same address as the C chainload) |
+| ATAGS | `0xc3f00000` | built by the sideloader (same address as the earlier C chainload) |
+| handoff stub | `0xc3f80000` | copied by the sideloader (same address as the earlier C chainload) |
 
 The container at `0xc2000000` is still free when stock `/psp/rfs1/rcS` runs;
 this was checked by loading the full container before boot and reading it
@@ -123,23 +126,25 @@ stub at `0xc3f80000` executes with the MMU on and continues at the same
 physical address after the MMU is disabled.
 
 The stock kernel does **not** see the container as NAND or as an initramfs; it
-is just RAM written by QEMU's loader.  chumpwn does not open `/dev/mtd*` at all.
+is just RAM written by QEMU's loader.  The sideloader does not open `/dev/mtd*`
+at all.
 
-## Faithful to the working C POC
+## Relationship to the earlier C implementation
 
-The Rust is a port of the existing, verified C sources, not a new exploit:
+The Rust follows the existing, verified C sources; the table records the
+correspondence.
 
-| Rust | Working C source | Notes |
+| Rust | C source | Notes |
 | --- | --- | --- |
 | `link.ld` | `poc2/link.ld` | `PT_LOAD` at vaddr 0 for `.zero`; code at `0x10000` |
-| `kernel_payload` in `global_asm!` | `stage2/payload.S`, `poc2/payload.S` | same uid/gid scan, same capability offsets `+0x24/+0x28/+0x2c` |
-| `trigger()` | `chainload.c trigger_poc()`, `stage2/exploit.c` | same `socket(AF_INET, SOCK_DGRAM)`, two `sendmsg`s, `MSG_MORE|MSG_PROBE` then `0` |
+| `kernel_payload` in `src/asm.rs` | `stage2/payload.S`, `poc2/payload.S` | same uid/gid scan, same capability offsets `+0x24/+0x28/+0x2c` |
+| `trigger()` in `src/trigger.rs` | `chainload.c trigger_poc()`, `stage2/exploit.c` | same `socket(AF_INET, SOCK_DGRAM)`, two `sendmsg`s, `MSG_MORE\|MSG_PROBE` then `0` |
 | `0x74`, `0x100`, `0x104` writes | `chainload.c` / `exploit.c` | fake `rtable.output` and uid/gid values |
-| `build_atags()` | `chainload.c build_atags()` | same ATAG_CORE/MEM/CMDLINE/NONE; added ATAG_INITRD2 for the separate initramfs |
-| `map_phys()`, `cacheflush()` | `chainload.c` | same `mmap2`/`MAP_FIXED` and ARM private `0x0f0002` |
-| `jump_blob` | `chainload-chumby/jump.S` | same I-cache/TLB invalidate and jump |
-| `stub_blob` | `chainload-chumby/stub.S` | same D-cache clean, MMU off, `r0=0`, `r1=851`, `r2=ATAGS`, `pc=zImage` |
-| `chumpwn_main()` | `chainload.c _start()` | same drop-to-1000, first trigger, capget, `/dev/mem`, staging, second trigger |
+| `build_atags()` in `src/atags.rs` | `chainload.c build_atags()` | same ATAG_CORE/MEM/CMDLINE/NONE; added ATAG_INITRD2 for the separate initramfs |
+| `map_phys()`, `cacheflush()` in `src/trigger.rs` | `chainload.c` | same `mmap2`/`MAP_FIXED` and ARM private `0x0f0002` |
+| `jump_blob` in `src/asm.rs` | `chainload-chumby/jump.S` | same I-cache/TLB invalidate and jump |
+| `stub_blob` in `src/asm.rs` | `chainload-chumby/stub.S` | same D-cache clean, MMU off, `r0=0`, `r1=851`, `r2=ATAGS`, `pc=zImage` |
+| `sideloader_main()` in `src/main.rs` | `chainload.c _start()` | same drop-to-1000, first trigger, capget, `/dev/mem`, staging, second trigger |
 
 Differences are deliberate and limited to the NAND-less requirement:
 
@@ -147,7 +152,8 @@ Differences are deliberate and limited to the NAND-less requirement:
   not from `/dev/mtdblock6`.
 - The initramfs is a separate file at `0xc2800000`, so `ATAG_INITRD2` is added
   and the cache flush covers it.
-- ATAGS and stub use the C chainload's addresses `0xc3f00000`/`0xc3f80000`.
+- ATAGS and stub use the earlier C chainload's addresses
+  `0xc3f00000`/`0xc3f80000`.
 - The command line has no `mtdparts=`, because the 5.9.16 kernel has no MTD.
 
 ## Build
@@ -159,8 +165,8 @@ zig linker wrapper is not used).
 
 ```sh
 rustup target add armv5te-unknown-linux-musleabi
-cd tools/chumpwn
-./build.sh                 # -> tools/chumpwn/chumpwn
+cd tools/neochumby-kernel-sideloader
+./build.sh                 # -> tools/neochumby-kernel-sideloader/neochumby-kernel-sideloader
 ```
 
 ### Linux 5.9.16
@@ -196,9 +202,9 @@ does not register a NAND device.
 The initramfs is `dist/`'s: the Buildroot external tree (`../../dist`) that
 builds the Chumby's own mainline userspace, not a placeholder.  `dist/build`
 runs Buildroot in a container and writes a zImage and a gzipped newc cpio;
-either can stand in for `kernel/build.sh`'s zImage above, since chumpwn only
-cares that the file starts with a zImage magic and that the initramfs is a
-gzipped cpio.
+either can stand in for `kernel/build.sh`'s zImage above, since the
+sideloader only cares that the file starts with a zImage magic and that the
+initramfs is a gzipped cpio.
 
 ```sh
 ../../dist/build build      # -> build/zImage, build/rootfs.cpio.gz
@@ -214,19 +220,19 @@ still to come (`neochumby-init`, the Chumby's own devices).
 
 `run-demo.py` prepares a separate scratch NAND image from the sanitized
 original, replacing only the 2 MiB PSP partition with a JFFS2 tree containing
-`chumpwn` and `rfs1/rcS` (see the no-write section above).  It then starts QEMU
-with the original NAND read-only, the payload via `-device loader`, and an
-interactive serial socket; it sends the NAND checks and shell markers, checks
-the `chumpwn` binary for MTD strings, fails if `/proc/mtd`, `/dev/mtd*`,
-`/sys/class/mtd` or NAND in dmesg appears, and fails if either the original or
-the scratch image hash changes.
+the sideloader and `rfs1/rcS` (see the no-write section above).  It then
+starts QEMU with the original NAND read-only, the payload via
+`-device loader`, and an interactive serial socket; it sends the NAND checks
+and shell markers, checks the sideloader binary for MTD strings, fails if
+`/proc/mtd`, `/dev/mtd*`, `/sys/class/mtd` or NAND in dmesg appears, and fails
+if either the original or the scratch image hash changes.
 
 ```sh
 QEMU=/path/to/qemu-system-arm \
 STOCK_ZIMAGE=/path/to/stock/zImage \
 NAND_SRC=/path/to/firmware/nand.img \
 CHUMBY_EMU=/path/to/chumby-emu \
-python3 tools/chumpwn/run-demo.py
+python3 tools/neochumby-kernel-sideloader/run-demo.py
 ```
 
 The exact QEMU command used for the captured log is in
@@ -245,14 +251,21 @@ qemu-system-arm -M chumby-classic \
 
 The stock kernel's command line is unchanged except that it still gets its
 normal `console=ttyS0,38400` and NAND root.  The 5.9.16 kernel gets its own
-ATAGS command line from chumpwn: `console=ttymxc0,115200 rdinit=/init`.
+ATAGS command line from the sideloader: `console=ttymxc0,115200 rdinit=/init`.
 
 ## Files
 
 ```text
-src/main.rs             Rust entry, syscalls, CVE trigger, loader, ATAGS, handoff
+src/main.rs             entry, option parsing, loader flow
+src/asm.rs              page-zero entry, kernel payload, jump and stub blobs
+src/atags.rs            ATAGS builder
+src/container.rs        QEMU loader container parser
+src/layout.rs           SDRAM addresses and default command line
+src/runtime.rs          mem* helpers and volatile copies
+src/sys.rs              syscalls, printing, string helpers, file reads
+src/trigger.rs          CVE-2009-2698 trigger, mmap and cacheflush
 link.ld                 page-zero PT_LOAD at 0, code at 0x10000
-build.sh                cargo build + copy chumpwn
+build.sh                cargo build + copy the binary
 mkpayload.py            QEMU loader container
 mk_psp_nand.py          host-side scratch NAND: replace only the PSP partition
 run-demo.py             QEMU boot, serial interaction, NAND hashes
@@ -264,12 +277,12 @@ evidence/               captured logs, config, hashes, exact command
 
 ## USB / hardware mode
 
-On a real Chumby (or a future QEMU with USB storage), chumpwn can read the
-zImage and initramfs directly instead of using the QEMU loader container:
+On a real Chumby (or a future QEMU with USB storage), the sideloader can read
+the zImage and initramfs directly instead of using the QEMU loader container:
 
 ```sh
-/psp/chumpwn --kernel /mnt/usb/chumpwn/zImage \
-             --initramfs /mnt/usb/chumpwn/initramfs.cpio.gz
+/psp/neochumby-kernel-sideloader --kernel /mnt/usb/sideloader/zImage \
+                                 --initramfs /mnt/usb/sideloader/initramfs.cpio.gz
 ```
 
 That mode is implemented (`--kernel`, `--initramfs`) but was not exercised in
@@ -291,13 +304,13 @@ The QEMU demo uses `--source 0xc2000000`, the loader container.
 - The loader region at `0xc2000000` is free at rcS for this stock image.  A
   different stock userland could allocate it before rcS; the QEMU demo checks
   this by loading the full container and reading it back.  `SRC_MAP_LEN`
-  (the window chumpwn reads the container through) is `0x700000`, matching
+  (the window the sideloader reads the container through) is `0x700000`, matching
   `mkpayload.py`'s own `LIMIT`; a container that fits under `LIMIT` always
   fits the read.
 - The page-zero ELF route is intentional and only works on the vulnerable
-  stock 2.6.16.  If `chumpwn` is run inside the neochumby jail, the
+  stock 2.6.16.  If the sideloader is run inside the neochumby jail, the
   `jail/refuse-page-zero-elfs` policy may refuse the ELF; it is meant to run
   from `/psp/rfs1/rcS`, a shell, or a USB stick, outside the jail.
 - **Next step:** `dist/` still needs `neochumby-init` and the Chumby's own
-  devices (see `dist/README.md`); chumpwn itself needs no change as that
-  userspace grows, since only the cpio contents change.
+  devices (see `dist/README.md`); the sideloader itself needs no change as
+  that userspace grows, since only the cpio contents change.
