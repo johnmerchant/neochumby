@@ -1,0 +1,24 @@
+# BusyBox: its defconfig with these options in place of its own.
+# classic/build fails if any line here didn't make it into its .config.
+
+# One static binary (glibc 2.8, the toolchain's).
+CONFIG_STATIC=y
+
+# One shell, ash (patches/busybox/ fits it to 2.6.16).
+# CONFIG_HUSH is not set
+
+# Applets that need more than glibc 2.8 or the toolchain's kernel headers
+# give: Linux capabilities, getrandom(), setns(), syncfs() and newer
+# netlink flags.
+# CONFIG_SETPRIV is not set
+# CONFIG_RUN_INIT is not set
+# CONFIG_SEEDRNG is not set
+# CONFIG_NSENTER is not set
+# CONFIG_FEATURE_SYNC_FANCY is not set
+# CONFIG_IP is not set
+# CONFIG_IPADDR is not set
+# CONFIG_IPLINK is not set
+# CONFIG_IPROUTE is not set
+# CONFIG_IPTUNNEL is not set
+# CONFIG_IPRULE is not set
+# CONFIG_IPNEIGH is not set
