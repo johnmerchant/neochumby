@@ -19,7 +19,7 @@ cc = "1"
 title = "CLOCK"
 exec = "neochumby-clock"
 access = ["screen", "touch", "terminal"]
-colour = "3c8cd0"
+color = "3c8cd0"
 
 [lints]
 workspace = true

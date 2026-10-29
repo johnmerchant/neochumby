@@ -32,7 +32,7 @@ neochumby.workspace = true
 [package.metadata.neochumby]
 title = "LOGS"
 exec = "neochumby-logs"
-colour = "7890a8"
+color = "7890a8"
 companion = "neochumby-logs-companion"
 neochumbyd = "optional"
 # The Chumby's logs, read-only, in its jail.

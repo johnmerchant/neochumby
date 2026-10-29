@@ -1322,7 +1322,7 @@ mod tests {
             name: "core".into(),
             title: None,
             exec: None,
-            colour: 0,
+            color: 0,
             service: Some(root.join("core")),
             needs: apps::Needs::Required,
             start: false,

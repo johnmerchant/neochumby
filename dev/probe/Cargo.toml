@@ -16,7 +16,7 @@ neochumby = { path = "../../crates/neochumby" }
 [package.metadata.neochumby]
 title = "PROBE"
 exec = "neochumby-probe"
-colour = "ff00ff"
+color = "ff00ff"
 access = ["screen", "touch"]
 
 [profile.release]

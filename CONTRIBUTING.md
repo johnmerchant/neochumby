@@ -394,7 +394,7 @@ neochumby = { git = "https://github.com/johnmerchant/neochumby" }
 [package.metadata.neochumby]
 title = "WEATHER"                    # listed in app lists
 exec = "neochumby-weather"           # runs in front when the app is opened
-colour = "4a90d9"                    # optional
+color = "4a90d9"                    # optional; `colour` works too
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
 neochumbyd = "optional"              # "required" | "optional" | absent

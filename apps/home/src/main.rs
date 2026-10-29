@@ -118,7 +118,7 @@ fn draw(fb: &mut Fb, all: &[App], s: &Screen, pressed: Option<Hit>) {
             Hit::App(i) => {
                 let a = &all[i];
                 let ok = a.runnable();
-                fb.rect(4, y, 8, ROW_H, if ok { a.colour } else { GREY });
+                fb.rect(4, y, 8, ROW_H, if ok { a.color } else { GREY });
                 fb.text(22, y + 10, a.title.as_deref().unwrap_or(&a.name), 2, if ok { TEXT } else { GREY });
                 if !ok {
                     fb.text(fb::W - Fb::text_width("needs pairing", 1) - 12, y + 14, "needs pairing", 1, GREY);
