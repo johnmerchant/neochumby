@@ -75,6 +75,7 @@ run() {
 }
 
 run smoke "$dev/emulate-smoke" "$tree" "$out/smoke"
+run pairing "$dev/emulate-pairing" "$tree" "$neochumbyd" "$out/pairing"
 run powercut "$dev/emulate-powercut" "$tree" "$neochumbyd" "$out/powercut"
 run stock "$dev/emulate-stock" "$tree" "$out/stock"
 if [ -n "${NEOCHUMBY_CLASSIC_PICTURES:-}" ]; then

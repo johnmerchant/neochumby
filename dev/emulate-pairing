@@ -1,0 +1,154 @@
+#!/bin/sh
+# Pairing through neochumby-home, end to end (#70): the emulated Chumby taps
+# PAIR against a neochumbyd on this PC, and the code it shows (and logs) is
+# the one `neochumbyd pairing` lists, 32 hex digits. A wrong code and a
+# short one are turned down; a refusal leaves /psp alone; an approval, typed
+# in capitals without dashes, writes the key and the conf with neochumbyd's
+# key pinned, and the next boot's session is neochumbyd's paired Chumby (its
+# log arrives over the developer link). A new key under the same name is
+# paired only with --replace, in place of the old one; and once forgotten,
+# the Chumby is turned away.
+#
+#   sudo dev/emulate-pairing TREE NEOCHUMBYD OUT
+#
+# TREE from tools/tree; NEOCHUMBYD the x86_64 neochumbyd built with it.
+# User mode only: the full-system machine and a real Chumby are skipped
+# (77), as pairing a real one is its owner's to do.
+set -eu
+tree=${1:?usage: dev/emulate-pairing TREE NEOCHUMBYD OUT}
+neochumbyd=${2:?usage: dev/emulate-pairing TREE NEOCHUMBYD OUT}
+out=${3:?usage: dev/emulate-pairing TREE NEOCHUMBYD OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$out"
+state=$out/state
+emu() { "$dev/emulate" --state "$state" "$@"; }
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the log:"
+  emu log || true
+  echo "-- neochumbyd's log:"
+  cat "$out/neochumbyd.log" || true
+  emu stop || true
+  exit 1
+}
+backend=$(emu backend)
+slow=$(emu scale)
+
+if [ "$backend" != user ]; then
+  echo "dev/emulate-pairing: skipped: pairing runs in user mode only (this is $backend)"
+  exit 77
+fi
+
+# The session's files and the home screen: all pairing needs.
+work=$out/tree
+rm -rf "$work"
+mkdir -p "$work/apps"
+for f in "$tree"/*; do
+  [ -f "$f" ] && cp -p "$f" "$work/"
+done
+cp -Rp "$tree/apps/home" "$work/apps/"
+
+ndstate=$out/nd
+rm -rf "$ndstate" "$out/psp0"
+mkdir -p "$out/psp0"
+api=127.0.0.1:17341
+"$neochumbyd" serve --state "$ndstate" --tree "$work" --api "$api" --nfs 127.0.0.1:12050 > "$out/neochumbyd.log" 2>&1 &
+server=$!
+trap 'kill $server 2>/dev/null || true' EXIT
+nd() { "$neochumbyd" "$@" --state "$ndstate"; }
+
+# neochumbyd's key, as it says when it starts.
+i=0
+until server_key=$(sed -n 's/.*; key \([0-9a-f]*\)$/\1/p' "$out/neochumbyd.log") && [ -n "$server_key" ]; do
+  i=$((i + 1))
+  [ "$i" -lt $((100 * slow)) ] || fail "neochumbyd didn't start"
+  sleep 0.1
+done
+
+# Until COMMAND succeeds, within SECS.
+until_ok() {
+  secs=$1
+  shift
+  i=0
+  until "$@"; do
+    i=$((i + 1))
+    [ "$i" -lt $((secs * 10 * slow)) ] || return 1
+    sleep 0.1
+  done
+}
+asking() { nd pairing | sed -n 's/^asking *chumby *code \([0-9a-f-]*\).*/\1/p'; }
+has_asking() { [ -n "$(asking)" ]; }
+none_asking() { [ -z "$(asking)" ]; }
+shown() { emu log | sed -n 's/.*neochumby-home: pairing with .*, showing \([0-9a-f-]*\).*/\1/p' | tail -n 1; }
+shows_code() { [ "$(shown)" = "$code" ]; }
+kept() { [ -f "$state/psp/neochumby.conf" ] && [ -f "$state/psp/neochumby.key" ]; }
+paired_keys() { nd pairing | sed -n 's/^paired *chumby *\([0-9a-f]*\).*/\1/p'; }
+
+# Taps PAIR on the home screen, and waits for the request: its code.
+pair() {
+  emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
+  emu tap 80 220 # PAIR
+  until_ok 30 has_asking || fail "the Chumby didn't ask to pair"
+  code=$(asking)
+  [ "${#code}" -eq 39 ] || fail "the code is $code: not eight groups of four"
+  until_ok 10 shows_code || fail "the Chumby shows $(shown), neochumbyd lists $code"
+  echo "the Chumby and neochumbyd both show $code"
+}
+
+step "a request, refused"
+emu start --psp "$out/psp0" --server "$api" "$work"
+emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
+pair
+if nd approve 0000-0000-0000-0000-0000-0000-0000-0000 > "$out/wrong.txt" 2>&1; then
+  fail "a code no one shows was approved"
+fi
+if nd approve 123456 > "$out/short.txt" 2>&1; then
+  fail "a six-digit code was approved"
+fi
+nd refuse "$code"
+emu wait log 'neochumby-home: not paired: refused' $((30 * slow)) || fail "the Chumby didn't hear it was refused"
+! kept || fail "a refused Chumby kept a pairing"
+[ -z "$(paired_keys)" ] || fail "a refused Chumby is paired"
+
+step "a request, approved by the code typed in capitals without dashes"
+sleep 5 # NOT PAIRED, then the home screen again
+pair
+nd approve "$(echo "$code" | tr -d - | tr a-f A-F)"
+emu wait log 'neochumby-home: paired with' $((30 * slow)) || fail "the Chumby didn't hear it was approved"
+until_ok 30 kept || fail "the Chumby didn't keep the pairing"
+grep -qx "server_key=$server_key" "$state/psp/neochumby.conf" || fail "the conf doesn't pin neochumbyd's key"
+first=$(paired_keys)
+[ "$(echo "$first" | wc -l)" -eq 1 ] && [ -n "$first" ] || fail "not one Chumby paired: $first"
+
+step "paired, the next boot is neochumbyd's Chumby"
+emu stop
+emu start --server "$api" "$work"
+has_log() { nd log chumby 2>/dev/null | grep -q 'neochumby: opening home'; }
+until_ok 60 has_log || fail "neochumbyd has no log from the paired Chumby"
+
+step "a new key under the same name, only with --replace"
+emu stop
+emu start --psp "$out/psp0" --server "$api" "$work"
+emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
+pair
+if nd approve "$code" > "$out/replace.txt" 2>&1; then
+  fail "a new key replaced the paired one without --replace"
+fi
+grep -q -- --replace "$out/replace.txt" || fail "approve didn't say --replace: $(cat "$out/replace.txt")"
+[ "$(paired_keys)" = "$first" ] || fail "the first key is no longer paired"
+nd approve "$code" --replace
+emu wait log 'neochumby-home: paired with' $((30 * slow)) || fail "the Chumby didn't hear it was approved"
+second=$(paired_keys)
+[ -n "$second" ] && [ "$second" != "$first" ] && [ "$(echo "$second" | wc -l)" -eq 1 ] ||
+  fail "not the new key alone: $second"
+until_ok 30 none_asking || fail "a request is still waiting"
+
+step "forgotten, it is turned away"
+nd forget chumby
+emu stop
+emu start --server "$api" "$work"
+emu wait log 'settings from .*: no longer paired' $((30 * slow)) || fail "the forgotten Chumby wasn't turned away"
+emu stop
+
+echo "dev/emulate-pairing: all passed"

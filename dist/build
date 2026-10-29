@@ -1,0 +1,120 @@
+#!/bin/sh
+# Builds the NANDLESS userspace a Chumby runs on mainline Linux, with
+# Buildroot: a zImage (5.9.16) with the initramfs built in, and the same
+# initramfs beside it for userhook2 to kexec, written to OUT:
+#
+#   OUT/nandless-zImage
+#   OUT/nandless-rootfs.cpio.gz
+#
+# The NAND drivers are modules in the initramfs; /init loads them only when
+# the kernel was booted without the sideloader's marker (i.e. when flashed).
+#
+# Buildroot needs Linux, so this runs it in a container (dist/Containerfile)
+# with Apple's container, docker or podman (NEOCHUMBY_DIST_RUNTIME picks).
+# Its work (the downloads, ccache, the build) stays in a volume,
+# neochumby-dist, on the container's own disk: the kernel's tree has files
+# whose names differ only by case, which macOS's disk can't hold. A second
+# run rebuilds only what changed; `$runtime volume rm neochumby-dist` starts
+# over.
+#
+#   dist/build OUT
+set -eu
+VERSION=2026.02.3
+SHA256=5a59e7501b0b4ec52c41f4bfa79412320e0b37eae5f719605a258e8d0c6fc7fb
+
+# In the container: Buildroot itself, then the checks and the copy out.
+if [ "${1:-}" = --inside ]; then
+  root=$2
+  out=$3
+  br=/work/buildroot-$VERSION
+  # Downloads and ccache's objects apart from the output, so CI can keep
+  # them when the output is stale.
+  export BR2_DL_DIR=/work/dl BR2_CCACHE_DIR=/work/ccache
+  if [ ! -d "$br" ]; then
+    wget -nv -O /work/br.tar.xz "https://buildroot.org/downloads/buildroot-$VERSION.tar.xz"
+    echo "$SHA256  /work/br.tar.xz" | sha256sum -c -
+    tar xJf /work/br.tar.xz -C /work
+    rm /work/br.tar.xz
+  fi
+  make -C "$br" O=/work/output BR2_EXTERNAL="$root/dist" chumby_classic_defconfig
+  # Bootlin's toolchain where it runs (x86_64, so CI), over the defconfig's.
+  # Kconfig would drop it silently anywhere else, so check it took.
+  if [ "$(uname -m)" = x86_64 ]; then
+    cat "$root/dist/board/chumby-classic/bootlin.config" >>/work/output/.config
+    make -C "$br" O=/work/output olddefconfig
+    grep -qx BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_ARMV5_EABI_MUSL_STABLE=y /work/output/.config || {
+      echo "dist/build: Bootlin's toolchain didn't take" >&2
+      exit 1
+    }
+  fi
+  make -C "$br" O=/work/output
+  # Kconfig drops an option whose dependencies aren't met, silently: every
+  # line of the fragment has to be in the kernel's .config as written.
+  # (A kernel from a tarball of our choosing builds in linux-custom.)
+  config=/work/output/build/linux-custom/.config
+  missing=0
+  grep -E '^(CONFIG_|# CONFIG_)' "$root/dist/board/chumby-classic/linux.fragment" |
+    while IFS= read -r line; do
+      grep -qxF "$line" "$config" || {
+        echo "dist/build: not in the kernel's .config: $line" >&2
+        exit 1
+      }
+    done || missing=1
+  test -x /work/output/target/init || {
+    echo "dist/build: /init missing from the NANDLESS rootfs" >&2
+    exit 1
+  }
+  find /work/output/target/lib/modules -name mxc_nand.ko | grep -q . || {
+    echo "dist/build: mxc_nand.ko missing from the NANDLESS initramfs" >&2
+    exit 1
+  }
+  mkdir -p "$out"
+  cp /work/output/images/zImage "$out/nandless-zImage"
+  cp /work/output/images/rootfs.cpio.gz "$out/nandless-rootfs.cpio.gz"
+  [ "$missing" = 0 ] || exit 1
+  echo "NANDLESS: $out/nandless-zImage (initramfs built in)"
+  echo "NANDLESS: $out/nandless-rootfs.cpio.gz (external initramfs)"
+  exit 0
+fi
+
+out=${1:?usage: dist/build OUT}
+root=$(git rev-parse --show-toplevel)
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+runtime=${NEOCHUMBY_DIST_RUNTIME:-}
+if [ -z "$runtime" ]; then
+  for r in container docker podman; do
+    command -v "$r" >/dev/null && {
+      runtime=$r
+      break
+    }
+  done
+fi
+[ -n "$runtime" ] || {
+  echo "dist/build: needs Apple's container, docker or podman" >&2
+  exit 2
+}
+"$runtime" build -t neochumby-dist -f "$root/dist/Containerfile" "$root/dist"
+# NEOCHUMBY_DIST_WORK=DIR keeps Buildroot's downloads and output in DIR
+# instead of a named volume; CI caches DIR.  A named volume is the default
+# because macOS's disk can't hold the kernel tree's case-different names.
+work=${NEOCHUMBY_DIST_WORK:-}
+if [ -n "$work" ]; then
+  mkdir -p "$work"
+  work=$(cd "$work" && pwd)
+  work_mount="-v $work:/work"
+else
+  "$runtime" volume inspect neochumby-dist >/dev/null 2>&1 ||
+    "$runtime" volume create neochumby-dist >/dev/null
+  work_mount="-v neochumby-dist:/work"
+fi
+# Apple's container gives a container 1 GB and 4 CPUs unless told.
+size=
+[ "$runtime" = container ] && size="-c 8 -m 8G"
+# A nameserver for the build's downloads, if the runtime's own doesn't
+# answer (seen with Apple's container): NEOCHUMBY_DIST_DNS=<ip>.
+dns=
+[ -n "${NEOCHUMBY_DIST_DNS:-}" ] && dns="--dns $NEOCHUMBY_DIST_DNS"
+# shellcheck disable=SC2086
+exec "$runtime" run --rm $size $dns $work_mount -v "$root:$root" -v "$out:$out" \
+  neochumby-dist sh "$root/dist/build" --inside "$root" "$out"

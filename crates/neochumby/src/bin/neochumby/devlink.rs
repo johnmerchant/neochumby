@@ -52,8 +52,8 @@ use std::time::{Duration, Instant};
 use neochumby::conf::{self, Paired};
 use neochumby::fb;
 use neochumby::input::{self, Calibration};
-use neochumby_proto::dev::{BATCH_LINES, Backoff, Lines, LogQueue, accepts_input, shot_chunks};
-use neochumby_proto::{Identity, Msg, PublicKey, Session, unhex_key};
+use neochumby_proto::dev::{BATCH_LINES, Backoff, Lines, LogQueue, shot_chunks};
+use neochumby_proto::{Identity, Msg, PublicKey, Session, Settings, unhex_key, version};
 use neochumby_sys::fd::{self, Stdio};
 
 const CONNECT: Duration = Duration::from_secs(5);
@@ -237,22 +237,10 @@ fn connect(p: &Paired, me: &Identity, server_key: &PublicKey) -> io::Result<(Ses
     neochumby_sys::net::keepalive(&tcp, 30, 10, 3);
     tcp.set_read_timeout(Some(WRITE))?;
     tcp.set_write_timeout(Some(WRITE))?;
-    let mut s = Session::connect(tcp, me)?;
-    if s.peer() != server_key {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"));
-    }
-    s.send(&Msg::Hello { name: conf::name() })?;
-    match s.recv_timeout(WRITE)? {
-        Some(Msg::Welcome) => {}
-        Some(Msg::Unpaired) => return Err(io::Error::new(io::ErrorKind::PermissionDenied, "no longer paired")),
-        m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
-    }
+    let mut s = Session::connect(tcp, me, server_key)?;
     // The settings: the session has them already (settings.rs), but the
     // link goes by these, and those sent after, for input.
-    let on = match s.recv_timeout(WRITE)? {
-        Some(Msg::Config(c)) => accepts_input(&c),
-        m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
-    };
+    let on = version::hello(&mut s, conf::name(), WRITE)?.dev;
     s.send(&Msg::Dev)?;
     Ok((s, on))
 }
@@ -387,7 +375,7 @@ fn serve(
             }
             Ok(Some(Msg::Shot)) => shot(s),
             Ok(Some(Msg::Config(c))) => {
-                input.on = accepts_input(&c);
+                input.on = Settings::from_pairs(c).dev;
                 Ok(())
             }
             Ok(Some(Msg::Tap { x, y, hold_ms })) => {
@@ -408,7 +396,7 @@ fn serve(
                 let r = input.button(down);
                 s.send(&done(r))
             }
-            // Anything else is for a newer session.
+            // Anything else is for a newer session, `Msg::Unknown` included.
             Ok(_) => Ok(()),
             Err(e) => Err(e),
         };

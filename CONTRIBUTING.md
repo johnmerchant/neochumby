@@ -262,6 +262,15 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
+**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`, run by CI, user
+mode only). The emulated Chumby taps PAIR against a neochumbyd on the PC,
+and the code it logs must be the one `neochumbyd pairing` lists. A wrong
+code and a six-digit one are turned down, a refusal leaves `/psp` alone,
+and an approval (typed in capitals, without dashes) pins neochumbyd's key
+in the conf, after which the next boot's log reaches `neochumbyd log`. A
+new key under the same name pairs only with `--replace`, and once
+forgotten, the Chumby is turned away.
+
 **A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
 OUT`, run by CI). The emulated Chumby pairs with a neochumbyd on the PC
 through neochumby-home's PAIR, syncs its tree to a FAT stick image
@@ -670,9 +679,17 @@ the app:
   over a socket it hands the app (`NEOCHUMBY_COMPANION`). It opens the
   companion of the app it started, named by the app's directory, so an app
   reaches only its own. Run by hand, as root, an app connects itself.
-- **Frames:** `Link::send` and `Link::recv` (`None` once the companion has
-  gone). On the companion's side they arrive on stdin and leave on stdout,
-  a u32 big-endian length then the bytes (`neochumby_proto::frame`).
+- **Messages:** define a type for each direction in the app's library
+  crate, and a `neochumby_proto::channel::Channel` that pairs them (serde
+  derives; postcard on the wire). The Chumby side sends and receives them
+  with `open(...)?.typed::<YourChannel>()`, the companion with
+  `neochumby_proto::channel::stdio::<YourChannel>()`; each end can send
+  only its own direction's type, so halves that disagree don't compile.
+  `apps/logs` does this.
+- **Frames:** for raw bytes instead, `Link::send` and `Link::recv` (`None`
+  once the companion has gone). On the companion's side they arrive on
+  stdin and leave on stdout, a u32 big-endian length then the bytes
+  (`neochumby_proto::frame`); a typed message is one such frame.
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
   and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
   stdin closes.
@@ -754,7 +771,7 @@ yet), say which and why. A reviewer may run it on a Chumby for you.
 
 ### Scenarios run everywhere
 
-The automated scenarios (`dev/emulate-smoke`, `dev/emulate-powercut`,
+The automated scenarios (`dev/emulate-smoke`, `dev/emulate-pairing`, `dev/emulate-powercut`,
 `dev/emulate-classic`, `dev/emulate-stock`, and any you add to `dev/e2e`) use only `dev/emulate`'s verbs, `start`, `log`/`wait log`,
 `shot`, `tap`, `button` and `stop`, so the same scenario runs on user
 mode, on the emulator (`--machine chumby-classic`) and on a real Chumby

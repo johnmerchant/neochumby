@@ -8,7 +8,7 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
-use crate::{MAX_MSG, Msg, PublicKey, hex, invalid, six_digits, unhex};
+use crate::{MAX_MSG, Msg, PublicKey, hex, invalid, pairing_code, unhex};
 
 const PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const PROLOGUE: &[u8] = b"neochumby 1";
@@ -62,16 +62,19 @@ pub struct Session {
     buf: Vec<u8>,
     /// Received and not yet a whole Noise message.
     rbuf: Vec<u8>,
+    /// The protocol version agreed with the peer (crate::version).
+    version: u16,
 }
 
 impl Session {
-    /// The Chumby's side: opens the handshake.
-    pub fn connect(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
+    /// The Chumby's side: opens the handshake. Its peer's key is not yet
+    /// checked.
+    pub(crate) fn client(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
         Session::handshake(tcp, me, true)
     }
 
-    /// neochumbyd's side.
-    pub fn accept(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
+    /// neochumbyd's side, its peer's key not yet checked.
+    pub(crate) fn server(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
         Session::handshake(tcp, me, false)
     }
 
@@ -94,9 +97,10 @@ impl Session {
         }
         let peer = key(hs.get_remote_static().unwrap_or_default())?;
         let h = hs.get_handshake_hash();
-        let code = six_digits([h[0], h[1], h[2], h[3]]);
+        // The handshake hash covers both static keys (XX).
+        let code = pairing_code(h[..16].try_into().map_err(invalid)?);
         let noise = hs.into_transport_mode().map_err(invalid)?;
-        Ok(Session { tcp, noise, peer, code, buf, rbuf: Vec::new() })
+        Ok(Session { tcp, noise, peer, code, buf, rbuf: Vec::new(), version: 0 })
     }
 
     /// The other side's public key, proven in the handshake.
@@ -104,9 +108,9 @@ impl Session {
         &self.peer
     }
 
-    /// Six digits both sides derive from this handshake: equal on both
-    /// screens only if no one sits between them.
-    pub fn code(&self) -> String {
+    /// The pairing code both sides derive from this handshake
+    /// ([`crate::Unverified::code`]).
+    pub(crate) fn code(&self) -> String {
         self.code.clone()
     }
 
@@ -114,12 +118,29 @@ impl Session {
         &self.tcp
     }
 
+    /// The protocol version agreed with the peer: 0 until
+    /// [`crate::version`] has agreed on another.
+    pub fn version(&self) -> u16 {
+        self.version
+    }
+
+    pub(crate) fn set_version(&mut self, v: u16) {
+        self.version = v;
+    }
+
+    /// Sends `msg`, if the agreed version has it (else
+    /// [`io::ErrorKind::Unsupported`]).
     pub fn send(&mut self, msg: &Msg) -> io::Result<()> {
-        let body = msg.encode();
+        crate::version::sendable(msg, self.version)?;
+        self.send_body(&msg.encode())
+    }
+
+    /// Sends an encoded message as it is.
+    pub(crate) fn send_body(&mut self, body: &[u8]) -> io::Result<()> {
         if body.len() > MAX_MSG {
             return Err(io::Error::new(io::ErrorKind::InvalidInput, "message too long"));
         }
-        let n = self.noise.write_message(&body, &mut self.buf).map_err(invalid)?;
+        let n = self.noise.write_message(body, &mut self.buf).map_err(invalid)?;
         send_frame(&mut self.tcp, &self.buf[..n])
     }
 

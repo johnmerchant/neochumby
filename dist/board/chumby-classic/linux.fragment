@@ -1,0 +1,66 @@
+# On top of imx_v4_v5_defconfig. dist/build checks that every line here
+# made it into the kernel's .config: Kconfig silently drops an option whose
+# dependencies aren't met.
+
+# Our static armv5te binaries' atomics go through the kernel's user helpers.
+CONFIG_KUSER_HELPERS=y
+
+# NANDLESS: the kernel has no NAND driver built in.  The NAND drivers are
+# modules in the initramfs; /init loads them only when the kernel was booted
+# without the sideloader's marker (i.e. when this image was flashed).
+CONFIG_MODULES=y
+CONFIG_MTD=m
+CONFIG_MTD_RAW_NAND=m
+CONFIG_MTD_NAND_MXC=m
+CONFIG_MTD_BLOCK=m
+CONFIG_MTD_CMDLINE_PARTS=m
+CONFIG_LOCALVERSION="-mx21-nandless"
+
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_TMPFS=y
+
+# The stick and NFS, where the tree comes from.
+CONFIG_USB=y
+CONFIG_USB_IMX21_HCD=y
+CONFIG_USB_STORAGE=y
+CONFIG_VFAT_FS=y
+CONFIG_NLS_CODEPAGE_437=y
+CONFIG_NLS_ISO8859_1=y
+CONFIG_NETWORK_FILESYSTEMS=y
+CONFIG_NFS_FS=y
+CONFIG_NFS_V3=y
+
+# Wi-Fi: rt73usb, its firmware loaded by the kernel from /lib/firmware.
+CONFIG_CFG80211=y
+CONFIG_MAC80211=y
+CONFIG_WLAN=y
+CONFIG_WLAN_VENDOR_RALINK=y
+CONFIG_RT2X00=y
+CONFIG_RT73USB=y
+CONFIG_FW_LOADER=y
+
+# The screen and touch, as the session opens them.
+CONFIG_FB_IMX=y
+CONFIG_INPUT_EVDEV=y
+
+# Sound: ALSA with OSS emulation, so /dev/dsp stays as it is.
+CONFIG_SOUND=y
+CONFIG_SND=y
+CONFIG_SND_OSSEMUL=y
+CONFIG_SND_PCM_OSS=y
+
+# The watchdog: a hang reboots into the stock firmware.
+CONFIG_WATCHDOG=y
+CONFIG_IMX2_WDT=y
+
+# The jail: namespaces, cgroups for memory limits, seccomp.
+CONFIG_NAMESPACES=y
+CONFIG_USER_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y

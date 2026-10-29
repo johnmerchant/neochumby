@@ -18,7 +18,7 @@
 //!   session answers [`Msg::Screen`](crate::Msg::Screen), then the
 //!   framebuffer as `Data` of at most [`SHOT_CHUNK`] bytes each.
 //! - **Input**, only on a Chumby whose owner set `dev=on` on its neochumbyd
-//!   ([`accepts_input`]): neochumbyd sends [`Msg::Tap`](crate::Msg::Tap)
+//!   ([`Settings::dev`](crate::Settings::dev)): neochumbyd sends [`Msg::Tap`](crate::Msg::Tap)
 //!   or [`Msg::Button`](crate::Msg::Button), and the Chumby answers each
 //!   with [`Msg::Done`](crate::Msg::Done), a tap once it has let go. A tap
 //!   is written to the touchscreen's input device, so every reader sees it
@@ -56,16 +56,6 @@ pub const MAX_HOLD_MS: u16 = 10_000;
 /// How long `neochumbyd button NAME tap` holds the button: a few of the
 /// session's 50 ms looks at it.
 pub const BUTTON_TAP_MS: u64 = 300;
-/// The setting that lets neochumbyd drive a Chumby: `dev=on`.
-pub const INPUT_KEY: &str = "dev";
-pub const INPUT_ON: &str = "on";
-
-/// Whether a Chumby with these settings takes taps and button presses
-/// from its neochumbyd. Off unless set: see the module's documentation.
-pub fn accepts_input(settings: &[(String, String)]) -> bool {
-    settings.iter().any(|(k, v)| k == INPUT_KEY && v == INPUT_ON)
-}
-
 /// `line` as it is sent and kept: at most [`MAX_LINE`] bytes, without
 /// control characters (a tab stays), so a log printed on a terminal can't
 /// drive it.
@@ -281,19 +271,6 @@ mod tests {
         assert_eq!(waits, [s(1), s(2), s(4), s(5), s(5)]);
         b.reset();
         assert_eq!(b.next_wait(), s(1));
-    }
-
-    #[test]
-    fn input_is_off_unless_set() {
-        let set = |pairs: &[(&str, &str)]| -> Vec<(String, String)> {
-            pairs.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect()
-        };
-        assert!(!accepts_input(&[]));
-        assert!(!accepts_input(&set(&[("start", "wx")])));
-        assert!(!accepts_input(&set(&[("dev", "off")])));
-        assert!(!accepts_input(&set(&[("dev", "On")])));
-        assert!(!accepts_input(&set(&[("develop", "on")])));
-        assert!(accepts_input(&set(&[("start", "wx"), ("dev", "on")])));
     }
 
     #[test]

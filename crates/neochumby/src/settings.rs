@@ -11,7 +11,7 @@ use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
-use neochumby_proto::{Identity, Msg, Session, unhex_key};
+use neochumby_proto::{Identity, Session, Settings, unhex_key, version};
 
 use crate::conf::{self, Paired};
 
@@ -24,7 +24,7 @@ const ANSWER: Duration = Duration::from_secs(5);
 
 /// The settings: fresh from the paired neochumbyd if it answers (and kept),
 /// else the last ones kept, else none.
-pub fn load() -> Vec<(String, String)> {
+pub fn load() -> Settings {
     if let Some(p) = conf::paired() {
         match fetch(&p) {
             Ok(s) => {
@@ -37,26 +37,18 @@ pub fn load() -> Vec<(String, String)> {
         }
     }
     let kept = std::fs::read_to_string(SETTINGS).unwrap_or_default();
-    kept.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())).filter(valid).collect()
+    Settings::from_pairs(kept.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())))
 }
 
-/// `key`'s value in `settings`.
-pub fn get<'a>(settings: &'a [(String, String)], key: &str) -> Option<&'a str> {
-    settings.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str())
-}
-
-/// What the Chumby takes: a lower-case key, and a value /psp files accept.
-fn valid((k, v): &(String, String)) -> bool {
-    !k.is_empty() && k.bytes().all(|b| b.is_ascii_lowercase() || b == b'_') && conf::valid_value(v)
-}
-
-fn fetch(p: &Paired) -> io::Result<Vec<(String, String)>> {
+fn fetch(p: &Paired) -> io::Result<Settings> {
     connect(p).map(|(_, settings)| settings)
 }
 
-/// A session with the paired neochumbyd, past `Welcome` and `Config`, and
-/// this Chumby's settings from it. neochumby-sync carries on with it.
-pub fn connect(p: &Paired) -> io::Result<(Session, Vec<(String, String)>)> {
+/// A session with the paired neochumbyd, past `Welcome` and `Config`, at
+/// the protocol version the two agree on, and this Chumby's settings from
+/// it (only pairs it keeps: neochumby_proto::settings::valid).
+/// neochumby-sync carries on with it.
+pub fn connect(p: &Paired) -> io::Result<(Session, Settings)> {
     let me = Identity::from_secret(&p.secret)?;
     let server_key = unhex_key(&p.server_key)?;
     let addr = (p.server.as_str(), p.api_port)
@@ -66,29 +58,16 @@ pub fn connect(p: &Paired) -> io::Result<(Session, Vec<(String, String)>)> {
     let tcp = TcpStream::connect_timeout(&addr, CONNECT)?;
     tcp.set_read_timeout(Some(ANSWER))?;
     tcp.set_write_timeout(Some(ANSWER))?;
-    let mut s = Session::connect(tcp, &me)?;
-    if s.peer() != &server_key {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"));
-    }
-    s.send(&Msg::Hello { name: conf::name() })?;
-    let mut next = || s.recv_timeout(ANSWER)?.ok_or_else(|| io::Error::from(io::ErrorKind::TimedOut));
-    match next()? {
-        Msg::Welcome => {}
-        Msg::Unpaired => return Err(io::Error::new(io::ErrorKind::PermissionDenied, "no longer paired")),
-        m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
-    }
-    // A neochumbyd from before Msg::Config sends nothing more: that times
-    // out, and the kept settings are used.
-    let settings = match next()? {
-        Msg::Config(pairs) => pairs.into_iter().filter(valid).collect(),
-        m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
-    };
+    let mut s = Session::connect(tcp, &me, &server_key)?;
+    // A neochumbyd from before Msg::Config sends nothing after Welcome:
+    // that times out, and the kept settings are used.
+    let settings = version::hello(&mut s, conf::name(), ANSWER)?;
     Ok((s, settings))
 }
 
 /// Writes SETTINGS only when they changed: /psp is a small flash.
-fn keep(s: &[(String, String)]) -> io::Result<()> {
-    let body: String = s.iter().map(|(k, v)| format!("{k}={v}\n")).collect();
+fn keep(s: &Settings) -> io::Result<()> {
+    let body: String = s.to_pairs().iter().map(|(k, v)| format!("{k}={v}\n")).collect();
     if std::fs::read_to_string(SETTINGS).is_ok_and(|old| old == body) {
         return Ok(());
     }

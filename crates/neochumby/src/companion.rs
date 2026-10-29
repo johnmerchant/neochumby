@@ -8,10 +8,20 @@
 //! `companion`, or without `neochumbyd = "required"` or `"optional"`, does
 //! not compile, as neochumbyd would have nothing to run for it.
 //!
+//! What goes over it is best typed: the app's library crate defines a
+//! [`Channel`] that both halves share, and [`Link::typed`] sends and
+//! receives its messages, as the companion does with
+//! [`neochumby_proto::channel::stdio`]. Each half can send only its own
+//! direction's messages, so halves that disagree don't compile.
+//!
 //! ```ignore
-//! let mut link = neochumby::companion::open(neochumby::companion!())?;
-//! while let Some(frame) = link.recv()? { /* ... */ }
+//! let mut link = neochumby::companion::open(neochumby::companion!())?.typed::<my_app::Wx>();
+//! link.send(&my_app::Ask::Weather { city: "Paris".into() })?;
+//! while let Some(answer) = link.recv()? { /* ... */ }
 //! ```
+//!
+//! An app that wants the frames themselves uses the [`Link`] as it is:
+//! [`Link::send`] and [`Link::recv`] carry bytes.
 //!
 //! # Through the session
 //!
@@ -31,14 +41,16 @@
 
 use std::fs::File;
 use std::io::{self, Read, Write};
+use std::marker::PhantomData;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{OwnedFd, RawFd};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
 
+use neochumby_proto::channel::{self, Channel};
 use neochumby_proto::frame::MAX_FRAME;
-use neochumby_proto::{Identity, Msg, Session, unhex_key};
+use neochumby_proto::{Identity, Msg, Session, unhex_key, version};
 use neochumby_sys::fd;
 
 use crate::conf::{self, Paired};
@@ -165,6 +177,43 @@ impl Link {
             },
         }
     }
+
+    /// This link, carrying `C`'s messages.
+    pub fn typed<C: Channel>(self) -> Typed<C> {
+        Typed { link: self, _c: PhantomData }
+    }
+}
+
+/// An open companion, as the app's end of `C`
+/// ([`neochumby_proto::channel`]): what [`Link`] does, a message for each
+/// frame. A frame that isn't one of `C`'s fails with
+/// [`io::ErrorKind::InvalidData`].
+pub struct Typed<C> {
+    link: Link,
+    _c: PhantomData<fn() -> C>,
+}
+
+impl<C: Channel> Typed<C> {
+    /// Sends the companion one message.
+    pub fn send(&mut self, m: &C::ToCompanion) -> io::Result<()> {
+        self.link.send(&channel::encode(m)?)
+    }
+
+    /// The companion's next message, or None once it has gone.
+    pub fn recv(&mut self) -> io::Result<Option<C::ToApp>> {
+        self.link.recv()?.map(|f| channel::decode(&f)).transpose()
+    }
+
+    /// The companion's next message if one comes within `t`, as
+    /// [`Link::recv_timeout`].
+    pub fn recv_timeout(&mut self, t: Duration) -> io::Result<Option<C::ToApp>> {
+        self.link.recv_timeout(t)?.map(|f| channel::decode(&f)).transpose()
+    }
+
+    /// The link, for frames as they are.
+    pub fn into_raw(self) -> Link {
+        self.link
+    }
 }
 
 impl Drop for Link {
@@ -197,18 +246,14 @@ pub fn connect(app: &str, p: &Paired, me: &Identity) -> io::Result<Session> {
     let tcp = TcpStream::connect_timeout(&addr, CONNECT)?;
     // A neochumbyd gone without a word is noticed in about a minute.
     neochumby_sys::net::keepalive(&tcp, 30, 10, 3);
-    let mut s = Session::connect(tcp, me)?;
-    if s.peer() != &server_key {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"));
-    }
-    s.send(&Msg::Hello { name: conf::name() })?;
-    match s.recv()? {
-        Msg::Welcome => {}
-        Msg::Unpaired => {
-            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "neochumbyd no longer pairs with this Chumby"));
+    let mut s = Session::connect(tcp, me, &server_key)?;
+    // The settings are the session's business, not the app's.
+    version::hello(&mut s, conf::name(), CONNECT).map_err(|e| match e.kind() {
+        io::ErrorKind::PermissionDenied => {
+            io::Error::new(io::ErrorKind::PermissionDenied, "neochumbyd no longer pairs with this Chumby")
         }
-        m => return Err(io::Error::new(io::ErrorKind::InvalidData, format!("unexpected {m:?}"))),
-    }
+        _ => e,
+    })?;
     s.send(&Msg::Open { app: app.into() })?;
     Ok(s)
 }
