@@ -36,6 +36,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
+| `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
 | `apps/htop` | neochumby-htop: [htop](https://github.com/htop-dev/htop) (3.5.3, a submodule) on the library's terminal, the touchscreen its mouse (F10, Quit, is past the 64th column: the corner hold leaves it) | GPL-2.0-or-later |
@@ -50,6 +51,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
+| `emu/` | The emulator: QEMU's `chumby-classic` machine, from [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit, which boots the stock firmware from your own flash backup; and chumby-emu, a host tool that builds its images | MIT (the machine: GPL-2.0-or-later, like QEMU) |
 
 Everything we write is MIT, except in `apps/doom`, `apps/quake`,
 `apps/htop`, `apps/top`, `apps/cmatrix`, `apps/bonsai`, `apps/pipes` and
@@ -76,13 +78,15 @@ crate's `Cargo.toml`:
 [package.metadata.neochumby]
 title = "QUAKE"                      # listed in app lists
 exec = "neochumby-quake"             # binaries, by name; exec runs in front
-colour = "8c5a28"                    # optional
+color = "8c5a28"                    # optional; `colour` works too
 service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
+access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
+player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
 ```
 
 An app can use any of these keys:
@@ -122,6 +126,18 @@ An app can use any of these keys:
   stock Chumby, unless the app in front says `button = true`: then it has
   the button. Doom and Quake fire with it. With the start app in front, a
   press is a `button` line on its pipe.
+- **`access`:** each app runs as a user of its own, jailed in a directory
+  holding only its own files, a `/tmp` of its own and what `access` lists:
+  `screen`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
+  `network` and `terminal`. It never sees the Chumby's key. `root`, listed alone, runs
+  it unjailed, as root: only `home` does, as it pairs the Chumby.
+  [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
+- **`player`:** a Chumby's default player is the one a start app's MUSIC
+  button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
+  (the start app asks the session, which tells the player's service).
+  It's named by `player=<app>` (`neochumbyd set NAME player=<app>`), else it's
+  `somafm`, else the first app with `player = true`. `neochumbyd pairing`
+  names the players in the tree.
 
 ## Building
 
@@ -144,6 +160,13 @@ cargo chumby          # the session and apps, for the Chumby
 cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux
 ```
 
+The server half also builds for 64-bit ARM Linux, such as a Raspberry Pi
+(`rustup target add aarch64-unknown-linux-musl`, then
+`--target aarch64-unknown-linux-musl`), or natively for the machine
+building it. `tools/deploy` builds for the server it installs on, asking
+it over ssh, and `tools/tree --server-target TRIPLE` takes a Rust target
+triple (CPU, vendor, OS and C library), or `host`.
+
 A Chumby and its neochumbyd talk TLS 1.3. To use Noise instead, build both
 with `--features neochumby-proto/noise`. Nothing is negotiated, so the two
 ends must be built the same way.
@@ -160,6 +183,7 @@ apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
 apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manifest
+apps/logs/                 neochumby-logs, neochumby-logs-companion, manifest
 apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
 apps/htop/                 neochumby-htop, manifest
 apps/top/                  neochumby-top, manifest
@@ -279,6 +303,20 @@ Chumby"), and the Chumby plays the audio. The host provides
 `NEOCHUMBY_AIRPLAY_PORT` (default 7350): RTSP from the base, UDP from
 base + 10. Each Chumby keeps the same ports.
 
+**Logs** (the logs app): the Chumby's own logs first, then, on a paired
+Chumby, the host's, from its companion. ◀ and ▶ along the top go from
+log to log; dragging scrolls, and at the end it follows. The host's are
+whatever its owner lists in `<state>/apps/logs/sources` (or
+`sources.NAME` for one Chumby), one a line, a file or a command:
+
+```
+syslog=/var/log/syslog
+web=|tail -n 200 -f /srv/web/access.log
+```
+
+Without that file it serves /var/log/syslog or /var/log/messages, and the
+journal where `journalctl` runs.
+
 ### Delivery: NFS or sync
 
 Each paired Chumby gets its tree one of two ways, chosen on the server:
@@ -379,6 +417,30 @@ times out every step that could block, and returns to the stock boot if
 anything fails. To skip it, create `/psp/neochumby-off`, or put a file
 named `neochumby-off` on a stick. neochumby never starts SSH; enable it
 yourself from the Chumby's settings (Chumby info → π) when you need it.
+
+## The emulator
+
+QEMU's `chumby-classic` machine runs a Chumby without the device: the
+stock kernel, root disk and settings partition from your own flash
+backup, unmodified, to the stock control panel, with the screen,
+touchscreen, serial console and flash working. The machine lives in
+[qemu-chumby](https://github.com/johnmerchant/qemu-chumby) (patches
+against a pinned QEMU release); `emu/` builds it at a pinned commit and
+makes the images. [`emu/README.md`](emu/README.md) has the details.
+
+```sh
+emu/qemu/build                       # QEMU with the machine (deps: emu/README.md)
+(cd emu && cargo build --release)    # chumby-emu, the image tools
+emu/target/release/chumby-emu mkpsp PSPDIR psp.jffs2
+emu/target/release/chumby-emu mknand BACKUPDIR psp.jffs2 nand.img
+emu/qemu/run zImage nand.img         # console on stdio, QMP on qmp.sock
+emu/qemu/qemu-chumby/chumby-ctl qmp.sock tap 160 120      # touch at a pixel
+emu/qemu/qemu-chumby/chumby-ctl qmp.sock shot screen.png  # screenshot
+```
+
+The NAND image is written as the Chumby writes its flash; add `-snapshot`
+to keep it unchanged, and `-icount shift=auto,sleep=off` to boot in a few
+seconds rather than in real time.
 
 ## Game data
 

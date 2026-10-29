@@ -18,7 +18,8 @@ cc = "1"
 [package.metadata.neochumby]
 title = "CLOCK"
 exec = "neochumby-clock"
-colour = "3c8cd0"
+access = ["screen", "touch", "terminal"]
+color = "3c8cd0"
 
 [lints]
 workspace = true

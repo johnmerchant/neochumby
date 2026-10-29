@@ -18,7 +18,9 @@ cc = "1"
 [package.metadata.neochumby]
 title = "TOP"
 exec = "neochumby-top"
-colour = "c8a028"
+# Reads every process from /proc.
+access = ["screen", "touch", "system", "terminal"]
+color = "c8a028"
 
 [lints]
 workspace = true

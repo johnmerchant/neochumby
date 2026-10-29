@@ -18,7 +18,8 @@ termwiz = "0.23"
 [package.metadata.neochumby]
 title = "PIPES"
 exec = "neochumby-pipes"
-colour = "3caa78"
+access = ["screen", "touch", "terminal"]
+color = "3caa78"
 
 [lints]
 workspace = true

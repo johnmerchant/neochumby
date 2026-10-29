@@ -13,21 +13,26 @@
 //! Chumby is paired (an app that needs a neochumbyd). Pairing asks for a
 //! restart anyway, so that's when a newly paired Chumby starts them.
 //!
+//! The default player's service is also told `pause` and `resume`, when
+//! the start app asks (run.rs).
+//!
 //! The session's own services (core: neochumby-sync, for delivery=sync)
 //! are run, restarted and stopped the same way, but open no app: they are
 //! never told what is in front, and what they ask for is dropped, so the
 //! interruption rules never come into it.
 
+use std::collections::HashSet;
 use std::path::Path;
-use std::process::Child;
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
 use neochumby::session::{Notice, Pipe, Request};
 
+use neochumby_sys::jail::Process;
 use neochumby_sys::process::{Signal, exited, kill_group};
 
 use crate::child;
+use crate::jail::{self, Role};
 
 /// The waits between a service's runs.
 #[derive(Clone, Copy)]
@@ -54,7 +59,7 @@ impl Backoff {
 }
 
 struct Running {
-    child: Child,
+    child: Process,
     pipe: Pipe,
     since: Instant,
     /// The app in front, if this service hasn't been told yet: its pipe
@@ -85,12 +90,21 @@ pub struct Events<'a> {
 pub struct Services<'a> {
     list: Vec<Service<'a>>,
     root: &'a Path,
+    /// The default player, for NEOCHUMBY_PLAYER.
+    player: Option<&'a str>,
 }
 
 impl<'a> Services<'a> {
     /// The service of each app in `apps` that can run here, and each of
-    /// `core`, the session's own; none started yet.
-    pub fn new(apps: &'a [App], core: &'a [App], root: &'a Path, backoff: Backoff) -> Services<'a> {
+    /// `core`, the session's own; none started yet. `player` is the default
+    /// player.
+    pub fn new(
+        apps: &'a [App],
+        core: &'a [App],
+        root: &'a Path,
+        player: Option<&'a str>,
+        backoff: Backoff,
+    ) -> Services<'a> {
         let now = Instant::now();
         let ours = |a: &'a App, core| {
             Some(Service { app: a, exe: a.service.as_deref()?, running: None, backoff, due: now, core })
@@ -101,7 +115,7 @@ impl<'a> Services<'a> {
             .filter_map(|a| ours(a, false))
             .chain(core.iter().filter_map(|a| ours(a, true)))
             .collect();
-        Services { list, root }
+        Services { list, root, player }
     }
 
     /// Starts each service that is due, with `front` as the app in front;
@@ -112,7 +126,7 @@ impl<'a> Services<'a> {
         for s in &mut self.list {
             let Some(r) = s.running.as_mut() else {
                 if Instant::now() >= s.due {
-                    s.start(self.root, front);
+                    s.start(self.root, self.player, front);
                 }
                 continue;
             };
@@ -146,6 +160,23 @@ impl<'a> Services<'a> {
         ev
     }
 
+    /// Ends each running service whose app lists no `network` but whose
+    /// uid is among `owners` (network.rs). The next poll finds it exited,
+    /// and starts it again later, as any service that exits.
+    pub fn end_offline(&mut self, owners: &HashSet<u32>) {
+        for s in &self.list {
+            if let Some(r) = &s.running
+                && jail::offline(s.app).is_some_and(|n| owners.contains(&n))
+            {
+                eprintln!(
+                    "neochumby: service {} has an internet socket open, without network access; ending it",
+                    s.app.name
+                );
+                let _ = kill_group(r.child.id(), Signal::Kill);
+            }
+        }
+    }
+
     /// Tells each running service that `app` is now in front.
     pub fn front(&mut self, app: &str) {
         for s in self.list.iter_mut().filter(|s| !s.core) {
@@ -153,6 +184,15 @@ impl<'a> Services<'a> {
                 r.tell(s.app, app);
             }
         }
+    }
+
+    /// Tells the service of the app `app` `notice`, if it's running and
+    /// its pipe has room now; why not, if it couldn't. The session never
+    /// waits on a service, and a line that couldn't go isn't kept.
+    pub fn tell(&mut self, app: &str, notice: &Notice) -> Result<(), &'static str> {
+        let s = self.list.iter_mut().find(|s| !s.core && s.app.name == app).ok_or("it has no service here")?;
+        let r = s.running.as_mut().ok_or("its service isn't running")?;
+        if r.pipe.try_send(&notice.line()) { Ok(()) } else { Err("its service's pipe is full") }
     }
 
     /// Stops every service: SIGTERM to each one's process group, then
@@ -173,8 +213,10 @@ impl<'a> Services<'a> {
 }
 
 impl Service<'_> {
-    fn start(&mut self, root: &Path, front: &str) {
-        match child::spawn(child::command(self.exe, &self.app.dir, root), &[]) {
+    fn start(&mut self, root: &Path, player: Option<&str>, front: &str) {
+        let mut launch = child::launch(self.app, self.exe, Role::Service, root);
+        launch.player(player);
+        match launch.spawn() {
             Ok((child, pipe)) => {
                 eprintln!("neochumby: service {} started", self.app.name);
                 let mut r = Running { child, pipe, since: Instant::now(), untold: None };

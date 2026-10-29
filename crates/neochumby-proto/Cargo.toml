@@ -12,6 +12,8 @@ publish.workspace = true
 noise = ["dep:snow"]
 
 [dependencies]
+postcard.workspace = true
+serde.workspace = true
 ring = "0.17"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 # Pure Rust (no ring), so it builds for the Chumby as for servers.
