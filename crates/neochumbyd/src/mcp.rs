@@ -225,7 +225,7 @@ impl Server {
         }
         for p in self.state.pending().map_err(|e| e.to_string())? {
             out += &format!(
-                "asking   {}  code {}  from {} (approve it on the server, after comparing the code on the Chumby's screen)\n",
+                "asking   {}  code {}  from {} (approve it on the server, typing the code from the Chumby's screen)\n",
                 p.name, p.code, p.addr
             );
         }

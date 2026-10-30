@@ -1,16 +1,23 @@
 #!/bin/sh
 # The end-to-end scenarios, all of them, on one of dev/emulate's backends,
 # with a summary to attach to a pull request (CONTRIBUTING.md, "Test on a
-# Chumby, or an emulated one, and show it"):
+# Chumby, or an emulated one, and show it"). Every emulated Chumby is
+# qemu-chumby's machine, through dev/emulate:
 #
-#   sudo dev/e2e TREE NEOCHUMBYD OUT
-#       user mode, as CI runs it (on a Mac, without sudo, in its Linux)
-#   NEOCHUMBY_EMU_MACHINE=chumby-classic dev/e2e TREE NEOCHUMBYD OUT
+#   dev/e2e [--build | --no-fetch] TREE NEOCHUMBYD OUT
+#       the dist profile, as CI runs it: neochumby's Linux 5.9.16, no
+#       proprietary firmware
+#   NEOCHUMBY_EMU_PROFILE=stock dev/e2e TREE NEOCHUMBYD OUT
 #       the emulated Chumby on its stock firmware: your own, by
-#       NEOCHUMBY_EMU_KERNEL, _NAND and _PSP (emu/README.md); local only,
-#       never in CI (docs/legal.md)
+#       NEOCHUMBY_EMU_KERNEL, _NAND and _PSP; local only, never in CI
+#       (docs/legal.md)
+#   NEOCHUMBY_EMU_PROFILE=classic dev/e2e TREE NEOCHUMBYD OUT
+#       Linux 2.6.16 built from Chumby's GPL source, with our initramfs
 #   NEOCHUMBY_EMU_DEVICE=NAME dev/e2e TREE NEOCHUMBYD OUT
 #       a real Chumby, paired and set dev=on
+#
+# E2E_SCENARIOS, a space-separated list of boot, smoke, pairing, powercut,
+# stock and classic, runs only those; by default, all.
 #
 # TREE from tools/tree, with doom and neochumby-sync, and for the stock
 # firmware's scenario ./dev/probe (`tools/tree OUT doom ./dev/probe`, at
@@ -20,7 +27,22 @@
 # OUT/<scenario>/, its output in OUT/<scenario>.txt, and the results in
 # OUT/summary.txt. A scenario a backend can't run exits 77: skipped, not
 # failed. The exit status is 1 if any failed.
+#
+# First, `dev/emulate prepare` makes QEMU and the profile's images ready,
+# once: fetched prebuilt and verified, else built from source (dev/emulate,
+# "QEMU ... and the dist and classic images"); --build builds them, never
+# fetching (NEOCHUMBY_BUILD=1), and --no-fetch builds what must be made
+# (NEOCHUMBY_NO_FETCH=1). Without them the scenarios skip; if a build
+# fails, so does dev/e2e.
 set -u
+while [ $# -gt 0 ]; do
+  case $1 in
+  --build) export NEOCHUMBY_BUILD=1 ;;
+  --no-fetch) export NEOCHUMBY_NO_FETCH=1 ;;
+  *) break ;;
+  esac
+  shift
+done
 tree=${1:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 out=${3:?usage: dev/e2e TREE NEOCHUMBYD OUT}
@@ -42,6 +64,18 @@ fi
 mkdir -p "$out"
 summary=$out/summary.txt
 failed=0
+
+# Once, here, not in the first scenario; the scenarios then use what's
+# there, or skip.
+"$dev/emulate" prepare
+case $? in
+0 | 77) ;;
+*)
+  echo "dev/e2e: dev/emulate prepare failed"
+  exit 1
+  ;;
+esac
+export NEOCHUMBY_EMU_PREPARED=1
 
 {
   echo "neochumby $(git -C "$dev" rev-parse --short HEAD 2>/dev/null || echo '(no git)')," \
@@ -68,10 +102,19 @@ run() {
   echo "$name: $result (${took}s)" | tee -a "$summary"
 }
 
-run smoke "$dev/emulate-smoke" "$tree" "$out/smoke"
-run powercut "$dev/emulate-powercut" "$tree" "$neochumbyd" "$out/powercut"
-run stock "$dev/emulate-stock" "$tree" "$out/stock"
-if [ -n "${NEOCHUMBY_CLASSIC_PICTURES:-}" ]; then
+wanted() {
+  case " ${E2E_SCENARIOS:-boot smoke pairing powercut stock classic} " in
+  *" $1 "*) return 0 ;;
+  esac
+  return 1
+}
+
+! wanted boot || run boot "$dev/emulate-boot" "$tree" "$out/boot"
+! wanted smoke || run smoke "$dev/emulate-smoke" "$tree" "$out/smoke"
+! wanted pairing || run pairing "$dev/emulate-pairing" "$tree" "$neochumbyd" "$out/pairing"
+! wanted powercut || run powercut "$dev/emulate-powercut" "$tree" "$neochumbyd" "$out/powercut"
+! wanted stock || run stock "$dev/emulate-stock" "$tree" "$out/stock"
+if [ -n "${NEOCHUMBY_CLASSIC_PICTURES:-}" ] && wanted classic; then
   run classic "$dev/emulate-classic" "$tree" "$NEOCHUMBY_CLASSIC_PICTURES" "$out/classic"
 fi
 

@@ -1,6 +1,10 @@
 //! neochumby: the Chumby Classic's screen, inputs and speaker, for the
 //! launcher, the apps and the services (stock 2.6.16 kernel, static musl,
 //! ARM926).
+//!
+//! **Experimental and unstable**: any release may break anything. Built
+//! for [neochumby](https://github.com/johnmerchant/neochumby), and
+//! published to start an SDK for it.
 
 pub mod apps;
 pub mod audio;

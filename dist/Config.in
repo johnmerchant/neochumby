@@ -1,0 +1,2 @@
+# neochumby's own packages.
+source "$BR2_EXTERNAL_NEOCHUMBY_PATH/package/neochumby-init/Config.in"

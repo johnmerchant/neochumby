@@ -1,0 +1,8 @@
+# BusyBox init (/init is BusyBox). rcS brings up the Chumby's drivers and
+# devices; stick runs a neochumby stick's hook, in the background, its
+# output on the console; the shell on ttyS0 comes back when it exits.
+::sysinit:/etc/init.d/rcS
+::once:/etc/init.d/stick
+ttyS0::respawn:-/bin/sh
+::ctrlaltdel:/sbin/reboot
+::shutdown:/bin/umount -a -r
