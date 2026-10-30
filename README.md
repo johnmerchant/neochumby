@@ -35,7 +35,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
-| `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
+| `apps/home` | neochumby-home, the app list, in text mode: the installed apps, pairing, the time, and CHUMBY MODE on the stock 2.6 kernel (the dist's Linux has no stock software to go back to) | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
@@ -54,6 +54,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `dist/` | The sideload image: a Buildroot build of Linux 5.9.16 with an initramfs built in (`sideload-zImage`), and the same initramfs on its own (`sideload-rootfs.cpio.gz`) | MIT |
 | `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> sideload Linux 5.9.16 kernel sideloader and QEMU demo (draft) | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
+| `dev/wasmbench` | Proposal 0003's benchmark of WebAssembly runtimes on a Chumby: its workloads in Rust, and EEMBC's [CoreMark](https://github.com/eembc/coremark) (1f483d5, a submodule) | MIT; CoreMark Apache-2.0, with EEMBC's terms for its name |
 | `emu/` | The emulator: [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit (a submodule), QEMU's `chumby-classic` machine with its runner and image tool, and the script that builds it | GPL-2.0-or-later, like QEMU (its image tool: MIT) |
 
 Everything we write is MIT, except in `apps/doom`, `apps/quake`,
@@ -156,8 +157,9 @@ An app can use any of these keys:
   (a small directory of its own in `/psp`, kept across boots). The session
   does for it what only root may: the mute and volume, the stock stream
   player (`play`), and, for the start app, the backlight (`brightness`). It
-  never sees the Chumby's key. `root`, listed alone, runs
-  it unjailed, as root: only `home` does, as it pairs the Chumby.
+  never sees the Chumby's key. `root`, listed alone or with `fb`, runs it
+  unjailed, as root: `home` does, as it pairs the Chumby (in text mode), and
+  neochumby-classic (with `fb`).
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
 - **Text mode, or `fb`:** an app's `exec` runs in text mode unless its
   `access` lists `fb`. In text mode it has no framebuffer: its stdin and
@@ -233,7 +235,7 @@ apps/top/                  neochumby-top, manifest
 apps/cmatrix/              neochumby-cmatrix, manifest (and so on for clock, bonsai, pipes, aquarium, genact)
 ```
 
-`tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes
+`tools/tree OUT [-d DATA] [--pinned] [APP ...]` builds that tree. It always includes
 the session and neochumby-home, plus the apps you name, from wherever
 they are:
 
@@ -241,8 +243,15 @@ they are:
 | --- | --- |
 | `doom` | `apps/doom` in this repository |
 | `./path`, `/path` | a crate on this machine |
-| `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it prints the commit to pin) |
-| `crate:neochumby-x@1.0.0` | crates.io (unversioned, the newest) |
+| `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it warns and prints the commit to pin) |
+| `crate:neochumby-x@1.0.0` | crates.io, checked against the index's SHA-256 (unversioned, it warns and takes the newest) |
+
+An app from elsewhere runs on your Chumby, and its companion on your
+server, so pin it: a full commit
+id after `#` (a branch or tag can move), a version after `@`. With
+`--pinned` (`tools/tree OUT --pinned APP ...`, and the same for
+`tools/stick` and `tools/deploy`), an app that isn't pinned is refused
+rather than warned about.
 
 Each app's binaries are built for the Chumby, and its companion and server
 program for the server, with the toolchain above. Its manifest is made from its

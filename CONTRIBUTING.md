@@ -76,7 +76,7 @@ later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
 verify CI's images' attestations with it). `dev/setup --check` says which
 are missing and how to get them on this system. `git submodule update
 --init` checks out the third-party C (Doom, Quake, fastfetch, htop, procps,
-ncurses) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
+ncurses, and dev/wasmbench's CoreMark) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
 only `classic/build` needs.
 
 The server half (neochumbyd and companions) is built for x86_64 Linux by
@@ -86,14 +86,24 @@ builds companions for another, and `tools/deploy` picks the one its server
 runs. A companion must build for all three: keep anything
 platform-specific behind `cfg`, as neochumbyd does.
 
-CI runs the same checks on every pull request. To run them yourself:
+CI runs the same checks on every pull request (and builds the dist image
+for 5.9.16 and stable; mainline weekly, or when a change is to it alone:
+dist/README.md, "Mainline, weekly"). To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
 crates), and `cargo test -p neochumby-proto -p neochumby-sync -p
-neochumbyd`. neochumbyd's tests include one end to end on loopback
+neochumbyd`. CI also checks what the build takes in: `cargo deny check
+bans licenses sources` (as `deny.toml` sets them) and `gitleaks git` over
+every commit, on every run, and RustSec's advisories (`cargo deny check
+advisories`) daily and whenever `Cargo.lock` or `deny.toml` changes. A new
+dependency must pass `cargo deny`: a licence not yet allowed, or a source
+other than crates.io, is added to `deny.toml` in the same pull request,
+saying why.
+
+neochumbyd's tests include one end to end on loopback
 (`crates/neochumbyd/tests/server.rs`): a Chumby pairs, and a server
-program approves it through the admin socket, sandboxed where the system can, and
-checks that it can't read neochumbyd's key or the owner's token.
+program approves it through the admin socket, sandboxed where the system
+can, and checks that it can't read neochumbyd's key or the owner's token.
 `neochumby-sys`'s tests check the sandbox itself; on Linux they need
 Landlock, and in CI they fail without it.
 
@@ -207,7 +217,7 @@ prepare` does just this part.
 
 | Profile | What boots | Needs |
 | --- | --- | --- |
-| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`) |
+| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`; CI builds mainline weekly, so that may be its newest build, not this checkout's) |
 | `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
 | `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
 
@@ -266,13 +276,17 @@ passes where, so far:
 | `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
 | `pairing`, `powercut` | skipped | skipped | they need a neochumbyd the Chumby can reach, and it has no network |
 
-The session on dist still uses the stock kernel's device nodes
-(`/dev/switch`, `/dev/accel`, `/proc/sys/sense1`), where 5.9.16 offers
-evdev, IIO, the backlight class and ALSA: the scenarios that need devices
-pass there once the session (or dist) bridges the two.
+The session on dist still uses the stock kernel's `/dev/switch` and
+`/dev/accel`, where 5.9.16 offers evdev and IIO: the scenarios that need
+devices pass there once the session (or dist) bridges the two. The
+backlight and the speaker's mute it already finds as each kernel has them:
+`/proc/sys/sense1` on 2.6.16, else the backlight class and the sound
+card's `Speaker Switch`.
 
 **boot** (`dev/emulate-boot TREE OUT`): the boot runs the stick's hook,
-the hook runs the session from the stick, and home opens and draws.
+the hook runs the session from the stick, and home opens and draws (with
+its CHUMBY MODE bar on the stock 2.6 kernel; on dist, where home has
+none, until its screen settles).
 
 **smoke** (`dev/emulate-smoke TREE OUT`, a tree with doom): home draws, a
 tap on DOOM opens Doom (without game data it says so and exits, and home
@@ -361,8 +375,11 @@ What the emulator can't catch is what real devices are for:
 An app is a crate named `neochumby-<name>`. It lives in this repository
 under `apps/<name>/`, or in its own repository with the crate at the root,
 where it is added to a tree from its git URL or from crates.io
-(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`). Its
-`Cargo.toml` says what it is:
+(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`).
+cargo-deny sees only this repository's `Cargo.lock`, so an app
+`tools/tree` fetches from git or crates.io, and what it depends on, isn't
+checked for licences or advisories: pin it (a full commit id, a version),
+and read what you pin. Its `Cargo.toml` says what it is:
 
 ```toml
 [package]
@@ -553,7 +570,7 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
 | `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service` (below) |
 | `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
-| `root` | no jail: it runs as root, as the session does. Listed alone |
+| `root` | no jail: it runs as root, as the session does. Listed alone, or with `fb` for an app that draws the screen itself: without `fb`, a root app runs in text mode too |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
 can't signal or trace each other, or root, and can't read the Chumby's
@@ -597,9 +614,10 @@ yours. The session also stops your stream:
 
 **The backlight.** Only root may set it. The start app and its service
 may write `brightness <n>` (0, off, to 65535, full), and carry on. The
-session writes `/proc/sys/sense1/brightness`, and puts back the level the
-Chumby booted with at CHUMBY MODE. From any other app it's refused and
-logged.
+session writes `/proc/sys/sense1/brightness` (on a newer kernel without
+it, the first `/sys/class/backlight` device, scaled to its
+`max_brightness`), and puts back the level the Chumby booted with at
+CHUMBY MODE. From any other app it's refused and logged.
 
 In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
 `Pipe::brightness(n)`.
@@ -823,6 +841,9 @@ month's releases from 0: `v2026.10.0`) cuts a dated release; CI's
 sources onto it from `dist-prebuilt`, and links qemu-chumby's build (a
 manual CI run on main with `release` set does the same, creating the
 release). It builds nothing, so cut one once main's CI has finished.
+The mainline kernel track's image isn't in a release: CI builds it only
+weekly (dist/README.md, "Mainline, weekly"), and the newest is on
+`dist-prebuilt`.
 
 ## Publishing the SDK crates
 

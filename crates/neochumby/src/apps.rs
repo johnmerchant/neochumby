@@ -30,8 +30,8 @@
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
 //!
-//! An app's exec runs in **text mode** unless its access lists `fb` (or
-//! `root`): its stdin and stdout are a terminal of its own, which the
+//! An app's exec runs in **text mode** unless its access lists `fb`, root
+//! or not: its stdin and stdout are a terminal of its own, which the
 //! session shows on the screen (neochumby::term), with touches arriving on
 //! stdin. With `fb`, it has the framebuffer and draws on it itself.
 
@@ -145,9 +145,9 @@ impl App {
     }
 
     /// Whether its exec runs in text mode, on a terminal the session
-    /// shows: unless it draws the screen itself (`fb`, or `root`).
+    /// shows: unless it draws the screen itself (`fb`), root or not.
     pub fn text(&self) -> bool {
-        !self.access.fb && !self.access.root
+        !self.access.fb
     }
 }
 
@@ -260,7 +260,7 @@ mod tests {
         for (name, manifest, text) in [
             ("htop", "exec=x\nfont=spleen-6x12\ntap=\\n\n", true),
             ("doom", "exec=x\naccess=fb,touch\n", false),
-            ("home", "exec=x\naccess=root\n", false),
+            ("classic", "exec=x\naccess=root,fb\n", false),
         ] {
             std::fs::create_dir_all(dir.join(name)).unwrap();
             std::fs::write(dir.join(name).join("manifest"), manifest).unwrap();
