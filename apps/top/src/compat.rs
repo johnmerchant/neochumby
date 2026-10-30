@@ -4,7 +4,7 @@
 //! each renamed to the function here, which makes the real call and, where
 //! the kernel says ENOSYS, does the same with the calls 2.6.16 has. A
 //! directory descriptor becomes its /proc/self/fd link (top has /proc:
-//! `system`), and pselect a select between two changes of the signal mask.
+//! `system`), and pselect a poll between two changes of the signal mask.
 //! Without these top exits with 47 at once, as it can't read /proc/self.
 
 use std::ffi::{CStr, CString, c_char, c_int, c_uint};
@@ -83,10 +83,11 @@ pub unsafe extern "C" fn top_readlinkat(dirfd: c_int, path: *const c_char, buf: 
     unsafe { libc::readlink(p.as_ptr(), buf, size) }
 }
 
-/// pselect(2): select(2) with `mask` in place while it waits. A signal
-/// that comes between the change of mask and select waits for the next
-/// key or the timeout, where pselect would end at once; to top that is a
-/// screen refreshed a few seconds late.
+/// pselect(2): poll(2) on the same descriptors, with `mask` in place while
+/// it waits (musl's select is pselect6 too). A signal that comes between
+/// the change of mask and poll waits for the next key or the timeout,
+/// where pselect would end at once; to top that is a screen refreshed a
+/// few seconds late.
 ///
 /// # Safety
 /// As pselect(2).
@@ -104,19 +105,51 @@ pub unsafe extern "C" fn top_pselect(
     if rc >= 0 || !enosys() {
         return rc;
     }
+    // SAFETY: each set, if not null, is an fd_set holding n descriptors.
+    let has = |set: *mut libc::fd_set, fd: c_int| !set.is_null() && unsafe { libc::FD_ISSET(fd, set) };
+    let mut fds: Vec<libc::pollfd> = (0..n.clamp(0, libc::FD_SETSIZE as c_int))
+        .filter_map(|fd| {
+            let events = if has(r, fd) { libc::POLLIN } else { 0 }
+                | if has(w, fd) { libc::POLLOUT } else { 0 }
+                | if has(e, fd) { libc::POLLPRI } else { 0 };
+            (events != 0).then_some(libc::pollfd { fd, events, revents: 0 })
+        })
+        .collect();
     // SAFETY: ts, if not null, is a timespec, as pselect's.
-    let mut tv = unsafe { ts.as_ref() }.map(|t| libc::timeval { tv_sec: t.tv_sec, tv_usec: (t.tv_nsec / 1000) as _ });
-    let tvp = tv.as_mut().map_or(std::ptr::null_mut(), |t| t as *mut libc::timeval);
+    let ms = unsafe { ts.as_ref() }.map_or(-1, |t| {
+        (t.tv_sec as i64 * 1000 + (t.tv_nsec as i64 + 999_999) / 1_000_000).min(c_int::MAX as i64) as c_int
+    });
     // SAFETY: an empty set, filled by sigprocmask with the mask as it was.
     let mut old: libc::sigset_t = unsafe { std::mem::zeroed() };
     // SAFETY: mask, if not null, is a sigset_t, as pselect's.
     let masked = !mask.is_null() && unsafe { libc::sigprocmask(libc::SIG_SETMASK, mask, &mut old) } == 0;
-    // SAFETY: the sets as pselect's, and tvp null or our timeval.
-    let rc = unsafe { libc::select(n, r, w, e, tvp) };
+    // SAFETY: fds is a Vec of pollfd, of its own length.
+    let rc = unsafe { libc::poll(fds.as_mut_ptr(), fds.len() as libc::nfds_t, ms) };
     if masked {
         // SAFETY: old is the mask sigprocmask gave us. (top reads no
-        // errno after pselect, so it needn't be kept from select.)
+        // errno after pselect, so it needn't be kept from poll.)
         unsafe { libc::sigprocmask(libc::SIG_SETMASK, &old, std::ptr::null_mut()) };
     }
-    rc
+    if rc < 0 {
+        return rc;
+    }
+    for set in [r, w, e] {
+        if !set.is_null() {
+            // SAFETY: set is an fd_set, as pselect's.
+            unsafe { libc::FD_ZERO(set) };
+        }
+    }
+    // As select counts: each descriptor once for each set it is ready in.
+    let mut ready = 0;
+    for p in &fds {
+        let marks = [(r, libc::POLLIN | libc::POLLHUP | libc::POLLERR), (w, libc::POLLOUT | libc::POLLERR), (e, libc::POLLPRI)];
+        for (set, bits) in marks {
+            if !set.is_null() && p.revents & bits != 0 {
+                // SAFETY: set is an fd_set, and p.fd is below FD_SETSIZE.
+                unsafe { libc::FD_SET(p.fd, set) };
+                ready += 1;
+            }
+        }
+    }
+    ready
 }
