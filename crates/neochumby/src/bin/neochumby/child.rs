@@ -8,8 +8,11 @@
 //! (player.rs). It runs in a
 //! process group of its own, so that it and whatever it started end
 //! together. An app runs jailed, as jail.rs describes, unless its manifest
-//! says `access = ["root"]`; the session's own services run as root.
+//! says `access = ["root"]`; the session's own services run as root. A
+//! text-mode app's exec gets its terminal (terminal.rs) as its stdin and
+//! stdout; its stderr, like everything else's, is the session's log.
 
+use std::fs::File;
 use std::os::fd::{AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
 use std::path::Path;
@@ -37,11 +40,12 @@ pub struct Launch<'a> {
     env: Vec<(String, String)>,
     keep: Vec<RawFd>,
     player: Option<&'a str>,
+    terminal: Option<File>,
 }
 
 /// `exe` of `app`, as `role`, from the tree at `root`.
 pub fn launch<'a>(app: &'a App, exe: &'a Path, role: Role, root: &'a Path) -> Launch<'a> {
-    Launch { app, exe, role, root, env: Vec::new(), keep: Vec::new(), player: None }
+    Launch { app, exe, role, root, env: Vec::new(), keep: Vec::new(), player: None, terminal: None }
 }
 
 impl<'a> Launch<'a> {
@@ -64,6 +68,14 @@ impl<'a> Launch<'a> {
         self
     }
 
+    /// Gives it `slave`, a terminal's far end, as its stdin and stdout.
+    /// The session's copy closes once it has started, so the terminal
+    /// closes when the app's do.
+    pub fn terminal(&mut self, slave: File) -> &mut Self {
+        self.terminal = Some(slave);
+        self
+    }
+
     /// Starts it in a process group of its own, with a new request pipe.
     pub fn spawn(mut self) -> std::io::Result<(Process, Pipe)> {
         let (pipe, theirs) = Pipe::pair()?;
@@ -77,18 +89,22 @@ impl<'a> Launch<'a> {
             self.keep.push(l.as_raw_fd());
             self.env.push((neochumby::companion::ENV.into(), l.as_raw_fd().to_string()));
         }
+        let terminal = self.terminal.as_ref().map(|t| t.as_raw_fd());
         let process = if jail::jailed(self.app) {
-            jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep)?
+            jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep, terminal)?
         } else {
             let mut cmd = Command::new(self.exe);
             cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", self.root).env("HOME", "/tmp");
             cmd.env_remove(session::PLAYER_ENV);
             cmd.envs(self.env).process_group(0);
+            if let Some(t) = &self.terminal {
+                cmd.stdin(t.try_clone()?).stdout(t.try_clone()?);
+            }
             pass_fds(&mut cmd, self.keep);
             Process::from(cmd.spawn()?)
         };
         // The child has its own copies now.
-        drop((theirs, link));
+        drop((theirs, link, self.terminal));
         Ok((process, pipe))
     }
 }
