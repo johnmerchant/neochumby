@@ -2,12 +2,24 @@
 name = "neochumby-sys"
 description = "neochumby's raw system calls, behind safe functions: the only crate of ours with unsafe code"
 license = "MIT"
-version.workspace = true
+# Its own semver, not the workspace's: published on crates.io (see
+# CONTRIBUTING.md).
+version = "0.0.1"
 edition.workspace = true
-publish.workspace = true
+publish = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["chumby", "syscalls", "linux", "embedded"]
+categories = ["os::linux-apis", "embedded"]
+# What the published crate carries: what it builds from.
+include = ["src/**", "README.md", "LICENSE"]
 
 [dependencies]
 libc.workspace = true
+
+[features]
+# What ncinit, the dist image's /init, needs (the boot module).
+boot = []
 
 [lints]
 workspace = true

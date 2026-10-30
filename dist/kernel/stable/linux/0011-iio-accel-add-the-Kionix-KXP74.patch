@@ -1,0 +1,307 @@
+Description: iio: accel: add the Kionix KXP74
+ A three-axis analogue accelerometer with a 12-bit ADC on SPI (mode 3):
+ a command byte starts an axis conversion and the result follows 50 us
+ later. Raw channels with a ratiometric scale and offset; no interrupt.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+diff --git a/Documentation/devicetree/bindings/iio/accel/kionix,kxp74.yaml b/Documentation/devicetree/bindings/iio/accel/kionix,kxp74.yaml
+new file mode 100644
+index 000000000..bf1101e89
+--- /dev/null
++++ b/Documentation/devicetree/bindings/iio/accel/kionix,kxp74.yaml
+@@ -0,0 +1,51 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/iio/accel/kionix,kxp74.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Kionix KXP74 Accelerometer
++
++maintainers:
++  - John Merchant <john@johnmerchant.dev>
++
++description: |
++  Three-axis analog-output accelerometer, +-2.5 g, with a 12-bit ADC
++  behind an SPI command interface. It is used in SPI mode 3.
++
++properties:
++  compatible:
++    const: kionix,kxp74
++
++  reg:
++    maxItems: 1
++
++  vdd-supply: true
++
++  spi-cpha: true
++  spi-cpol: true
++
++required:
++  - compatible
++  - reg
++
++allOf:
++  - $ref: /schemas/spi/spi-peripheral-props.yaml#
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    spi {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        accelerometer@0 {
++            compatible = "kionix,kxp74";
++            reg = <0>;
++            spi-max-frequency = <1000000>;
++            spi-cpha;
++            spi-cpol;
++        };
++    };
++...
+diff --git a/drivers/iio/accel/Kconfig b/drivers/iio/accel/Kconfig
+index 4094299e2..ca37d6edd 100644
+--- a/drivers/iio/accel/Kconfig
++++ b/drivers/iio/accel/Kconfig
+@@ -487,6 +487,17 @@ config IIO_KX022A_I2C
+ 	  connected to I2C interface. Supported devices are:
+ 	    KX022A, KX132-1211, KX132ACR-LBZ
+ 
++config KXP74
++	tristate "Kionix KXP74 SPI accelerometer"
++	depends on SPI
++	help
++	  Say yes here to build support for the Kionix KXP74 three-axis
++	  analog-output accelerometer with SPI ADC interface, as fitted to
++	  the Chumby Classic sensor board.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called kxp74.
++
+ config KXSD9
+ 	tristate "Kionix KXSD9 Accelerometer Driver"
+ 	select IIO_BUFFER
+diff --git a/drivers/iio/accel/Makefile b/drivers/iio/accel/Makefile
+index fa440a859..388ac8e25 100644
+--- a/drivers/iio/accel/Makefile
++++ b/drivers/iio/accel/Makefile
+@@ -50,6 +50,7 @@ obj-$(CONFIG_IIO_KX022A)	+= kionix-kx022a.o
+ obj-$(CONFIG_IIO_KX022A_I2C)	+= kionix-kx022a-i2c.o
+ obj-$(CONFIG_IIO_KX022A_SPI)	+= kionix-kx022a-spi.o
+ obj-$(CONFIG_KXCJK1013) += kxcjk-1013.o
++obj-$(CONFIG_KXP74)	+= kxp74.o
+ obj-$(CONFIG_KXSD9)	+= kxsd9.o
+ obj-$(CONFIG_KXSD9_SPI)	+= kxsd9-spi.o
+ obj-$(CONFIG_KXSD9_I2C)	+= kxsd9-i2c.o
+diff --git a/drivers/iio/accel/kxp74.c b/drivers/iio/accel/kxp74.c
+new file mode 100644
+index 000000000..28f2686f0
+--- /dev/null
++++ b/drivers/iio/accel/kxp74.c
+@@ -0,0 +1,201 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * Kionix KXP74 three-axis accelerometer, SPI interface
++ *
++ * The part has a 12-bit ADC behind a command protocol rather than a
++ * register map: an 8-bit "convert" command selects an axis, and after the
++ * conversion time the result is clocked out as 16 bits, MSB first, with
++ * the sample in bits 15:4. Chip select must stay asserted across both.
++ *
++ * Based on the protocol used by Chumby's chumby_accel.c (Linux 2.6.16).
++ */
++
++#include <linux/kernel.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/mutex.h>
++#include <linux/spi/spi.h>
++
++#include <linux/iio/iio.h>
++
++#define KXP74_CMD_CONVERT_X	0x00
++#define KXP74_CMD_CONVERT_Z	0x01
++#define KXP74_CMD_CONVERT_Y	0x02
++#define KXP74_CMD_WRITE_CTRL	0x04
++
++#define KXP74_CTRL_ENABLE	BIT(2)
++
++#define KXP74_CONVERT_US	50
++
++/*
++ * The output is ratiometric with 0 g at mid-scale and +/-2.5 g across
++ * the 12-bit range, 819.2 counts per g: 9.80665 * 5 / 4096 m/s^2 per count.
++ */
++#define KXP74_OFFSET		(-2048)
++#define KXP74_SCALE_NANO	11971008
++
++struct kxp74_state {
++	struct spi_device *spi;
++	struct mutex lock;	/* one conversion at a time */
++	u8 tx[2] ____cacheline_aligned;
++	u8 rx[2];
++};
++
++#define KXP74_CHANNEL(axis, cmd) {					\
++	.type = IIO_ACCEL,						\
++	.modified = 1,							\
++	.channel2 = IIO_MOD_##axis,					\
++	.address = cmd,							\
++	.info_mask_separate = BIT(IIO_CHAN_INFO_RAW),			\
++	.info_mask_shared_by_type = BIT(IIO_CHAN_INFO_SCALE) |		\
++				    BIT(IIO_CHAN_INFO_OFFSET),		\
++}
++
++static const struct iio_chan_spec kxp74_channels[] = {
++	KXP74_CHANNEL(X, KXP74_CMD_CONVERT_X),
++	KXP74_CHANNEL(Y, KXP74_CMD_CONVERT_Y),
++	KXP74_CHANNEL(Z, KXP74_CMD_CONVERT_Z),
++};
++
++static int kxp74_convert(struct kxp74_state *st, u8 cmd)
++{
++	struct spi_transfer xfers[] = {
++		{
++			.tx_buf = &st->tx[1],
++			.len = 1,
++			.delay = {
++				.value = KXP74_CONVERT_US,
++				.unit = SPI_DELAY_UNIT_USECS,
++			},
++		}, {
++			/* the stock driver repeats the command while reading */
++			.tx_buf = st->tx,
++			.rx_buf = st->rx,
++			.len = 2,
++		},
++	};
++	int ret;
++
++	mutex_lock(&st->lock);
++	st->tx[0] = 0;
++	st->tx[1] = cmd;
++	ret = spi_sync_transfer(st->spi, xfers, ARRAY_SIZE(xfers));
++	if (!ret)
++		ret = (st->rx[0] << 4) | (st->rx[1] >> 4);
++	mutex_unlock(&st->lock);
++
++	return ret;
++}
++
++static int kxp74_write_ctrl(struct kxp74_state *st, u8 val)
++{
++	int ret;
++
++	mutex_lock(&st->lock);
++	st->tx[0] = KXP74_CMD_WRITE_CTRL;
++	st->tx[1] = val;
++	ret = spi_write(st->spi, st->tx, 2);
++	mutex_unlock(&st->lock);
++
++	return ret;
++}
++
++static int kxp74_read_raw(struct iio_dev *indio_dev,
++			  struct iio_chan_spec const *chan,
++			  int *val, int *val2, long mask)
++{
++	struct kxp74_state *st = iio_priv(indio_dev);
++	int ret;
++
++	switch (mask) {
++	case IIO_CHAN_INFO_RAW:
++		ret = kxp74_convert(st, chan->address);
++		if (ret < 0)
++			return ret;
++		*val = ret;
++		return IIO_VAL_INT;
++	case IIO_CHAN_INFO_OFFSET:
++		*val = KXP74_OFFSET;
++		return IIO_VAL_INT;
++	case IIO_CHAN_INFO_SCALE:
++		*val = 0;
++		*val2 = KXP74_SCALE_NANO;
++		return IIO_VAL_INT_PLUS_NANO;
++	default:
++		return -EINVAL;
++	}
++}
++
++static const struct iio_info kxp74_info = {
++	.read_raw = kxp74_read_raw,
++};
++
++static void kxp74_power_off(void *data)
++{
++	kxp74_write_ctrl(data, 0);
++}
++
++static int kxp74_probe(struct spi_device *spi)
++{
++	struct iio_dev *indio_dev;
++	struct kxp74_state *st;
++	int ret;
++
++	indio_dev = devm_iio_device_alloc(&spi->dev, sizeof(*st));
++	if (!indio_dev)
++		return -ENOMEM;
++
++	st = iio_priv(indio_dev);
++	st->spi = spi;
++	mutex_init(&st->lock);
++
++	if (!spi->bits_per_word)
++		spi->bits_per_word = 8;
++	ret = spi_setup(spi);
++	if (ret)
++		return ret;
++
++	ret = kxp74_write_ctrl(st, KXP74_CTRL_ENABLE);
++	if (ret) {
++		dev_err(&spi->dev, "failed to enable: %d\n", ret);
++		return ret;
++	}
++
++	ret = devm_add_action_or_reset(&spi->dev, kxp74_power_off, st);
++	if (ret)
++		return ret;
++
++	/* the same name however the device was probed, by OF or SPI id */
++	indio_dev->name = "kxp74";
++	indio_dev->info = &kxp74_info;
++	indio_dev->modes = INDIO_DIRECT_MODE;
++	indio_dev->channels = kxp74_channels;
++	indio_dev->num_channels = ARRAY_SIZE(kxp74_channels);
++
++	return devm_iio_device_register(&spi->dev, indio_dev);
++}
++
++static const struct spi_device_id kxp74_id[] = {
++	{ "kxp74", 0 },
++	{ }
++};
++MODULE_DEVICE_TABLE(spi, kxp74_id);
++
++static const struct of_device_id kxp74_of_match[] = {
++	{ .compatible = "kionix,kxp74" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, kxp74_of_match);
++
++static struct spi_driver kxp74_driver = {
++	.driver = {
++		.name = "kxp74",
++		.of_match_table = kxp74_of_match,
++	},
++	.probe = kxp74_probe,
++	.id_table = kxp74_id,
++};
++module_spi_driver(kxp74_driver);
++
++MODULE_DESCRIPTION("Kionix KXP74 SPI accelerometer driver");
++MODULE_LICENSE("GPL v2");

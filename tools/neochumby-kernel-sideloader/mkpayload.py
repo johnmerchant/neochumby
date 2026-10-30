@@ -9,7 +9,7 @@ limit, so the stock 2.6.16 kernel never allocates it.  Layout:
     ...     initramfs (gzipped cpio), unless --no-initramfs
 
 With --no-initramfs the zImage uses the initramfs built into it; that is the
-NANDLESS recovery image.  No NAND is used or written.
+sideload recovery image.  No NAND is used or written.
 """
 import struct
 import sys

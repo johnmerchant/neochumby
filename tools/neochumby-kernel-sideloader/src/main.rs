@@ -75,7 +75,7 @@ pub(crate) fn run(mut args: Args) -> ! {
         }
     }
 
-    print_str("\nsideloader: NANDLESS: no NAND access in this path\n");
+    print_str("\nsideloader: no NAND access in this path\n");
     print_str("sideloader: start uid=");
     let mut uid = raw::getuid();
     let mut gid = raw::getgid();

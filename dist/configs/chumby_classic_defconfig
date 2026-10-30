@@ -8,6 +8,8 @@ BR2_ARM_SOFT_FLOAT=y
 # has to build with it. (On an x86_64 host dist/build swaps in Bootlin's
 # prebuilt toolchain instead: board/chumby-classic/bootlin.config.)
 BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+# C++ too: Buildroot's Rust needs it for a musl target (ncinit).
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_GCC_VERSION_13_X=y
 BR2_KERNEL_HEADERS_AS_KERNEL=y
 BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_5_9=y
@@ -26,8 +28,8 @@ BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/patches"
 # The kernel: 5.9.16, which still has the i.MX21's board files
 # (mach-mx21ads). Our options go on top of imx_v4_v5_defconfig.
 BR2_LINUX_KERNEL=y
-BR2_LINUX_KERNEL_CUSTOM_TARBALL=y
-BR2_LINUX_KERNEL_CUSTOM_TARBALL_LOCATION="$(BR2_KERNEL_MIRROR)/linux/kernel/v5.x/linux-5.9.16.tar.xz"
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="5.9.16"
 BR2_LINUX_KERNEL_USE_DEFCONFIG=y
 BR2_LINUX_KERNEL_DEFCONFIG="imx_v4_v5"
 BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/board/chumby-classic/linux.fragment"
@@ -46,14 +48,14 @@ BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
 BR2_PACKAGE_LINUX_FIRMWARE=y
 BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT73=y
 
-# NANDLESS: the initramfs is built into the kernel as well as shipped
+# sideload: the initramfs is built into the kernel as well as shipped
 # beside it.  A flashed zImage therefore still boots, and /init can load the
 # NAND recovery modules when the sideload marker is absent.
 BR2_TARGET_ROOTFS_INITRAMFS=y
-BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/board/chumby-classic/rootfs"
 
-# modprobe for the NAND recovery modules (the normal path never loads them).
-BR2_PACKAGE_KMOD=y
+# /init: ncinit (crates/neochumby-init), which loads the NAND recovery
+# modules (only when flashed) and every other module as its device appears.
+BR2_PACKAGE_NEOCHUMBY_INIT=y
 
 # The initramfs userhook2 kexecs with, beside the zImage.
 BR2_TARGET_ROOTFS_CPIO=y

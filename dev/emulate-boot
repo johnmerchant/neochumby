@@ -1,0 +1,60 @@
+#!/bin/sh
+# The boot, on dev/emulate's emulated Chumby: the least that must work on
+# every profile, and what CI checks on dist while the smoke test can't pass
+# there yet. It checks that
+#   - the boot mounts the stick and runs its hook (dev/emulate's, which
+#     runs the tree's own userhook2);
+#   - the hook runs the session from the stick, and the session opens home;
+#   - home draws: its CHUMBY MODE bar, light blue along the bottom.
+# The screenshot and the console go in OUT.
+#
+#   dev/emulate-boot TREE OUT     (TREE from tools/tree)
+set -eu
+tree=${1:?usage: dev/emulate-boot TREE OUT}
+out=${2:?usage: dev/emulate-boot TREE OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$out"
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-boot.XXXXXX")
+trap 'emu stop >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
+emu() { "$dev/emulate" --state "$state" "$@"; }
+backend=$(emu backend)
+if [ "$backend" = device ]; then
+  echo "dev/emulate-boot: skipped: the emulated Chumby's boot only"
+  exit 77
+fi
+slow=$(emu scale)
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the console:"
+  emu log || true
+  emu stop || true
+  exit 1
+}
+
+step "boot ($backend)"
+r=0
+emu start "$tree" || r=$?
+[ "$r" -eq 0 ] || exit "$r"
+emu wait log 'emutest: stick mounted' $((100 * slow)) || fail "the boot didn't run the stick's hook"
+emu wait log "apps from the stick" $((10 * slow)) || fail "the hook didn't take the tree from the stick"
+emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the session didn't open home"
+
+step "home draws"
+# Light blue: blue well over red, and bright.
+light_blue() {
+  p=$(emu pixel 160 228) || return 1
+  r=$(printf %d "0x$(echo "$p" | cut -c2-3)")
+  b=$(printf %d "0x$(echo "$p" | cut -c6-7)")
+  [ "$b" -gt 200 ] && [ "$b" -gt $((r + 40)) ]
+}
+i=0
+until light_blue; do
+  i=$((i + 1))
+  [ "$i" -lt $((20 * slow)) ] || fail "home's CHUMBY MODE bar isn't on the screen: $(emu pixel 160 228)"
+  sleep 1
+done
+emu shot "$out/home.png"
+emu log > "$out/console.txt"
+emu stop
+echo "dev/emulate-boot: all passed ($backend)"
