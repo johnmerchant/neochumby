@@ -113,7 +113,9 @@ kernel at the pinned commit, BusyBox's tarball, `classic/` and the
 toolchain's source: BusyBox links the toolchain's glibc statically. CI
 publishes the classic image only once that source is mirrored
 (`CLASSIC_TOOLCHAIN_SRC_URL` in `ci.yml`); until then it packs it and holds
-it back, and `classic/fetch` finds nothing.
+it back, and `classic/fetch` finds nothing. `dev/emulate`'s classic
+profile runs `classic/fetch`, else `classic/build`, into `build/classic`
+by itself.
 
 ## CI
 
