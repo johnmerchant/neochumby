@@ -47,6 +47,8 @@ pub mod signal;
 pub mod speaker;
 pub mod time;
 
+#[cfg(all(target_os = "linux", feature = "boot"))]
+pub mod boot;
 #[cfg(target_os = "linux")]
 pub mod jail;
 #[cfg(target_os = "linux")]

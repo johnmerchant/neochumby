@@ -77,6 +77,14 @@ if [ "${1:-}" = --inside ]; then
       exit 1
     }
   fi
+  # The same for ncinit, which needs Rust, which needs a C++ toolchain.
+  grep -qx BR2_PACKAGE_NEOCHUMBY_INIT=y $o/.config || {
+    echo "dist/build: ncinit (BR2_PACKAGE_NEOCHUMBY_INIT) didn't take" >&2
+    exit 1
+  }
+  # ncinit is built from this checkout, which Buildroot can't watch for
+  # changes: build it afresh every run (cargo's work is small).
+  make -C "$br" O=$o neochumby-init-dirclean
   make -C "$br" O=$o
   # Kconfig drops an option whose dependencies aren't met, silently: every
   # line of the fragment has to be in the kernel's .config as written.

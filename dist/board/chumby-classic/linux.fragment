@@ -56,11 +56,12 @@ CONFIG_FRAMEBUFFER_CONSOLE=y
 CONFIG_FONTS=y
 # CONFIG_FONT_8x8 is not set
 CONFIG_FONT_SPLEEN_5x8=y
-# A USB keyboard, for that shell: built in, since nothing loads modules for
-# a device plugged in after the boot.
-CONFIG_HID=y
-CONFIG_HID_GENERIC=y
-CONFIG_USB_HID=y
+# A USB keyboard, for that shell: modules, which ncinit loads when one is
+# plugged in (usbhid for its USB interface, then hid-generic for the HID
+# device that makes).
+CONFIG_HID=m
+CONFIG_HID_GENERIC=m
+CONFIG_USB_HID=m
 
 # Sound: ALSA with OSS emulation, so /dev/dsp stays as it is.
 CONFIG_SOUND=y

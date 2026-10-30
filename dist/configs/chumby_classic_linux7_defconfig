@@ -10,6 +10,8 @@ BR2_ARM_SOFT_FLOAT=y
 # allows: the apps keep the baseline they were built for, and the toolchain
 # doesn't follow every kernel update.
 BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+# C++ too: Buildroot's Rust needs it for a musl target (ncinit).
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
 BR2_GCC_VERSION_13_X=y
 BR2_KERNEL_HEADERS_VERSION=y
 BR2_DEFAULT_KERNEL_VERSION="5.9.16"
@@ -57,10 +59,10 @@ BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT73=y
 # beside it.  A flashed zImage therefore still boots, and /init can load the
 # NAND recovery modules when the sideload marker is absent.
 BR2_TARGET_ROOTFS_INITRAMFS=y
-BR2_ROOTFS_OVERLAY="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/board/chumby-classic/rootfs"
 
-# modprobe for the NAND recovery modules (the normal path never loads them).
-BR2_PACKAGE_KMOD=y
+# /init: ncinit (crates/neochumby-init), which loads the NAND recovery
+# modules (only when flashed) and every other module as its device appears.
+BR2_PACKAGE_NEOCHUMBY_INIT=y
 
 # The initramfs userhook2 kexecs with, beside the zImage.
 BR2_TARGET_ROOTFS_CPIO=y
