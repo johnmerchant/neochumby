@@ -9,6 +9,7 @@ It is independent of `dist/` (mainline 5.9.16, the sideload image).
 
 ```
 classic/build OUT    # OUT/classic-zImage, OUT/classic-rootfs.cpio.gz, OUT/classic-config
+classic/fetch OUT    # the same files, CI's build of them (dist/README.md, "Prebuilt")
 classic/boot-test QEMU OUT/classic-zImage [--stick IMG --want TEXT]
 ```
 
@@ -100,6 +101,19 @@ in `NEOCHUMBY_CLASSIC_WORK=DIR` (CI caches it); a second run rebuilds only
 what changed, and `$runtime volume rm neochumby-classic` starts over.
 `NEOCHUMBY_CLASSIC_DNS=<ip>` gives the container a nameserver if the
 runtime's doesn't answer.
+
+## Prebuilt
+
+`classic/fetch OUT` is `dist/fetch --classic OUT`: CI's build of the
+image for this checkout's inputs (`classic/` but this README, `boot-test`
+and `fetch`, with the kernel commit it pins), from the `dist-prebuilt`
+release (`neochumby-classic-INPUTS-2.6.16.tar.xz`), verified as
+`dist/README.md` describes. Its source, `-source.tar` beside it, is the
+kernel at the pinned commit, BusyBox's tarball, `classic/` and the
+toolchain's source: BusyBox links the toolchain's glibc statically. CI
+publishes the classic image only once that source is mirrored
+(`CLASSIC_TOOLCHAIN_SRC_URL` in `ci.yml`); until then it packs it and holds
+it back, and `classic/fetch` finds nothing.
 
 ## CI
 

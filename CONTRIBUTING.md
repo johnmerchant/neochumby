@@ -144,7 +144,7 @@ root, no VM: it runs natively on Linux and macOS.
 
 | Profile | What boots | Needs |
 | --- | --- | --- |
-| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `dist/build build/sideload-dist` (or `NEOCHUMBY_EMU_DIST_KERNEL`) |
+| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `dist/fetch build/sideload-dist` (CI's build, verified) or `dist/build build/sideload-dist` (or `NEOCHUMBY_EMU_DIST_KERNEL`) |
 | `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
 | `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic/classic-zImage`); to come |
 
@@ -612,6 +612,15 @@ Names must be ones it can take: A-Z a-z 0-9 `.` `_` `+` `-`, not starting
 or ending with `.`, unique ignoring case, and not a DOS device name (`con`,
 `aux.txt`). `neochumbyd manifest` lists anything left out. Only files that
 change are sent, so keep names stable and leave identical files alone.
+
+## Releases
+
+`gh release create vYYYY.MM.N --generate-notes` on main (`N` counts the
+month's releases from 0: `v2026.10.0`) cuts a dated release; CI's
+`release` job then copies that commit's prebuilt, attested images and their
+sources onto it from `dist-prebuilt`, and links qemu-chumby's build (a
+manual CI run on main with `release` set does the same, creating the
+release). It builds nothing, so cut one once main's CI has finished.
 
 ## Pull requests
 

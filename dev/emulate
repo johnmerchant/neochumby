@@ -61,7 +61,8 @@ a command line, and where the settings go:
            runs its userhook2. The settings are a copy of the NAND with its
            settings partition rewritten. Local only: never in CI
            (docs/legal.md)
-  dist     neochumby's Linux 5.9.16 (dist/build OUT; OUT/sideload-zImage):
+  dist     neochumby's Linux 5.9.16 (dist/fetch OUT or dist/build OUT;
+           OUT/sideload-zImage):
            --kernel, or NEOCHUMBY_EMU_DIST_KERNEL, else
            build/sideload-dist/sideload-zImage. Its /init mounts the stick
            and runs its userhook2. No proprietary firmware: CI runs it
@@ -156,7 +157,7 @@ PROFILES = {
         "initrd": ("NEOCHUMBY_EMU_DIST_INITRD", None),
         "append": ("NEOCHUMBY_EMU_DIST_APPEND", "console=ttymxc0,115200 rdinit=/init"),
         "psp": "stick",
-        "needs": "the dist image (dist/build build/sideload-dist)",
+        "needs": "the dist image (dist/fetch build/sideload-dist, or dist/build build/sideload-dist)",
     },
     "classic": {
         "kernel": ("NEOCHUMBY_EMU_CLASSIC_KERNEL", "build/classic/classic-zImage"),
@@ -165,7 +166,7 @@ PROFILES = {
         "initrd": ("NEOCHUMBY_EMU_CLASSIC_INITRD", None),
         "append": ("NEOCHUMBY_EMU_CLASSIC_APPEND", "console=ttyS0,38400"),
         "psp": "stick",
-        "needs": "the classic image (classic/build build/classic)",
+        "needs": "the classic image (classic/fetch build/classic, or classic/build build/classic)",
     },
 }
 DEFAULT_PROFILE = "dist"
