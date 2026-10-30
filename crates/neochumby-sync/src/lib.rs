@@ -75,6 +75,7 @@ pub const LIMITS: Limits = Limits { max_files: 8192, max_file: 64 << 20, max_tot
 /// What a round talks over: a paired session, or in tests a pair of
 /// channels.
 pub trait Link {
+    /// Sends `m`.
     fn send(&mut self, m: &neochumby_proto::Msg) -> std::io::Result<()>;
     /// The next message if one comes within `t`.
     fn recv_timeout(&mut self, t: std::time::Duration) -> std::io::Result<Option<neochumby_proto::Msg>>;

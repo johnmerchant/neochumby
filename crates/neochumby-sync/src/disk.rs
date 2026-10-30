@@ -32,14 +32,17 @@ pub struct Meta {
 
 /// A file being written.
 pub trait Output {
+    /// `b`, after what was written before.
     fn write_all(&mut self, b: &[u8]) -> io::Result<()>;
     /// Its bytes, on the stick (fsync).
     fn sync(&mut self) -> io::Result<()>;
 }
 
+/// The stick, as sync uses it: [`RealDisk`], or crash.rs's model of one.
 pub trait Disk: Send + Sync {
     /// A file to read from start to end.
     fn open(&self, p: &Path) -> io::Result<Box<dyn Read>>;
+    /// What `p` is, and its size.
     fn stat(&self, p: &Path) -> io::Result<Meta>;
     /// A directory's entries: each name and kind.
     fn list(&self, dir: &Path) -> io::Result<Vec<(OsString, Kind)>>;
@@ -50,8 +53,11 @@ pub trait Disk: Send + Sync {
     fn append(&self, p: &Path) -> io::Result<Box<dyn Output>>;
     /// `from` renamed to `to`, replacing what `to` was.
     fn rename(&self, from: &Path, to: &Path) -> io::Result<()>;
+    /// The file `p` gone.
     fn remove_file(&self, p: &Path) -> io::Result<()>;
+    /// The directory `p` gone, and everything in it.
     fn remove_dir_all(&self, p: &Path) -> io::Result<()>;
+    /// A new directory; an error if the name is taken.
     fn create_dir(&self, p: &Path) -> io::Result<()>;
     /// `dir`'s entries, on the stick.
     fn sync_dir(&self, dir: &Path) -> io::Result<()>;
