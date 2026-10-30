@@ -107,6 +107,18 @@ can, and checks that it can't read neochumbyd's key or the owner's token.
 `neochumby-sys`'s tests check the sandbox itself; on Linux they need
 Landlock, and in CI they fail without it.
 
+One test needs root, as it changes uids: apps' programs under uids of
+their own (`isolate::tests::as_root`, `--app-uids`). CI runs it with sudo.
+On a Linux machine, run it as CI does, or as root in a container (rootless
+podman will do), where it leaves nothing behind. Run as CI does, it leaves
+a directory in `/tmp`, owned by made-up uids, to remove as root:
+
+```sh
+bin=$(cargo test -p neochumbyd --no-run --message-format=json |
+  jq -r 'select(.profile.test and .target.kind == ["bin"]) | .executable')
+sudo "$bin" --ignored --exact isolate::tests::as_root
+```
+
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its
 tests run whole sync rounds over a real session on loopback, with a
@@ -781,6 +793,10 @@ the app:
   to neochumbyd's log. It gets only a short list of neochumbyd's
   environment: what it needs from the host comes in a `NEOCHUMBY_`
   variable, such as AirPlay's `NEOCHUMBY_AIRPLAY_PORT`.
+- **Its own uid:** with `--app-uids`, a companion runs as a uid of its
+  app's own (the same as its app's server program), with no other
+  groups. Keep everything it writes in `NEOCHUMBY_STATE`: it can't write
+  neochumbyd's state, the tree or another app's directory.
 
 `apps/airplay` is a worked example of both halves, and `apps/logs` one
 whose companion is optional.

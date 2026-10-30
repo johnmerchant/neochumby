@@ -158,7 +158,7 @@ fn spawn(s: &Server) -> std::io::Result<Child> {
     // this run. The program gets its end as descriptor 3, and neochumbyd
     // answers on the other until it closes.
     let admin = if s.state.allowed(&s.app).iter().any(|w| w == PAIRING) { Some(UnixStream::pair()?) } else { None };
-    let home = confine::prepare(&mut cmd, &s.home, admin.as_ref().map(|(_, theirs)| theirs.as_raw_fd()))?;
+    let home = s.plan.prepare(&mut cmd, &s.home, admin.as_ref().map(|(_, theirs)| theirs.as_raw_fd()))?;
     cmd.env("NEOCHUMBY_STATE", home)
         .env("NEOCHUMBY_TREE", s.tree.canonicalize()?)
         .env_remove("NEOCHUMBY_ADMIN")
@@ -237,10 +237,7 @@ mod tests {
         std::fs::write(dir.join("tree/apps/doom/manifest"), "exec=neochumby-doom\n").unwrap();
 
         let state = State::open(dir.join("state")).unwrap();
-        let confine = match neochumby_sys::sandbox::detect() {
-            Ok(s) => Confine::Sandboxed(s),
-            Err(_) => Confine::Unsandboxed,
-        };
+        let confine = Confine::for_tests();
         let d = start(&dir.join("tree"), &dir.join("state"), &state, &confine);
         assert_eq!(d.threads.len(), 1);
         let home = dir.join("state/apps/clock");

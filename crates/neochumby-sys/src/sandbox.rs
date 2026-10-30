@@ -105,27 +105,35 @@ impl Sandbox {
         }
     }
 
-    /// What it doesn't confine, for the log.
-    pub fn gaps(&self) -> Vec<&'static str> {
+    /// What it doesn't confine, for the log. `own_uid`: the program also
+    /// runs as a user of its own, which owns nothing of anyone else's, so
+    /// can't truncate, chmod or chown it, or signal another user's
+    /// processes, whatever the sandbox allows.
+    pub fn gaps(&self, own_uid: bool) -> Vec<&'static str> {
         let mut g = Vec::new();
         match *self {
             Sandbox::Landlock(abi) => {
                 if abi < 2 {
                     g.push("moving files between directories is refused altogether (ABI 1)");
                 }
-                if abi < 3 {
+                if abi < 3 && !own_uid {
                     g.push("truncating a file it can open (ABI 3)");
                 }
                 if abi < 4 {
                     g.push("binding TCP ports (ABI 4)");
                 }
-                if abi < 6 {
+                if abi < 6 && !own_uid {
                     g.push("signalling other processes, and their abstract Unix sockets (ABI 6)");
+                }
+                if abi < 6 && own_uid {
+                    g.push("abstract Unix sockets (ABI 6)");
                 }
                 if abi >= 9 {
                     g.push("what ABI 9 and later add, such as connecting to Unix sockets by path, which neochumbyd doesn't use yet");
                 }
-                g.push("chmod, chown, utime and extended attributes, of files it can reach");
+                if !own_uid {
+                    g.push("chmod, chown, utime and extended attributes, of files it can reach");
+                }
                 g.push("outbound TCP and UDP");
             }
             Sandbox::Apple => {
@@ -463,7 +471,7 @@ mod tests {
             Err(why) if std::env::var_os("CI").is_some() && cfg!(target_os = "linux") => panic!("{why}"),
             Err(why) => return eprintln!("skipped: {why}"),
         };
-        eprintln!("sandbox: {}; not confined: {}", sandbox.describe(), sandbox.gaps().join("; "));
+        eprintln!("sandbox: {}; not confined: {}", sandbox.describe(), sandbox.gaps(false).join("; "));
         let dir = std::env::temp_dir().join(format!("neochumby-sandbox-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let (state, home) = (dir.join("state"), dir.join("home"));

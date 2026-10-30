@@ -1,7 +1,8 @@
 //! Apps' companions: the server half an app may have, named in its
 //! manifest (`companion=<file in the app's directory>`). For each Chumby
 //! that opens it, neochumbyd runs one, sandboxed (confine.rs), as its own
-//! process, with
+//! process (with `--app-uids`, under the app's own uid, as its server
+//! program runs), with
 //!
 //!   NEOCHUMBY_CHUMBY   the Chumby's name, as it paired
 //!   NEOCHUMBY_STATE    a directory of the app's own, kept across runs
@@ -80,7 +81,7 @@ pub fn run(tree: &Path, state: &Path, confine: &Confine, chumby: &str, app: &str
         }
     };
     let mut cmd = plan.command(&exe, state, tree, &home, None)?;
-    let home = confine::prepare(&mut cmd, &home, None)?;
+    let home = plan.prepare(&mut cmd, &home, None)?;
     let mut child = cmd
         .env("NEOCHUMBY_CHUMBY", chumby)
         .env("NEOCHUMBY_STATE", &home)

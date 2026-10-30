@@ -241,6 +241,14 @@ jobs:
       # qemu-chumby's chumby_machine) against chumby-image's, and its
       # control path against a stub QEMU.
       - run: python3 dev/test_emulate.py
+      # Apps' companions and server programs under uids of their own: the
+      # one test that changes uids, so needs root (passwordless sudo on
+      # these runners).
+      - name: Apps' programs under uids of their own, as root
+        run: |
+          bin=$(cargo test -p neochumbyd --no-run --message-format=json |
+            jq -r 'select(.profile.test and .target.kind == ["bin"]) | .executable')
+          sudo "$bin" --ignored --exact isolate::tests::as_root
 
   cross:
     name: Build for the Chumby and the server
