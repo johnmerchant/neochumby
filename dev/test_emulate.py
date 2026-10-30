@@ -10,11 +10,13 @@ them; so can a Mac.
 import hashlib
 import importlib.machinery
 import importlib.util
+import io
 import json
 import os
 import shutil
 import subprocess
 import sys
+import tarfile
 import tempfile
 import textwrap
 import time
@@ -792,6 +794,200 @@ class Prebuilt(unittest.TestCase):
                            env=self.env, capture_output=True, text=True, timeout=60)
         self.assertEqual(r.returncode, 1)
         self.assertIn("dev/emulate prepare failed", r.stdout)
+
+
+# gh, for DistFetch: logged in, and its attestation verify passes but for
+# the files named in STUB_UNSIGNED.
+GH_STUB = r'''#!/bin/sh
+case $1 in
+auth) exit 0 ;;
+attestation)
+  case " $STUB_UNSIGNED " in *" $(basename "$3") "*) echo "no attestation" >&2; exit 1 ;; esac
+  echo "verify $(basename "$3")" >>"$STUB_LOG"; exit 0 ;;
+esac
+exit 1
+'''
+
+
+class DistFetch(unittest.TestCase):
+    """The real dist/fetch, in a checkout of its own, against a file://
+    mirror of the release and a stub gh: mainline falls back to the newest
+    mainline build when its inputs have none; the others never do."""
+
+    def git(self, *args):
+        return subprocess.run(["git", "-C", self.repo, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                               "-c", "commit.gpgsign=false", *args], check=True, capture_output=True,
+                              text=True).stdout.strip()
+
+    def commit(self, text, path="dist/Config.in", days_ago=0):
+        """A commit of TEXT to PATH, its committer time DAYS_AGO."""
+        os.makedirs(os.path.dirname(os.path.join(self.repo, path)), exist_ok=True)
+        with open(os.path.join(self.repo, path), "w") as f:
+            f.write(text)
+        self.git("add", path)
+        when = f"@{int(time.time() - days_ago * 86400)} +0000"
+        subprocess.run(["git", "-C", self.repo, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                        "-c", "commit.gpgsign=false", "commit", "-qm", text], check=True, capture_output=True,
+                       env=dict(os.environ, GIT_COMMITTER_DATE=when, GIT_AUTHOR_DATE=when))
+        return self.git("rev-parse", "HEAD")
+
+    def setUp(self):
+        self.t = tempfile.mkdtemp(prefix="fetch.")
+        self.repo = os.path.join(self.t, "repo")
+        self.mirror = os.path.join(self.t, "mirror")
+        bin_ = os.path.join(self.t, "bin")
+        for d in (self.repo + "/dist", self.mirror, bin_):
+            os.makedirs(d)
+        shutil.copy(os.path.join(REPO, "dist", "fetch"), os.path.join(self.repo, "dist", "fetch"))
+        with open(os.path.join(self.repo, "dist", "Config.in"), "w") as f:
+            f.write("zero\n")
+        self.git("init", "-q")
+        self.git("add", "-A")
+        self.git("commit", "-qm", "the checkout")
+        with open(os.path.join(bin_, "gh"), "w") as f:
+            f.write(GH_STUB)
+        os.chmod(os.path.join(bin_, "gh"), 0o755)
+        self.log = os.path.join(self.t, "log")
+        self.env = dict(os.environ, PATH=bin_ + os.pathsep + os.environ["PATH"], STUB_LOG=self.log,
+                        STUB_UNSIGNED="", NEOCHUMBY_PREBUILT="file://" + self.mirror)
+        self.when = time.time() - 1000
+
+    def tearDown(self):
+        shutil.rmtree(self.t)
+
+    def publish(self, inputs, kernel, manifest_inputs=None):
+        """A build on the mirror, each newer than the last."""
+        stem = f"neochumby-dist-{inputs}-{kernel}"
+        path = os.path.join(self.mirror, stem + ".tar.xz")
+        files = {"MANIFEST": f"image: dist\nkernel: {kernel}\ninputs: {manifest_inputs or inputs}\n",
+                 "sideload-zImage": f"zImage {inputs[:7]}\n", "sideload-rootfs.cpio.gz": "rootfs\n"}
+        with tarfile.open(path, "w:xz") as tar:
+            for name, text in files.items():
+                data = text.encode()
+                info = tarfile.TarInfo(f"{stem}/{name}")
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+        self.when += 10
+        os.utime(path, (self.when, self.when))
+        return stem + ".tar.xz"
+
+    def fetch(self, kernel):
+        out = os.path.join(self.t, "out")
+        r = subprocess.run([os.path.join(self.repo, "dist", "fetch"), "--kernel", kernel, out],
+                           env=self.env, capture_output=True, text=True, timeout=60)
+        zimage = os.path.join(out, "sideload-zImage")
+        if not os.path.exists(zimage):
+            return r, None
+        with open(zimage) as f:
+            return r, f.read().split()[1]
+
+    def test_mainline_for_its_inputs(self):
+        old = self.commit("one\n")
+        now = self.commit("two\n")
+        self.publish(old, "mainline")
+        self.publish(now, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(got, now[:7])
+        self.assertNotIn("newest", r.stderr)
+
+    def test_mainline_falls_back_to_the_newest(self):
+        older = self.commit("one\n")
+        newer = self.commit("two\n")
+        now = self.commit("three\n")
+        self.publish(older, "mainline")
+        self.publish(newer, "mainline")
+        self.publish(now, "stable")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(got, newer[:7])
+        self.assertIn(f"no prebuilt mainline image for inputs {now}", r.stderr)
+        self.assertIn(f"the newest on dist-prebuilt in this checkout's history instead, of inputs {newer}", r.stderr)
+        self.assertIn("0 days (committer time) behind HEAD", r.stderr)
+        with open(self.log) as f:
+            self.assertEqual(f.read().split(), ["verify", f"neochumby-dist-{newer}-mainline.tar.xz"])
+
+    def test_the_fallback_is_checked_too(self):
+        older = self.commit("one\n")
+        self.commit("two\n")
+        name = self.publish(older, "mainline")
+        self.env["STUB_UNSIGNED"] = name
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("isn't attested", r.stderr)
+        self.assertIsNone(got)
+        self.env["STUB_UNSIGNED"] = ""
+        self.publish(older, "mainline", manifest_inputs="0" * 40)
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f"doesn't say \"inputs: {older}\"", r.stderr)
+        self.assertIsNone(got)
+
+    def test_no_fallback_for_the_others_or_local_changes(self):
+        older = self.commit("one\n")
+        self.commit("two\n")
+        self.publish(older, "stable")
+        self.publish(older, "mainline")
+        r, got = self.fetch("stable")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no prebuilt dist image for inputs", r.stderr)
+        self.assertIsNone(got)
+        with open(os.path.join(self.repo, "dist", "Config.in"), "w") as f:
+            f.write("mine\n")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("local changes", r.stderr)
+        self.assertIsNone(got)
+
+    def test_only_from_this_checkouts_history(self):
+        base = self.commit("one\n")
+        elsewhere = self.commit("theirs\n")
+        self.git("reset", "-q", "--hard", base)
+        self.commit("ours\n")
+        self.publish(elsewhere, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("none of the mainline builds on dist-prebuilt is of a commit in this checkout's history",
+                      r.stderr)
+        self.assertIn("or wait for the weekly build", r.stderr)
+        self.assertIsNone(got)
+        # A newer one elsewhere is passed over for one in the history.
+        self.publish(base, "mainline")
+        self.publish(elsewhere, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(got, base[:7])
+
+    def test_only_a_recent_one(self):
+        old = self.commit("one\n", days_ago=20)
+        self.commit("two\n")
+        self.publish(old, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f"of inputs {old}, is 20 days behind HEAD (more than 14)", r.stderr)
+        self.assertIsNone(got)
+        recent = self.commit("three\n", days_ago=10)
+        self.commit("four\n")
+        self.publish(recent, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(got, recent[:7])
+        self.assertIn("10 days (committer time) behind HEAD", r.stderr)
+
+    def test_only_one_with_the_current_pin(self):
+        before = self.commit("one\n")
+        pin = self.commit("hash\n", path="dist/kernel/mainline/linux/linux.hash")
+        self.publish(before, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f"predates the mainline pin's last change ({pin})", r.stderr)
+        self.assertIsNone(got)
+
+    def test_none_at_all(self):
+        self.commit("one\n")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("no prebuilt dist image for inputs", r.stderr)
 
 
 class Device(unittest.TestCase):

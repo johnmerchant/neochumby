@@ -2,6 +2,18 @@
 
 ## What neochumby protects, and what it doesn't
 
+**Treat anything that runs on a Chumby as able to get root.** Its stock
+kernel, Linux 2.6.16, gets no fixes, and it has local privilege
+escalations that will never be fixed on it. The jail below is there to
+keep an app that misbehaves from disrupting the others and the Chumby's
+normal running. It is not a security boundary.
+
+**The security boundary is the server.** neochumbyd is where community
+code runs (apps' companions and server programs), where the keys are, and
+where what each Chumby runs comes from. So the work goes there: sandboxing
+what neochumbyd runs, and making sure a Chumby runs only what its paired
+neochumbyd delivered.
+
 - **The session runs as root; apps don't.** Each app runs as a user of its
   own, chrooted in a private mount namespace that holds its own files, a
   `/tmp` of its own and only the devices its manifest's `access` lists
@@ -23,7 +35,9 @@
   or network namespaces, no seccomp, no cgroups and no netfilter, and it
   has known local privilege escalations that will never be fixed on it.
   Native code written to get root there probably can. **An app is still
-  trusted code: install apps only from sources you trust.**
+  trusted code: install apps only from sources you trust.** What the
+  Chumby runs comes from the paired neochumbyd: guard that, and the tree
+  it serves.
 - **The network can't be taken from an app.** An app whose `access`
   doesn't list `network` gets no name lookup, and the session ends it if
   it finds an internet socket of its in `/proc/net` (it looks once a
@@ -38,11 +52,26 @@
   mount from `/psp`, and 2.6.16 can't change a bind mount's flags, so an
   app could put a page-zero ELF there and run it. Until that's closed, an
   app with `storage` is trusted code, as any app is (above).
-- **The app tree is served over NFSv3,** read-only and without
-  authentication. Every file is served as root's, without setuid or
-  setgid bits, and the Chumby mounts it `nosuid,nodev`. Anyone who can reach a neochumbyd's NFS port can read the
-  tree (our binaries and your game data). Limit it to the network your
-  Chumbys are on.
+- **What each delivery guarantees** (README, "Delivery: NFS or sync"):
+  - **`sync`:** every file comes over the pinned session, hashed as it
+    arrives, and the Chumby boots the stick's set without the network. Its
+    integrity rests on the pairing alone.
+  - **`nfs`** (the default): the tree is served read-only over NFSv3,
+    without authentication. Every file is served as root's, without setuid
+    or setgid bits, and the Chumby mounts it `nosuid,nodev`. neochumbyd
+    also serves the tree's manifest, signed with its key. Once
+    `neochumby-boot` is in the Chumby's `/psp` (pairing and the session
+    install it), the tree is mounted `noexec`, and the Chumby runs only
+    copies, in RAM, of programs that match that manifest. It reads the
+    apps' manifests and the boot hook only as checked, too. Someone who
+    can answer for the server can't run code of their own this way. They
+    can still: serve an older tree that neochumbyd once served; feed an
+    app crafted data from its directory, which isn't checked; and, on a
+    Chumby paired before `neochumby-boot` existed, have the one unchecked
+    boot that installs it. Anyone who can reach the NFS port can read the
+    tree (our binaries and your game data). Limit it to the network your
+    Chumbys are on.
+  - **A stick made by hand** (`tools/stick`) runs whatever is on it.
 - **A Chumby and its neochumbyd talk TLS 1.3,** and each side checks the
   other's pinned key on every connection before it carries anything else.
   Pairing pins the keys after someone types the code from the Chumby's
