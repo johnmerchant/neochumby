@@ -148,10 +148,13 @@ stable; mainline is built at main's head every Sunday (and by hand, a
 `workflow_dispatch` with `mainline`), booted and published like the
 others, and with them for a change to mainline alone. So most inputs
 commits have no mainline build, and `dist/fetch --kernel mainline` then
-takes the newest one on the release instead, checked the same way (its
-`MANIFEST` naming the inputs it was built from), with a line saying which
-commit that is and that it may be older than the checkout; with local
-changes to the inputs it refuses, as for the others. Dated releases carry
+takes the newest one on the release of a commit in the checkout's
+history instead, checked the same way (its `MANIFEST` naming the inputs it
+was built from), with a line saying which commit that is and how far
+behind. It must have the track's current pin and be at most 14 days
+behind `HEAD`, so an old signed build can't stand in once newer ones are
+gone; else it refuses (build it, or wait for the weekly build). With
+local changes to the inputs it refuses, as for the others. Dated releases carry
 5.9.16, stable and classic, not mainline.
 
 `dev/emulate` and `dev/e2e` do this themselves, into `build/sideload-dist`

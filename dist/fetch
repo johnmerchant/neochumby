@@ -33,9 +33,17 @@
 #
 # Mainline is built weekly, so most inputs commits have no build of it.
 # When there's none for these inputs, the newest mainline build on the
-# release (by upload) is fetched instead, with a line saying which inputs
-# commit it's of and that it may be older than this checkout: checked the
-# same way, its MANIFEST naming those inputs. Never for local changes.
+# release (by upload) whose inputs commit is in this checkout's history is
+# fetched instead, with a line saying which commit it's of and how much
+# older it is: checked the same way, its MANIFEST naming those inputs.
+# Never for local changes. Since the release can be edited (newer builds
+# deleted, leaving an old signed one), the fallback is bounded: its inputs
+# commit must be an ancestor of HEAD, must already have the mainline
+# track's current pin (the last commit to dist/kernel/mainline/ or its
+# defconfig: an older build is another kernel), and must be no more than
+# 14 days of committer time behind HEAD (two weekly builds, so one missed
+# run is borne). Otherwise it refuses, and says to build it or wait for
+# the weekly build.
 #
 # Exits 0 with the files in OUT. Exits 1 and leaves OUT as it was when the
 # inputs have local changes (the prebuilt image wouldn't match them), when
@@ -157,26 +165,49 @@ stem=neochumby-$image-$inputs-$kernel
 work=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-fetch.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
 
-# The inputs commit of the newest mainline build on the release, if any.
-newest_mainline() {
+# The inputs commits of the mainline builds on the release, newest first.
+mainline_builds() {
     case $base in
         file://*) ls -t "${base#file://}" ;;
         *) gh api "repos/$repo/releases/tags/$tag" --jq '.assets[] | [.created_at, .name] | @tsv' |
             sort -r | cut -f2 ;;
-    esac | sed -n 's/^neochumby-dist-\([0-9a-f]\{40\}\)-mainline\.tar\.xz$/\1/p' | head -n 1
+    esac | sed -n 's/^neochumby-dist-\([0-9a-f]\{40\}\)-mainline\.tar\.xz$/\1/p'
 }
 
 echo "fetching $base/$stem.tar.xz"
 if ! curl -fsSL --retry 3 -o "$work/$stem.tar.xz" "$base/$stem.tar.xz"; then
-    newest=
-    [ "$kernel" != mainline ] || newest=$(newest_mainline 2>/dev/null) || newest=
-    if [ -z "$newest" ] || [ "$newest" = "$inputs" ]; then
+    builds=
+    [ "$kernel" != mainline ] || builds=$(mainline_builds 2>/dev/null | grep -vxF "$inputs") || builds=
+    if [ -z "$builds" ]; then
         echo "fetch: no prebuilt $image image for inputs $inputs ($kernel): CI publishes" >&2
         echo "  only main's, once its run finishes. Build it instead: $build $out" >&2
         exit 1
     fi
+    # The newest in this checkout's history, then the bounds (above).
+    newest=
+    for c in $builds; do
+        if git merge-base --is-ancestor "$c" HEAD 2>/dev/null; then newest=$c; break; fi
+    done
+    refuse() {
+        echo "fetch: no prebuilt mainline image for inputs $inputs (CI builds mainline weekly)," >&2
+        echo "  and $*: refused." >&2
+        echo "  Build it instead: $build $out (or wait for the weekly build)" >&2
+        exit 1
+    }
+    [ -n "$newest" ] || refuse "none of the mainline builds on $tag is of a commit in this checkout's history"
+    pin=$(git log -1 --format=%H -- dist/kernel/mainline dist/configs/chumby_classic_mainline_defconfig)
+    if [ -n "$pin" ] && ! git merge-base --is-ancestor "$pin" "$newest"; then
+        refuse "the newest in its history, of inputs $newest, predates the mainline pin's last change ($pin)"
+    fi
+    days=14
+    age=$(( $(git log -1 --format=%ct HEAD) - $(git log -1 --format=%ct "$newest") ))
+    age_days=$((age / 86400))
+    if [ "$age" -gt $((days * 86400)) ]; then
+        refuse "the newest in its history, of inputs $newest, is $age_days days behind HEAD (more than $days)"
+    fi
     echo "fetch: no prebuilt mainline image for inputs $inputs (CI builds mainline weekly):" >&2
-    echo "  the newest on $tag instead, of inputs $newest, which may be older than this checkout" >&2
+    echo "  the newest on $tag in this checkout's history instead, of inputs $newest," >&2
+    echo "  $age_days days (committer time) behind HEAD: it may be older than this checkout" >&2
     inputs=$newest
     stem=neochumby-$image-$inputs-$kernel
     echo "fetching $base/$stem.tar.xz"

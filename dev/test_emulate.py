@@ -819,10 +819,16 @@ class DistFetch(unittest.TestCase):
                                "-c", "commit.gpgsign=false", *args], check=True, capture_output=True,
                               text=True).stdout.strip()
 
-    def commit(self, text):
-        with open(os.path.join(self.repo, "dist", "Config.in"), "w") as f:
+    def commit(self, text, path="dist/Config.in", days_ago=0):
+        """A commit of TEXT to PATH, its committer time DAYS_AGO."""
+        os.makedirs(os.path.dirname(os.path.join(self.repo, path)), exist_ok=True)
+        with open(os.path.join(self.repo, path), "w") as f:
             f.write(text)
-        self.git("commit", "-qam", text)
+        self.git("add", path)
+        when = f"@{int(time.time() - days_ago * 86400)} +0000"
+        subprocess.run(["git", "-C", self.repo, "-c", "user.name=t", "-c", "user.email=t@example.com",
+                        "-c", "commit.gpgsign=false", "commit", "-qm", text], check=True, capture_output=True,
+                       env=dict(os.environ, GIT_COMMITTER_DATE=when, GIT_AUTHOR_DATE=when))
         return self.git("rev-parse", "HEAD")
 
     def setUp(self):
@@ -896,7 +902,8 @@ class DistFetch(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stderr)
         self.assertEqual(got, newer[:7])
         self.assertIn(f"no prebuilt mainline image for inputs {now}", r.stderr)
-        self.assertIn(f"the newest on dist-prebuilt instead, of inputs {newer}, which may be older", r.stderr)
+        self.assertIn(f"the newest on dist-prebuilt in this checkout's history instead, of inputs {newer}", r.stderr)
+        self.assertIn("0 days (committer time) behind HEAD", r.stderr)
         with open(self.log) as f:
             self.assertEqual(f.read().split(), ["verify", f"neochumby-dist-{newer}-mainline.tar.xz"])
 
@@ -930,6 +937,50 @@ class DistFetch(unittest.TestCase):
         r, got = self.fetch("mainline")
         self.assertEqual(r.returncode, 1)
         self.assertIn("local changes", r.stderr)
+        self.assertIsNone(got)
+
+    def test_only_from_this_checkouts_history(self):
+        base = self.commit("one\n")
+        elsewhere = self.commit("theirs\n")
+        self.git("reset", "-q", "--hard", base)
+        self.commit("ours\n")
+        self.publish(elsewhere, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn("none of the mainline builds on dist-prebuilt is of a commit in this checkout's history",
+                      r.stderr)
+        self.assertIn("or wait for the weekly build", r.stderr)
+        self.assertIsNone(got)
+        # A newer one elsewhere is passed over for one in the history.
+        self.publish(base, "mainline")
+        self.publish(elsewhere, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(got, base[:7])
+
+    def test_only_a_recent_one(self):
+        old = self.commit("one\n", days_ago=20)
+        self.commit("two\n")
+        self.publish(old, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f"of inputs {old}, is 20 days behind HEAD (more than 14)", r.stderr)
+        self.assertIsNone(got)
+        recent = self.commit("three\n", days_ago=10)
+        self.commit("four\n")
+        self.publish(recent, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 0, r.stderr)
+        self.assertEqual(got, recent[:7])
+        self.assertIn("10 days (committer time) behind HEAD", r.stderr)
+
+    def test_only_one_with_the_current_pin(self):
+        before = self.commit("one\n")
+        pin = self.commit("hash\n", path="dist/kernel/mainline/linux/linux.hash")
+        self.publish(before, "mainline")
+        r, got = self.fetch("mainline")
+        self.assertEqual(r.returncode, 1)
+        self.assertIn(f"predates the mainline pin's last change ({pin})", r.stderr)
         self.assertIsNone(got)
 
     def test_none_at_all(self):
