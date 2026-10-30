@@ -24,20 +24,31 @@ BR2_STATIC_LIBS=y
 BR2_CCACHE=y
 BR2_CCACHE_INITIAL_SETUP="--max-size=1G"
 
-# Every download checked against a hash; the kernel's are ours (patches/).
+# Every download checked against a hash; the kernel's are ours. patches/
+# has the headers' hash (5.9.16, shared with the other kernels) and
+# kernel/stable/ this track's own: linux/ (its patches and the tarball's
+# hash, with no version in the path, so a bump renames nothing) and
+# linux.fragment.
 BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
-BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/patches"
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/patches $(BR2_EXTERNAL_NEOCHUMBY_PATH)/kernel/stable"
 
-# The kernel: 7.2.13, with the i.MX21 brought back as a device-tree
-# platform (patches/linux/7.2.13). Our options go on top of
-# imx_v4_v5_defconfig. The boot loader passes ATAGs and no device tree, so
-# the zImage carries the Chumby's DTB appended.
+# The kernel: the stable track, kernel.org's newest stable release, with
+# the i.MX21 brought back as a device-tree platform (kernel/stable/linux).
+# Our options go on top of imx_v4_v5_defconfig. The boot loader passes
+# ATAGs and no device tree, so the zImage carries the Chumby's DTB
+# appended.
+#
+# The pin: this version, and its tarball's SHA-256 in
+# kernel/stable/linux/linux.hash (from kernel.org's signed sha256sums.asc).
+# CI's kernel-sync job moves both when kernel.org's stable does
+# (dist/kernel-sync); dist/build refuses a hash file that names another
+# version.
 BR2_LINUX_KERNEL=y
 BR2_LINUX_KERNEL_CUSTOM_VERSION=y
 BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="7.2.13"
 BR2_LINUX_KERNEL_USE_DEFCONFIG=y
 BR2_LINUX_KERNEL_DEFCONFIG="imx_v4_v5"
-BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/board/chumby-classic/linux7.fragment"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/kernel/stable/linux.fragment"
 BR2_LINUX_KERNEL_APPENDED_ZIMAGE=y
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="nxp/imx/imx21-chumby-classic"

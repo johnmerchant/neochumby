@@ -95,8 +95,8 @@ def main():
             print(f"ERROR: recovery check failed after root's modprobe: {what}", file=sys.stderr)
             print(loaded, file=sys.stderr)
             ok = False
-    if not re.search(r"^Linux \(none\) (5\.9\.16|7\.2\.13)-mx21-sideload #\d+ .* armv5tejl GNU/Linux$", uname, re.M):
-        print("ERROR: recovery check failed: uname -a is not a sideload kernel (5.9.16 or 7.2.13)", file=sys.stderr)
+    if not re.search(r"^Linux \(none\) [0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?-mx21-sideload #\d+ .* armv5tejl GNU/Linux$", uname, re.M):
+        print("ERROR: recovery check failed: uname -a is not a sideload kernel (VERSION-mx21-sideload)", file=sys.stderr)
         ok = False
     print(f"sideload recovery demo: {'PASS' if ok else 'FAIL'}")
     print(f"log: {log_path}")

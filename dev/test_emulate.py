@@ -746,12 +746,12 @@ class Prebuilt(unittest.TestCase):
         self.assertEqual(self.asked(), [])
 
     def test_kernel_and_classic(self):
-        self.env["NEOCHUMBY_DIST_KERNEL"] = "7.2.13"
+        self.env["NEOCHUMBY_DIST_KERNEL"] = "stable"
         self.env["STUB_FETCH"] = "no prebuilt"
         self.prepare()
-        self.assertEqual(self.asked(), ["fetch qemu", "fetch dist 7.2.13 build/sideload-dist-7.2.13",
-                                        "build dist 7.2.13 build/sideload-dist-7.2.13"])
-        self.assertEqual(self.read("build/sideload-dist-7.2.13/sideload-zImage"), "built 7.2.13\n")
+        self.assertEqual(self.asked(), ["fetch qemu", "fetch dist stable build/sideload-dist-stable",
+                                        "build dist stable build/sideload-dist-stable"])
+        self.assertEqual(self.read("build/sideload-dist-stable/sideload-zImage"), "built stable\n")
         self.env["STUB_FETCH"] = "ok"
         self.prepare(profile="classic")
         self.assertEqual(self.asked(), ["fetch classic 2.6.16 build/classic"])
