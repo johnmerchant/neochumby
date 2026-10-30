@@ -47,6 +47,16 @@ CONFIG_INPUT_EVDEV=y
 # The graphic window as fb1, with the stock /proc/driver/imxfb controls.
 CONFIG_FB_IMX_GRAPHIC_WINDOW=y
 
+# The console on the screen, where /init's shell runs too, in Spleen 5x8
+# (patches/linux/*/...-lib-fonts-add-Spleen-5x8.patch): 64x30 characters
+# on the 320x240 screen. The only font, so the console's default.
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FONTS=y
+# CONFIG_FONT_8x8 is not set
+CONFIG_FONT_SPLEEN_5x8=y
+
 # Sound: ALSA with OSS emulation, so /dev/dsp stays as it is.
 CONFIG_SOUND=y
 CONFIG_SND=y

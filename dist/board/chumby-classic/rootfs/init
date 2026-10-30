@@ -17,8 +17,12 @@ mount -t devtmpfs devtmpfs /dev
 [ -c /dev/console ] || mknod -m 600 /dev/console c 5 1
 [ -c /dev/null ] || mknod -m 666 /dev/null c 1 3
 
-# Messages go to the kernel log, which is how init normally speaks.
-log() { echo "init: $*" > /dev/kmsg; }
+# Messages go to the kernel log, which is how init normally speaks, and
+# to the screen's console, tty1, so that they show on the Chumby itself.
+log() {
+    echo "init: $*" > /dev/kmsg
+    [ -c /dev/tty1 ] && echo "init: $*" > /dev/tty1
+}
 
 if grep -q 'neochumby.sideloaded=1' /proc/cmdline; then
     log "sideloaded; NAND modules stay unloaded"
@@ -39,6 +43,7 @@ fi
 # /mnt/usb, and its boot hook, userhook2, beside the console's shell. A
 # stick can take several seconds to show up (more when a control transfer
 # times out and the hub tries it again).
+hook=
 i=0
 while [ ! -b /dev/sda1 ] && [ "$i" -lt 15 ]; do
     sleep 1
@@ -49,8 +54,17 @@ if [ -b /dev/sda1 ] && mkdir -p /mnt/usb && mount -t vfat /dev/sda1 /mnt/usb; th
     if [ -x /mnt/usb/userhook2 ]; then
         log "running /mnt/usb/userhook2"
         /mnt/usb/userhook2 </dev/null >/dev/console 2>&1 &
+        hook=1
     fi
 fi
 
-log "starting shell"
+# A shell on the console the kernel was given, the serial port, and one on
+# the screen (a USB keyboard types into it), unless a hook runs: the screen
+# is then its session's.
+if [ -z "$hook" ] && [ -c /dev/tty1 ]; then
+    log "starting shells"
+    (while :; do setsid -c /bin/sh -i </dev/tty1 >/dev/tty1 2>&1; done) &
+else
+    log "starting shell"
+fi
 exec setsid -c /bin/sh -i </dev/console >/dev/console 2>&1
