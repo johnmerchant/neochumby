@@ -39,6 +39,8 @@ pub struct Api {
     pub hashes: neochumby_sync::serve::Hashes,
     /// The Chumbys' developer links.
     pub links: dev::Links,
+    /// How apps' programs are run: sandboxed, or not at all.
+    pub confine: crate::confine::Confine,
 }
 
 /// The most connections at once; and of them, the most not yet known to
@@ -199,7 +201,7 @@ fn handle(api: &Api, tcp: TcpStream, slot: &mut Slot) -> io::Result<()> {
             s.send(&Msg::Welcome)?;
             s.send(&version::config(&api.state.settings(&name)))?;
             match version::after_config(&mut s, deadline) {
-                Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &name, &app, s),
+                Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &api.confine, &name, &app, s),
                 Ok(m @ Msg::SyncHave { .. }) => sync::serve(api, &name, s, m),
                 Ok(Msg::Dev) => dev::run(api, &name, s),
                 // A Chumby that came only for its settings hangs up.
@@ -278,6 +280,7 @@ mod tests {
             state_dir: d.clone(),
             hashes: Default::default(),
             links: Default::default(),
+            confine: crate::confine::Confine::Refused("not needed here".into()),
         });
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
@@ -324,6 +327,7 @@ mod tests {
             state_dir: d.clone(),
             hashes: Default::default(),
             links: Default::default(),
+            confine: crate::confine::Confine::Refused("not needed here".into()),
         });
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
