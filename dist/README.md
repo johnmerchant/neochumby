@@ -84,6 +84,12 @@ a branch, or main's CI hasn't published yet) or the download doesn't
 verify: build it with `dist/build` then. `classic/fetch OUT` does the same
 for the classic image.
 
+`dev/emulate` and `dev/e2e` do this themselves, into `build/sideload-dist`
+(`build/sideload-dist-7.2.13` with `NEOCHUMBY_DIST_KERNEL=7.2.13`) and
+`build/classic`, when the image is missing or its inputs have changed:
+`dist/fetch`, else `dist/build`, with a line saying why (CONTRIBUTING.md,
+"Testing without a Chumby").
+
 ## A neochumby stick
 
 Before its shell, `/init` runs a neochumby stick as the stock boot does: it

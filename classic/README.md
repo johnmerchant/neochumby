@@ -143,7 +143,9 @@ kernel at the pinned commit, BusyBox's tarball, `classic/` (the patches
 and the build), and the notices of what zig links into BusyBox: musl's
 (MIT), zig's own libc and runtime (MIT) and compiler-rt's (Apache-2.0 WITH
 LLVM-exception), from the zig release it names. The kernel's compiler,
-which isn't in the image, owes nothing.
+which isn't in the image, owes nothing. `dev/emulate`'s classic
+profile runs `classic/fetch`, else `classic/build`, into `build/classic`
+by itself.
 
 ## CI
 

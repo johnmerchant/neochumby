@@ -19,6 +19,12 @@ the settings.
                                   hold lasts longer in emulated time)
          [--boot]                 accepted, for the scenarios: the full
                                   system always boots through the hooks
+         [--build]                QEMU and images built from source, never
+                                  fetched (NEOCHUMBY_BUILD=1)
+         [--no-fetch]             built if they must be made, not fetched
+                                  (NEOCHUMBY_NO_FETCH=1)
+  dev/emulate prepare [--build | --no-fetch]   what start would fetch or
+                                  build, made ready, and nothing booted
   dev/emulate tap X Y [--hold MS] a touch at screen pixel (X, Y)
   dev/emulate button down|up|press  the top button
   dev/emulate shot OUT.png        the screen
@@ -61,22 +67,36 @@ a command line, and where the settings go:
            runs its userhook2. The settings are a copy of the NAND with its
            settings partition rewritten. Local only: never in CI
            (docs/legal.md)
-  dist     neochumby's Linux 5.9.16 (dist/fetch OUT or dist/build OUT;
-           OUT/sideload-zImage):
-           --kernel, or NEOCHUMBY_EMU_DIST_KERNEL, else
-           build/sideload-dist/sideload-zImage. Its /init mounts the stick
-           and runs its userhook2. No proprietary firmware: CI runs it
+  dist     neochumby's Linux 5.9.16: --kernel, or NEOCHUMBY_EMU_DIST_KERNEL,
+           else build/sideload-dist/sideload-zImage, fetched or built
+           (below). NEOCHUMBY_DIST_KERNEL=7.2.13 (as dist/build takes it)
+           boots 7.2.13 instead, from build/sideload-dist-7.2.13. Its /init
+           mounts the stick and runs its userhook2. No proprietary
+           firmware: CI runs it
   classic  Linux 2.6.16 from Chumby's GPL source with a busybox initramfs
-           (NEOCHUMBY_EMU_CLASSIC_KERNEL, else build/classic/classic-zImage),
-           which runs the stick's hook as the stock boot does
+           (NEOCHUMBY_EMU_CLASSIC_KERNEL, else build/classic/classic-zImage,
+           fetched or built), which runs the stick's hook as the stock boot
+           does
 
 Each of a profile's images is a flag (--kernel, --nand, --factory-psp,
 --initrd, --append) or a variable: NEOCHUMBY_EMU_DIST_KERNEL, _INITRD and
 _APPEND for dist, likewise _CLASSIC_ for classic, and for stock
 NEOCHUMBY_EMU_KERNEL, _NAND, _PSP and _APPEND. A new profile is an entry in
 PROFILES below. For dist and classic the settings go on the stick, and the
-hook copies them into /psp. Without a profile's images, or without QEMU with the
-machine (emu/qemu/build, $QEMU or --qemu), start exits 77: skipped.
+hook copies them into /psp.
+
+QEMU (emu/qemu/out/obj/qemu-system-arm, unless --qemu or $QEMU) and the
+dist and classic images (unless given) are made ready at start, as
+dev/prebuilt.py describes: used as they are while they match their inputs
+(the qemu-chumby commit pinned here; the image's inputs commit, kernel and
+any local changes to them), else fetched prebuilt and verified
+(emu/qemu/fetch, dist/fetch, classic/fetch), else, with a line saying why,
+built from source (emu/qemu/build, dist/build, classic/build). One made
+some other way (by hand, or CI's) is used as it is. The stock profile's
+images are your own and never fetched. Without a profile's images or QEMU,
+when neither fetching nor building can make them here, start exits 77:
+skipped; a build that fails is an error. (dev/e2e runs prepare once and
+sets NEOCHUMBY_EMU_PREPARED=1, with which start neither fetches nor builds.)
 
 The stick is a FAT image laid out as tools/stick lays one out, the tree as
 neochumby/, except that its userhook2 is dev/emulate-userhook2: it puts
@@ -117,6 +137,7 @@ DEV = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(DEV)
 sys.path.insert(0, DEV)
 import device  # noqa: E402
+import prebuilt  # noqa: E402
 
 # chumby-machine, from the qemu-chumby submodule (or CHUMBY_MACHINE_PATH, a
 # checkout of it).
@@ -157,7 +178,7 @@ PROFILES = {
         "initrd": ("NEOCHUMBY_EMU_DIST_INITRD", None),
         "append": ("NEOCHUMBY_EMU_DIST_APPEND", "console=ttymxc0,115200 rdinit=/init"),
         "psp": "stick",
-        "needs": "the dist image (dist/fetch build/sideload-dist, or dist/build build/sideload-dist)",
+        "needs": "the dist image (dist/fetch, else dist/build)",
     },
     "classic": {
         "kernel": ("NEOCHUMBY_EMU_CLASSIC_KERNEL", "build/classic/classic-zImage"),
@@ -166,7 +187,7 @@ PROFILES = {
         "initrd": ("NEOCHUMBY_EMU_CLASSIC_INITRD", None),
         "append": ("NEOCHUMBY_EMU_CLASSIC_APPEND", "console=ttyS0,38400"),
         "psp": "stick",
-        "needs": "the classic image (classic/fetch build/classic, or classic/build build/classic)",
+        "needs": "the classic image (classic/fetch, else classic/build)",
     },
 }
 DEFAULT_PROFILE = "dist"
@@ -235,15 +256,44 @@ def machine(state):
     return cm.Machine(state.path)
 
 
-def find_qemu(given):
-    """QEMU with the machine: --qemu, $QEMU, emu/qemu/build's, else PATH's."""
-    for q in (given, os.environ.get("QEMU"), os.path.join(REPO, "emu", "qemu", "out", "obj", "qemu-system-arm")):
+def making(opts):
+    """How start makes what it needs (dev/prebuilt.py): (mode, act)."""
+    if opts.get("build") or os.environ.get("NEOCHUMBY_BUILD") == "1":
+        mode = "build"
+    elif opts.get("no_fetch") or os.environ.get("NEOCHUMBY_NO_FETCH") == "1":
+        mode = "no-fetch"
+    else:
+        mode = "auto"
+    # dev/e2e has prepared them already: use them or skip, but don't try again.
+    return mode, os.environ.get("NEOCHUMBY_EMU_PREPARED") != "1"
+
+
+def find_qemu(given, how=("auto", True)):
+    """QEMU with the machine: --qemu, $QEMU, emu/qemu/out/obj's (fetched or
+    built if need be), else qemu-chumby's own or PATH's."""
+    for q in (given, os.environ.get("QEMU")):
         if q and os.access(q, os.X_OK):
             return q
     try:
+        return prebuilt.Qemu(REPO).ensure(*how)
+    except prebuilt.Unavailable as e:
+        why = str(e)
+    except prebuilt.Failed as e:
+        sys.exit(f"dev/emulate: {e}")
+    try:
         return cm.find_qemu()
     except cm.Error:
-        return None
+        skip(f"no qemu-system-arm with the chumby-classic machine: {why}; or give $QEMU or --qemu")
+
+
+def prebuilt_image(profile):
+    """The image dev/emulate fetches or builds for PROFILE: None for stock,
+    whose images are your own."""
+    if profile == "dist":
+        return prebuilt.Image(REPO, "dist", os.environ.get("NEOCHUMBY_DIST_KERNEL") or None)
+    if profile == "classic":
+        return prebuilt.Image(REPO, "classic")
+    return None
 
 
 # The stick.
@@ -303,9 +353,48 @@ def setting(profile, key, opts):
     if spec is None:
         return None
     env, default = spec
-    if key != "append" and default:
+    if key == "kernel" and prebuilt_image(profile):
+        default = prebuilt_image(profile).path()
+    elif key != "append" and default:
         default = os.path.join(REPO, default)
     return os.environ.get(env) or default
+
+
+def ready(profile, opts):
+    """The profile's images and QEMU, fetched or built if need be:
+    (images, qemu). Skips (77) without them."""
+    p = PROFILES[profile]
+    images = {k: setting(profile, k, opts) for k in ("kernel", "nand", "factory_psp", "initrd", "append")}
+    # The image is ours to make unless one was given.
+    image = None if opts.get("kernel") or os.environ.get(p["kernel"][0]) else prebuilt_image(profile)
+    flags = {"kernel": "--kernel", "nand": "--nand", "factory_psp": "--factory-psp"}
+    missing = [f"{flags[k]} or {p[k][0]}" for k in flags
+               if p[k] is not None and not (k == "kernel" and image)
+               and not (images[k] and os.path.exists(images[k]))]
+    if missing:
+        skip(f"the {profile} profile needs {p['needs']}: {', '.join(missing)}")
+    if images["initrd"] and not os.path.exists(images["initrd"]):
+        sys.exit(f"dev/emulate: {images['initrd']}: no such initrd")
+    if cm is None:
+        skip(f"no chumby-machine ({QEMU_CHUMBY} is empty: git submodule update --init emu/qemu/qemu-chumby)")
+    how = making(opts)
+    qemu = find_qemu(opts.get("qemu"), how)
+    if image:
+        try:
+            images["kernel"] = image.ensure(*how)
+        except prebuilt.Unavailable as e:
+            skip(f"the {profile} profile needs {p['needs']}: {e} (or --kernel or {p['kernel'][0]})")
+        except prebuilt.Failed as e:
+            sys.exit(f"dev/emulate: {e}")
+    return images, qemu
+
+
+def cmd_prepare(opts):
+    if opts["device"]:
+        print("dev/emulate: a real Chumby: nothing to prepare")
+        return
+    images, qemu = ready(opts["profile"], opts)
+    print(f"dev/emulate: ready: {opts['profile']} boots {images['kernel']} on {qemu}")
 
 
 def cmd_start(state, opts, tree):
@@ -325,19 +414,7 @@ def cmd_start(state, opts, tree):
     if not tree and not opts.get("stick"):
         sys.exit("dev/emulate start: give a TREE, or a --stick holding one")
     p = PROFILES[profile]
-    images = {k: setting(profile, k, opts) for k in ("kernel", "nand", "factory_psp", "initrd", "append")}
-    flags = {"kernel": "--kernel", "nand": "--nand", "factory_psp": "--factory-psp"}
-    missing = [f"{flags[k]} or {p[k][0]}" for k in flags
-               if p[k] is not None and not (images[k] and os.path.exists(images[k]))]
-    if missing:
-        skip(f"the {profile} profile needs {p['needs']}: {', '.join(missing)}")
-    if images["initrd"] and not os.path.exists(images["initrd"]):
-        sys.exit(f"dev/emulate: {images['initrd']}: no such initrd")
-    if cm is None:
-        skip(f"no chumby-machine ({QEMU_CHUMBY} is empty: git submodule update --init emu/qemu/qemu-chumby)")
-    qemu = find_qemu(opts.get("qemu"))
-    if not qemu:
-        skip("no qemu-system-arm with the chumby-classic machine (emu/qemu/build, $QEMU or --qemu)")
+    images, qemu = ready(profile, opts)
     state.claim()
     m = machine(state)
     if m.running():
@@ -625,7 +702,15 @@ def main(argv):
             sys.exit(f"usage: dev/emulate {usage}")
         return args[:n]
 
-    if cmd == "start":
+    if cmd == "prepare":
+        opts = {"profile": profile, "device": chumby, "qemu": flag(args, "--qemu"), "kernel": flag(args, "--kernel"),
+                "nand": flag(args, "--nand"), "factory_psp": flag(args, "--factory-psp"),
+                "initrd": flag(args, "--initrd"), "build": "--build" in args, "no_fetch": "--no-fetch" in args}
+        args = [a for a in args if a not in ("--build", "--no-fetch")]
+        if args:
+            sys.exit(f"dev/emulate prepare: unknown options: {' '.join(args)}")
+        cmd_prepare(opts)
+    elif cmd == "start":
         opts = {
             "profile": profile,
             "device": chumby,
@@ -640,8 +725,10 @@ def main(argv):
             "append": flag(args, "--append"),
             "qemu": flag(args, "--qemu"),
             "fast": "--fast" in args,
+            "build": "--build" in args,
+            "no_fetch": "--no-fetch" in args,
         }
-        args = [a for a in args if a not in ("--fast", "--boot")]
+        args = [a for a in args if a not in ("--fast", "--boot", "--build", "--no-fetch")]
         binds = []
         while "--bind" in args:
             src, _, guest = flag(args, "--bind").partition(":")
