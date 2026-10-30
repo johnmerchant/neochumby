@@ -1,28 +1,21 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Thu, 29 Oct 2026 18:43:32 +0000
-Subject: [PATCH 05/14] pwm: imx1: program the period and divider, and fix the
- duty cycle
-
-The driver only rewrote PWMS, relied on the boot loader for the period
-and divider, and wrote PWMP - PWMP * duty / period, while the output
-is high for PWMS cycles of each period: duty 0 gave a full-on output.
-pwm-backlight now keeps a PWM with no enable GPIO running at duty 0
-for brightness 0, which turned such a backlight fully on.
-
-Program the period from PERCLK1 with the smallest CLKSEL and prescaler
-that fit, and PWMS as the duty cycle in cycles. Also enable the clocks
-before writing the registers, which only take writes while they run;
-the first configuration after a disable used to be lost.
-
-Document the i.MX21 PWM, which is the i.MX1's.
-
+Description: pwm: imx1: program the period and divider, and fix the duty cycle
+ The driver only rewrote PWMS, relied on the boot loader for the period
+ and divider, and wrote PWMP - PWMP * duty / period, while the output
+ is high for PWMS cycles of each period: duty 0 gave a full-on output.
+ pwm-backlight now keeps a PWM with no enable GPIO running at duty 0
+ for brightness 0, which turned such a backlight fully on.
+ .
+ Program the period from PERCLK1 with the smallest CLKSEL and prescaler
+ that fit, and PWMS as the duty cycle in cycles. Also enable the clocks
+ before writing the registers, which only take writes while they run;
+ the first configuration after a disable used to be lost.
+ .
+ Document the i.MX21 PWM, which is the i.MX1's.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- .../devicetree/bindings/pwm/imx-pwm.yaml      |  3 +
- drivers/pwm/pwm-imx1.c                        | 79 ++++++++++++-------
- 2 files changed, 53 insertions(+), 29 deletions(-)
-
 diff --git a/Documentation/devicetree/bindings/pwm/imx-pwm.yaml b/Documentation/devicetree/bindings/pwm/imx-pwm.yaml
 index 04148198e..7c64f8faf 100644
 --- a/Documentation/devicetree/bindings/pwm/imx-pwm.yaml

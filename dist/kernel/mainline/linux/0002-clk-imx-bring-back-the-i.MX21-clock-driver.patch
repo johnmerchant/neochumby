@@ -1,22 +1,14 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Thu, 29 Oct 2026 18:43:29 +0000
-Subject: [PATCH 02/14] clk: imx: bring back the i.MX21 clock driver
-
-Commit 805837740d01 ("clk: imx: imx21: Remove clock driver") removed
-it with the i.MX21. Restore it for the device-tree i.MX21, keeping only
-the DT entry point: the clkdev lookups and the board-file timer setup
-went with the board files. The binding and dt-bindings header are
-still in the tree.
-
+Description: clk: imx: bring back the i.MX21 clock driver
+ Commit 805837740d01 ("clk: imx: imx21: Remove clock driver") removed
+ it with the i.MX21. Restore it for the device-tree i.MX21, keeping only
+ the DT entry point: the clkdev lookups and the board-file timer setup
+ went with the board files. The binding and dt-bindings header are
+ still in the tree.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- drivers/clk/imx/Kconfig     |   4 ++
- drivers/clk/imx/Makefile    |   1 +
- drivers/clk/imx/clk-imx21.c | 125 ++++++++++++++++++++++++++++++++++++
- 3 files changed, 130 insertions(+)
- create mode 100644 drivers/clk/imx/clk-imx21.c
-
 diff --git a/drivers/clk/imx/Kconfig b/drivers/clk/imx/Kconfig
 index b292e7ca5..9316fe3f2 100644
 --- a/drivers/clk/imx/Kconfig

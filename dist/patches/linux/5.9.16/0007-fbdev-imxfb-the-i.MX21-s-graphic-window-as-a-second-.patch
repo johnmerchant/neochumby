@@ -1,36 +1,29 @@
-From 2b86b8e07878480182cad7b460f6ba00f846946d Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Fri, 30 Oct 2026 13:03:10 +1030
-Subject: [PATCH 8/8] fbdev: imxfb: the i.MX21's graphic window as a second
- framebuffer
-
-The i.MX21's and i.MX27's LCD controller blends a second plane, the
-graphic window, over the screen, with an alpha value and a six-bit-per-
-channel colour key. The Chumby Classic's stock 2.6.16 kernel has it as
-/dev/fb1, the panel's size at (0,0), and controls it through
-/proc/driver/imxfb/{enable,alpha,key,key_en}; its software uses both.
-
-With FB_IMX_GRAPHIC_WINDOW, imxfb does the same on the i.MX21 and i.MX27:
-- fb1 has fb0's mode (check_var hands it back whatever is asked) and its
-  own write-combined buffer, cleared to black.
-- The proc files read and write as the stock kernel's: a write is a
-  number in any base and whatever follows it is ignored; enable and
-  key_en read "0" or "1", alpha "0x%x", and key "0xRRGGBB" with six bits
-  per channel.
-- The window starts as the stock firmware leaves it: on, alpha 0x80,
-  black keyed out, so the black window shows nothing.
-- LGWCR is kept in the driver, so blanking doesn't lose it and reads
-  don't need the clocks. Turning the window on stops the controller's
-  AHB clock around the write, as the stock kernel does.
-
-Unlike the stock kernel, setting fb0's mode leaves the window alone.
-
+Description: fbdev: imxfb: the i.MX21's graphic window as a second framebuffer
+ The i.MX21's and i.MX27's LCD controller blends a second plane, the
+ graphic window, over the screen, with an alpha value and a six-bit-per-
+ channel colour key. The Chumby Classic's stock 2.6.16 kernel has it as
+ /dev/fb1, the panel's size at (0,0), and controls it through
+ /proc/driver/imxfb/{enable,alpha,key,key_en}; its software uses both.
+ .
+ With FB_IMX_GRAPHIC_WINDOW, imxfb does the same on the i.MX21 and i.MX27:
+ - fb1 has fb0's mode (check_var hands it back whatever is asked) and its
+   own write-combined buffer, cleared to black.
+ - The proc files read and write as the stock kernel's: a write is a
+   number in any base and whatever follows it is ignored; enable and
+   key_en read "0" or "1", alpha "0x%x", and key "0xRRGGBB" with six bits
+   per channel.
+ - The window starts as the stock firmware leaves it: on, alpha 0x80,
+   black keyed out, so the black window shows nothing.
+ - LGWCR is kept in the driver, so blanking doesn't lose it and reads
+   don't need the clocks. Turning the window on stops the controller's
+   AHB clock around the write, as the stock kernel does.
+ .
+ Unlike the stock kernel, setting fb0's mode leaves the window alone.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- drivers/video/fbdev/Kconfig |  10 ++
- drivers/video/fbdev/imxfb.c | 316 ++++++++++++++++++++++++++++++++++++
- 2 files changed, 326 insertions(+)
-
 diff --git a/drivers/video/fbdev/Kconfig b/drivers/video/fbdev/Kconfig
 index 402e85450..f695e0adc 100644
 --- a/drivers/video/fbdev/Kconfig

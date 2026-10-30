@@ -18,6 +18,14 @@ changes easy to take.
   and `tools/deploy`) checks out the submodules of the apps it builds, so a
   clone without `--recurse-submodules` works there; `cargo` alone needs
   `git submodule update --init` first.
+- **Patch files** (the kernels' and BusyBox's, under `dist/patches/`,
+  `dist/kernel/` and `classic/patches/`) are plain patches, applied with
+  `patch -p1`, with a DEP-3-style header before the diff: `Description:`
+  (the summary, then the explanation indented one space, `.` for an empty
+  line), `Author:`, `Upstream-Status:` (`Inappropriate [AI generated
+  code]` for ours, `Backport [commit]` with the original author for
+  upstream's), `Signed-off-by:`, `Claude-Session:`, then `---`; not
+  `git format-patch` output.
 - **Comments say what the code does and why the rule is what it is**, not
   how it was debugged. One paragraph is usually enough.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL

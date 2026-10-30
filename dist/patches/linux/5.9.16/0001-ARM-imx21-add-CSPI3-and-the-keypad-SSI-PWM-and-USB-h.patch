@@ -1,21 +1,13 @@
-From f0cb981ad5ce740b85ba119decef251781d021f6 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Fri, 30 Oct 2026 02:23:30 +1030
-Subject: [PATCH 1/7] ARM: imx21: add CSPI3 and the keypad, SSI, PWM and USB
- host clock lookups
-
-The i.MX21 has three CSPIs but only the first two had platform data.
-The clock driver had no lookups for the keypad port, the SSIs or the
-PWM, and none without a connection id for the USB host, whose driver
-asks for its clock with a NULL con_id.
-
+Description: ARM: imx21: add CSPI3 and the keypad, SSI, PWM and USB host clock lookups
+ The i.MX21 has three CSPIs but only the first two had platform data.
+ The clock driver had no lookups for the keypad port, the SSIs or the
+ PWM, and none without a connection id for the USB host, whose driver
+ asks for its clock with a NULL con_id.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- arch/arm/mach-imx/devices-imx21.h            | 1 +
- arch/arm/mach-imx/devices/platform-spi_imx.c | 1 +
- drivers/clk/imx/clk-imx21.c                  | 6 ++++++
- 3 files changed, 8 insertions(+)
-
 diff --git a/arch/arm/mach-imx/devices-imx21.h b/arch/arm/mach-imx/devices-imx21.h
 index 3679d1de8..af67bbcf9 100644
 --- a/arch/arm/mach-imx/devices-imx21.h

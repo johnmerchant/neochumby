@@ -1,20 +1,12 @@
-From 3ead6947cc2e13eab2f4ce344100971dfc67d463 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Fri, 30 Oct 2026 02:23:30 +1030
-Subject: [PATCH 3/7] Input: add the TSC2100 touchscreen
-
-The pen interrupt starts a threaded handler that converts X, Y and the
-pressure host-controlled, every 10 ms until the pen lifts, as tsc2007
-does. The device is named tsc2100_ts, as Chumby's 2.6.16 driver named it.
-
+Description: Input: add the TSC2100 touchscreen
+ The pen interrupt starts a threaded handler that converts X, Y and the
+ pressure host-controlled, every 10 ms until the pen lifts, as tsc2007
+ does. The device is named tsc2100_ts, as Chumby's 2.6.16 driver named it.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- drivers/input/touchscreen/Kconfig      |  12 ++
- drivers/input/touchscreen/Makefile     |   1 +
- drivers/input/touchscreen/tsc2100_ts.c | 276 +++++++++++++++++++++++++
- 3 files changed, 289 insertions(+)
- create mode 100644 drivers/input/touchscreen/tsc2100_ts.c
-
 diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
 index e6e043388..495dd5524 100644
 --- a/drivers/input/touchscreen/Kconfig
