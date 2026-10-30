@@ -14,8 +14,9 @@ use genact::args::AppConfig;
 use genact::modules::ALL_MODULES;
 
 fn genact(args: impl Iterator<Item = String>) -> ! {
-    // A tap types a newline (below): the terminal is in line mode, and has
-    // no controlling terminal to turn ^C into a signal. Any input quits.
+    // A tap types a newline (its manifest's tap): the terminal is in line
+    // mode, and has no controlling terminal to turn ^C into a signal. Any
+    // input quits.
     std::thread::spawn(|| {
         let mut b = [0u8; 1];
         let _ = std::io::stdin().lock().read(&mut b);
@@ -49,7 +50,7 @@ fn main() {
     };
     let mut cmd = Command::new(exe);
     cmd.arg("genact");
-    match neochumby::term::run_tapping(cmd, b"\n") {
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-genact: genact: {s}"),
         Ok(_) => {}
         Err(e) => {
