@@ -1,5 +1,5 @@
 #!/bin/sh
-# neochumby-hook-version=2
+# neochumby-hook-version=3
 # (Raise it with every change: the session replaces an installed hook only
 # with a higher version, so a rollback to an older set never downgrades it.)
 # neochumby's boot hook. The same script goes in two places, and the stock
@@ -140,6 +140,11 @@ if [ -n "$root" ]; then
 elif [ -x "$STICK/neochumby/neochumby" ]; then
   root=$STICK/neochumby
   echo "apps from the stick"
+elif [ "${server%%:*}" = serial ]; then
+  # A neochumbyd over the serial line (an emulated Chumby's) has no NFS:
+  # its trees come synced to the stick.
+  echo "no apps: no stick tree or synced set, and neochumbyd is over the serial line"
+  exit 0
 elif [ -n "$server" ]; then
   deadline 20 sh -c "until ping -c 1 $server >/dev/null 2>&1; do sleep 1; done" || exit 0
   mkdir -p "$MNT"

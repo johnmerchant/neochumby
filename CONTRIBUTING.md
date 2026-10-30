@@ -258,7 +258,13 @@ dev/emulate stop
   directory, or `--state DIR`: the stick, the NAND copy, the console's log
   and chumby-machine's sockets.
 - **No network.** The emulated Chumby never has one (QEMU runs with `-nic
-  none`): `--server`, pairing and `delivery=sync` need a real Chumby.
+  none`). `start --server SOCK` joins its second UART (ttyS1 on 2.6.16,
+  ttymxc1 on dist) to SOCK, a neochumbyd's `--listen-unix` socket, and
+  writes `server=serial` in the stick's neochumby.conf: the session then
+  reaches neochumbyd over that line, with the same TLS sessions as over TCP
+  (neochumby-proto's `mux`). Pairing and `delivery=sync` work there; NFS
+  doesn't. The pairing it keeps goes back in /psp at the next start
+  (`dev/emulate kept` copies it out), and `--psp` starts afresh.
 
 `python3 dev/test_emulate.py` (CI runs it) checks the images dev/emulate
 makes and its whole control path against a stub QEMU, without firmware.
@@ -275,7 +281,7 @@ passes where, so far:
 | `smoke` | passes | fails | on 5.9.16 the kernel's framebuffer console blinks its cursor over the session's screen (`vt.global_cursor_default=0` stops it), so the screen seldom settles; and the session reads touches from `/dev/input/event0`, which there is the top button (the touchscreen is `event1`), so no tap reaches it; there is no `/dev/switch` either |
 | `stock` | passes | skipped | the stock firmware's own boot |
 | `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
-| `pairing`, `powercut` | skipped | skipped | they need a neochumbyd the Chumby can reach, and it has no network |
+| `link` | passes | passes (5.9.16) | not in CI: it runs a neochumbyd here, at the other end of the serial line, and a round over the line takes minutes; `pairing` and `powercut` likewise (both pass on classic) |
 
 The session on dist still uses the stock kernel's `/dev/switch` and
 `/dev/accel`, where 5.9.16 offers evdev and IIO: the scenarios that need
@@ -318,19 +324,24 @@ made-up data and placeholder artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
-**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`; pending). The
+**link** (`dev/emulate-link TREE NEOCHUMBYD OUT`): a neochumbyd here, at
+the other end of the emulated Chumby's serial line. PAIR pairs over the
+line, with the code both ends show; at the next start neochumbyd has the
+Chumby's log and its screen over the developer link, and with
+`delivery=sync` a first round fills set a of its stick, which the boot
+after runs.
+
+**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`). The
 Chumby taps PAIR against a neochumbyd on the PC, and the code it logs must
 be the one `neochumbyd pairing` lists. A wrong code and a six-digit one are
 turned down, a refusal leaves `/psp` alone, and an approval (typed in
 capitals, without dashes) pins neochumbyd's key in the conf, after which
 the next boot's log reaches `neochumbyd log`. A new key under the same name
 pairs only with `--replace`, and once forgotten, the Chumby is turned away.
-It ran under the old user-mode emulator, which shared the PC's network;
-the emulated Chumby has none, so it waits for another way to reach
-neochumbyd (a serial link, say).
+It runs over the serial line, as link does.
 
 **A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
-OUT`; pending on the emulator, as pairing). The Chumby pairs with a
+OUT`; over the serial line, as pairing). The Chumby pairs with a
 neochumbyd, syncs its tree to its stick (`delivery=sync`), then boots
 through the hook while a second round writes the other set, and
 `dev/emulate powercut OUT.img` cuts the power: the machine stopped where it

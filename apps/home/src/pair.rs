@@ -7,7 +7,6 @@
 //! written to /psp: this Chumby's key, the conf with the server's key
 //! pinned, and the boot hook, so it boots from the server with no stick.
 
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -45,10 +44,9 @@ fn ask(
         Ok(s) => Identity::from_secret(&s).map_err(|e| e.to_string())?,
         Err(_) => Identity::generate().map_err(|e| e.to_string())?,
     };
-    let addr = (server, api_port).to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("no address")?;
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    let stream = neochumby::line::connect(server, api_port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
     // Pairing is how the server's key is learnt: none to check yet.
-    let mut s = Unverified::connect(tcp, &identity).map_err(|e| e.to_string())?;
+    let mut s = Unverified::connect(stream, &identity).map_err(|e| e.to_string())?;
     s.send(&Msg::Pair { name: conf::name() }).map_err(|e| e.to_string())?;
     let _ = tx.send(Progress::Code(s.code()));
     let Msg::Paired { nfs_port, path } = s.recv().map_err(|e| e.to_string())? else {
@@ -71,6 +69,8 @@ fn ask(
     let w = |p: &str, d: &[u8], m| conf::write_atomic(Path::new(p), d, m).map_err(|e| format!("{p}: {e}"));
     w(conf::KEY, identity.secret().as_bytes(), 0o600)?;
     w(conf::CONF, c.as_bytes(), 0o644)?;
+    // A Chumby whose settings never had a hook has no rfs1 yet.
+    std::fs::create_dir_all("/psp/rfs1").map_err(|e| format!("/psp/rfs1: {e}"))?;
     w("/psp/rfs1/userhook2", &hook, 0o755)?;
     // What checks the tree over NFS from the next boot on, from the tree
     // pairing runs from, as the hook is (neochumby::verified).

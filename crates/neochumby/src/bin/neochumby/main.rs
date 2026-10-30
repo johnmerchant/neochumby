@@ -7,6 +7,10 @@
 //! services and exits, and the boot carries on with the Chumby's own
 //! software.
 //!
+//! A Chumby whose server is `serial` (an emulated one, with no network)
+//! reaches its neochumbyd over its serial line, which the session shares
+//! out to everything that connects (line.rs).
+//!
 //! On a paired Chumby, its output also goes to its neochumbyd, which can
 //! ask it to restart, or for its screen, and, once its owner allows it,
 //! tap its screen and press its top button (devlink.rs). A restart stops
@@ -52,6 +56,7 @@ mod child;
 mod companion;
 mod devlink;
 mod jail;
+mod line;
 mod network;
 mod player;
 mod run;
@@ -376,6 +381,9 @@ impl run::Device for Chumby {
 }
 
 fn session() {
+    // On a Chumby with no network, its serial line to neochumbyd: before
+    // anything connects there.
+    line::start();
     // First, so that it carries everything the session logs.
     let link = devlink::Link::start();
     let root = apps::root();

@@ -31,7 +31,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, a terminal for programs written for one, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
 | `crates/neochumby/fonts` | The terminal's fonts: [Spleen](https://github.com/fcambus/spleen) 2.2.0, every size, as PSF (its README has the source) | BSD-2-Clause (`LICENSE.spleen`) |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
-| `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys | MIT |
+| `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, over TCP or a serial line | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
@@ -547,8 +547,20 @@ factory-like settings directory), in the environment, in
 `~/.config/neochumby/env.local` (every checkout's), or in an `.env.local`
 beside this README that git ignores. `dev/emulate --help` has the rest:
 the stick's layout and boot hook, the settings, and what each profile
-can't do yet. The emulated Chumby never has a network (`-nic none`), so
-pairing and `delivery=sync` need a real Chumby (`dev/emulate --device`).
+can't do yet. The emulated Chumby never has a network (`-nic none`).
+It reaches a neochumbyd over its serial line instead: qemu-chumby's
+`--link` joins its second UART to a Unix socket where neochumbyd listens,
+and its session carries the same TLS sessions over that line as over TCP:
+
+```sh
+neochumbyd serve --state /tmp/nd --tree TREE --listen-unix /tmp/nd.sock
+dev/emulate start --server /tmp/nd.sock TREE   # the stick's neochumby.conf says server=serial
+neochumbyd pairing; neochumbyd approve CODE      # after tapping PAIR
+neochumbyd set chumby delivery=sync              # then dev/emulate stop and start again
+```
+
+It stays paired from one start to the next. The line carries about 100
+KB/s, so NFS doesn't run over it: `delivery=sync` does.
 
 ## The sideload image
 

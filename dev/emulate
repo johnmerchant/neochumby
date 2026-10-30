@@ -14,6 +14,11 @@ the settings.
          [--psp DIR]              DIR's files added to the settings (/psp)
          [--bind DIR:PATH]        DIR, on the stick, linked at PATH (e.g.
                                   pictures at /tmp/classic)
+         [--size MB]              the stick start makes, this size
+         [--server SOCK]          the Chumby's neochumbyd is the one
+                                  listening on SOCK (neochumbyd serve
+                                  --listen-unix SOCK), over its serial line
+                                  (below)
          [--fast]                 -icount: emulated time runs ahead while
                                   the Chumby is idle (boots in seconds; a
                                   hold lasts longer in emulated time)
@@ -53,6 +58,8 @@ the settings.
                                   has a shell while the session runs)
   dev/emulate mkstick IMG [--size MB] [--force] [TREE]
                                   a stick image as start makes one
+  dev/emulate kept                the pairing the Chumby keeps (--server),
+                                  as it stands: its files, in DIR/psp
   dev/emulate backend             the profile: stock, dist, classic or device
   dev/emulate scale               how much longer than a Chumby's its waits
                                   are (NEOCHUMBY_EMU_SLOW overrides)
@@ -111,8 +118,19 @@ the settings and --bind directories in place, copies the session's log to
 the console, and runs the tree's own userhook2, unchanged. The session's
 end is that hook's "neochumby exited: N" on the console.
 
-The emulated Chumby has no network (QEMU runs with -nic none): --server,
-and so pairing and delivery=sync, need a real Chumby.
+The emulated Chumby has no network (QEMU runs with -nic none). With
+--server SOCK, its second UART (ttyS1 on 2.6.16, ttymxc1 on dist's
+kernels) is joined to the unix socket SOCK, where neochumbyd listens
+(serve --listen-unix SOCK), and to nothing else: the stick's
+neochumby.conf says server=serial, and the session carries its
+connections to neochumbyd over that line, the same TLS sessions as over
+TCP. So PAIR pairs it (neochumbyd pairing, approve), and then `neochumbyd
+set chumby delivery=sync` and `neochumbyd restart chumby` sync the tree to
+its stick (NFS can't run over the line). What the Chumby keeps of its
+pairing (/psp's neochumby.conf, .key and .settings) is copied to the
+stick as it changes and put back in /psp at the next start, so it stays
+paired from one start to the next; --psp starts it afresh with that
+directory's files instead. dev/emulate kept copies it to DIR/psp.
 
 --device NAME (or NEOCHUMBY_EMU_DEVICE) drives a real Chumby instead: one
 paired with a neochumbyd and set `dev=on` (`neochumbyd set NAME dev=on`),
@@ -135,6 +153,7 @@ import re
 import shlex
 import shutil
 import stat
+import struct
 import subprocess
 import sys
 import tempfile
@@ -307,13 +326,19 @@ def prebuilt_image(profile):
 # The stick.
 
 
-def stick_layout(work, tree, profile, extra_psp, binds):
+def stick_layout(work, tree, profile, extra_psp, binds, kept=None):
     """The stick's files, in WORK: as tools/stick lays them out, but with
     dev/emulate's hook as userhook2 (the tree's own is neochumby/userhook2),
     and under emulate/ the settings and --bind directories. Links, which
-    the stick image follows."""
+    the stick image follows. With KEPT (a directory: --server), the stick's
+    neochumby.conf says server=serial, and emulate/kept holds the pairing
+    to put back."""
     os.makedirs(os.path.join(work, "emulate"))
     os.symlink(HOOK, os.path.join(work, "userhook2"))
+    if kept is not None:
+        with open(os.path.join(work, "neochumby.conf"), "w") as f:
+            f.write("server=serial\n")
+        shutil.copytree(kept, os.path.join(work, "emulate", "kept"))
     if tree:
         os.symlink(os.path.abspath(tree), os.path.join(work, "neochumby"))
     if profile and PROFILES[profile]["psp"] == "stick":
@@ -332,12 +357,37 @@ def stick_layout(work, tree, profile, extra_psp, binds):
                 f.write(f"{i} {guest}\n")
 
 
-def make_stick(out, tree, profile, extra_psp, binds, size_mb=None):
+def make_stick(out, tree, profile, extra_psp, binds, size_mb=None, kept=None):
     if tree and not os.path.isfile(os.path.join(tree, "neochumby")):
         sys.exit(f"dev/emulate: {tree}: no neochumby there (make one with tools/tree)")
     with tempfile.TemporaryDirectory() as work:
-        stick_layout(os.path.join(work, "stick"), tree, profile, extra_psp, binds)
+        stick_layout(os.path.join(work, "stick"), tree, profile, extra_psp, binds, kept)
         cm.mkfat(os.path.join(work, "stick"), out, size_mb, "NEOCHUMBY")
+
+
+# What the Chumby keeps of its pairing, carried from one start to the next
+# on the stick (emulate-userhook2) with --server.
+KEPT = ("neochumby.conf", "neochumby.key", "neochumby.settings")
+
+
+def harvest(state, stick):
+    """The pairing the Chumby last kept on STICK, copied to DIR/psp
+    (in place of what was there); True if it had any."""
+    try:
+        files = cm.fat_files(stick)
+    except (OSError, ValueError, IndexError, struct.error):
+        return False
+    got = {n: files.get(f"emulate/kept/{n}") for n in KEPT}
+    if not any(got.values()):
+        return False
+    kept = state.at("psp")
+    shutil.rmtree(kept, ignore_errors=True)
+    os.makedirs(kept)
+    for n, data in got.items():
+        if data:
+            with open(os.path.join(kept, n), "wb") as f:
+                f.write(data)
+    return True
 
 
 def psp_dir(work, factory, extra):
@@ -414,9 +464,12 @@ def cmd_start(state, opts, tree):
         write(state, "profile", device.MACHINE)
         device.start(state, opts, tree, write, read, remove)
         return
-    if opts.get("server"):
-        sys.exit("dev/emulate: --server: the emulated Chumby has no network (-nic none); "
-                 "pairing and NFS need a real Chumby (--device)")
+    link = opts.get("server")
+    if link:
+        link = os.path.abspath(link)
+        if not (os.path.exists(link) and stat.S_ISSOCK(os.stat(link).st_mode)):
+            sys.exit(f"dev/emulate: --server {opts['server']}: not a socket; give neochumbyd's "
+                     "(neochumbyd serve --listen-unix SOCK): the emulated Chumby has no network")
     if tree and opts.get("stick"):
         sys.exit("dev/emulate start: a TREE or a --stick, not both")
     if not tree and not opts.get("stick"):
@@ -436,7 +489,14 @@ def cmd_start(state, opts, tree):
             sys.exit("dev/emulate: --psp and --bind go on the stick that start makes from a TREE")
     else:
         stick = state.at("stick.img")
-        make_stick(stick, tree, profile, opts.get("psp"), opts.get("binds"))
+        kept = None
+        if link:
+            # The pairing kept last time, unless --psp starts afresh.
+            kept = state.at("psp")
+            if opts.get("psp") or not (os.path.exists(stick) and harvest(state, stick)):
+                shutil.rmtree(kept, ignore_errors=True)
+                os.makedirs(kept)
+        make_stick(stick, tree, profile, opts.get("psp"), opts.get("binds"), opts.get("size"), kept=kept)
     props, extra = {}, []
     if opts.get("audio"):
         props["audiodev"] = "speaker"
@@ -445,7 +505,7 @@ def cmd_start(state, opts, tree):
         psp = psp_dir(work, images["factory_psp"], opts.get("psp")) if p["psp"] == "nand" else None
         m.start(kernel=images["kernel"], nand=images["nand"], psp=psp, initrd=images["initrd"],
                 append=images["append"], stick=stick, fast=opts.get("fast"), props=props, extra=extra,
-                qemu=qemu)
+                qemu=qemu, link=link)
     write(state, "profile", profile)
     print(f"dev/emulate: {profile} booting ({state.path}); the console: dev/emulate log")
 
@@ -625,6 +685,18 @@ def cmd_stop(state):
             device.stop(state, read, remove)
     elif b and cm is not None:
         machine(state).stop()
+        stick = machine(state).config().get("stick")
+        if stick and os.path.exists(stick):
+            harvest(state, stick)
+
+
+def cmd_kept(state):
+    """The pairing on the stick now: copied to DIR/psp, and listed."""
+    stick = machine(state).config().get("stick") if cm is not None else None
+    if not (stick and os.path.exists(stick) and harvest(state, stick)):
+        sys.exit("dev/emulate kept: the Chumby keeps no pairing on its stick")
+    for n in sorted(os.listdir(state.at("psp"))):
+        print(os.path.join(state.at("psp"), n))
 
 
 def cmd_exec(state, argv, secs):
@@ -735,6 +807,7 @@ def main(argv):
             "host": host,
             "stick": flag(args, "--stick"),
             "server": flag(args, "--server"),
+            "size": flag(args, "--size"),
             "psp": flag(args, "--psp"),
             "kernel": flag(args, "--kernel"),
             "nand": flag(args, "--nand"),
@@ -755,6 +828,8 @@ def main(argv):
                 sys.exit("dev/emulate start: --bind DIR:/PATH, DIR a directory")
             binds.append((os.path.abspath(src), guest))
         opts["binds"] = binds
+        if opts["size"] is not None:
+            opts["size"] = number(opts["size"])
         if any(a.startswith("-") for a in args) or len(args) > 1:
             sys.exit(f"dev/emulate start: unknown options: {' '.join(args)}")
         cmd_start(state, opts, args[0] if args else None)
@@ -822,6 +897,8 @@ def main(argv):
         cmd_powercut(state, out, force)
     elif cmd == "stop":
         cmd_stop(state)
+    elif cmd == "kept":
+        cmd_kept(state)
     elif cmd == "exec":
         secs = number(flag(args, "--for", "0"), float)
         cmd_exec(state, args, secs)

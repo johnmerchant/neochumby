@@ -13,6 +13,7 @@ import importlib.util
 import io
 import json
 import os
+import socket
 import shutil
 import subprocess
 import sys
@@ -248,6 +249,8 @@ STUB = textwrap.dedent(r'''
                     reply = {"return": {"status": "running", "running": True}}
                 elif cmd == "query-chumby-state":
                     reply = {"return": {"backlight": 65535, "button": False}}
+                if "id" in m:
+                    reply["id"] = m["id"]
                 r.sendall(b'{"event": "NOISE"}\n' + json.dumps(reply).encode() + b"\n")
                 if cmd == "quit":
                     sys.exit(0)
@@ -307,6 +310,25 @@ class Machine(unittest.TestCase):
         r = self.emu("start", self.tree, "--kernel", self.kernel, "--qemu", self.stub, "--server", "127.0.0.1:1")
         self.assertNotEqual(r.returncode, 0)
         self.assertIn("no network", r.stderr)
+
+    def test_server_over_the_serial_line(self):
+        # A short path: a Unix socket's must be.
+        d = tempfile.mkdtemp(prefix="ncl", dir="/tmp")
+        self.addCleanup(shutil.rmtree, d, True)
+        path = os.path.join(d, "s")
+        sock = socket.socket(socket.AF_UNIX)
+        sock.bind(path)
+        self.addCleanup(sock.close)
+        r = self.emu("start", self.tree, "--kernel", self.kernel, "--qemu", self.stub, "--server", path)
+        self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
+        a = self.argv()
+        self.assertEqual(a[a.index("-nic") + 1], "none")
+        self.assertIn(f"socket,id=link,path={path},server=off,reconnect-ms=1000", a)
+        self.assertEqual(a[len(a) - a[::-1].index("-serial")], "chardev:link")
+        files = cm.fat_files(os.path.join(self.state, "stick.img"))
+        self.assertEqual(files["neochumby.conf"], b"server=serial\n")
+        self.assertIn("emulate/kept", files)
+        self.emu("stop")
 
     def test_dist(self):
         r = self.emu("start", self.tree, "--kernel", self.kernel, "--qemu", self.stub)

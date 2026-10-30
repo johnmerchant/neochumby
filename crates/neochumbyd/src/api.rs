@@ -14,15 +14,19 @@
 //! Chumby has connected from, so that the rest filling up doesn't shut
 //! out the Chumbys; and a paired Chumby, which may not be well behaved
 //! either, has a share of its own.
+//!
+//! A connection comes over TCP, or as a channel on a Chumby's serial line
+//! (line.rs); from there on, the two are handled alike.
 
 use std::collections::{HashMap, HashSet};
+use std::fmt;
 use std::io;
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use neochumby_proto::{Identity, Msg, Unverified, valid_name, version};
+use neochumby_proto::{Identity, Msg, Stream, Unverified, valid_name, version};
 
 use crate::state::{PENDING_TTL, State};
 use crate::{companion, dev, sync};
@@ -63,31 +67,50 @@ const FIRST_WORDS: Duration = Duration::from_secs(30);
 #[cfg(test)]
 const FIRST_WORDS: Duration = Duration::from_secs(2);
 
+/// Where a connection comes from: an address, or a serial line (the
+/// Unix connection it came in on, counted from 1).
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum Origin {
+    Ip(IpAddr),
+    Line(u64),
+}
+
+impl fmt::Display for Origin {
+    /// One word, as pending/ keeps it.
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Origin::Ip(ip) => write!(f, "{ip}"),
+            Origin::Line(n) => write!(f, "serial-line-{n}"),
+        }
+    }
+}
+
+/// The connections held, over TCP and serial lines together.
 #[derive(Default)]
-struct Limits(Mutex<Counts>);
+pub struct Limits(Mutex<Counts>);
 
 #[derive(Default)]
 struct Counts {
     all: usize,
     unknown: usize,
-    by_addr: HashMap<IpAddr, usize>,
+    by_addr: HashMap<Origin, usize>,
     /// Addresses paired Chumbys have connected from.
-    paired_addrs: HashSet<IpAddr>,
+    paired_addrs: HashSet<Origin>,
     /// Each paired Chumby's connections, by name.
     by_chumby: HashMap<String, usize>,
 }
 
 /// One connection's place in the [`Limits`], given back when it is dropped.
-struct Slot {
+pub struct Slot {
     limits: Arc<Limits>,
-    ip: IpAddr,
+    ip: Origin,
     unknown: bool,
     /// The paired Chumby it is known to be.
     chumby: Option<String>,
 }
 
 impl Limits {
-    fn admit(self: &Arc<Self>, ip: IpAddr) -> Option<Slot> {
+    pub fn admit(self: &Arc<Self>, ip: Origin) -> Option<Slot> {
         let mut c = self.0.lock().unwrap();
         let from = c.by_addr.get(&ip).copied().unwrap_or(0);
         let share = if c.paired_addrs.contains(&ip) { MAX_UNKNOWN + RESERVED } else { MAX_UNKNOWN };
@@ -96,18 +119,18 @@ impl Limits {
         }
         c.all += 1;
         c.unknown += 1;
-        c.by_addr.insert(ip, from + 1);
+        c.by_addr.insert(ip.clone(), from + 1);
         Some(Slot { limits: self.clone(), ip, unknown: true, chumby: None })
     }
 }
 
 impl Counts {
-    fn known(&mut self, ip: IpAddr) {
+    fn known(&mut self, ip: &Origin) {
         self.unknown -= 1;
-        if let Some(n) = self.by_addr.get_mut(&ip) {
+        if let Some(n) = self.by_addr.get_mut(ip) {
             *n -= 1;
             if *n == 0 {
-                self.by_addr.remove(&ip);
+                self.by_addr.remove(ip);
             }
         }
     }
@@ -120,11 +143,11 @@ impl Slot {
     fn known(&mut self, name: &str) -> bool {
         let mut c = self.limits.0.lock().unwrap();
         if std::mem::take(&mut self.unknown) {
-            c.known(self.ip);
+            c.known(&self.ip);
             if c.paired_addrs.len() >= MAX_PAIRED_ADDRS {
                 c.paired_addrs.clear();
             }
-            c.paired_addrs.insert(self.ip);
+            c.paired_addrs.insert(self.ip.clone());
         }
         let n = c.by_chumby.entry(name.to_string()).or_default();
         if *n >= MAX_PER_CHUMBY {
@@ -141,7 +164,7 @@ impl Drop for Slot {
         let mut c = self.limits.0.lock().unwrap();
         c.all -= 1;
         if self.unknown {
-            c.known(self.ip);
+            c.known(&self.ip);
         }
         if let Some(name) = &self.chumby
             && let Some(n) = c.by_chumby.get_mut(name)
@@ -154,17 +177,25 @@ impl Drop for Slot {
     }
 }
 
+/// Takes connections on `listener`, with limits of their own (the tests').
+#[cfg(test)]
 pub fn serve(listener: TcpListener, api: Arc<Api>) {
-    let limits = Arc::new(Limits::default());
+    serve_with(listener, api, Default::default())
+}
+
+/// Takes connections on `listener`, sharing `limits` with the serial lines
+/// (line.rs).
+pub fn serve_with(listener: TcpListener, api: Arc<Api>, limits: Arc<Limits>) {
     for tcp in listener.incoming().flatten() {
         let Ok(addr) = tcp.peer_addr() else { continue };
-        let Some(mut slot) = limits.admit(addr.ip()) else {
+        let Some(mut slot) = limits.admit(Origin::Ip(addr.ip())) else {
             eprintln!("neochumbyd: {addr}: too many connections; dropped");
             continue;
         };
         let api = api.clone();
         std::thread::spawn(move || {
-            if let Err(e) = handle(&api, tcp, &mut slot) {
+            keepalive(&tcp);
+            if let Err(e) = handle(&api, tcp, &Origin::Ip(addr.ip()), &mut slot) {
                 eprintln!("neochumbyd: {addr}: {e}");
             }
         });
@@ -179,9 +210,8 @@ fn keepalive(tcp: &TcpStream) {
     neochumby_sys::net::keepalive(tcp, 10, 5, 3);
 }
 
-fn handle(api: &Api, tcp: TcpStream, slot: &mut Slot) -> io::Result<()> {
-    let addr = tcp.peer_addr()?;
-    keepalive(&tcp);
+/// One connection, from `origin`, over TCP or a serial line alike.
+pub fn handle(api: &Api, tcp: impl Stream + 'static, origin: &Origin, slot: &mut Slot) -> io::Result<()> {
     // The first words by their deadline, the whole handshake within it
     // however slowly it is sent, or give up on it; and a write the Chumby
     // is not taking for this long means it is gone.
@@ -211,7 +241,7 @@ fn handle(api: &Api, tcp: TcpStream, slot: &mut Slot) -> io::Result<()> {
         }
         Msg::Pair { name } if valid_name(&name) => {
             let code = u.code();
-            let id = match api.state.request(&code, &name, u.peer(), addr) {
+            let id = match api.state.request(&code, &name, u.peer(), &origin.to_string()) {
                 Ok(id) => id,
                 Err(e) => {
                     let _ = u.send(&Msg::Refused);
@@ -219,8 +249,7 @@ fn handle(api: &Api, tcp: TcpStream, slot: &mut Slot) -> io::Result<()> {
                 }
             };
             eprintln!(
-                "neochumbyd: {name} at {} asks to pair, showing {code}: if its screen shows the same, run `neochumbyd approve CODE` with the code from its screen",
-                addr.ip()
+                "neochumbyd: {name} at {origin} asks to pair, showing {code}: if its screen shows the same, run `neochumbyd approve CODE` with the code from its screen"
             );
             let deadline = Instant::now() + PENDING_TTL;
             loop {
@@ -251,9 +280,9 @@ mod tests {
     #[test]
     fn limits() {
         let limits = Arc::new(Limits::default());
-        let (a, b): (IpAddr, IpAddr) = ("192.0.2.1".parse().unwrap(), "192.0.2.2".parse().unwrap());
-        let mut from_a: Vec<Slot> = (0..MAX_UNKNOWN_PER_ADDR).map(|_| limits.admit(a).unwrap()).collect();
-        assert!(limits.admit(a).is_none(), "too many unknown from one address");
+        let (a, b) = (Origin::Ip("192.0.2.1".parse().unwrap()), Origin::Line(1));
+        let mut from_a: Vec<Slot> = (0..MAX_UNKNOWN_PER_ADDR).map(|_| limits.admit(a.clone()).unwrap()).collect();
+        assert!(limits.admit(a.clone()).is_none(), "too many unknown from one address");
         let from_b = limits.admit(b).unwrap();
         // Known, it makes room for another from its address.
         assert!(from_a[0].known("den"));
@@ -360,8 +389,10 @@ mod tests {
     #[test]
     fn silent_after_the_handshake_is_dropped() {
         let (_api, addr, d) = server("silent");
-        let u = Unverified::connect(TcpStream::connect(addr).unwrap(), &Identity::generate().unwrap()).unwrap();
-        let took = hung_up(u.tcp(), FIRST_WORDS + Duration::from_secs(10));
+        let tcp = TcpStream::connect(addr).unwrap();
+        let watch = tcp.try_clone().unwrap();
+        let _u = Unverified::connect(tcp, &Identity::generate().unwrap()).unwrap();
+        let took = hung_up(&watch, FIRST_WORDS + Duration::from_secs(10));
         assert!(took <= FIRST_WORDS + Duration::from_secs(2), "{took:?}");
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -373,11 +404,13 @@ mod tests {
         let (api, addr, d) = server("silent-config");
         let chumby = Identity::generate().unwrap();
         let code = "0100-0000-0000-0000-0000-0000-0000-0000";
-        api.state.request(code, "den", &chumby.public(), "192.0.2.7:1".parse().unwrap()).unwrap();
+        api.state.request(code, "den", &chumby.public(), "192.0.2.7").unwrap();
         api.state.approve(code, false).unwrap();
-        let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &api.identity.public()).unwrap();
+        let tcp = TcpStream::connect(addr).unwrap();
+        let watch = tcp.try_clone().unwrap();
+        let mut s = Session::connect(tcp, &chumby, &api.identity.public()).unwrap();
         version::hello(&mut s, "den".into(), Duration::from_secs(5)).unwrap();
-        let took = hung_up(s.tcp(), FIRST_WORDS + Duration::from_secs(10));
+        let took = hung_up(&watch, FIRST_WORDS + Duration::from_secs(10));
         assert!(took <= FIRST_WORDS + Duration::from_secs(2), "{took:?}");
         std::fs::remove_dir_all(&d).unwrap();
     }
@@ -420,22 +453,22 @@ mod tests {
     #[test]
     fn reserved_and_per_chumby() {
         let limits = Arc::new(Limits::default());
-        let chumby: IpAddr = "192.0.2.9".parse().unwrap();
-        let mut s = limits.admit(chumby).unwrap();
+        let chumby = Origin::Ip("192.0.2.9".parse().unwrap());
+        let mut s = limits.admit(chumby.clone()).unwrap();
         assert!(s.known("den"));
         let others: Vec<Slot> = (0..MAX_UNKNOWN)
-            .map(|i| limits.admit(IpAddr::from([198, 51, 100, (i / MAX_UNKNOWN_PER_ADDR) as u8])).unwrap())
+            .map(|i| limits.admit(Origin::Ip(IpAddr::from([198, 51, 100, (i / MAX_UNKNOWN_PER_ADDR) as u8]))).unwrap())
             .collect();
-        assert!(limits.admit("203.0.113.1".parse().unwrap()).is_none(), "the unknown share is full");
-        let mut again = limits.admit(chumby).expect("a paired Chumby's address has slots kept for it");
+        assert!(limits.admit(Origin::Ip("203.0.113.1".parse().unwrap())).is_none(), "the unknown share is full");
+        let mut again = limits.admit(chumby.clone()).expect("a paired Chumby's address has slots kept for it");
         assert!(again.known("den"));
         let mut den: Vec<Slot> = vec![s, again];
         while den.len() < MAX_PER_CHUMBY {
-            let mut s = limits.admit(chumby).unwrap();
+            let mut s = limits.admit(chumby.clone()).unwrap();
             assert!(s.known("den"));
             den.push(s);
         }
-        let mut one_more = limits.admit(chumby).unwrap();
+        let mut one_more = limits.admit(chumby.clone()).unwrap();
         assert!(!one_more.known("den"), "den holds its share");
         drop((others, den, one_more));
         let c = limits.0.lock().unwrap();

@@ -178,7 +178,7 @@ mod tests {
         let key = Identity::generate().unwrap().public();
         let code = |n: u8| format!("{n:02x}00-0000-0000-0000-0000-0000-0000-0000");
         let (c1, c2, c3) = (code(1), code(2), code(3));
-        st.request(&c1, "kitchen", &key, "192.0.2.7:4000".parse().unwrap()).unwrap();
+        st.request(&c1, "kitchen", &key, "192.0.2.7").unwrap();
 
         assert_eq!(request(&st, "paired"), "ok\n");
         assert_eq!(request(&st, "pending"), format!("pending {c1} kitchen 192.0.2.7 {}\nok\n", hex(&key)));
@@ -209,7 +209,7 @@ mod tests {
         assert!(request(&st, &format!("set kitchen {START}=a!b {token}")).starts_with("error"));
         assert!(request(&st, &format!("set lounge {START}=wx {token}")).starts_with("error no Chumby"));
 
-        st.request(&c2, "lounge", &key, "192.0.2.8:4000".parse().unwrap()).unwrap();
+        st.request(&c2, "lounge", &key, "192.0.2.8").unwrap();
         assert_eq!(request(&st, &format!("refuse {c2}")), "error refuse: wrong number of words\n");
         assert_eq!(request(&st, &format!("refuse {c2} nope")), "error wrong token\n");
         assert_eq!(request(&st, "pending").lines().count(), 2, "still asking");
@@ -222,7 +222,7 @@ mod tests {
         assert!(request(&st, "paired").starts_with("paired kitchen "), "still paired");
         // Another key under its name replaces it only with `replace`.
         let other = Identity::generate().unwrap().public();
-        st.request(&c3, "kitchen", &other, "192.0.2.9:4000".parse().unwrap()).unwrap();
+        st.request(&c3, "kitchen", &other, "192.0.2.9").unwrap();
         assert!(request(&st, &format!("approve {c3} {token}")).starts_with("error kitchen is already paired"));
         assert_eq!(request(&st, &format!("replace {c3} nope")), "error wrong token\n");
         assert_eq!(request(&st, &format!("replace {c3} {token}")), "ok kitchen\n");
