@@ -1,9 +1,18 @@
 //! neochumby-home, the app list: the installed apps, tap one to open it;
 //! PAIR when booted with a neochumbyd this Chumby is not paired with; the
-//! time; and CHUMBY MODE, which hands the Chumby back to its own software.
-//! It's an ordinary app that may be the start app (`start = true`), and the
-//! start app when no other is chosen. The session also opens it from
-//! anything when the top-left corner is held.
+//! time; and, on the stock 2.6 kernel, CHUMBY MODE, which hands the Chumby
+//! back to its own software. (On the dist's Linux, 5.9 and later, there is
+//! no stock software to go back to, and no CHUMBY MODE.) It's an ordinary
+//! app that may be the start app (`start = true`), and the start app when
+//! no other is chosen. The session also opens it from anything when the
+//! top-left corner is held.
+//!
+//! It runs in text mode, like any app without `fb`: it draws on its
+//! terminal (term.rs), and touches come as mouse reports on its stdin. In
+//! its own font, Spleen 8x16, the terminal is 40 by 15, and the rows fall
+//! where they did when home drew the framebuffer itself: apps from y=16,
+//! 48 high, and the bar along the bottom 32. Another font (the owner's
+//! `font=`) scales the same layout to its cells.
 //!
 //! It opens apps and CHUMBY MODE by asking the session over its request
 //! pipe (neochumby::session), then exits: the session runs what it asked
@@ -16,26 +25,28 @@
 //! and does not open.
 
 mod pair;
+mod term;
 
 use std::time::{Duration, Instant};
 
 use neochumby::apps::{self, App};
 use neochumby::conf;
-use neochumby::fb::{self, Fb, rgb};
-use neochumby::input::{Touch, Touchscreen};
 use neochumby::session::{Notice, Pipe};
+use term::{Paint, Rgb, Term, Touch, fit, rgb565};
 
-const BG: u16 = rgb(16, 16, 32);
-const GREY: u16 = rgb(90, 90, 100);
-const TEXT: u16 = rgb(230, 230, 230);
+const GREY: Rgb = (90, 90, 100);
+const TEXT: Rgb = (230, 230, 230);
+const TITLE: Rgb = (255, 200, 120);
+const ROW: Rgb = (28, 28, 48);
+const PRESSED: Rgb = (230, 230, 230);
+const DARK: Rgb = (0, 0, 0);
+const BLUE: Rgb = (120, 200, 255);
+const GREEN: Rgb = (120, 220, 120);
 
-const TOP: usize = 44;
-const ROW_H: usize = 36;
-const GAP: usize = 4;
+/// Apps to a page: four, or three and MORE.
 const ROWS: usize = 4;
-const BAR_Y: usize = fb::H - 36;
 
-#[derive(Clone, Copy, PartialEq)]
+#[derive(Clone, Copy, PartialEq, Debug)]
 enum Hit {
     App(usize),
     More,
@@ -43,11 +54,52 @@ enum Hit {
     ChumbyMode,
 }
 
+/// Where things are on a terminal of `cols` by `rows` cells: the title on
+/// the top row, then [`ROWS`] rows of apps, each `entry` high, and the bar
+/// (PAIR, CHUMBY MODE), when it has a button, `bar` high along the bottom.
+#[derive(Clone, Copy, PartialEq, Debug)]
+struct Layout {
+    cols: usize,
+    rows: usize,
+    entry: usize,
+    bar: usize,
+}
+
+impl Layout {
+    fn new(cols: usize, rows: usize, bar: bool) -> Layout {
+        let bar = match bar {
+            false => 0,
+            true if rows >= 12 => 2,
+            true => 1,
+        };
+        let entry = (rows.saturating_sub(1 + bar) / ROWS).max(1);
+        Layout { cols, rows, entry, bar }
+    }
+
+    /// How many of an entry's rows it fills: all but the first, which
+    /// parts it from what is above, when it has three or more.
+    fn filled(&self) -> usize {
+        if self.entry >= 3 { self.entry - 1 } else { self.entry }
+    }
+
+    /// The first row entry `i` fills.
+    fn entry_row(&self, i: usize) -> usize {
+        1 + i * self.entry + (self.entry - self.filled())
+    }
+
+    /// The bar's first row.
+    fn bar_row(&self) -> usize {
+        self.rows - self.bar
+    }
+}
+
 /// What is on screen: the listed apps (by index), a page at a time.
 struct Screen {
     listed: Vec<usize>,
     page: usize,
     pairing: Option<(String, u16)>,
+    /// Whether CHUMBY MODE is offered: on the stock 2.6 kernel only.
+    chumby_mode: bool,
 }
 
 impl Screen {
@@ -71,16 +123,34 @@ impl Screen {
         r
     }
 
-    fn hit(&self, x: i32, y: i32) -> Option<Hit> {
-        let (x, y) = (x.max(0) as usize, y.max(0) as usize);
-        if y >= BAR_Y {
-            return Some(match &self.pairing {
-                Some(_) if x < fb::W / 2 => Hit::Pair,
-                _ => Hit::ChumbyMode,
-            });
+    /// The bar's buttons, left to right.
+    fn bar(&self) -> Vec<Hit> {
+        let mut b = Vec::new();
+        if self.pairing.is_some() {
+            b.push(Hit::Pair);
         }
-        let row = y.checked_sub(TOP)? / (ROW_H + GAP);
-        self.rows().get(row).copied()
+        if self.chumby_mode {
+            b.push(Hit::ChumbyMode);
+        }
+        b
+    }
+
+    fn layout(&self, cols: usize, rows: usize) -> Layout {
+        Layout::new(cols, rows, !self.bar().is_empty())
+    }
+
+    /// What is on cell (`col`, `row`).
+    fn hit(&self, l: &Layout, col: usize, row: usize) -> Option<Hit> {
+        if l.bar > 0 && row >= l.bar_row() {
+            let bar = self.bar();
+            return bar.get(col * bar.len() / l.cols.max(1)).copied();
+        }
+        let row = row.checked_sub(1)?;
+        // Not on the row that parts an entry from the one above.
+        if row % l.entry < l.entry - l.filled() {
+            return None;
+        }
+        self.rows().get(row / l.entry).copied()
     }
 }
 
@@ -89,61 +159,79 @@ fn clock() -> String {
     format!("{:02}:{:02}", t.hour, t.minute)
 }
 
-fn draw_clock(fb: &mut Fb) {
+fn paint_clock(p: &mut Paint, l: &Layout) {
     let t = clock();
-    let x = fb::W - Fb::text_width(&t, 2) - 10;
-    fb.rect(x, 12, Fb::text_width(&t, 2), 16, BG);
-    fb.text(x, 12, &t, 2, TEXT);
+    p.at(l.cols.saturating_sub(t.len() + 1), 0).text(&t, TEXT, None, true);
 }
 
-fn button(fb: &mut Fb, x: usize, w: usize, label: &str, colour: u16, pressed: bool) {
-    fb.rect(x, BAR_Y, w, 32, if pressed { rgb(255, 255, 255) } else { colour });
-    let tx = x + w.saturating_sub(Fb::text_width(label, 2)) / 2;
-    fb.text(tx, BAR_Y + 8, label, 2, rgb(0, 0, 0));
+/// A button of the bar, `w` wide from `col`, its label in the middle.
+fn button(p: &mut Paint, l: &Layout, col: usize, w: usize, label: &str, colour: Rgb, pressed: bool) {
+    let bg = if pressed { (255, 255, 255) } else { colour };
+    p.fill(col, l.bar_row(), w, l.bar, bg);
+    let label = fit(label, w);
+    p.at(col + (w - label.len()) / 2, l.bar_row() + (l.bar - 1) / 2).text(&label, DARK, Some(bg), true);
 }
 
-fn draw(fb: &mut Fb, all: &[App], s: &Screen, pressed: Option<Hit>) {
-    fb.clear(BG);
-    fb.text(10, 12, "neochumby", 2, rgb(255, 200, 120));
-    draw_clock(fb);
+fn draw(t: &mut Term, all: &[App], s: &Screen, pressed: Option<Hit>) {
+    let l = s.layout(t.cols, t.rows);
+    let mut p = Paint::cleared();
+    p.at(1, 0).text("neochumby", TITLE, None, true);
+    paint_clock(&mut p, &l);
 
     if s.listed.is_empty() {
-        fb.text(10, TOP + 10, "no apps installed", 2, GREY);
+        p.at(1, 2).text("no apps installed", GREY, None, false);
     }
-    for (row, hit) in s.rows().into_iter().enumerate() {
-        let y = TOP + row * (ROW_H + GAP);
+    let filled = l.filled();
+    let stripe = (l.cols / 40).max(1);
+    for (i, hit) in s.rows().into_iter().enumerate() {
+        let row = l.entry_row(i);
         let lit = pressed == Some(hit);
-        fb.rect(4, y, fb::W - 8, ROW_H, if lit { rgb(60, 60, 80) } else { rgb(28, 28, 48) });
+        let bg = if lit { PRESSED } else { ROW };
+        p.fill(0, row, l.cols, filled, bg);
+        let label_row = row + (filled - 1) / 2;
+        let text_col = stripe + 1;
+        let width = l.cols.saturating_sub(text_col + 1);
         match hit {
             Hit::App(i) => {
                 let a = &all[i];
                 let ok = a.runnable();
-                fb.rect(4, y, 8, ROW_H, if ok { a.color } else { GREY });
-                fb.text(22, y + 10, a.title.as_deref().unwrap_or(&a.name), 2, if ok { TEXT } else { GREY });
-                if !ok {
-                    fb.text(fb::W - Fb::text_width("needs pairing", 1) - 12, y + 14, "needs pairing", 1, GREY);
+                p.fill(0, row, stripe, filled, if ok { rgb565(a.color) } else { GREY });
+                let fg = if lit {
+                    DARK
+                } else if ok {
+                    TEXT
+                } else {
+                    GREY
+                };
+                p.at(text_col, label_row).text(&fit(a.title.as_deref().unwrap_or(&a.name), width), fg, Some(bg), true);
+                let note = "needs pairing";
+                if !ok && width > 16 + note.len() {
+                    p.at(l.cols - note.len() - 1, label_row).text(note, GREY, Some(bg), false);
                 }
             }
             Hit::More => {
                 let label = format!("MORE  {}/{}", s.page + 1, s.pages());
-                fb.text(22, y + 10, &label, 2, TEXT);
+                p.at(text_col, label_row).text(&fit(&label, width), if lit { DARK } else { TEXT }, Some(bg), true);
             }
             _ => {}
         }
     }
 
-    let half = (fb::W - 12) / 2;
-    if s.pairing.is_some() {
-        button(fb, 4, half, "PAIR", rgb(120, 220, 120), pressed == Some(Hit::Pair));
-        button(fb, 8 + half, half, "CHUMBY MODE", rgb(120, 200, 255), pressed == Some(Hit::ChumbyMode));
-    } else {
-        button(fb, 4, fb::W - 8, "CHUMBY MODE", rgb(120, 200, 255), pressed == Some(Hit::ChumbyMode));
+    let bar = s.bar();
+    for (i, hit) in bar.iter().enumerate() {
+        let (from, to) = (i * l.cols / bar.len(), (i + 1) * l.cols / bar.len());
+        let (label, colour) = match hit {
+            Hit::Pair => ("PAIR", GREEN),
+            _ => ("CHUMBY MODE", BLUE),
+        };
+        button(&mut p, &l, from, to - from, label, colour, pressed == Some(*hit));
     }
+    t.show(&p.0);
 }
 
-/// Asks the session for `what` and exits, leaving the screen black, or
-/// returns if there's no session to ask (run by hand).
-fn ask(fb: &mut Fb, pipe: Option<&mut Pipe>, what: &str, send: impl FnOnce(&mut Pipe) -> std::io::Result<()>) {
+/// Asks the session for `what` and exits, leaving the terminal cleared,
+/// or returns if there's no session to ask (run by hand).
+fn ask(t: &mut Term, pipe: Option<&mut Pipe>, what: &str, send: impl FnOnce(&mut Pipe) -> std::io::Result<()>) {
     let Some(pipe) = pipe else {
         eprintln!("neochumby-home: no session to ask for {what} (not run by neochumby)");
         return;
@@ -152,7 +240,7 @@ fn ask(fb: &mut Fb, pipe: Option<&mut Pipe>, what: &str, send: impl FnOnce(&mut 
         eprintln!("neochumby-home: asking for {what}: {e}");
         return;
     }
-    fb.clear(rgb(0, 0, 0));
+    t.leave();
     std::process::exit(0);
 }
 
@@ -177,46 +265,55 @@ fn pairing_offer() -> Option<(String, u16)> {
     }
 }
 
+/// Whether the Chumby's own software is there to go back to: on its stock
+/// 2.6 kernel, not on the dist's (5.9 and later), which replaced it. When
+/// the kernel doesn't say, as run by hand off the Chumby, it is offered.
+fn stock_kernel(release: Option<&str>) -> bool {
+    release.is_none_or(|r| r.trim().starts_with("2."))
+}
+
 fn main() {
     neochumby::debug::install("neochumby-home");
-    let mut fb = Fb::open().expect("/dev/fb0");
+    let mut t = Term::open();
     let mut pipe = Pipe::from_env();
-    let mut touch = Touchscreen::open();
     let root = apps::root();
     let all = apps::all(&root);
+    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok();
     let mut screen = Screen {
         listed: all.iter().enumerate().filter(|(_, a)| a.title.is_some() && a.exec.is_some()).map(|(i, _)| i).collect(),
         page: 0,
         pairing: pairing_offer(),
+        chumby_mode: stock_kernel(release.as_deref()),
     };
     let mut pressed: Option<Hit> = None;
     let mut last_clock = Instant::now();
-    draw(&mut fb, &all, &screen, None);
+    draw(&mut t, &all, &screen, None);
+    // For the scenarios, which wait for it.
+    eprintln!("neochumby-home: showing {} apps on {}x{}", screen.listed.len(), t.cols, t.rows);
 
     loop {
-        for t in touch.poll() {
-            match t {
-                Touch::Down { x, y, .. } => {
-                    let hit = screen.hit(x, y);
+        for touch in t.poll(30) {
+            let l = screen.layout(t.cols, t.rows);
+            match touch {
+                Touch::Down { col, row } => {
+                    let hit = screen.hit(&l, col, row);
                     if hit != pressed {
                         pressed = hit;
-                        draw(&mut fb, &all, &screen, pressed);
+                        draw(&mut t, &all, &screen, pressed);
                     }
                 }
                 Touch::Up => {
                     match pressed.take() {
-                        Some(Hit::ChumbyMode) => ask(&mut fb, pipe.as_mut(), "CHUMBY MODE", |p| p.chumby_mode()),
+                        Some(Hit::ChumbyMode) => ask(&mut t, pipe.as_mut(), "CHUMBY MODE", |p| p.chumby_mode()),
                         Some(Hit::App(i)) => {
                             if all[i].runnable() {
-                                ask(&mut fb, pipe.as_mut(), &all[i].name, |p| p.open(&all[i].name));
+                                ask(&mut t, pipe.as_mut(), &all[i].name, |p| p.open(&all[i].name));
                             }
                         }
                         Some(Hit::More) => screen.page = (screen.page + 1) % screen.pages(),
                         Some(Hit::Pair) => {
                             if let Some((server, port)) = screen.pairing.clone()
-                                && pair::run(&mut fb, &mut touch, &server, port, &root, || {
-                                    button_pressed(pipe.as_mut())
-                                })
+                                && pair::run(&mut t, &server, port, &root, || button_pressed(pipe.as_mut()))
                             {
                                 screen.pairing = None;
                             }
@@ -225,22 +322,22 @@ fn main() {
                         }
                         None => {}
                     }
-                    // Taps made meanwhile were someone else's.
-                    touch.poll();
-                    draw(&mut fb, &all, &screen, None);
+                    t.drain();
+                    draw(&mut t, &all, &screen, None);
                 }
             }
         }
         if button_pressed(pipe.as_mut()) {
             screen.button();
             pressed = None;
-            draw(&mut fb, &all, &screen, None);
+            draw(&mut t, &all, &screen, None);
         }
         if last_clock.elapsed() >= Duration::from_secs(1) {
-            draw_clock(&mut fb);
+            let mut p = Paint::default();
+            paint_clock(&mut p, &screen.layout(t.cols, t.rows));
+            t.show(&p.0);
             last_clock = Instant::now();
         }
-        neochumby::sleep_ms(30);
     }
 }
 
@@ -248,13 +345,75 @@ fn main() {
 mod tests {
     use super::*;
 
+    fn screen(apps: usize, pairing: bool, chumby_mode: bool) -> Screen {
+        Screen { listed: (0..apps).collect(), page: 0, pairing: pairing.then(|| ("s".into(), 1)), chumby_mode }
+    }
+
     #[test]
     fn the_button_goes_back_to_the_first_page() {
-        let mut s = Screen { listed: (0..10).collect(), page: 2, pairing: None };
+        let mut s = screen(10, false, true);
+        s.page = 2;
         assert!(s.pages() > 2);
         s.button();
         assert_eq!(s.page, 0);
         assert!(has_button(&["front wx".into(), "button".into()]));
         assert!(!has_button(&["front wx".into(), "buttons".into()]));
+    }
+
+    /// In Spleen 8x16, a tap lands where it did on the framebuffer home
+    /// drew before: dev/emulate-smoke taps apps at y = 62, 102, 142 and 182
+    /// and CHUMBY MODE at 220, and dev/emulate-boot looks for the bar at
+    /// y = 228.
+    #[test]
+    fn rows_fall_where_they_did() {
+        let s = screen(5, false, true);
+        let l = s.layout(40, 15);
+        assert_eq!(l, Layout { cols: 40, rows: 15, entry: 3, bar: 2 });
+        let at = |x: usize, y: usize| s.hit(&l, x / 8, y / 16);
+        assert_eq!(at(160, 62), Some(Hit::App(0)));
+        assert_eq!(at(160, 102), Some(Hit::App(1)));
+        assert_eq!(at(160, 142), Some(Hit::App(2)));
+        assert_eq!(at(160, 182), Some(Hit::More));
+        assert_eq!(at(160, 220), Some(Hit::ChumbyMode));
+        assert_eq!(at(160, 228), Some(Hit::ChumbyMode));
+        // Above the apps, where dev/emulate-smoke taps for `neochumby
+        // sensors`, and the row parting the first from the title: nothing.
+        assert_eq!(at(160, 8), None);
+        assert_eq!(at(200, 20), None);
+    }
+
+    #[test]
+    fn the_bar_holds_what_there_is() {
+        // Pairing on the stock kernel: PAIR on the left, CHUMBY MODE right.
+        let s = screen(2, true, true);
+        let l = s.layout(40, 15);
+        assert_eq!((s.hit(&l, 5, 14), s.hit(&l, 35, 14)), (Some(Hit::Pair), Some(Hit::ChumbyMode)));
+        // On 5.9 and later: no CHUMBY MODE; PAIR alone, else no bar.
+        let s = screen(2, true, false);
+        let l = s.layout(40, 15);
+        assert_eq!(s.hit(&l, 35, 14), Some(Hit::Pair));
+        let s = screen(2, false, false);
+        let l = s.layout(40, 15);
+        assert_eq!(l.bar, 0);
+        assert_eq!(s.hit(&l, 20, 14), None);
+        assert_eq!(s.hit(&l, 20, 2), Some(Hit::App(0)));
+    }
+
+    #[test]
+    fn another_font_scales_the_layout() {
+        // Spleen 5x8: 64 by 30.
+        let s = screen(3, false, true);
+        let l = s.layout(64, 30);
+        assert_eq!((l.entry, l.bar), (6, 2));
+        assert_eq!(s.hit(&l, 10, 8), Some(Hit::App(1)));
+        assert_eq!(s.hit(&l, 10, 29), Some(Hit::ChumbyMode));
+    }
+
+    #[test]
+    fn chumby_mode_only_on_the_stock_kernel() {
+        assert!(stock_kernel(Some("2.6.16-chumby-1.7\n")));
+        assert!(!stock_kernel(Some("5.9.16-mx21-sideload\n")));
+        assert!(!stock_kernel(Some("7.2.13-mx21-sideload")));
+        assert!(stock_kernel(None));
     }
 }
