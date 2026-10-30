@@ -1,4 +1,5 @@
 /target
+/crates/neochumby-init/target
 # Game data is never committed: Doom and Quake WADs/PAKs are fetched onto
 # the server by hand (see README).
 *.wad

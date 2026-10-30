@@ -1,0 +1,118 @@
+# On top of imx_v4_v5_defconfig. dist/build checks that every line here
+# made it into the kernel's .config: Kconfig silently drops an option whose
+# dependencies aren't met.
+
+# Our static armv5te binaries' atomics go through the kernel's user helpers.
+CONFIG_KUSER_HELPERS=y
+
+# sideload: the kernel has no NAND driver built in.  The NAND drivers are
+# modules in the initramfs; /init loads them only when the kernel was booted
+# without the sideloader's marker (i.e. when this image was flashed).
+CONFIG_MODULES=y
+CONFIG_MTD=m
+CONFIG_MTD_RAW_NAND=m
+CONFIG_MTD_NAND_MXC=m
+CONFIG_MTD_BLOCK=m
+CONFIG_MTD_CMDLINE_PARTS=m
+CONFIG_LOCALVERSION="-mx21-sideload"
+
+# No camera or tuner on a Chumby: imx_v4_v5_defconfig's media support would
+# put some 150 modules (DVB frontends and tuners) in the initramfs.
+# CONFIG_MEDIA_SUPPORT is not set
+
+CONFIG_BLK_DEV_INITRD=y
+CONFIG_DEVTMPFS=y
+CONFIG_DEVTMPFS_MOUNT=y
+CONFIG_TMPFS=y
+
+# The stick and NFS, where the tree comes from.
+CONFIG_USB=y
+CONFIG_USB_IMX21_HCD=y
+CONFIG_USB_STORAGE=y
+CONFIG_VFAT_FS=y
+CONFIG_NLS_CODEPAGE_437=y
+CONFIG_NLS_ISO8859_1=y
+CONFIG_NETWORK_FILESYSTEMS=y
+CONFIG_NFS_FS=y
+CONFIG_NFS_V3=y
+
+# Wi-Fi: rt73usb, its firmware loaded by the kernel from /lib/firmware.
+CONFIG_CFG80211=y
+CONFIG_MAC80211=y
+CONFIG_WLAN=y
+CONFIG_WLAN_VENDOR_RALINK=y
+CONFIG_RT2X00=y
+CONFIG_RT73USB=y
+CONFIG_FW_LOADER=y
+
+# The screen and touch, as the session opens them.
+CONFIG_FB_IMX=y
+CONFIG_INPUT_EVDEV=y
+
+# The console on the screen, where /init's shell runs too, in Spleen 5x8
+# (patches/linux/*/...-lib-fonts-add-Spleen-5x8.patch): 64x30 characters
+# on the 320x240 screen. The only font, so the console's default.
+CONFIG_VT=y
+CONFIG_VT_CONSOLE=y
+CONFIG_FRAMEBUFFER_CONSOLE=y
+CONFIG_FONTS=y
+# CONFIG_FONT_8x8 is not set
+CONFIG_FONT_SPLEEN_5x8=y
+# A USB keyboard, for that shell: modules, which ncinit loads when one is
+# plugged in (usbhid for its USB interface, then hid-generic for the HID
+# device that makes).
+CONFIG_HID=m
+CONFIG_HID_GENERIC=m
+CONFIG_USB_HID=m
+
+# Sound: ALSA with OSS emulation, so /dev/dsp stays as it is.
+CONFIG_SOUND=y
+CONFIG_SND=y
+CONFIG_SND_OSSEMUL=y
+CONFIG_SND_PCM_OSS=y
+
+# The watchdog: a hang reboots into the stock firmware.
+CONFIG_WATCHDOG=y
+CONFIG_IMX2_WDT=y
+
+# The jail: namespaces, cgroups for memory limits, seccomp.
+CONFIG_NAMESPACES=y
+CONFIG_USER_NS=y
+CONFIG_PID_NS=y
+CONFIG_NET_NS=y
+CONFIG_CGROUPS=y
+CONFIG_MEMCG=y
+CONFIG_SECCOMP=y
+CONFIG_SECCOMP_FILTER=y
+
+# The board: the i.MX21 as a device-tree platform. The boot loader passes
+# ATAGs and no device tree: the DTB is appended to the zImage, and the
+# command line and memory come from the ATAGs.
+CONFIG_SOC_IMX21=y
+CONFIG_ARM_APPENDED_DTB=y
+CONFIG_ARM_ATAG_DTB_COMPAT=y
+CONFIG_ARM_ATAG_DTB_COMPAT_CMDLINE_FROM_BOOTLOADER=y
+
+# The TSC2100 on SPI3: touchscreen and audio codec.
+CONFIG_MFD_TSC2100=y
+CONFIG_TOUCHSCREEN_TSC2100=y
+CONFIG_SND_SOC_TSC2100=y
+CONFIG_SND_SOC_IMX_TSC2100=y
+
+# The keypad port as GPIO: the top button, polled, and the power switches.
+CONFIG_GPIO_IMX21_KPP=y
+CONFIG_KEYBOARD_GPIO_POLLED=y
+
+# The LCD's supply, switched by a keypad column.
+CONFIG_REGULATOR=y
+CONFIG_REGULATOR_FIXED_VOLTAGE=y
+
+# The backlight, on the PWM.
+CONFIG_PWM=y
+CONFIG_PWM_IMX1=y
+CONFIG_BACKLIGHT_CLASS_DEVICE=y
+CONFIG_BACKLIGHT_PWM=y
+
+# The accelerometer on the sensor card, on SPI1.
+CONFIG_IIO=y
+CONFIG_KXP74=y

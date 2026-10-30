@@ -1,0 +1,5 @@
+/target
+/neochumby-kernel-sideloader
+/build/
+__pycache__/
+*.pyc

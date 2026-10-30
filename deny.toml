@@ -1,6 +1,6 @@
-# cargo-deny (CI's supply-chain job): known vulnerabilities, licences,
-# duplicate or banned crates, and where crates come from, for every crate in
-# Cargo.lock. Run it as CI does: `cargo deny check`.
+# cargo-deny (CI's supply-chain and advisories jobs): known vulnerabilities,
+# licences, duplicate or banned crates, and where crates come from, for
+# every crate in Cargo.lock. Run it as CI does: `cargo deny check`.
 
 [graph]
 # Every target the workspace builds for: the Chumby, the server, and the
@@ -60,7 +60,14 @@ exceptions = [
     { crate = "neochumby-pipes", allow = ["GPL-3.0-only"] },
     { crate = "neochumby-cmatrix", allow = ["GPL-3.0-or-later"] },
     { crate = "neochumby-softfloat", allow = ["GPL-3.0-or-later WITH GCC-exception-3.1"] },
-    { crate = "neochumby-ncurses", allow = ["X11-distribute-modifications-variant"] },
+    # ncurses' own licence (an X11 variant), with X11 and FSFUL files and
+    # its configure scripts' GPL with the Autoconf exception.
+    { crate = "neochumby-ncurses", allow = [
+        "X11-distribute-modifications-variant",
+        "X11",
+        "FSFUL",
+        "GPL-3.0-or-later WITH Autoconf-exception-generic-3.0",
+    ] },
 ]
 
 [bans]
@@ -70,6 +77,10 @@ multiple-versions = "allow"
 # inside the workspace are fine.
 wildcards = "deny"
 allow-wildcard-paths = true
+# asciiquarium-rs is GPL, and allowed above wherever it appears, so only
+# neochumby-aquarium may depend on it. (The other GPL crates are apps,
+# which nothing depends on.)
+deny = [{ crate = "asciiquarium-rs", wrappers = ["neochumby-aquarium"] }]
 
 [sources]
 # crates.io only. A git dependency, or another registry, has to be added

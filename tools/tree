@@ -24,9 +24,10 @@
 #   crate:NAME[@VERSION]          a crate from crates.io (else its newest),
 #                                 checked against the index's SHA-256
 #
-# What an app's binaries are built from runs as root on a Chumby, so pin
-# it: a full commit id for git+ (a branch or tag can move), a version for
-# crate:. Unpinned, tools/tree warns; with --pinned it refuses.
+# What an app's binaries are built from runs on a Chumby (its companion on
+# the server), so pin it: a full commit id for git+ (a branch or tag can
+# move), a version for crate:. Unpinned, tools/tree warns; with --pinned
+# it refuses.
 #
 # Game data is never in the repo: with -d DATA, a tree of the same shape
 # holding your own copies (apps/doom/doom1.wad, apps/quake/id1/pak0.pak),
