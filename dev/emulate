@@ -126,7 +126,8 @@ The emulator's directory is --state DIR, else $NEOCHUMBY_EMU, else
 neochumby-emulate-UID-PROFILE (or -NAME for a device) in the temporary
 directory: the stick, the NAND copy, the console's log (console.log) and
 chumby-machine's sockets. Nothing here needs root. Your own settings,
-such as where your firmware is, can go in the checkout's .env.local.
+such as where your firmware is, can go in ~/.config/neochumby/env.local,
+shared by every checkout, or in the checkout's .env.local, which wins.
 """
 
 import os
@@ -654,19 +655,24 @@ def cmd_mkstick(img, size, force, tree, profile):
 
 
 def local_settings():
-    """The checkout's .env.local (never committed): KEY=VALUE lines, such as
-    where your own firmware images are (NEOCHUMBY_EMU_KERNEL, _NAND, _PSP).
-    The environment wins over it, and NEOCHUMBY_ENV_LOCAL names another
-    file (the tests give /dev/null)."""
-    try:
-        with open(os.environ.get("NEOCHUMBY_ENV_LOCAL") or os.path.join(REPO, ".env.local")) as f:
-            lines = f.read().splitlines()
-    except FileNotFoundError:
-        return
-    for line in lines:
-        key, eq, value = line.strip().partition("=")
-        if eq and key and not key.startswith("#"):
-            os.environ.setdefault(key.strip(), os.path.expanduser(value.strip().strip("\"'")))
+    """Your own settings, never committed: KEY=VALUE lines, such as where
+    your firmware images are (NEOCHUMBY_EMU_KERNEL, _NAND, _PSP) or your
+    Chumby's server (NEOCHUMBY_EMU_HOST). The checkout's .env.local first,
+    then ~/.config/neochumby/env.local, shared by every checkout and
+    worktree; the environment wins over both. NEOCHUMBY_ENV_LOCAL names one
+    file in their place (the tests give /dev/null)."""
+    given = os.environ.get("NEOCHUMBY_ENV_LOCAL")
+    config = os.environ.get("XDG_CONFIG_HOME") or os.path.expanduser("~/.config")
+    for path in [given] if given else [os.path.join(REPO, ".env.local"), os.path.join(config, "neochumby", "env.local")]:
+        try:
+            with open(path) as f:
+                lines = f.read().splitlines()
+        except FileNotFoundError:
+            continue
+        for line in lines:
+            key, eq, value = line.strip().partition("=")
+            if eq and key and not key.startswith("#"):
+                os.environ.setdefault(key.strip(), os.path.expanduser(value.strip().strip("\"'")))
 
 
 USAGE = "usage: dev/emulate [--profile NAME | --device NAME] [--state DIR] COMMAND ... (dev/emulate --help)"

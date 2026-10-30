@@ -543,7 +543,8 @@ it says so and the scenarios skip.
 For `stock`, make your NAND image and kernel with qemu-chumby's
 `chumby-image` (its README, "Images") and give them to `dev/emulate` as
 `NEOCHUMBY_EMU_KERNEL`, `NEOCHUMBY_EMU_NAND` and `NEOCHUMBY_EMU_PSP` (your
-factory-like settings directory), in the environment or in an `.env.local`
+factory-like settings directory), in the environment, in
+`~/.config/neochumby/env.local` (every checkout's), or in an `.env.local`
 beside this README that git ignores. `dev/emulate --help` has the rest:
 the stick's layout and boot hook, the settings, and what each profile
 can't do yet. The emulated Chumby never has a network (`-nic none`), so

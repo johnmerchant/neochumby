@@ -222,8 +222,9 @@ prepare` does just this part.
 | `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
 
 `--profile NAME` or `NEOCHUMBY_EMU_PROFILE` picks one. Your own settings,
-such as where your firmware is, can go in `.env.local` at the top of the
-checkout (git ignores it). Without a profile's images or QEMU, `start` and
+such as where your firmware is, can go in `~/.config/neochumby/env.local`,
+shared by every checkout, or in `.env.local` at the top of a checkout
+(git ignores it), which wins over it. Without a profile's images or QEMU, `start` and
 the scenarios exit 77, skipped (the stock profile's images are yours and
 never fetched; for the others, when neither fetching nor building works
 here).
@@ -934,11 +935,14 @@ are three ways, from quickest to most faithful:
    `NEOCHUMBY_EMU_PROFILE=stock dev/e2e TREE NEOCHUMBYD OUT` runs the
    scenarios on it, with `dev/emulate-stock`, which only it can: neochumby
    inside the stock boot, handing back to the stock software. Put where
-   your images are in `.env.local` at the checkout's root
-   (`NEOCHUMBY_EMU_KERNEL=`, `_NAND=`, `_PSP=` lines; git ignores it), and
-   `dev/emulate` and `dev/e2e` find them. CI can't, having no firmware
-   (and it never will), so this suite is yours to run locally, and its
-   results are the evidence.
+   your images are in `~/.config/neochumby/env.local`, which every
+   checkout and worktree shares, or in `.env.local` at a checkout's root,
+   which wins over it (git ignores it): `NEOCHUMBY_EMU_KERNEL=`, `_NAND=`,
+   `_PSP=` lines, and for a real Chumby with `--device`, where its
+   neochumbyd is (`NEOCHUMBY_EMU_HOST=`, `NEOCHUMBYD_DIR=`). `dev/emulate`
+   and `dev/e2e` find them. CI can't, having no firmware (and it never
+   will), so this suite is yours to run locally, and its results are the
+   evidence.
 3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
    `neochumbyd shot` (see [On a Chumby](#on-a-chumby)). Needed for what no
    emulator models: timing, the touchscreen's noise, a USB stick's own
