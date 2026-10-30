@@ -32,7 +32,7 @@ members = [
 
 # The bundle's releases are dated (vYYYY.MM.N); this version is only for
 # the crates that aren't published. The SDK crates published on crates.io
-# (neochumby and the neochumby-* crates it needs, and neochumby-ncurses)
+# (neochumby and the neochumby-* crates it needs)
 # each have their own semver version: see CONTRIBUTING.md.
 [workspace.package]
 version = "0.1.0"

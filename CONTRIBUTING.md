@@ -659,7 +659,7 @@ release). It builds nothing, so cut one once main's CI has finished.
 
 ## Publishing the SDK crates
 
-Seven crates are published on crates.io, as an SDK for apps outside this
+Six crates are published on crates.io, as an SDK for apps outside this
 repository: experimental, and any release may break them. In dependency
 order:
 
@@ -667,49 +667,35 @@ order:
    `neochumby-softfloat`
 2. `neochumby-sync`
 3. `neochumby`
-4. `neochumby-ncurses`
 
-The rest stay `publish = false`.
+The rest stay `publish = false`. `neochumby-ncurses` 0.0.1 is on
+crates.io, but it isn't published any more.
 
-- **Versions come from CI, not from the repository.** Nobody bumps a
-  crate's version or tags a release. On every push to main, once it
-  builds, tests and packages, CI's "Publish to crates.io" job publishes
-  each crate that changed, at crates.io's latest version plus one in the
-  last component (0.0.N, then 0.0.N+1). A crate's `version` in its
-  Cargo.toml (and in `[workspace.dependencies]`, where the others take it
-  by path and version) is only the floor: its first release, or a version
-  to jump to by raising it. It stays 0.0.1 in the repository while
-  crates.io moves on. CI writes the real versions into its own checkout,
-  never into a commit. These versions are not the bundle's dated releases
-  (vYYYY.MM.N).
-- **What counts as changed.** CI packages the crate at its latest
-  release's version, with its dependencies at their versions as this run
-  decides them, and compares that with the `.crate` on crates.io
-  (ignoring `.cargo_vcs_info.json` and `Cargo.lock`). Any difference
-  publishes a new release, whether in a source file, the manifest, a
-  dependency requirement, or workspace metadata it inherits. At 0.0.x
-  every release is incompatible with the one before, so a crate's
-  republished dependencies also republish it, with its requirement on
-  them raised. A crate not on crates.io yet is published at its floor.
-- **Records and re-runs.** CI tags each release `<crate>-v<version>`. The
-  tags are records only: comparing with crates.io decides what to
-  publish, so a re-run on the same commit publishes nothing new, and a
-  re-run after a failed run publishes what that run didn't. Running CI
-  from the Actions tab (workflow_dispatch) on main does the same, unless
-  `release` is set: a release builds and publishes nothing else. Anywhere
-  else (pull requests, or other branches), the job prints what it
-  would publish, at which versions and in which order, and runs `cargo
-  publish --dry-run` instead.
+- **A crate is released by hand, with a tag.** Raise its `version` in its
+  Cargo.toml, and in `[workspace.dependencies]`, where the others take it
+  by path and version, in a pull request. Once that's merged, tag the
+  commit on main and push the tag:
+
+      git tag neochumby-sync-v0.0.2 origin/main
+      git push origin neochumby-sync-v0.0.2
+
+  CI's "Publish to crates.io" job then publishes that one crate. It
+  checks that the tag names a published crate, at the version its
+  Cargo.toml says, on a commit on main; nothing else runs for the tag. A
+  crate whose dependency changed needs that dependency released first.
+  At 0.0.x every release is incompatible with the one before, so raise
+  the requirement in its dependents too, and release them after it.
+  These versions are not the bundle's dated releases (vYYYY.MM.N).
+- **Re-runs.** Re-running the job for a version already on crates.io
+  passes and publishes nothing.
 - **What's packaged.** Each crate's `include` lists what it carries: what
-  it builds from, its README and its licence texts. neochumby-ncurses
-  carries ncurses' sources, less what its build configures out. CI's
-  "Package the SDK crates" job packages them all and builds each from its
+  it builds from, its README and its licence texts. CI's "Package the SDK
+  crates" job packages them all on every run and builds each from its
   package, on the host and for the Chumby (`cargo publish --dry-run`), so
   `cargo package --list -p <crate>` and that job are where to look after
   changing one.
 - **Later:** at 0.1 and above, `cargo semver-checks` against the published
-  release will choose between a patch and a minor release, instead of
-  every change being incompatible.
+  release will choose between a patch and a minor release.
 
 ## Pull requests
 
