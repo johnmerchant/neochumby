@@ -36,7 +36,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
-| `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
+| `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker, with a now-playing screen in text mode; and `neochumby-airplay-proto`, its messages, for frontends of other apps | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) in text mode, beside a Chumby | MIT |
@@ -92,6 +92,7 @@ access = ["fb", "touch", "speaker", "network"]   # what it reaches beyond its ja
 player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
 font = "spleen-8x16"                 # text mode: its terminal's font
 tap = "q"                            # text mode: what a tap types until it asks for the mouse
+frontend = "airplay"                 # it shows that app, in its place, once the owner approves
 ```
 
 An app can use any of these keys:
@@ -163,6 +164,11 @@ An app can use any of these keys:
   It's named by `player=<app>` (`neochumbyd set NAME player=<app>`), else it's
   `somafm`, else the first app with `player = true`. `neochumbyd pairing`
   names the players in the tree.
+- **`frontend`:** an app that shows another, through that app's service:
+  an AirPlay screen of your own, say. The owner approves it with
+  `neochumbyd set NAME frontend_airplay=<app>`; it is then opened wherever
+  AirPlay would be, and AirPlay's service talks to it
+  ([CONTRIBUTING](CONTRIBUTING.md#writing-an-airplay-frontend)).
 
 ## Building
 
@@ -203,7 +209,7 @@ userhook2                  the boot hook, which pairing installs
 apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
-apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manifest
+apps/airplay/              neochumby-airplay, neochumby-airplay-screen, neochumby-airplay-companion, manifest
 apps/logs/                 neochumby-logs, neochumby-logs-companion, manifest
 apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
 apps/htop/                 neochumby-htop, manifest
@@ -276,7 +282,11 @@ each end checks the other's key on every connection.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its
 companion on neochumbyd runs an AirPlay receiver named after it ("Kitchen
-Chumby"), and the Chumby plays the audio. The host provides
+Chumby"), and the Chumby plays the audio. Opened, or when a stream
+begins, it shows what's playing: the title, artist and album, the cover,
+the time and a progress bar, with previous, play/pause, next and the
+volume, which go to the phone or Mac playing. It is a player, so a start
+app's MUSIC and MUTE buttons open and pause it. The host provides
 `shairport-sync` on `PATH`, avahi, and the base of eighty ports as
 `NEOCHUMBY_AIRPLAY_PORT` (default 7350): RTSP from the base, UDP from
 base + 10. Each Chumby keeps the same ports.

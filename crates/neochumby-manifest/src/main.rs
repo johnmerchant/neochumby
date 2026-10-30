@@ -20,6 +20,10 @@
 //! or a PSF file in its directory), and `tap` what a tap types while the
 //! program hasn't asked for the mouse, written to the manifest with
 //! escapes ([`escape`]).
+//!
+//! `frontend` names another app that this one shows in its place, through
+//! that app's service (neochumby::service), once the owner approves it: it
+//! needs an `exec`, and may draw in text mode or with `fb`.
 
 use std::process::ExitCode;
 
@@ -40,6 +44,7 @@ const KEYS: &[&str] = &[
     "access",
     "font",
     "tap",
+    "frontend",
 ];
 
 /// The fonts built in, as neochumby::term::font has them: Spleen, in every
@@ -200,6 +205,20 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
             ));
         }
     }
+    if let Some(v) = meta.get("frontend") {
+        let app = v.as_str().unwrap_or_default();
+        let valid = (1..=32).contains(&app.len())
+            && app.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-');
+        if !valid {
+            return Err(format!("frontend: {v} is not an app's name (1-32 of a-z, 0-9, _ and -)"));
+        }
+        if !meta.contains_key("exec") {
+            return Err("frontend: a frontend is opened in its app's place, so it needs an exec".into());
+        }
+        if name.strip_prefix("neochumby-") == Some(app) {
+            return Err("frontend: an app is its own frontend already".into());
+        }
+    }
     if meta.contains_key("companion") && !meta.contains_key("neochumbyd") {
         return Err(r#"companion: only a neochumbyd runs it; set neochumbyd = "required" or "optional""#.into());
     }
@@ -310,6 +329,19 @@ mod tests {
         assert!(e.starts_with("font:") && e.contains("fb"), "{e}");
         assert!(manifest(&wrap("service = \"neochumby-x\"\ntap = \"q\"")).unwrap_err().starts_with("tap:"));
         assert!(manifest(&wrap("exec = \"neochumby-x\"\ntap = \"\"")).unwrap_err().starts_with("tap:"));
+    }
+
+    #[test]
+    fn a_frontend_names_another_app_and_has_an_exec() {
+        let m =
+            manifest(&wrap("exec = \"neochumby-x\"\nfrontend = \"airplay\"\naccess = [\"fb\", \"touch\"]")).unwrap();
+        assert_eq!(m, "exec=neochumby-x\naccess=fb,touch\nfrontend=airplay\n");
+        for bad in ["frontend = \"Air Play\"", "frontend = \"../airplay\"", "frontend = true"] {
+            let e = manifest(&wrap(&format!("exec = \"neochumby-x\"\n{bad}"))).unwrap_err();
+            assert!(e.starts_with("frontend:"), "{bad}: {e}");
+        }
+        assert!(manifest(&wrap("service = \"neochumby-x\"\nfrontend = \"airplay\"")).unwrap_err().contains("exec"));
+        assert!(manifest(&wrap("exec = \"neochumby-x\"\nfrontend = \"x\"")).unwrap_err().contains("own"));
     }
 
     #[test]

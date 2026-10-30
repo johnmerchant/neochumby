@@ -107,14 +107,18 @@ jobs:
       # The crates that build for the host: the protocol, sync's rounds (on
       # both sides, so a temporary directory stands in for the stick),
       # neochumbyd, the manifest tool, the system calls, the macros,
-      # AirPlay's companion, and neochumby-classic's engine (its host build
-      # renders frames to files).
+      # AirPlay's companion, its screen and service's memory, and its
+      # messages for frontends, and neochumby-classic's engine (its host
+      # build renders frames to files).
       - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -- -D warnings
-      - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
+      - run: cargo clippy -p neochumby-airplay --lib --bin neochumby-airplay-companion -- -D warnings
+      - run: cargo clippy -p neochumby-airplay --profile test --lib --bin neochumby-airplay-companion -- -D warnings
+      - run: cargo clippy --all-targets -p neochumby-airplay-proto -- -D warnings
       # The logs app's text, layout and drawing, and its companion.
       - run: cargo clippy --all-targets -p neochumby-logs -- -D warnings
       - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic
-      - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
+      - run: cargo test -p neochumby-airplay --lib --bin neochumby-airplay-companion
+      - run: cargo test -p neochumby-airplay-proto
       # ncinit, a workspace of its own (Buildroot builds it for the dist
       # image), and the system calls only it uses.
       - run: cargo fmt --check --manifest-path crates/neochumby-init/Cargo.toml

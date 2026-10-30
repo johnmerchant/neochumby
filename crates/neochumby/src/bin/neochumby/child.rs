@@ -5,7 +5,8 @@
 //! request pipe as NEOCHUMBY_SESSION (neochumby::session), if its app has a
 //! companion, a socket to it as NEOCHUMBY_COMPANION (neochumby::companion)
 //! and, when this Chumby has one, its default player as NEOCHUMBY_PLAYER
-//! (player.rs). It runs in a
+//! (player.rs). An app with an approved frontend, and that frontend, also
+//! get what lets them reach each other (frontend.rs). It runs in a
 //! process group of its own, so that it and whatever it started end
 //! together. An app runs jailed, as jail.rs describes, unless its manifest
 //! says `access = ["root"]`; the session's own services run as root. A
@@ -20,11 +21,13 @@ use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
+use neochumby::service;
 use neochumby::session::{self, Pipe};
 use neochumby_sys::jail::Process;
 use neochumby_sys::process::{Signal, exited, group_alive, kill_group, pass_fds};
 
 use crate::companion;
+use crate::frontend;
 use crate::jail::{self, Role};
 
 /// How long what's left of a process group has, after SIGTERM, once its
@@ -89,6 +92,7 @@ impl<'a> Launch<'a> {
             self.keep.push(l.as_raw_fd());
             self.env.push((neochumby::companion::ENV.into(), l.as_raw_fd().to_string()));
         }
+        self.env.extend(frontend::env(&self.app.name));
         let terminal = self.terminal.as_ref().map(|t| t.as_raw_fd());
         let process = if jail::jailed(self.app) {
             jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep, terminal)?
@@ -96,6 +100,7 @@ impl<'a> Launch<'a> {
             let mut cmd = Command::new(self.exe);
             cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", self.root).env("HOME", "/tmp");
             cmd.env_remove(session::PLAYER_ENV);
+            cmd.env_remove(service::CLIENTS_ENV).env_remove(service::FRONTEND_ENV);
             cmd.envs(self.env).process_group(0);
             if let Some(t) = &self.terminal {
                 cmd.stdin(t.try_clone()?).stdout(t.try_clone()?);

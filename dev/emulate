@@ -14,6 +14,9 @@ the settings.
          [--psp DIR]              DIR's files added to the settings (/psp)
          [--bind DIR:PATH]        DIR, on the stick, linked at PATH (e.g.
                                   pictures at /tmp/classic)
+         [--audio WAV]            what the speaker plays, recorded to WAV
+                                  (QEMU's wav audiodev: 16-bit stereo, the
+                                  header's sizes left at zero)
          [--fast]                 -icount: emulated time runs ahead while
                                   the Chumby is idle (boots in seconds; a
                                   hold lasts longer in emulated time)
@@ -432,8 +435,12 @@ def cmd_start(state, opts, tree):
         make_stick(stick, tree, profile, opts.get("psp"), opts.get("binds"))
     with tempfile.TemporaryDirectory() as work:
         psp = psp_dir(work, images["factory_psp"], opts.get("psp")) if p["psp"] == "nand" else None
+        props, extra = None, ()
+        if opts.get("audio"):
+            props = {"audiodev": "speaker"}
+            extra = ("-audiodev", f"wav,id=speaker,path={os.path.abspath(opts['audio'])}")
         m.start(kernel=images["kernel"], nand=images["nand"], psp=psp, initrd=images["initrd"],
-                append=images["append"], stick=stick, fast=opts.get("fast"), qemu=qemu)
+                append=images["append"], stick=stick, fast=opts.get("fast"), qemu=qemu, props=props, extra=extra)
     write(state, "profile", profile)
     print(f"dev/emulate: {profile} booting ({state.path}); the console: dev/emulate log")
 
@@ -725,6 +732,7 @@ def main(argv):
             "initrd": flag(args, "--initrd"),
             "append": flag(args, "--append"),
             "qemu": flag(args, "--qemu"),
+            "audio": flag(args, "--audio"),
             "fast": "--fast" in args,
             "build": "--build" in args,
             "no_fetch": "--no-fetch" in args,

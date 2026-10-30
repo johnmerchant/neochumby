@@ -6,7 +6,8 @@
 //! the start app. The start app is meant to keep running: if it exits
 //! without asking five times within a minute, `home` becomes the start app
 //! instead, and if that's `home` already, the Chumby goes back to its own
-//! software.
+//! software. An app with a frontend the owner approved is opened as that
+//! frontend, whoever asks for it (frontend.rs).
 //!
 //! The escape hatch (a touch held in the top-left corner) ends whatever is
 //! in front, with its process group, and opens `home`, even if the start
@@ -63,6 +64,7 @@ use neochumby_sys::process::exited;
 
 use crate::button::Edges;
 use crate::child;
+use crate::frontend;
 use crate::jail::{self, Role};
 use crate::network;
 use crate::services::{Backoff, Services};
@@ -518,8 +520,9 @@ impl<'a, D: Device> Session<'a, D> {
             Request::ChumbyMode => Next::ChumbyMode,
             // Taken in before it gets here (watch).
             Request::Speaker(_) | Request::Player(_) => return None,
-            Request::Open(name) if *name == f.app.name => return None,
             Request::Open(name) => match self.openable(name) {
+                // What's in front already (its frontend, perhaps).
+                Ok(app) if app.name == f.app.name => return None,
                 Ok(app) => Next::Open(app, None),
                 Err(why) => {
                     eprintln!("neochumby: service {} asks to open {name}: {why}", from.name);
@@ -566,7 +569,9 @@ impl<'a, D: Device> Session<'a, D> {
     }
 
     /// An app that can be opened: in the tree, with an `exec`, and runnable.
+    /// For an app with an approved frontend, that frontend (frontend.rs).
     fn openable(&self, name: &str) -> Result<&'a App, &'static str> {
+        let name = frontend::instead_of(name).unwrap_or(name);
         let app = self.apps.iter().find(|a| a.name == name).ok_or("no such app here")?;
         if app.exec.is_none() {
             Err("it has nothing to open (no exec)")
@@ -1365,6 +1370,7 @@ mod tests {
             player: false,
             font: None,
             tap: Vec::new(),
+            frontend: None,
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");
