@@ -60,8 +60,8 @@ fn main() {
     };
     let mut cmd = Command::new(exe);
     cmd.args(ARGS).env("NEOCHUMBY_PIPES", "1");
-    // A tap types q, which ends pipes-rs.
-    match neochumby::term::run_tapping(cmd, b"q") {
+    // A tap types q (its manifest's tap), which ends pipes-rs.
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-pipes: pipes-rs: {s}"),
         Ok(_) => {}
         Err(e) => {

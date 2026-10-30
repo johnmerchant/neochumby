@@ -35,8 +35,8 @@ fn main() {
     };
     let mut cmd = Command::new(exe);
     cmd.env("NEOCHUMBY_AQUARIUM", "1");
-    // A tap types q, which ends it.
-    match neochumby::term::run_tapping(cmd, b"q") {
+    // A tap types q (its manifest's tap), which ends it.
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-aquarium: asciiquarium-rs: {s}"),
         Ok(_) => {}
         Err(e) => {

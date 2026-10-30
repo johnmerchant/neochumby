@@ -18,7 +18,9 @@ cc = "1"
 title = "HTOP"
 exec = "neochumby-htop"
 # Reads every process from /proc.
-access = ["screen", "touch", "system", "terminal"]
+access = ["system"]
+# 53x20 characters: room for its meters and columns, and big enough to tap.
+font = "spleen-6x12"
 color = "50a03c"
 
 [lints]
