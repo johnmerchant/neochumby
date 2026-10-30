@@ -29,7 +29,7 @@ mod runtime;
 
 pub use runtime::{Caller, Instance, Memory, Module, Runtime};
 
-/// WAMR's version, as built (`2.4.3-f8ed1f442969`, with the commit when
+/// WAMR's version, as built (`2.4.5-25bd7eb63e82`, with the commit when
 /// the build could see it): part of what an `.aot` file is compiled for.
 pub const VERSION: &str = env!("NEOCHUMBY_WAMR_VERSION");
 

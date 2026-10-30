@@ -14,7 +14,11 @@ changes easy to take.
   (`apps/quake/build.rs`). A change that can't be made that way goes in a
   fork, as a commit marked with a comment naming the app
   (`// neochumby-quake: ...`), and the submodule is pinned to that commit:
-  no patch files applied at build time. `tools/tree` (and so `tools/stick`
+  no patch files applied at build time. WAMR (`crates/neochumby-wamr`) is
+  the exception: its submodule is pinned to a release, and its one fix,
+  waiting on upstream, is a patch in the project's format
+  (`crates/neochumby-wamr/patches/`), which its `build.rs` applies to a
+  copy of the file it changes. `tools/tree` (and so `tools/stick`
   and `tools/deploy`) checks out the submodules of the apps it builds, so a
   clone without `--recurse-submodules` works there; `cargo` alone needs
   `git submodule update --init` first.

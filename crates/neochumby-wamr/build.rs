@@ -8,8 +8,11 @@
 // assumes ARMv7 instructions. Elsewhere (the host, for tests) only the
 // interpreter, which needs no assembly: invokeNative's portable C.
 //
-// The fast interpreter's loader, wasm_loader.c, is compiled from a copy with
-// one fix (fixed_loader, below) until upstream has it.
+// WAMR is read from the submodule as it is, pinned to a release; nothing is
+// downloaded. The one change it needs here, patches/0001-*.patch (the fast
+// interpreter's loader, alignment-safe on ARMv5), is applied to a copy of
+// the file it changes, in OUT_DIR, which is compiled in its place: the
+// submodule itself is never touched.
 
 use std::path::{Path, PathBuf};
 
@@ -105,46 +108,29 @@ const DEFINES: &[(&str, &str)] = &[
     ("_GNU_SOURCE", "1"),
 ];
 
-/// wasm_loader.c with its three handler-address stores made alignment-safe.
-///
-/// Rewriting `select` for i64 and f64 operands, the fast interpreter's
-/// loader patches the handler's address into compiled code with a plain
-/// `*(uint32 *)(p_code_compiled_tmp - sizeof(uint32)) = ...`, but that code
-/// is only 2-byte aligned. An ARMv5 (the Chumby's ARM926EJ-S) ignores the
-/// low bits of an unaligned STR's address, so the address lands 2 bytes off
-/// and a later dispatch jumps to garbage (SIGILL, in Thumb state). QEMU does
-/// the store as an ARMv6 would, so the emulator never shows it. The stores
-/// go through memcpy instead, which is byte stores where the alignment
-/// isn't known. The build fails if upstream's code has moved and the three
-/// aren't found as they were.
-fn fixed_loader(core: &Path, out: &Path) -> PathBuf {
-    let src = core.join("iwasm/interpreter/wasm_loader.c");
-    let s = std::fs::read_to_string(&src).expect("wasm_loader.c");
-    let mut fixed = String::with_capacity(s.len() + 256);
-    let mut rest = s.as_str();
-    let mut sites = 0;
-    let head = "*(uint32 *)(p_code_compiled_tmp";
-    while let Some(i) = rest.find(head) {
-        let (before, at) = rest.split_at(i);
-        let end = at.find(';').expect("a statement");
-        let stmt = &at[..end];
-        let (lhs, rhs) = stmt.split_once('=').expect("an assignment");
-        let ptr = lhs.trim().trim_start_matches("*(uint32 *)").trim();
-        let ptr = ptr.strip_prefix('(').and_then(|p| p.strip_suffix(')')).expect("a parenthesised pointer");
-        fixed.push_str(before);
-        fixed.push_str(&format!("NEOCHUMBY_PUT_U32({}, {})", ptr.trim(), rhs.trim()));
-        rest = &at[end..];
-        sites += 1;
+/// The patches, in order, each changing one file of WAMR's.
+const PATCHES: &[&str] = &["patches/0001-fast-interp-loader-store-handler-addresses-unaligned-safely.patch"];
+
+/// Applies each of [`PATCHES`] to a copy of the file it changes, in `out`:
+/// the copies, by their paths under the submodule. A patch that no longer
+/// applies (upstream moved) fails the build.
+fn patched(out: &Path) -> Vec<(String, PathBuf)> {
+    let mut files = Vec::new();
+    for p in PATCHES {
+        let text = std::fs::read_to_string(p).unwrap_or_else(|e| panic!("{p}: {e}"));
+        println!("cargo:rerun-if-changed={p}");
+        // The DEP-3 header comes before the diff, which starts at "--- a/".
+        let at = text.find("\n--- a/").unwrap_or_else(|| panic!("{p}: no diff")) + 1;
+        let diff = &text[at..];
+        let file = diff.lines().next().and_then(|l| l.strip_prefix("--- a/")).expect("a file").trim().to_string();
+        let patch = diffy::Patch::from_str(diff).unwrap_or_else(|e| panic!("{p}: {e}"));
+        let original = std::fs::read_to_string(Path::new(WAMR).join(&file)).expect("the patched file");
+        let fixed = diffy::apply(&original, &patch).unwrap_or_else(|e| panic!("{p} doesn't apply to {file}: {e}"));
+        let dst = out.join(file.replace('/', "_"));
+        std::fs::write(&dst, fixed).expect("writing a patched file");
+        files.push((file, dst));
     }
-    fixed.push_str(rest);
-    assert_eq!(sites, 3, "wasm_loader.c: expected the 3 unaligned handler stores, found {sites}");
-    let include = "#include \"wasm_loader.h\"";
-    assert!(fixed.contains(include), "wasm_loader.c: no #include \"wasm_loader.h\"");
-    let put = "#define NEOCHUMBY_PUT_U32(p, v) \\\n    do { uint32 put_v_ = (uint32)(v); memcpy((p), &put_v_, sizeof put_v_); } while (0)";
-    let fixed = fixed.replacen(include, &format!("{include}\n{put}"), 1);
-    let dst = out.join("wasm_loader.c");
-    std::fs::write(&dst, fixed).expect("writing wasm_loader.c");
-    dst
+    files
 }
 
 /// WAMR's version, from core/version.h, and the submodule's commit when git
@@ -193,7 +179,11 @@ fn main() {
     for f in COMMON {
         b.file(core.join(f));
     }
-    b.file(fixed_loader(&core, &out));
+    // wasm_loader.c, patched; its includes are found by INCLUDES below.
+    for (file, copy) in patched(&out) {
+        assert!(file.ends_with("wasm_loader.c"), "{file}: only the loader is patched");
+        b.file(copy);
+    }
     for d in INCLUDES {
         b.include(core.join(d));
     }
