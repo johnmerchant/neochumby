@@ -622,16 +622,15 @@ mod tests {
             nfs_port: 2049,
             tree: d.join("tree"),
             state_dir: d.clone(),
-            sandbox: crate::isolate::Sandbox::as_neochumbyd(&d),
             hashes: Default::default(),
             links: Links::default(),
+            confine: crate::confine::Confine::Refused("not needed here".into()),
         };
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
         std::thread::spawn(move || crate::api::serve(l, Arc::new(api)));
 
-        let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby).unwrap();
-        assert_eq!(s.peer(), &server_key);
+        let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &server_key).unwrap();
         s.send(&Msg::Hello { name: "den".into() }).unwrap();
         assert_eq!(s.recv().unwrap(), Msg::Welcome);
         assert!(matches!(s.recv().unwrap(), Msg::Config(_)));

@@ -1,50 +1,37 @@
 #!/bin/sh
-# dev/emulate's smoke test, which CI runs: boots a tree's session as a
-# Chumby would and drives it from outside, checking that
+# dev/emulate's smoke test: boots a tree's session as a Chumby would, from
+# a USB stick, and drives it from outside, checking that
 #   - the home screen draws, and a tap on DOOM opens Doom (without game data
 #     it says so and exits, and the home screen comes back);
-#   - the fake devices behave (dev/emulate selftest);
-#   - neochumby sensors, run beside the session, sees a touch; and the top
-#     button reaches whoever reads it (sensors, or the session itself once
-#     it holds /dev/switch);
 #   - holding the top-left corner for three seconds restarts the home screen;
-#   - CHUMBY MODE ends the session cleanly;
-#   - the same tree boots from a FAT stick image (skipped, and said so, on a
-#     kernel without vfat: Apple's container's).
-# Screenshots, the session's log and the sensors output go in OUT.
+#   - the top button reaches the session, when it holds /dev/switch;
+#   - neochumby sensors, run on the console beside the session, sees a
+#     touch (where the console has a shell during the session: dist,
+#     classic);
+#   - CHUMBY MODE ends the session cleanly.
+# Screenshots and the console go in OUT.
 #
-#   sudo dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
-#   dev/emulate-smoke TREE OUT          on a Mac, after dev/emulate vm start
+#   dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
 #
-# The same scenario runs on each of dev/emulate's backends, picked by the
-# environment: NEOCHUMBY_EMU_MACHINE=chumby-classic (the whole emulated
-# Chumby, your own firmware) or NEOCHUMBY_EMU_DEVICE=NAME (a real Chumby,
-# paired and set dev=on), without sudo for either. Steps only user mode can
-# do (selftest, sensors, the FAT stick) are skipped there, and the top
-# button on the full-system machine too, until it has one; the waits scale
-# with `dev/emulate scale`; a backend that can't do a step at all (no
-# firmware, a neochumbyd from before remote input) makes it exit 77.
+# On dev/emulate's profile (NEOCHUMBY_EMU_PROFILE: dist, CI's; stock, your
+# own firmware; classic) or on a real Chumby (NEOCHUMBY_EMU_DEVICE=NAME,
+# paired and set dev=on). The waits scale with `dev/emulate scale`; a
+# backend that can't run at all (no images, a neochumbyd from before
+# remote input) makes it exit 77.
 set -eu
 tree=${1:?usage: dev/emulate-smoke TREE OUT}
 out=${2:?usage: dev/emulate-smoke TREE OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
-# On a Mac, all of user mode runs in dev/emulate's Linux (the other
-# backends, from #36, run on the Mac itself).
-if [ "$(uname)" = Darwin ] && [ -z "${NEOCHUMBY_EMU_MACHINE:-}${NEOCHUMBY_EMU_DEVICE:-}" ]; then
-  exec "$dev/emulate" vm exec sh "$dev/emulate-smoke" "$@"
-fi
 mkdir -p "$out"
-# The emulator's directory: not in OUT, which may be a folder shared from a
-# Mac, where its control socket can't be.
-state=$(mktemp -d /var/tmp/neochumby-smoke.XXXXXX)
-trap 'rm -rf "$state"' EXIT
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-smoke.XXXXXX")
+trap 'emu stop >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
-machine=$(emu backend)
+backend=$(emu backend)
 slow=$(emu scale)
 step() { echo "== $*"; }
 fail() {
   echo "FAIL: $*"
-  echo "-- the session's log:"
+  echo "-- the console:"
   emu log || true
   emu stop || true
   exit 1
@@ -55,7 +42,7 @@ opened_home() {
   i=0
   until [ "$(count 'neochumby: opening home')" -ge "$1" ]; do
     i=$((i + 1))
-    [ "$i" -lt $((300 * slow)) ] || fail "$2"
+    [ "$i" -lt $((600 * slow)) ] || fail "$2"
     sleep 0.1
   done
   emu wait screen $((30 * slow)) || fail "$2"
@@ -81,12 +68,14 @@ else
   page=$((index / 3)) row=$((index % 3))
 fi
 
-step "boot ($machine)"
+step "boot ($backend)"
 if emu start "$tree"; then :; else
   code=$?
   [ "$code" = 77 ] && exit 77
   fail "dev/emulate start failed ($code)"
 fi
+# The whole boot, then the session.
+emu wait log 'neochumby: opening home' $((100 * slow)) || fail "the session didn't open home"
 opened_home 1 "the home screen didn't open"
 emu shot "$out/1-home.png"
 
@@ -113,11 +102,6 @@ else
   echo "Doom is running"
 fi
 
-if [ "$machine" = user ]; then
-  step "the devices"
-  emu selftest || fail "dev/emulate selftest"
-fi
-
 step "the corner hold (the escape hatch)"
 before=$(count 'neochumby: opening home')
 emu tap 5 5 --hold 3600
@@ -130,66 +114,38 @@ emu shot "$out/3-escaped.png"
 # here: a remote press can't reach an app that reads the switch itself
 # (button = true, Doom's FIRE), so a step that needs that is skipped on a
 # device.
-if [ "$machine" = device ] || emu status | grep -q 'button_open: True'; then
+if [ "$backend" = device ] || emu status | grep -q 'button_open: True'; then
   step "the top button, to the session"
   emu button press
   emu wait log 'neochumby: the top button: ' $((10 * slow)) || fail "the session didn't act on the top button"
   emu wait screen $((30 * slow)) || fail "the home screen didn't come back after the top button"
-  session_button=1
+  button=
 else
-  session_button=
+  echo "skipped: the top button (the session hasn't /dev/switch)"
+  button=" the top button,"
 fi
 
-if [ "$machine" = user ]; then
-step "neochumby sensors: a touch, and the top button unless the session has it"
-emu button down
-(sleep 1 && emu tap 200 20 && emu button up) &
-emu exec --for 2.5 /mnt/neochumby/neochumby sensors > "$out/sensors.txt" 2>&1 || fail "neochumby sensors: $(cat "$out/sensors.txt")"
-wait
-if [ -z "$session_button" ]; then
-  grep -q 'squeeze=true' "$out/sensors.txt" || fail "sensors didn't see the button held"
-  grep -q 'squeeze=false' "$out/sensors.txt" || fail "sensors didn't see the button released"
-fi
-grep -q 'Down { x: 200, y: 20,' "$out/sensors.txt" || fail "sensors didn't see the touch at (200, 20)"
-fi
+# The console's shell runs beside the session on dist and classic.
+case $backend in
+dist | classic)
+  step "neochumby sensors: a touch"
+  (sleep 3 && emu tap 200 20) &
+  emu exec --for 6 /mnt/usb/neochumby/neochumby sensors > "$out/sensors.txt" 2>&1 || true
+  wait
+  grep -q 'Down { x: 200, y: 20,' "$out/sensors.txt" || fail "sensors didn't see the touch at (200, 20): $(cat "$out/sensors.txt")"
+  sensors=
+  ;;
+*) sensors=" sensors," ;;
+esac
 
 step "CHUMBY MODE"
 emu tap 160 220
 emu wait exit $((20 * slow)) || fail "CHUMBY MODE didn't end the session"
 [ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
 emu log > "$out/log.txt"
-if [ "$machine" != user ]; then
-  # The stock software carries on after CHUMBY MODE: the machine is stopped.
-  emu stop
-  echo "-- the console:"
-  cat "$out/log.txt"
-  skipped="selftest, sensors and the FAT stick"
-  [ "$machine" = device ] || skipped="selftest, sensors, the top button and the FAT stick"
-  echo "dev/emulate-smoke: all passed ($machine; $skipped skipped)"
-  exit 0
-fi
-
-step "boot from a stick"
-if grep -qw vfat /proc/filesystems || modprobe -q vfat 2>/dev/null; then
-  # Room for every app CI builds: 256 MB, or twice the tree if that's more.
-  size=$(du -sm "$tree" | cut -f1)
-  emu mkstick --force --size $((size * 2 > 256 ? size * 2 : 256)) "$out/stick.img" "$tree"
-  emu start --stick "$out/stick.img"
-  opened_home 1 "the home screen didn't open from the stick"
-  emu shot "$out/4-stick.png"
-  emu tap 160 220
-  emu wait exit 20 || fail "CHUMBY MODE didn't end the session from the stick"
-  emu log > "$out/log-stick.txt"
-  stick=
-else
-  echo "skipped: this kernel has no vfat (on a Mac, NEOCHUMBY_EMU_VM=lima has)"
-  stick=" but the stick"
-fi
-
-echo "-- the session's log, from the tree:"
+# The boot carries on after the session: the machine is stopped.
+emu stop
+echo "-- the console:"
 cat "$out/log.txt"
-if [ -z "$stick" ]; then
-  echo "-- and from the stick:"
-  cat "$out/log-stick.txt"
-fi
-echo "dev/emulate-smoke: all passed$stick"
+skipped=$(echo "$button$sensors" | sed 's/,$//')
+echo "dev/emulate-smoke: all passed ($backend${skipped:+; skipped:$skipped})"

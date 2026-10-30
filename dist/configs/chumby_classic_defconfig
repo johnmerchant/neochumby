@@ -1,0 +1,63 @@
+# The Chumby Classic: Freescale i.MX21, an ARM926EJ-S with no FPU.
+BR2_arm=y
+BR2_arm926t=y
+BR2_ARM_EABI=y
+BR2_ARM_SOFT_FLOAT=y
+
+# Static musl, like the apps. gcc 13 is this Buildroot's oldest, so 5.9
+# has to build with it. (On an x86_64 host dist/build swaps in Bootlin's
+# prebuilt toolchain instead: board/chumby-classic/bootlin.config.)
+BR2_TOOLCHAIN_BUILDROOT_MUSL=y
+# C++ too: Buildroot's Rust needs it for a musl target (ncinit).
+BR2_TOOLCHAIN_BUILDROOT_CXX=y
+BR2_GCC_VERSION_13_X=y
+BR2_KERNEL_HEADERS_AS_KERNEL=y
+BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_5_9=y
+BR2_STATIC_LIBS=y
+
+# Compiles go through ccache, so a build whose output was thrown away (a
+# config change, a cold CI cache) still reuses what it compiled before.
+# dist/build puts the cache in its work, beside the downloads.
+BR2_CCACHE=y
+BR2_CCACHE_INITIAL_SETUP="--max-size=1G"
+
+# Every download checked against a hash; the kernel's are ours (patches/).
+BR2_DOWNLOAD_FORCE_CHECK_HASHES=y
+BR2_GLOBAL_PATCH_DIR="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/patches"
+
+# The kernel: 5.9.16, which still has the i.MX21's board files
+# (mach-mx21ads). Our options go on top of imx_v4_v5_defconfig.
+BR2_LINUX_KERNEL=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION=y
+BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE="5.9.16"
+BR2_LINUX_KERNEL_USE_DEFCONFIG=y
+BR2_LINUX_KERNEL_DEFCONFIG="imx_v4_v5"
+BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/board/chumby-classic/linux.fragment"
+BR2_LINUX_KERNEL_ZIMAGE=y
+# scripts/extract-cert links OpenSSL: Buildroot's, not the host's.
+BR2_LINUX_KERNEL_NEEDS_HOST_OPENSSL=y
+
+# No init of Buildroot's: neochumby-init will be ours. devtmpfs makes /dev.
+BR2_INIT_NONE=y
+BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_DEVTMPFS=y
+
+# Wi-Fi: the Chumby's adapter is an rt73 (rt73usb, with its firmware).
+BR2_PACKAGE_WPA_SUPPLICANT=y
+BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
+BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
+BR2_PACKAGE_LINUX_FIRMWARE=y
+BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT73=y
+
+# sideload: the initramfs is built into the kernel as well as shipped
+# beside it.  A flashed zImage therefore still boots, and /init can load the
+# NAND recovery modules when the sideload marker is absent.
+BR2_TARGET_ROOTFS_INITRAMFS=y
+
+# /init: ncinit (crates/neochumby-init), which loads the NAND recovery
+# modules (only when flashed) and every other module as its device appears.
+BR2_PACKAGE_NEOCHUMBY_INIT=y
+
+# The initramfs userhook2 kexecs with, beside the zImage.
+BR2_TARGET_ROOTFS_CPIO=y
+BR2_TARGET_ROOTFS_CPIO_GZIP=y
+# BR2_TARGET_ROOTFS_TAR is not set

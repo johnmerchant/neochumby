@@ -3,20 +3,13 @@
 //!
 //! neochumbyd started as root becomes its own user ([`become_user`]),
 //! keeping only the capabilities to start a child as another uid
-//! (CAP_SETUID, CAP_SETGID) and to give that child a directory
-//! (CAP_CHOWN). A child started as another uid with `CommandExt::uid` and
+//! (CAP_SETUID, CAP_SETGID), to give that child a directory (CAP_CHOWN),
+//! and to stop it (CAP_KILL). A child started as another uid with `CommandExt::uid` and
 //! `gid` loses them at exec: it has no file capabilities, no ambient or
 //! inheritable ones, and can't gain any (no_new_privs).
 
 #[cfg(target_os = "linux")]
 use std::io;
-
-/// This process's effective user id.
-pub fn effective_uid() -> u32 {
-    // SAFETY: geteuid(2) takes nothing, touches no memory of ours and
-    // can't fail.
-    unsafe { libc::geteuid() }
-}
 
 /// Adds `bits` to this process's file mode creation mask (umask(2)), for
 /// it and every child it starts, and returns the mask it was.
@@ -33,10 +26,11 @@ pub fn add_to_umask(bits: u32) -> u32 {
     old as u32
 }
 
-/// The capabilities [`become_user`] keeps: CAP_CHOWN (0), CAP_SETGID (6)
-/// and CAP_SETUID (7), as bits of the kernel's capability sets.
+/// The capabilities [`become_user`] keeps: CAP_CHOWN (0), CAP_KILL (5),
+/// CAP_SETGID (6) and CAP_SETUID (7), as bits of the kernel's capability
+/// sets. CAP_KILL adds nothing to CAP_SETUID, which can become anyone.
 #[cfg(target_os = "linux")]
-const KEPT: u32 = 0b1100_0001;
+const KEPT: u32 = 0b1110_0001;
 
 /// capset(2)'s header and one of its two data words (version 3: 64-bit
 /// sets, as two 32-bit halves), as linux/capability.h has them. Only the
@@ -67,8 +61,8 @@ fn check(r: libc::c_int) -> io::Result<()> {
 }
 
 /// Makes this process, run as root, `uid` with group `gid` and no other
-/// groups, keeping CAP_SETUID, CAP_SETGID and CAP_CHOWN and nothing else,
-/// and sets no_new_privs, so neither it nor anything it starts can gain
+/// groups, keeping CAP_SETUID, CAP_SETGID, CAP_CHOWN and CAP_KILL and
+/// nothing else, and sets no_new_privs, so neither it nor anything it starts can gain
 /// privileges by exec (a set-uid file, file capabilities).
 ///
 /// The uids change for the whole process, but capabilities belong to a
@@ -118,18 +112,12 @@ mod tests {
         unsafe { libc::umask(old as libc::mode_t) };
     }
 
-    #[test]
-    fn who() {
-        // Whoever runs the tests; only that it answers.
-        let _ = effective_uid();
-    }
-
     #[cfg(target_os = "linux")]
     #[test]
     fn only_root_becomes_someone_else() {
         assert!(become_user(0, 0).is_err());
         // As root it would work, and change who runs the other tests.
-        if effective_uid() != 0 {
+        if crate::user::effective().uid != 0 {
             assert!(become_user(1000, 1000).is_err());
         }
     }

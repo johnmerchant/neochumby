@@ -8,10 +8,16 @@
 # a round, on the host, is neochumby-sync's own crash test; this is the
 # whole Chumby.)
 #
-#   sudo dev/emulate-powercut TREE NEOCHUMBYD OUT
+#   dev/emulate-powercut TREE NEOCHUMBYD OUT
 #
 # TREE from tools/tree, with neochumby-sync; NEOCHUMBYD the x86_64
-# neochumbyd built with it. In user mode it pairs the emulated Chumby with
+# neochumbyd built with it. Pending on the emulated Chumby: a round needs a
+# neochumbyd, and the emulated Chumby has no network (qemu-chumby runs it
+# with -nic none), so every profile skips it (77) until the session can
+# reach neochumbyd another way. dev/emulate has what the rest needs (a
+# stick image the Chumby writes, powercut, exec on the console). Under
+# dev/emulate's old user mode, which shared the PC's network, it paired the
+# emulated Chumby with
 # a neochumbyd on this PC, through neochumby-home's PAIR, sets
 # delivery=sync, lets a first round fill set a of a FAT stick image, adds a
 # big file to the tree, boots through the real boot hook (start --boot,
@@ -21,8 +27,7 @@
 # makes set b live, which one more boot then runs. A cut that came after the
 # round finished proves nothing, so then it tries again, sooner.
 #
-# The full-system machine has no USB yet: skipped (77). With
-# NEOCHUMBY_EMU_DEVICE=NAME, a real Chumby already paired with the
+# With NEOCHUMBY_EMU_DEVICE=NAME, a real Chumby already paired with the
 # neochumbyd serving TREE (NEOCHUMBY_EMU_HOST, NEOCHUMBYD_DIR), set
 # delivery=sync and dev=on, with a stick that holds a complete set: the
 # person beside it pulls the plug when asked, and the next round is checked
@@ -66,8 +71,8 @@ grow() {
   head -c $((24 << 20)) /dev/urandom > "$1/apps/home/powercut.bin"
 }
 
-if [ "$backend" = chumby-classic ]; then
-  echo "dev/emulate-powercut: skipped: the full-system machine has no USB stick yet"
+if [ "$backend" != device ]; then
+  echo "dev/emulate-powercut: skipped: pending: the emulated Chumby has no network to reach neochumbyd (this is $backend)"
   exit 77
 fi
 
@@ -87,24 +92,15 @@ if [ "$backend" = device ]; then
   exit 0
 fi
 
-# User mode, everything on this PC.
+# The emulated Chumby, everything on this PC: user mode's steps, kept for
+# the port (unreachable until then).
 work=$out/tree
 ndstate=$out/nd
 rm -rf "$ndstate" "$out/psp0"
 slim "$tree" "$work"
 mkdir -p "$out/psp0"
 api=127.0.0.1:17340
-# This round runs no companions, so neochumbyd runs unsandboxed, which it
-# refuses as root: as the user who ran sudo.
-as=
-if [ "$(id -u)" = 0 ]; then
-  [ -n "${SUDO_UID:-}" ] || fail "run it with sudo, so neochumbyd can run as you"
-  mkdir -p "$ndstate"
-  chown "$SUDO_UID:$SUDO_GID" "$ndstate"
-  as="setpriv --reuid=$SUDO_UID --regid=$SUDO_GID --clear-groups"
-fi
-$as "$neochumbyd" serve --state "$ndstate" --tree "$work" --api "$api" --nfs 127.0.0.1:12049 --unsandboxed \
-  > "$out/neochumbyd.log" 2>&1 &
+"$neochumbyd" serve --state "$ndstate" --tree "$work" --api "$api" --nfs 127.0.0.1:12049 > "$out/neochumbyd.log" 2>&1 &
 server=$!
 trap 'kill $server 2>/dev/null || true' EXIT
 nd() { "$neochumbyd" "$@" --state "$ndstate"; }
@@ -124,7 +120,7 @@ emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen d
 emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
 emu tap 80 220 # PAIR
 i=0
-until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9]*\).*/\1/p') && [ -n "$code" ]; do
+until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9a-f-]*\).*/\1/p') && [ -n "$code" ]; do
   i=$((i + 1))
   [ "$i" -lt $((300 * slow)) ] || fail "the Chumby didn't ask to pair"
   sleep 0.1

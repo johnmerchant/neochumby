@@ -1,14 +1,21 @@
 //! neochumbyd: what a Chumby pairs with. Serves the app tree over NFS, or
 //! keeps a copy of it on the Chumby's stick (`delivery=sync`, sync.rs),
 //! pairs Chumbys, and runs the server half of their apps (companion.rs)
-//! over neochumby-proto. It knows no app by name: an app brings its own
-//! companion, in its directory of the tree.
+//! over neochumby-proto, and the apps' once-per-server server programs
+//! (server.rs), which may reach it through an admin socket (admin.rs).
+//! Both run sandboxed (confine.rs). It knows no app by name: an app brings
+//! its own companion and server program, in its directory of the tree.
 //!
 //!   neochumbyd serve [options]    the daemon
 //!   neochumbyd pairing            Chumbys paired and asking to pair, and
 //!                                 the start and players in the tree
 //!                                 (tree.rs)
-//!   neochumbyd approve CODE       pair the Chumby showing CODE
+//!   neochumbyd approve CODE [--replace]
+//!                                 pair the Chumby showing CODE (its 32
+//!                                 digits, typed from its screen); one
+//!                                 already paired under its name with
+//!                                 another key is unpaired only with
+//!                                 --replace
 //!   neochumbyd refuse CODE
 //!   neochumbyd forget NAME
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
@@ -37,6 +44,13 @@
 //!   neochumbyd mcp                 log, restart, shot, set and pairing's
 //!                                  list as an MCP server on stdio, for
 //!                                  Claude Code and the like (mcp.rs)
+//!   neochumbyd allow APP pairing  lets APP's server program use the admin
+//!                                  socket (admin.rs) as it next starts;
+//!                                  `allow` alone lists what's allowed
+//!   neochumbyd disallow APP pairing
+//!   neochumbyd token [new]        the owner's token, which approving or
+//!                                  every change through the admin socket
+//!                                  needs; `new` replaces it
 //!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
@@ -46,19 +60,23 @@
 //!   --app-uids FIRST-LAST
 //!                      started as root, neochumbyd becomes the user that
 //!                      owns DIR, and runs each app's companions and server
-//!                      program under a uid of the app's own from this range
-//!                      (isolate.rs)
-//!   --unsandboxed      run them as neochumbyd's own user when there's no
-//!                      sandbox (neither --app-uids nor Landlock); never as
-//!                      root. Without it, serve refuses to start
+//!                      program under a uid of the app's own from this
+//!                      range (isolate.rs), in this system's sandbox too
+//!                      where it has one
+//!   --unsandboxed      run apps' server programs and companions without
+//!                      a sandbox, where there is none (neither this
+//!                      system's nor --app-uids; confine.rs); never as root
 
+mod admin;
 mod api;
 mod companion;
+mod confine;
 mod dev;
 mod isolate;
 mod mcp;
 mod nfs;
 mod png;
+mod server;
 mod state;
 mod sync;
 mod tree;
@@ -69,6 +87,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nfsserve::tcp::{NFSTcp, NFSTcpListener};
+use tokio::signal::unix::{SignalKind, signal};
 
 use neochumby_proto::Msg;
 use neochumby_proto::dev::{BUTTON_TAP_MS, MAX_HOLD_MS};
@@ -89,6 +108,7 @@ struct Args {
     operand: Option<String>,
     setting: Option<String>,
     follow: bool,
+    replace: bool,
     /// The operands after NAME, for `tap` and `button`.
     rest: Vec<String>,
     hold: Option<String>,
@@ -102,7 +122,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed]"
+        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed]"
     );
     std::process::exit(2)
 }
@@ -113,6 +133,7 @@ fn args() -> Args {
         operand: None,
         setting: None,
         follow: false,
+        replace: false,
         rest: Vec::new(),
         hold: None,
         state: "/var/lib/neochumbyd".into(),
@@ -130,14 +151,17 @@ fn args() -> Args {
             "--tree" => a.tree = Some(value().into()),
             "--nfs" => a.nfs = value(),
             "--api" => a.api = value(),
+            "-f" | "--follow" => a.follow = true,
+            "--replace" => a.replace = true,
+            "--hold" => a.hold = Some(value()),
             "--app-uids" => a.app_uids = Some(value()),
             "--unsandboxed" => a.unsandboxed = true,
-            "-f" | "--follow" => a.follow = true,
-            "--hold" => a.hold = Some(value()),
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
             _ if a.operand.is_none() => a.operand = Some(arg),
-            _ if matches!(a.command.as_str(), "set" | "shot") && a.setting.is_none() => a.setting = Some(arg),
+            _ if matches!(a.command.as_str(), "set" | "shot" | "allow" | "disallow") && a.setting.is_none() => {
+                a.setting = Some(arg)
+            }
             _ if matches!(a.command.as_str(), "tap" | "button") => a.rest.push(arg),
             _ => usage(),
         }
@@ -152,21 +176,18 @@ fn fail(e: impl std::fmt::Display) -> ! {
 
 fn main() {
     let a = args();
-    // Before anything is written or any thread started: as root, this
-    // becomes neochumbyd's own user.
-    // Landlock comes with #9, which passes what the kernel offers here.
-    let landlock: Option<&str> = None;
-    let sandbox = (a.command == "serve").then(|| {
-        isolate::Sandbox::start(&a.state, a.app_uids.as_deref(), a.unsandboxed, landlock).unwrap_or_else(|e| fail(e))
-    });
-    if (a.app_uids.is_some() || a.unsandboxed) && sandbox.is_none() {
+    // Before anything is written or any thread started: with --app-uids,
+    // neochumbyd started as root becomes its own user here.
+    let confine = (a.command == "serve")
+        .then(|| confine::Confine::choose(&a.state, a.app_uids.as_deref(), a.unsandboxed).unwrap_or_else(|e| fail(e)));
+    if (a.app_uids.is_some() || a.unsandboxed) && confine.is_none() {
         usage();
     }
     let state = State::open(a.state.clone()).unwrap_or_else(|e| fail(format!("{}: {e}", a.state.display())));
     let operand = || a.operand.clone().unwrap_or_else(|| usage());
     let tree_dir = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     match a.command.as_str() {
-        "serve" => serve(&a, state, sandbox.expect("made for serve")),
+        "serve" => serve(&a, state, confine.expect("chosen for serve")),
         "pairing" => {
             let (starts, players) = (tree::start_apps(&tree_dir), tree::players(&tree_dir));
             for (name, key) in state.pairs().unwrap_or_else(|e| fail(e)) {
@@ -188,7 +209,7 @@ fn main() {
             println!("{}", tree::player_hint(&players));
         }
         "approve" => {
-            let name = state.approve(&operand()).unwrap_or_else(|e| fail(e));
+            let name = state.approve(&operand(), a.replace).unwrap_or_else(|e| fail(e));
             println!("paired {name}");
         }
         "refuse" => state.refuse(&operand()).unwrap_or_else(|e| fail(e)),
@@ -260,6 +281,30 @@ fn main() {
             }
             println!("{name}: {}", a.rest.join(" "));
         }
+        "allow" | "disallow" if a.operand.is_none() => {
+            for (app, words) in state.allowances() {
+                println!("{app}  {}", words.join(" "));
+            }
+        }
+        "allow" | "disallow" => {
+            let what = a.setting.clone().unwrap_or_else(|| usage());
+            let on = a.command == "allow";
+            state.allow(&operand(), &what, on).unwrap_or_else(|e| fail(e));
+            let app = operand();
+            if on {
+                println!("{app} allowed {what}: its server program gets the admin socket as it next starts");
+            } else {
+                println!("{app} no longer allowed {what}: its admin socket stops answering");
+            }
+        }
+        "token" => {
+            let token = match a.operand.as_deref() {
+                None => state.owner_token(),
+                Some("new") => state.new_owner_token(),
+                Some(_) => usage(),
+            };
+            println!("{}", token.unwrap_or_else(|e| fail(e)));
+        }
         _ => usage(),
     }
 }
@@ -317,11 +362,14 @@ fn paired(state: &State, name: &str) -> String {
     name.to_string()
 }
 
-fn serve(a: &Args, state: State, sandbox: isolate::Sandbox) {
-    // Nothing it makes is for other users: companions may be other users.
+fn serve(a: &Args, state: State, confine: confine::Confine) {
+    // Nothing it makes is for other users: apps' programs may be other
+    // users (--app-uids).
     neochumby_sys::privilege::add_to_umask(0o007);
-    state.secure().unwrap_or_else(|e| fail(format!("{}: {e}", a.state.display())));
+    state.secure().unwrap_or_else(|e| fail(format!("closing the state directory to other users: {e}")));
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
+    // Requests a daemon before this one kept: no one waits on them now.
+    state.clear_pending().unwrap_or_else(|e| fail(format!("pending: {e}")));
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     let nfs_port = a.nfs.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or_else(|| usage());
     eprintln!(
@@ -332,6 +380,12 @@ fn serve(a: &Args, state: State, sandbox: isolate::Sandbox) {
         neochumby_proto::hex(&identity.public())
     );
 
+    // Made now, so the owner can read it before the web page asks.
+    state.owner_token().unwrap_or_else(|e| fail(format!("owner token: {e}")));
+    // An admin socket left by an earlier neochumbyd (they had paths then).
+    let _ = std::fs::remove_file(a.state.join("admin.sock"));
+    let server_state = state.clone();
+
     let listener = TcpListener::bind(&a.api).unwrap_or_else(|e| fail(format!("{}: {e}", a.api)));
     let api = Arc::new(api::Api {
         state,
@@ -339,16 +393,31 @@ fn serve(a: &Args, state: State, sandbox: isolate::Sandbox) {
         nfs_port,
         tree: tree.clone(),
         state_dir: a.state.clone(),
-        sandbox,
         hashes: neochumby_sync::serve::Hashes::default(),
         links: Default::default(),
+        confine: confine.clone(),
     });
     std::thread::spawn(move || api::serve(listener, api));
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));
-    rt.block_on(async {
-        let fs = nfs::TreeFs::new(tree);
-        let listener = NFSTcpListener::bind(&a.nfs, fs).await.unwrap_or_else(|e| fail(format!("{}: {e}", a.nfs)));
-        listener.handle_forever().await.unwrap_or_else(|e| fail(e));
+    let (servers, failed) = rt.block_on(async {
+        let mut term = signal(SignalKind::terminate()).unwrap_or_else(|e| fail(e));
+        let listener = NFSTcpListener::bind(&a.nfs, nfs::TreeFs::new(tree.clone()))
+            .await
+            .unwrap_or_else(|e| fail(format!("{}: {e}", a.nfs)));
+        // Last, so nothing above can fail with server programs running.
+        let servers = server::start(&tree, &a.state, &server_state, &confine);
+        let failed = tokio::select! {
+            r = listener.handle_forever() => r.err(),
+            _ = term.recv() => None,
+            _ = tokio::signal::ctrl_c() => None,
+        };
+        (servers, failed)
     });
+    // Stopping, on SIGTERM or SIGINT: the server programs first.
+    eprintln!("neochumbyd: stopping");
+    servers.stop();
+    if let Some(e) = failed {
+        fail(format!("{}: {e}", a.nfs));
+    }
 }

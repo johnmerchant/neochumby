@@ -1,0 +1,8 @@
+# dist/build's Linux: what Buildroot needs of its host
+# (https://buildroot.org/downloads/manual/manual.html#requirement).
+FROM docker.io/library/ubuntu:24.04
+RUN apt-get update -q \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends \
+      build-essential bc bzip2 ca-certificates cpio file git gzip patch perl \
+      python3 rsync unzip wget xz-utils libncurses-dev \
+ && rm -rf /var/lib/apt/lists/*

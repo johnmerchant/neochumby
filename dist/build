@@ -1,0 +1,322 @@
+#!/bin/sh
+# Builds the sideload userspace a Chumby runs on mainline Linux, with
+# Buildroot: a zImage with the initramfs built in, and the same initramfs
+# beside it for userhook2 to kexec, written to OUT:
+#
+#   OUT/sideload-zImage
+#   OUT/sideload-rootfs.cpio.gz
+#
+# The NAND drivers are modules in the initramfs; /init loads them only when
+# the kernel was booted without the sideloader's marker (i.e. when flashed).
+#
+# Buildroot needs Linux, so this runs it in a container (dist/Containerfile)
+# with Apple's container, docker or podman (NEOCHUMBY_DIST_RUNTIME picks).
+# Its work (the downloads, ccache, the build) stays in a volume,
+# neochumby-dist, on the container's own disk: the kernel's tree has files
+# whose names differ only by case, which macOS's disk can't hold. A second
+# run rebuilds only what changed; `$runtime volume rm neochumby-dist` starts
+# over.
+#
+#   dist/build OUT
+#   dist/build --linux-version      prints the Linux version the kernel pins
+#                                   (7.2.13, 7.3, 7.4-rc3), and nothing else
+#   dist/build --archive            mainline: makes the tag's archive, as the
+#                                   build does, and prints its SHA-256 line
+#                                   for linux.hash (dist/kernel-sync)
+#
+# NEOCHUMBY_DIST_KERNEL picks the kernel, one of three tracks:
+#
+#   5.9.16    (the default) the last release with the i.MX21's board files
+#             (configs/chumby_classic_defconfig, patches/linux/5.9.16)
+#   stable    kernel.org's newest stable release
+#             (configs/chumby_classic_stable_defconfig, kernel/stable/)
+#   mainline  kernel.org's mainline: Linus's newest tag, a release or an -rc
+#             (configs/chumby_classic_mainline_defconfig, kernel/mainline/)
+#
+# stable and mainline bring the i.MX21 back as a device-tree platform. Each
+# pins one version in its defconfig, with its hash (and for mainline, the
+# tag's commit) in kernel/TRACK/linux/linux.hash; CI's kernel-sync job
+# moves them as kernel.org does (dist/kernel-sync). Switching kernels, or
+# a track's version, rebuilds the kernel.
+set -eu
+VERSION=2026.02.3
+SHA256=5a59e7501b0b4ec52c41f4bfa79412320e0b37eae5f719605a258e8d0c6fc7fb
+
+# What each kernel is built from: defconfig, fragment (the kernel options
+# dist/build checks took), hashfile (the pin's hash, for a track) and
+# zimage (what Buildroot names the kernel it makes).
+track() {
+  hashfile=
+  case $1 in
+  5.9.16)
+    defconfig=chumby_classic_defconfig
+    fragment=board/chumby-classic/linux.fragment
+    zimage=zImage
+    ;;
+  stable | mainline)
+    defconfig=chumby_classic_$1_defconfig
+    fragment=kernel/$1/linux.fragment
+    hashfile=kernel/$1/linux/linux.hash
+    # The zImage with the Chumby's DTB appended (BR2_LINUX_KERNEL_APPENDED_ZIMAGE)
+    zimage=zImage.imx21-chumby-classic
+    ;;
+  *)
+    echo "dist/build: NEOCHUMBY_DIST_KERNEL is 5.9.16, stable or mainline, not $1" >&2
+    exit 2
+    ;;
+  esac
+}
+
+# The pin of kernel $2 in the tree at $1: linux (its version, as kernel.org
+# names it), source (the file Buildroot downloads and checks against the
+# hash file) and, for mainline, tag, url and commit. With $3 = nohash, the
+# hash file needn't have the source's hash yet (--archive makes it); with
+# version, nothing past the version is read.
+pin() {
+  dc=$1/dist/configs/$defconfig
+  get() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$dc"; }
+  tag='' url='' commit=''
+  case $2 in
+  5.9.16)
+    linux=$(get BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)
+    source=linux-$linux.tar.xz
+    ;;
+  stable)
+    linux=$(get BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)
+    source=linux-$linux.tar.xz
+    ;;
+  mainline)
+    tag=$(get BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION)
+    url=$(get BR2_LINUX_KERNEL_CUSTOM_REPO_URL)
+    linux=${tag#v}
+    # Buildroot's name for its archive of a git download: -git4 is its
+    # archive format's version (BR_FMT_VERSION_git), checked against
+    # Buildroot's own LINUX_SOURCE below.
+    source=linux-$tag-git4.tar.gz
+    ;;
+  esac
+  case $linux in
+  [0-9]*.[0-9]* | [0-9]*.[0-9]*-rc[0-9]*) ;;
+  *)
+    echo "dist/build: dist/configs/$defconfig pins no Linux version" >&2
+    exit 1
+    ;;
+  esac
+  [ -n "$hashfile" ] && [ "${3:-}" != version ] || return 0
+  h=$1/dist/$hashfile
+  if [ "$2" = mainline ]; then
+    commit=$(sed -n 's/^# commit \([0-9a-f]\{40\}\)$/\1/p' "$h")
+    [ -n "$commit" ] || {
+      echo "dist/build: dist/$hashfile pins no commit (# commit <sha1>) for $tag" >&2
+      exit 1
+    }
+  fi
+  [ "${3:-}" = nohash ] && return 0
+  grep -Eq "^sha256 +[0-9a-f]{64} +$source\$" "$h" || {
+    echo "dist/build: dist/$hashfile has no SHA-256 for $source, which dist/configs/$defconfig pins" >&2
+    exit 1
+  }
+}
+
+# mainline's download, in the container: the archive of the pinned tag
+# Buildroot's git download makes, made with Buildroot's own helper
+# (mk_tar_gz, as support/download/git calls it) from a shallow fetch of the
+# tag, not the whole history Buildroot would clone. The tag must be the
+# pinned commit; then, but with --archive, the archive must have the
+# pinned hash, before it goes where Buildroot finds it (which checks it
+# again). Already there: left alone, for Buildroot to check.
+archive() {
+  dl=$BR2_DL_DIR/linux
+  f=$dl/$source
+  [ "${1:-}" = print ] || [ ! -f "$f" ] || return 0
+  want=$(make -s -C "$br" O=$o printvars VARS=LINUX_SOURCE | sed 's/^[^=]*=//')
+  [ "$want" = "$source" ] || {
+    echo "dist/build: Buildroot downloads mainline as $want, not $source: update pin() and linux.hash" >&2
+    exit 1
+  }
+  tar=$(make -s -C "$br" O=$o printvars VARS=TAR | sed 's/^[^=]*=//')
+  g=/work/linux-$tag.git
+  rm -rf "$g"
+  git init -q "$g"
+  git -C "$g" fetch -q --depth 1 "$url" tag "$tag"
+  got=$(git -C "$g" rev-parse "$tag^{commit}")
+  [ "$got" = "$commit" ] || {
+    echo "dist/build: $url's $tag is $got, not the pinned $commit" >&2
+    exit 1
+  }
+  git -C "$g" -c advice.detachedHead=false checkout -q "$tag"
+  # support/download/git rewrites export-subst files; the kernel has none,
+  # and an archive made without that would differ from Buildroot's.
+  if git -C "$g" grep -q export-subst -- .gitattributes '*/.gitattributes'; then
+    echo "dist/build: $tag has export-subst files, which this archive doesn't expand" >&2
+    exit 1
+  fi
+  date=$(git -C "$g" log -1 --pretty=format:%ci)
+  mkdir -p "$dl" "$g.tmp"
+  # (mk_tar_gz leaves an empty temporary file where it runs.)
+  (cd "$g.tmp" && TAR=$tar bash -c '. "$1"; shift; mk_tar_gz "$@"' _ \
+    "$br/support/download/helpers" "$g" "linux-$tag" "$date" "$f.part" '.git/*')
+  rm -rf "$g" "$g.tmp"
+  sum=$(sha256sum "$f.part" | cut -d' ' -f1)
+  if [ "${1:-}" = print ]; then
+    mv "$f.part" "$f"
+    echo "sha256  $sum  $source"
+    return 0
+  fi
+  grep -Eq "^sha256 +$sum +$source\$" "$root/dist/$hashfile" || {
+    rm -f "$f.part"
+    echo "dist/build: $source of $tag ($commit) has SHA-256 $sum, not dist/$hashfile's" >&2
+    exit 1
+  }
+  mv "$f.part" "$f"
+}
+
+# Outside any container: the pinned version.
+if [ "${1:-}" = --linux-version ]; then
+  kernel=${NEOCHUMBY_DIST_KERNEL:-5.9.16}
+  track "$kernel"
+  pin "$(cd "$(dirname "$0")" && git rev-parse --show-toplevel)" "$kernel" version
+  echo "$linux"
+  exit 0
+fi
+
+# In the container: Buildroot itself, then the checks and the copy out.
+if [ "${1:-}" = --inside ]; then
+  root=$2
+  out=$3
+  br=/work/buildroot-$VERSION
+  o=/work/output
+  kernel=${4:-5.9.16}
+  mode=${5:-build}
+  track "$kernel"
+  if [ "$mode" = archive ]; then
+    [ "$kernel" = mainline ] || {
+      echo "dist/build: --archive is for mainline, whose download is the tag's archive" >&2
+      exit 2
+    }
+    pin "$root" "$kernel" nohash
+  else
+    pin "$root" "$kernel"
+  fi
+  # Downloads and ccache's objects apart from the output, so CI can keep
+  # them when the output is stale.
+  export BR2_DL_DIR=/work/dl BR2_CCACHE_DIR=/work/ccache
+  if [ ! -d "$br" ]; then
+    wget -nv -O /work/br.tar.xz "https://buildroot.org/downloads/buildroot-$VERSION.tar.xz"
+    echo "$SHA256  /work/br.tar.xz" | sha256sum -c -
+    tar xJf /work/br.tar.xz -C /work
+    rm /work/br.tar.xz
+  fi
+  if [ "$mode" = archive ]; then
+    # Its own output: the build's is left as it is.
+    o=/work/output-archive
+    make -s -C "$br" O=$o BR2_EXTERNAL="$root/dist" "$defconfig" >/dev/null
+    archive print
+    rm -rf $o
+    exit 0
+  fi
+  # Switching kernels, or a track's version: Buildroot keeps the other
+  # kernel's tree and its modules in target/, which would end up in the
+  # initramfs.
+  if [ -d $o/build ] && [ "$(cat $o/.neochumby-kernel 2>/dev/null)" != "$kernel $linux" ]; then
+    rm -rf $o/build/linux-[0-9]* $o/build/linux-v[0-9]* $o/target/lib/modules
+  fi
+  make -C "$br" O=$o BR2_EXTERNAL="$root/dist" "$defconfig"
+  echo "$kernel $linux" >$o/.neochumby-kernel
+  # Bootlin's toolchain where it runs (x86_64, so CI), over the defconfig's.
+  # Kconfig would drop it silently anywhere else, so check it took.
+  if [ "$(uname -m)" = x86_64 ]; then
+    cat "$root/dist/board/chumby-classic/bootlin.config" >>$o/.config
+    make -C "$br" O=$o olddefconfig
+    grep -qx BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_ARMV5_EABI_MUSL_STABLE=y $o/.config || {
+      echo "dist/build: Bootlin's toolchain didn't take" >&2
+      exit 1
+    }
+  fi
+  [ "$kernel" != mainline ] || archive
+  # The same for ncinit, which needs Rust, which needs a C++ toolchain.
+  grep -qx BR2_PACKAGE_NEOCHUMBY_INIT=y $o/.config || {
+    echo "dist/build: ncinit (BR2_PACKAGE_NEOCHUMBY_INIT) didn't take" >&2
+    exit 1
+  }
+  # ncinit is built from this checkout, which Buildroot can't watch for
+  # changes: build it afresh every run (cargo's work is small).
+  make -C "$br" O=$o neochumby-init-dirclean
+  make -C "$br" O=$o
+  # Kconfig drops an option whose dependencies aren't met, silently: every
+  # line of the fragment has to be in the kernel's .config as written.
+  # (The kernel builds in linux-<version>; Buildroot knows where.)
+  config=$(make -s -C "$br" O=$o printvars VARS=LINUX_DIR | sed 's/^[^=]*=//')/.config
+  missing=0
+  grep -E '^(CONFIG_|# CONFIG_)' "$root/dist/$fragment" |
+    while IFS= read -r line; do
+      grep -qxF "$line" "$config" || {
+        echo "dist/build: not in the kernel's .config: $line" >&2
+        exit 1
+      }
+    done || missing=1
+  test -x $o/target/init || {
+    echo "dist/build: /init missing from the sideload rootfs" >&2
+    exit 1
+  }
+  find $o/target/lib/modules -name mxc_nand.ko | grep -q . || {
+    echo "dist/build: mxc_nand.ko missing from the sideload initramfs" >&2
+    exit 1
+  }
+  mkdir -p "$out"
+  cp "$o/images/$zimage" "$out/sideload-zImage"
+  cp $o/images/rootfs.cpio.gz "$out/sideload-rootfs.cpio.gz"
+  [ "$missing" = 0 ] || exit 1
+  echo "sideload: $out/sideload-zImage (initramfs built in)"
+  echo "sideload: $out/sideload-rootfs.cpio.gz (external initramfs)"
+  exit 0
+fi
+
+root=$(cd "$(dirname "$0")" && git rev-parse --show-toplevel)
+mode=build
+if [ "${1:-}" = --archive ]; then
+  # Nothing written outside the work but the archive's line, on stdout.
+  mode=archive
+  out=$root
+else
+  out=${1:?usage: dist/build OUT | --linux-version | --archive}
+  mkdir -p "$out"
+  out=$(cd "$out" && pwd)
+fi
+runtime=${NEOCHUMBY_DIST_RUNTIME:-}
+if [ -z "$runtime" ]; then
+  for r in container docker podman; do
+    command -v "$r" >/dev/null && {
+      runtime=$r
+      break
+    }
+  done
+fi
+[ -n "$runtime" ] || {
+  echo "dist/build: needs Apple's container, docker or podman" >&2
+  exit 2
+}
+"$runtime" build -t neochumby-dist -f "$root/dist/Containerfile" "$root/dist" >&2
+# NEOCHUMBY_DIST_WORK=DIR keeps Buildroot's downloads and output in DIR
+# instead of a named volume; CI caches DIR.  A named volume is the default
+# because macOS's disk can't hold the kernel tree's case-different names.
+work=${NEOCHUMBY_DIST_WORK:-}
+if [ -n "$work" ]; then
+  mkdir -p "$work"
+  work=$(cd "$work" && pwd)
+  work_mount="-v $work:/work"
+else
+  "$runtime" volume inspect neochumby-dist >/dev/null 2>&1 ||
+    "$runtime" volume create neochumby-dist >/dev/null
+  work_mount="-v neochumby-dist:/work"
+fi
+# Apple's container gives a container 1 GB and 4 CPUs unless told.
+size=
+[ "$runtime" = container ] && size="-c 8 -m 8G"
+# A nameserver for the build's downloads, if the runtime's own doesn't
+# answer (seen with Apple's container): NEOCHUMBY_DIST_DNS=<ip>.
+dns=
+[ -n "${NEOCHUMBY_DIST_DNS:-}" ] && dns="--dns $NEOCHUMBY_DIST_DNS"
+# shellcheck disable=SC2086
+exec "$runtime" run --rm $size $dns $work_mount -v "$root:$root" -v "$out:$out" \
+  neochumby-dist sh "$root/dist/build" --inside "$root" "$out" "${NEOCHUMBY_DIST_KERNEL:-5.9.16}" "$mode"
