@@ -47,6 +47,7 @@ mod player;
 mod run;
 mod services;
 mod start;
+mod storage;
 
 use std::fs::{File, OpenOptions};
 use std::io::Read;
@@ -54,7 +55,7 @@ use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -224,6 +225,28 @@ impl Volumes {
     }
 }
 
+/// The backlight: 0 (off) to 65535 (full). Only root may write it.
+const BRIGHTNESS: &str = "/proc/sys/sense1/brightness";
+/// The Chumby's own stream player, which hands a URL to its daemon
+/// (btplayd), as the stock software and classic's wxshow run it.
+const BTPLAY: &str = "/usr/bin/btplay";
+
+/// Runs the stock player with `args`: no shell, so a URL is one argument
+/// and nothing else. It may not return soon, so a thread waits for it: the
+/// loop never does. Its daemon outlives it, by design; it stays out of the
+/// apps' process groups and holds none of the session's descriptors
+/// (they're close-on-exec).
+fn btplay(args: Vec<String>) {
+    let mut cmd = Command::new(BTPLAY);
+    cmd.args(&args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.process_group(0);
+    std::thread::spawn(move || match cmd.status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!("neochumby: {BTPLAY} {}: {s}", args.join(" ")),
+        Err(e) => eprintln!("neochumby: {BTPLAY}: {e}"),
+    });
+}
+
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
@@ -237,6 +260,8 @@ struct Chumby {
     restart: Option<Arc<AtomicBool>>,
     /// The top button as neochumbyd holds it, through the developer link.
     remote: Option<Arc<devlink::Remote>>,
+    /// The backlight as the Chumby booted with it.
+    boot_brightness: Option<u32>,
 }
 
 impl run::Device for Chumby {
@@ -305,6 +330,25 @@ impl run::Device for Chumby {
     fn restart(&mut self) -> bool {
         self.restart.as_ref().is_some_and(|r| r.swap(false, Ordering::SeqCst))
     }
+
+    /// One write to /proc, so the loop does it.
+    fn brightness(&mut self, level: Option<u32>) {
+        let Some(v) = level.or(self.boot_brightness) else { return };
+        if let Err(e) = std::fs::write(BRIGHTNESS, format!("{v}\n")) {
+            eprintln!("neochumby: {BRIGHTNESS}: {e}");
+        }
+    }
+
+    fn play(&mut self, url: Option<&str>) {
+        match url {
+            Some(u) => btplay(vec!["--start-daemon".into(), u.into()]),
+            None => btplay(vec!["--passthru=stop".into()]),
+        }
+    }
+
+    fn speaker_group(&self) -> Option<u32> {
+        audio::holder().and_then(neochumby_sys::process::group_of)
+    }
 }
 
 fn session() {
@@ -351,6 +395,7 @@ fn session() {
                 button_tried: Some(Instant::now()),
                 restart: link.as_ref().map(devlink::Link::restart_flag),
                 remote: link.as_ref().map(devlink::Link::remote),
+                boot_brightness: std::fs::read_to_string(BRIGHTNESS).ok().and_then(|s| s.trim().parse().ok()),
             };
             // On either ending, the loop has closed the button, stopped the
             // services (neochumby-sync with them) and put the speaker back.
