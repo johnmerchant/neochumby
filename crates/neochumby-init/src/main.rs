@@ -14,6 +14,7 @@
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
 mod modules;
+mod status;
 mod uevent;
 
 use std::collections::HashSet;
@@ -29,6 +30,7 @@ use std::time::{Duration, Instant};
 use neochumby_sys::boot::{self, MountFlags};
 
 use crate::modules::Db;
+use crate::status::Status;
 
 const PATH: &str = "/bin:/sbin:/usr/bin:/usr/sbin";
 /// How long the stick gets to show up: several seconds, more when a
@@ -78,9 +80,12 @@ impl Init {
 
         let (db, loaded) = module_db();
         let events = match boot::uevent_socket() {
-            Ok(s) => Some(s),
+            Ok(s) => {
+                screen_step("Listening for devices", Status::Ok);
+                Some(s)
+            }
             Err(e) => {
-                log(&format!("no device events: {e}"));
+                step("Listening for devices", Status::Failed, &format!("no device events: {e}"));
                 None
             }
         };
@@ -97,10 +102,10 @@ impl Init {
         // and one on the screen (a USB keyboard types into it), unless a
         // hook runs: the screen is then its session's.
         if init.hook.is_none() && is_char_device("/dev/tty1") {
-            log("starting shells");
+            step("Starting shells", Status::Ok, "starting shells");
             init.shells.push(Shell::new("/dev/tty1"));
         } else {
-            log("starting shell");
+            step("Starting a shell on the console", Status::Ok, "starting shell");
         }
         init.shells.push(Shell::new("/dev/console"));
         init
@@ -184,26 +189,29 @@ impl Init {
             self.service(TICK_MS);
         }
         if !is_block_device("/dev/sda1") {
+            screen_step("Looking for a neochumby stick", Status::Skipped);
             return;
         }
         let _ = fs::create_dir_all("/mnt/usb");
         if let Err(e) = boot::mount("/dev/sda1", Path::new("/mnt/usb"), "vfat", MountFlags::default()) {
-            log(&format!("/dev/sda1: {e}"));
+            step("Mounting the stick on /mnt/usb", Status::Failed, &format!("/dev/sda1: {e}"));
             return;
         }
-        log("stick mounted on /mnt/usb");
+        step("Mounting the stick on /mnt/usb", Status::Ok, "stick mounted on /mnt/usb");
         if !is_executable("/mnt/usb/userhook2") {
             return;
         }
-        log("running /mnt/usb/userhook2");
         let mut hook = Command::new("/mnt/usb/userhook2");
         hook.env("PATH", PATH).stdin(Stdio::null());
         if let Some((out, err)) = terminal("/dev/console").and_then(|f| Some((f.try_clone().ok()?, f))) {
             hook.stdout(out).stderr(err);
         }
         match hook.spawn() {
-            Ok(child) => self.hook = Some(child.id()),
-            Err(e) => log(&format!("userhook2: {e}")),
+            Ok(child) => {
+                step("Running the stick's userhook2", Status::Ok, "running /mnt/usb/userhook2");
+                self.hook = Some(child.id());
+            }
+            Err(e) => step("Running the stick's userhook2", Status::Failed, &format!("userhook2: {e}")),
         }
     }
 
@@ -250,19 +258,20 @@ impl Init {
         for m in self.db.load_order(name, &self.loaded) {
             let Some(path) = self.db.module(&m).map(|m| m.path.clone()) else { continue };
             if self.sideloaded && path.starts_with(NAND_DRIVERS) {
-                log(&format!("{m} stays unloaded: sideloaded"));
+                step(&format!("Loading {m}"), Status::Skipped, &format!("{m} stays unloaded: sideloaded"));
                 self.loaded.insert(m);
                 continue;
             }
             let result = File::open(Path::new(&modules_dir()).join(&path)).and_then(|f| boot::load_module(&f));
+            let what = format!("Loading {m}");
             match result {
                 Ok(()) => match why {
-                    Some(alias) => log(&format!("loaded {m} for {alias}")),
-                    None => log(&format!("loaded {m}")),
+                    Some(alias) => step(&what, Status::Ok, &format!("loaded {m} for {alias}")),
+                    None => step(&what, Status::Ok, &format!("loaded {m}")),
                 },
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 // Not tried again, for every device it would drive.
-                Err(e) => log(&format!("{m}: {e}")),
+                Err(e) => step(&what, Status::Failed, &format!("{m}: {e}")),
             }
             self.loaded.insert(m);
         }
@@ -288,13 +297,18 @@ impl Shell {
         boot::new_session(&mut sh);
         match sh.spawn() {
             Ok(child) => self.pid = Some(child.id()),
-            Err(e) => log(&format!("{}: /bin/sh: {e}", self.tty)),
+            Err(e) => step(
+                &format!("Starting a shell on {}", self.tty),
+                Status::Failed,
+                &format!("{}: /bin/sh: {e}", self.tty),
+            ),
         }
     }
 }
 
 fn mount_kernel_fs() {
     let hardened = MountFlags { nosuid: true, nodev: true, noexec: true };
+    let mut ok = true;
     for (dir, fstype, flags) in [
         ("/proc", "proc", hardened),
         ("/sys", "sysfs", hardened),
@@ -304,10 +318,13 @@ fn mount_kernel_fs() {
         if let Err(e) = boot::mount(fstype, Path::new(dir), fstype, flags) {
             // Mounted already.
             if e.kind() != io::ErrorKind::ResourceBusy {
-                log(&format!("{dir}: {e}"));
+                kmsg(&format!("{dir}: {e}"));
+                ok = false;
             }
         }
     }
+    // Only now: the screen's console is in /dev, devtmpfs.
+    screen_step("Mounting /proc, /sys and /dev", if ok { Status::Ok } else { Status::Failed });
     for dir in ["/tmp", "/mnt"] {
         let _ = fs::create_dir_all(dir);
     }
@@ -326,25 +343,47 @@ fn module_db() -> (Db, HashSet<String>) {
     let db = match (dep, alias) {
         (Ok(dep), Ok(alias)) => Db::parse(&dep, &alias),
         (Err(e), _) | (_, Err(e)) => {
-            log(&format!("{dir}: no module lists: {e}"));
+            step("Reading the module lists", Status::Failed, &format!("{dir}: no module lists: {e}"));
             Db::default()
         }
     };
     (db, modules::loaded(&fs::read_to_string("/proc/modules").unwrap_or_default()))
 }
 
-/// Messages go to the kernel's log, which is how init normally speaks,
-/// and to the screen's console, tty1, so that they show on the Chumby
-/// itself.
+/// A message to the kernel's log, which is how init normally speaks (and
+/// which the serial console shows), and to the screen, so that it shows on
+/// the Chumby itself.
 fn log(msg: &str) {
-    let line = format!("init: {msg}\n");
+    kmsg(msg);
+    screen(&format!("{msg}\n"));
+}
+
+/// A step that ended `status`: `msg` in the kernel's log as ever, and on
+/// the screen `what` with its result, as Red Hat's init scripts show it.
+fn step(what: &str, status: Status, msg: &str) {
+    kmsg(msg);
+    screen_step(what, status);
+}
+
+/// A step on the screen only.
+fn screen_step(what: &str, status: Status) {
+    let cols =
+        OpenOptions::new().read(true).open("/dev/tty1").ok().and_then(|t| boot::columns(&t)).map_or(64, usize::from);
+    screen(&status::line(what, status, cols));
+}
+
+fn kmsg(msg: &str) {
     if let Ok(mut k) = OpenOptions::new().write(true).open("/dev/kmsg") {
-        let _ = k.write_all(line.as_bytes());
+        let _ = k.write_all(format!("init: {msg}\n").as_bytes());
     }
+}
+
+/// The screen's console, tty1, if there is one.
+fn screen(text: &str) {
     if is_char_device("/dev/tty1")
         && let Ok(mut t) = OpenOptions::new().write(true).open("/dev/tty1")
     {
-        let _ = t.write_all(line.as_bytes());
+        let _ = t.write_all(text.as_bytes());
     }
 }
 
@@ -352,7 +391,7 @@ fn terminal(path: &str) -> Option<File> {
     match OpenOptions::new().read(true).write(true).open(path) {
         Ok(f) => Some(f),
         Err(e) => {
-            log(&format!("{path}: {e}"));
+            kmsg(&format!("{path}: {e}"));
             None
         }
     }
