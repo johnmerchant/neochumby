@@ -33,10 +33,19 @@
   setgid bits, and the Chumby mounts it `nosuid,nodev`. Anyone who can reach a neochumbyd's NFS port can read the
   tree (our binaries and your game data). Limit it to the network your
   Chumbys are on.
-- **A Chumby and its neochumbyd talk TLS 1.3** (or Noise, if built that
-  way), and each side checks the other's pinned key on every connection.
-  Pairing pins the keys after someone confirms that the 6-digit code
-  matches on both screens.
+- **A Chumby and its neochumbyd talk TLS 1.3,** and each side checks the
+  other's pinned key on every connection before it carries anything else.
+  Pairing pins the keys after someone types the code from the Chumby's
+  screen into `neochumbyd approve`. The code is 128 bits from the
+  connection and both keys, too long for anyone in the middle to make both
+  ends show alike. Until a connection is known to be a paired Chumby's,
+  neochumbyd holds it to a 30-second deadline and caps how many it takes
+  (overall, and from one address), and at most eight pairing requests wait
+  at once.
+- **A Chumby pairing trusts whoever answers.** It can't tell neochumbyd's
+  approval from an impostor's, so someone in the middle while it pairs
+  can have it pin their key, even though neochumbyd never approves them.
+  Pair on a network you trust.
 - **Apps' programs on the server are sandboxed.** Companions (one per
   Chumby) and server programs (one per server, `server=`) run as
   neochumbyd's user, but confined. Under neochumbyd's state directory each
@@ -90,8 +99,8 @@
 - **Every change through the admin socket needs the owner's token**
   (`neochumbyd token`): approving, refusing and forgetting pairings, and
   settings (which include remote input, `dev=on`, and where a Chumby's
-  apps come from). Pairing is only as safe as the person who compares the
-  codes, so a web page must not approve for anyone who can merely reach
+  apps come from). Pairing is only as safe as the person who types the
+  code, so a web page must not approve for anyone who can merely reach
   it: it asks for the token. A wrong token is answered after a second. If
   the token may have leaked, `neochumbyd token new` replaces it at once.
 - **Who can reach the state directory can do everything neochumbyd

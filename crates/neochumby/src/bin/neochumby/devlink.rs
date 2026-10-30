@@ -237,10 +237,7 @@ fn connect(p: &Paired, me: &Identity, server_key: &PublicKey) -> io::Result<(Ses
     neochumby_sys::net::keepalive(&tcp, 30, 10, 3);
     tcp.set_read_timeout(Some(WRITE))?;
     tcp.set_write_timeout(Some(WRITE))?;
-    let mut s = Session::connect(tcp, me)?;
-    if s.peer() != server_key {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"));
-    }
+    let mut s = Session::connect(tcp, me, server_key)?;
     // The settings: the session has them already (settings.rs), but the
     // link goes by these, and those sent after, for input.
     let on = version::hello(&mut s, conf::name(), WRITE)?.dev;

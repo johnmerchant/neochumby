@@ -1,0 +1,436 @@
+#!/usr/bin/env python3
+"""kernel-sync: keeps the dist image's stable and mainline kernel tracks
+pinned to what kernel.org releases (https://www.kernel.org/releases.json).
+
+    dist/kernel-sync check            each track: its pin, kernel.org's, and
+                                      whether a bump is due (exit 0)
+    dist/kernel-sync bump TRACK       moves TRACK's pin in this checkout to
+                                      kernel.org's, verified (below)
+    dist/kernel-sync pr [--dry-run]   for each track that's due, a bump on
+                                      the branch kernel-sync/TRACK and a pull
+                                      request of it (CI's kernel-sync job);
+                                      --dry-run says what it would do
+
+The tracks (dist/build):
+  stable    the newest of releases.json's entries with moniker "stable"
+  mainline  its entry with moniker "mainline": a release (7.3) or an -rc
+            (7.4-rc3)
+
+A pin is the version in the track's defconfig and its hash in
+dist/kernel/TRACK/linux/linux.hash. Nothing kernel.org says is taken on
+trust; a bump is written only once it's verified:
+
+  stable    kernel.org's sha256sums.asc for the series, its signature
+            checked against the Kernel.org checksum autosigner's key (by
+            its fingerprint, pinned below); then the tarball itself is
+            downloaded and must have that SHA-256.
+  mainline  the tag, fetched (shallow) from Linus's repository, its
+            signature checked against Linus Torvalds's key (by its
+            fingerprint, pinned below); its commit is pinned, and the
+            SHA-256 is of the archive dist/build --archive makes of it (in
+            dist/build's container, as the build does: the build checks
+            both again).
+
+The keys come from kernel.org's pgpkeys repository; only the fingerprints
+here are trusted. Needs git, gpg and curl; mainline's archive needs what
+dist/build does (a container runtime), and pr needs gh, logged in.
+
+`pr` keeps one pull request a track: kernel-sync/TRACK, opened from main.
+When kernel.org moves again before it's merged, the same branch and pull
+request are updated: replaced by a fresh bump on main when it has only
+this job's commits, or given one more commit on top when someone has
+pushed to it (a port of the patches, say), so that nothing of theirs is
+lost. It never merges, and never approves.
+"""
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import urllib.request
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+RELEASES = "https://www.kernel.org/releases.json"
+CDN = "https://cdn.kernel.org/pub/linux/kernel"
+MAINLINE_REPO = "https://git.kernel.org/pub/scm/linux/kernel/git/torvalds/linux.git"
+KEYS = "https://git.kernel.org/pub/scm/docs/kernel/pgpkeys.git/plain/keys"
+# Primary key fingerprints: what a signature must be made by.
+AUTOSIGNER = "B8868C80BA62A1FFFAF5FDA9632D3A06589DA6B1"  # Kernel.org checksum autosigner
+TORVALDS = "ABAF11C65A2970B130ABE3C479BE3E4300411886"  # Linus Torvalds
+TRACKS = ("stable", "mainline")
+BOT_NAME = "github-actions[bot]"
+BOT_EMAIL = "41898282+github-actions[bot]@users.noreply.github.com"
+VERSION = re.compile(r"[0-9]+\.[0-9]+(\.[0-9]+)?(-rc[0-9]+)?")
+
+
+class Error(Exception):
+    pass
+
+
+def say(msg):
+    print(f"kernel-sync: {msg}", file=sys.stderr, flush=True)
+
+
+def run(*argv, cwd=None, env=None, capture=True, check=True):
+    r = subprocess.run(argv, cwd=cwd or ROOT, env=env, text=True,
+                       stdout=subprocess.PIPE if capture else None)
+    if check and r.returncode != 0:
+        raise Error(f"{' '.join(argv)} exited {r.returncode}")
+    return r.stdout.strip() if capture else ""
+
+
+def fetch(url, path=None):
+    """URL's bytes (or, with PATH, written there), with a few retries."""
+    last = None
+    for _ in range(3):
+        try:
+            # kernel.org refuses urllib's own User-Agent.
+            req = urllib.request.Request(url, headers={"User-Agent": "neochumby-kernel-sync"})
+            with urllib.request.urlopen(req, timeout=120) as r:
+                if path is None:
+                    return r.read()
+                with open(path, "wb") as f:
+                    while True:
+                        b = r.read(1 << 20)
+                        if not b:
+                            break
+                        f.write(b)
+                return None
+        except OSError as e:
+            last = e
+    raise Error(f"can't fetch {url}: {last}")
+
+
+def key(v):
+    """A version's sort key: 7.2.13 < 7.3-rc1 < 7.3 < 7.3.1."""
+    m = re.fullmatch(r"([0-9]+)\.([0-9]+)(?:\.([0-9]+))?(?:-rc([0-9]+))?", v)
+    if not m:
+        raise Error(f"not a kernel version: {v}")
+    rc = int(m[4]) if m[4] else 1 << 30
+    return (int(m[1]), int(m[2]), -1 if m[4] else int(m[3] or 0), rc)
+
+
+# The pins, as files in a tree.
+
+def defconfig(track):
+    return os.path.join(ROOT, "dist", "configs", f"chumby_classic_{track}_defconfig")
+
+
+def hashfile(track):
+    return os.path.join(ROOT, "dist", "kernel", track, "linux", "linux.hash")
+
+
+PIN_VAR = {"stable": "BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE",
+           "mainline": "BR2_LINUX_KERNEL_CUSTOM_REPO_VERSION"}
+
+
+def pinned_in(text, track):
+    m = re.search(rf'^{PIN_VAR[track]}="([^"]*)"$', text, re.M)
+    if not m:
+        raise Error(f"no {PIN_VAR[track]} in {track}'s defconfig")
+    v = m[1].removeprefix("v") if track == "mainline" else m[1]
+    if not VERSION.fullmatch(v):
+        raise Error(f"{track}'s defconfig pins {m[1]!r}, not a kernel version")
+    return v
+
+
+def pinned(track):
+    with open(defconfig(track)) as f:
+        return pinned_in(f.read(), track)
+
+
+def upstream(releases):
+    """{track: version} from releases.json."""
+    rel = releases["releases"]
+    stable = [r["version"] for r in rel if r.get("moniker") == "stable"]
+    mainline = [r["version"] for r in rel if r.get("moniker") == "mainline"]
+    if not stable or len(mainline) != 1:
+        raise Error("releases.json has no stable or no single mainline entry")
+    out = {"stable": max(stable, key=key), "mainline": mainline[0]}
+    for t, v in out.items():
+        if not VERSION.fullmatch(v):
+            raise Error(f"releases.json's {t} is {v!r}, not a kernel version")
+    return out
+
+
+def load_releases(src):
+    if src and not src.startswith(("http://", "https://")):
+        with open(src) as f:
+            return json.load(f)
+    return json.loads(fetch(src or RELEASES))
+
+
+# Verification.
+
+def gpg_home(work, *fingerprints):
+    """A GNUPGHOME in WORK with kernel.org's copy of each key."""
+    home = os.path.join(work, "gnupg")
+    os.makedirs(home, mode=0o700, exist_ok=True)
+    for fpr in fingerprints:
+        path = os.path.join(work, f"{fpr}.asc")
+        fetch(f"{KEYS}/{fpr[-16:]}.asc", path)
+        run("gpg", "--batch", "--quiet", "--import", path,
+            env={**os.environ, "GNUPGHOME": home})
+    return home
+
+
+def signed_by(status, fpr):
+    """Whether gpg's --status-fd output has a good signature by FPR's key
+    (the primary key's fingerprint, the last field of VALIDSIG)."""
+    for line in status.splitlines():
+        f = line.split()
+        if len(f) >= 3 and f[:2] == ["[GNUPG:]", "VALIDSIG"] and f[-1] == fpr:
+            return True
+    return False
+
+
+def verify_stable(version, work):
+    """The SHA-256 of linux-VERSION.tar.xz: from the signed sha256sums.asc,
+    and the tarball's own."""
+    series = f"v{version.split('.')[0]}.x"
+    name = f"linux-{version}.tar.xz"
+    home = gpg_home(work, AUTOSIGNER)
+    sums = os.path.join(work, "sha256sums.asc")
+    fetch(f"{CDN}/{series}/sha256sums.asc", sums)
+    out = os.path.join(work, "sha256sums")
+    r = subprocess.run(["gpg", "--batch", "--status-fd", "1", "--output", out, "--decrypt", sums],
+                       env={**os.environ, "GNUPGHOME": home}, text=True,
+                       stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+    if r.returncode != 0 or not signed_by(r.stdout, AUTOSIGNER):
+        raise Error(f"{series}/sha256sums.asc isn't signed by the autosigner, {AUTOSIGNER}")
+    # Only what the signature covers: gpg's output, not the file.
+    want = [l.split()[0] for l in open(out) if l.split()[1:] == [name]]
+    if len(want) != 1 or not re.fullmatch(r"[0-9a-f]{64}", want[0]):
+        raise Error(f"{series}/sha256sums.asc has no single SHA-256 for {name}")
+    tarball = os.path.join(work, name)
+    say(f"downloading {name}")
+    fetch(f"{CDN}/{series}/{name}", tarball)
+    h = hashlib.sha256()
+    with open(tarball, "rb") as f:
+        for b in iter(lambda: f.read(1 << 20), b""):
+            h.update(b)
+    got = h.hexdigest()
+    os.unlink(tarball)
+    if got != want[0]:
+        raise Error(f"{name} has SHA-256 {got}, not sha256sums.asc's {want[0]}")
+    say(f"{name}: {got}, as kernel.org's signed sha256sums.asc says")
+    return got
+
+
+def verify_mainline(version, work):
+    """The commit of tag vVERSION, whose signature is Linus's."""
+    tag = f"v{version}"
+    home = gpg_home(work, TORVALDS)
+    g = os.path.join(work, "linux.git")
+    run("git", "init", "-q", "--bare", g)
+    say(f"fetching {tag}")
+    run("git", "-C", g, "fetch", "-q", "--depth", "1", MAINLINE_REPO, "tag", tag)
+    r = subprocess.run(["git", "-C", g, "verify-tag", "--raw", tag],
+                       env={**os.environ, "GNUPGHOME": home}, text=True,
+                       stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+    if r.returncode != 0 or not signed_by(r.stderr, TORVALDS):
+        raise Error(f"{tag} isn't signed by Linus Torvalds, {TORVALDS}")
+    commit = run("git", "-C", g, "rev-parse", f"{tag}^{{commit}}")
+    say(f"{tag}: commit {commit}, signed by Linus Torvalds")
+    return commit
+
+
+# Bumps.
+
+def bump(track, version):
+    """Moves TRACK's pin in this checkout to VERSION, verified. Returns the
+    lines that say what was checked, for the commit and the pull request."""
+    old = pinned(track)
+    with tempfile.TemporaryDirectory(prefix="kernel-sync.") as work:
+        with open(defconfig(track)) as f:
+            dc = f.read()
+        value = f"v{version}" if track == "mainline" else version
+        dc = re.sub(rf'^{PIN_VAR[track]}="[^"]*"$', f'{PIN_VAR[track]}="{value}"', dc, flags=re.M)
+        if track == "stable":
+            sha = verify_stable(version, work)
+            series = f"v{version.split('.')[0]}.x"
+            hashes = (f"# From {CDN}/{series}/sha256sums.asc\n"
+                      f"sha256  {sha}  linux-{version}.tar.xz\n")
+            proof = [f"`linux-{version}.tar.xz`: SHA-256 `{sha}`, as kernel.org's "
+                     f"`{series}/sha256sums.asc` says, signed by the Kernel.org checksum "
+                     f"autosigner (`{AUTOSIGNER}`), and as the tarball downloaded has."]
+        else:
+            commit = verify_mainline(version, work)
+            head = (f"# The tag configs/chumby_classic_mainline_defconfig pins, v{version} (signed by\n"
+                    f"# Linus Torvalds), its commit, and the SHA-256 of Buildroot's archive of it\n"
+                    f"# (dist/build --archive)\n"
+                    f"# commit {commit}\n")
+            with open(defconfig(track), "w") as f:
+                f.write(dc)
+            with open(hashfile(track), "w") as f:
+                f.write(head)
+            say("making the tag's archive (dist/build --archive)")
+            out = run(os.path.join(ROOT, "dist", "build"), "--archive",
+                      env={**os.environ, "NEOCHUMBY_DIST_KERNEL": "mainline"})
+            line = [l for l in out.splitlines() if l.startswith("sha256 ")]
+            m = re.fullmatch(rf"sha256  ([0-9a-f]{{64}})  linux-v{re.escape(version)}-git4\.tar\.gz",
+                             line[-1] if line else "")
+            if not m:
+                raise Error(f"dist/build --archive printed no SHA-256 for v{version}")
+            hashes = head + line[-1] + "\n"
+            proof = [f"`v{version}`: commit `{commit}`, the tag signed by Linus Torvalds "
+                     f"(`{TORVALDS}`).",
+                     f"`linux-v{version}-git4.tar.gz`: SHA-256 `{m[1]}`, Buildroot's archive "
+                     f"of the tag (`dist/build --archive`)."]
+        with open(defconfig(track), "w") as f:
+            f.write(dc)
+        with open(hashfile(track), "w") as f:
+            f.write(hashes)
+    say(f"{track}: {old} -> {version}")
+    return proof
+
+
+# Pull requests.
+
+def git(*args, check=True):
+    return run("git", *args, check=check)
+
+
+def gh(*args, dry=False):
+    if dry:
+        print("would run: gh " + " ".join(a if re.fullmatch(r"[\w./:=@-]+", a) else repr(a) for a in args))
+        return ""
+    return run("gh", *args)
+
+
+def pr(releases, dry):
+    up = upstream(releases)
+    git("fetch", "-q", "origin", "main")
+    main = git("rev-parse", "origin/main")
+    failed = []
+    for track in TRACKS:
+        try:
+            sync_track(track, up[track], main, dry)
+        except Error as e:
+            # The other track still goes ahead; the job fails at the end.
+            # (kernel.org's releases.json can name a release a few minutes
+            # before its signed sha256sums.asc does: the next run has it.)
+            say(f"{track}: {e}")
+            failed.append(track)
+    if failed:
+        raise Error(f"no bump for {' or '.join(failed)} (above); the next run tries again")
+
+
+def sync_track(track, want, main, dry):
+    on_main = pinned_in(git("show", f"{main}:dist/configs/chumby_classic_{track}_defconfig"), track)
+    if on_main == want:
+        print(f"{track}: {on_main} on main, as kernel.org's {track}: nothing to do")
+        return
+    branch = f"kernel-sync/{track}"
+    remote = git("ls-remote", "--heads", "origin", branch)
+    ours = None
+    if remote:
+        git("fetch", "-q", "origin", f"+refs/heads/{branch}:refs/remotes/origin/{branch}")
+        ours = pinned_in(git("show", f"origin/{branch}:dist/configs/chumby_classic_{track}_defconfig"), track)
+    if ours == want:
+        # Its pull request may have been closed, to decline the bump:
+        # it isn't opened again (deleting the branch has it made anew).
+        print(f"{track}: {branch} already has {want}: nothing to do")
+        return
+    others = []
+    if remote:
+        others = [l for l in git("log", "--format=%ae", f"{main}..origin/{branch}").splitlines() if l != BOT_EMAIL]
+    base = f"origin/{branch}" if others else main
+    how = "on top of the commits pushed to it" if others else "on main"
+    print(f"{track}: {on_main} on main, kernel.org has {want}: a bump {how}, on {branch}")
+    # In a worktree of its own: this checkout is left as it is.
+    with tempfile.TemporaryDirectory(prefix="kernel-sync-tree.") as tmp:
+        tree = os.path.join(tmp, "tree")
+        git("worktree", "add", "-q", "--detach", tree, base)
+        try:
+            proof = bump_in(tree, track, want, on_main, branch, bool(remote) and not others, dry)
+        finally:
+            git("worktree", "remove", "--force", tree)
+    ensure_pr(track, branch, on_main, want, proof, dry)
+
+
+def bump_in(tree, track, want, on_main, branch, force, dry):
+    """The bump, committed in TREE (a worktree) and pushed to BRANCH."""
+    global ROOT
+    root, ROOT = ROOT, tree
+    try:
+        proof = bump(track, want)
+        msg = (f"dist: Linux {want} as the {track} kernel\n\n"
+               f"kernel.org's {track} is {want} (main pins {on_main}); kernel-sync's\n"
+               f"bump, verified:\n\n" + "\n".join(f"- {p.replace('`', '')}" for p in proof) + "\n")
+        git("add", defconfig(track), hashfile(track))
+        git("-c", f"user.name={BOT_NAME}", "-c", f"user.email={BOT_EMAIL}",
+            "commit", "-q", "-m", msg)
+        print(git("show", "--stat", "--format=%an <%ae>%n%n%B", "HEAD"))
+        push = ["push", "-q", "origin", f"HEAD:refs/heads/{branch}"]
+        if force:
+            push.insert(2, "--force-with-lease=" + f"refs/heads/{branch}:origin/{branch}")
+        if dry:
+            print("would run: git " + " ".join(push))
+        else:
+            git(*push)
+        return proof
+    finally:
+        ROOT = root
+
+
+def ensure_pr(track, branch, on_main, want, proof, dry):
+    title = f"dist: Linux {want} as the {track} kernel"
+    body = [f"kernel.org's `{track}` is **{want}**; main pins {on_main}. "
+            f"This is `dist/kernel-sync`'s bump of the pin "
+            f"(`dist/configs/chumby_classic_{track}_defconfig`, "
+            f"`dist/kernel/{track}/linux/linux.hash`).", ""]
+    if proof:
+        body += ["Verified before it was written:", ""] + [f"- {p}" for p in proof] + [""]
+    body += ["CI on this branch says whether the patches in "
+             f"`dist/kernel/{track}/linux/` still apply and the image builds and boots. "
+             "When they don't, port them here: later bumps go on top of what's pushed. "
+             "Opened and updated by CI's kernel-sync job, which never merges."]
+    body = "\n".join(body)
+    found = run("gh", "pr", "list", "--head", branch, "--state", "open",
+                "--json", "number", "--jq", ".[].number") if not dry or shutil.which("gh") else ""
+    if found:
+        print(f"{track}: updating pull request #{found}")
+        gh("pr", "edit", found, "--title", title, "--body", body, dry=dry)
+    else:
+        print(f"{track}: opening a pull request of {branch}")
+        gh("pr", "create", "--base", "main", "--head", branch, "--title", title, "--body", body, dry=dry)
+    # A push with GITHUB_TOKEN starts no workflow, so no pull_request run:
+    # CI on the branch, asked for (and shown on the pull request's commit).
+    gh("workflow", "run", "ci.yml", "--ref", branch, dry=dry)
+
+
+def main(argv):
+    args = argv[1:]
+    releases_src = os.environ.get("KERNEL_SYNC_RELEASES")  # a file, for tests
+    try:
+        if args[:1] == ["check"] and len(args) == 1:
+            up = upstream(load_releases(releases_src))
+            for t in TRACKS:
+                p = pinned(t)
+                print(f"{t}: pinned {p}, kernel.org {up[t]}: {'up to date' if p == up[t] else 'bump due'}")
+            return 0
+        if args[:1] == ["bump"] and len(args) == 2 and args[1] in TRACKS:
+            up = upstream(load_releases(releases_src))
+            if pinned(args[1]) == up[args[1]]:
+                print(f"{args[1]}: pinned {up[args[1]]}, as kernel.org: nothing to do")
+                return 0
+            for line in bump(args[1], up[args[1]]):
+                print(line)
+            return 0
+        if args[:1] == ["pr"] and args[1:] in ([], ["--dry-run"]):
+            pr(load_releases(releases_src), dry=args[1:] == ["--dry-run"])
+            return 0
+    except Error as e:
+        say(str(e))
+        return 1
+    print(__doc__.split("\n\n")[1], file=sys.stderr)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

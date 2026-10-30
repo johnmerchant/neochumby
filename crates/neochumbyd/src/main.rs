@@ -10,7 +10,12 @@
 //!   neochumbyd pairing            Chumbys paired and asking to pair, and
 //!                                 the start and players in the tree
 //!                                 (tree.rs)
-//!   neochumbyd approve CODE       pair the Chumby showing CODE
+//!   neochumbyd approve CODE [--replace]
+//!                                 pair the Chumby showing CODE (its 32
+//!                                 digits, typed from its screen); one
+//!                                 already paired under its name with
+//!                                 another key is unpaired only with
+//!                                 --replace
 //!   neochumbyd refuse CODE
 //!   neochumbyd forget NAME
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
@@ -95,6 +100,7 @@ struct Args {
     operand: Option<String>,
     setting: Option<String>,
     follow: bool,
+    replace: bool,
     /// The operands after NAME, for `tap` and `button`.
     rest: Vec<String>,
     hold: Option<String>,
@@ -107,7 +113,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--unsandboxed]"
+        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--unsandboxed]"
     );
     std::process::exit(2)
 }
@@ -118,6 +124,7 @@ fn args() -> Args {
         operand: None,
         setting: None,
         follow: false,
+        replace: false,
         rest: Vec::new(),
         hold: None,
         state: "/var/lib/neochumbyd".into(),
@@ -135,6 +142,7 @@ fn args() -> Args {
             "--nfs" => a.nfs = value(),
             "--api" => a.api = value(),
             "-f" | "--follow" => a.follow = true,
+            "--replace" => a.replace = true,
             "--hold" => a.hold = Some(value()),
             "--unsandboxed" => a.unsandboxed = true,
             _ if arg.starts_with("--") => usage(),
@@ -183,7 +191,7 @@ fn main() {
             println!("{}", tree::player_hint(&players));
         }
         "approve" => {
-            let name = state.approve(&operand()).unwrap_or_else(|e| fail(e));
+            let name = state.approve(&operand(), a.replace).unwrap_or_else(|e| fail(e));
             println!("paired {name}");
         }
         "refuse" => state.refuse(&operand()).unwrap_or_else(|e| fail(e)),
@@ -338,6 +346,8 @@ fn paired(state: &State, name: &str) -> String {
 
 fn serve(a: &Args, state: State) {
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
+    // Requests a daemon before this one kept: no one waits on them now.
+    state.clear_pending().unwrap_or_else(|e| fail(format!("pending: {e}")));
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     let nfs_port = a.nfs.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or_else(|| usage());
     eprintln!(

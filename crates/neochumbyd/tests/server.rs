@@ -20,7 +20,7 @@ use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
 use neochumby_proto::settings::key::START;
-use neochumby_proto::{Identity, Msg, Session};
+use neochumby_proto::{Identity, Msg, Session, Unverified};
 use neochumby_sys::process::{self, Signal};
 
 fn main() -> ExitCode {
@@ -274,10 +274,11 @@ fn end_to_end() {
     let tcp = wait_for(20, "the API", || TcpStream::connect(&api).ok());
     // Not the ten minutes neochumbyd gives a request, if the page fails.
     tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-    let mut s = Session::connect(tcp, &chumby).unwrap();
+    let mut s = Unverified::connect(tcp, &chumby).unwrap();
+    let server_key = *s.peer();
     s.send(&Msg::Pair { name: "kitchen".into() }).unwrap();
-    // The owner, having read the code on both screens, gives the page the
-    // token.
+    // The owner, having typed the code from the Chumby's screen, gives the
+    // page the token.
     wait_for(20, "the web page", || home.exists().then_some(()));
     std::fs::write(home.join("typed"), &token).unwrap();
     match s.recv() {
@@ -294,7 +295,7 @@ fn end_to_end() {
     assert!(!state.join("admin.sock").exists());
 
     // The Chumby, paired, gets the start app the page chose.
-    let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby).unwrap();
+    let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby, &server_key).unwrap();
     s.send(&Msg::Hello { name: "kitchen".into() }).unwrap();
     assert_eq!(s.recv().unwrap(), Msg::Welcome);
     match s.recv().unwrap() {
@@ -305,7 +306,7 @@ fn end_to_end() {
 
     // It opens a companion, after its settings, and the companion answers
     // from its sandbox (or says what failed there).
-    let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby).unwrap();
+    let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby, &server_key).unwrap();
     s.send(&Msg::Hello { name: "kitchen".into() }).unwrap();
     assert_eq!(s.recv().unwrap(), Msg::Welcome);
     assert!(matches!(s.recv().unwrap(), Msg::Config(_)));

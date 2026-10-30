@@ -246,10 +246,7 @@ pub fn connect(app: &str, p: &Paired, me: &Identity) -> io::Result<Session> {
     let tcp = TcpStream::connect_timeout(&addr, CONNECT)?;
     // A neochumbyd gone without a word is noticed in about a minute.
     neochumby_sys::net::keepalive(&tcp, 30, 10, 3);
-    let mut s = Session::connect(tcp, me)?;
-    if s.peer() != &server_key {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"));
-    }
+    let mut s = Session::connect(tcp, me, &server_key)?;
     // The settings are the session's business, not the app's.
     version::hello(&mut s, conf::name(), CONNECT).map_err(|e| match e.kind() {
         io::ErrorKind::PermissionDenied => {

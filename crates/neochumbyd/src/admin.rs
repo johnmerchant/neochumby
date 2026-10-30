@@ -25,6 +25,9 @@
 //!   pending                   pending CODE NAME ADDRESS KEY
 //!                             ok                          each asking
 //!   approve CODE TOKEN        ok NAME     pairs the Chumby showing CODE
+//!   replace CODE TOKEN        ok NAME     the same, unpairing one already
+//!                                         paired under its name with
+//!                                         another key (`approve --replace`)
 //!   refuse CODE TOKEN         ok
 //!   forget NAME TOKEN         ok          unpairs NAME
 //!   set NAME KEY=VALUE TOKEN  ok          one of a Chumby's settings;
@@ -33,8 +36,8 @@
 //!                                         for the page's own login
 //!
 //! TOKEN is the owner's (`neochumbyd token`). Every change needs it; only
-//! reading (`paired`, `pending`) and `check` don't. Comparing the code on
-//! both screens is what pairing's security rests on, so the person
+//! reading (`paired`, `pending`) and `check` don't. Typing the code from
+//! the Chumby's screen is what pairing's security rests on, so the person
 //! approving must be the owner, not just someone on the network who can
 //! reach the web page; and settings include remote input (`dev=on`) and
 //! where a Chumby's apps come from. So nothing depends on the page putting
@@ -54,7 +57,7 @@ const MAX_LINE: usize = 1024;
 
 /// The commands that change something, and so need the owner's token
 /// (their last word), with how many words each takes.
-const CHANGES: &[(&str, usize)] = &[("approve", 3), ("refuse", 3), ("forget", 3), ("set", 4)];
+const CHANGES: &[(&str, usize)] = &[("approve", 3), ("replace", 3), ("refuse", 3), ("forget", 3), ("set", 4)];
 
 /// Answers `app`'s requests on `conn` until it closes it, or its owner no
 /// longer allows it `pairing`.
@@ -126,9 +129,12 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             eprintln!("neochumbyd: admin: {cmd}: wrong token");
             Err(bad("wrong token"))
         }
-        ["approve", code, _] => {
-            let name = state.approve(code)?;
-            eprintln!("neochumbyd: admin: approved {name} ({code})");
+        [cmd @ ("approve" | "replace"), code, _] => {
+            let name = state.approve(code, *cmd == "replace")?;
+            eprintln!(
+                "neochumbyd: admin: approved {name} ({code}{})",
+                if *cmd == "replace" { ", replacing" } else { "" }
+            );
             Ok(format!("ok {name}\n"))
         }
         ["refuse", code, _] => {
@@ -170,16 +176,18 @@ mod tests {
         let (dir, st) = temp_state("requests");
         let token = st.owner_token().unwrap();
         let key = Identity::generate().unwrap().public();
-        st.request("123456", "kitchen", &key, "192.0.2.7:4000".parse().unwrap()).unwrap();
+        let code = |n: u8| format!("{n:02x}00-0000-0000-0000-0000-0000-0000-0000");
+        let (c1, c2, c3) = (code(1), code(2), code(3));
+        st.request(&c1, "kitchen", &key, "192.0.2.7:4000".parse().unwrap()).unwrap();
 
         assert_eq!(request(&st, "paired"), "ok\n");
-        assert_eq!(request(&st, "pending"), format!("pending 123456 kitchen 192.0.2.7 {}\nok\n", hex(&key)));
-        assert_eq!(request(&st, "approve 123456 nope"), "error wrong token\n");
-        assert_eq!(request(&st, "approve 123456"), "error approve: wrong number of words\n");
+        assert_eq!(request(&st, "pending"), format!("pending {c1} kitchen 192.0.2.7 {}\nok\n", hex(&key)));
+        assert_eq!(request(&st, &format!("approve {c1} nope")), "error wrong token\n");
+        assert_eq!(request(&st, &format!("approve {c1}")), "error approve: wrong number of words\n");
         assert_eq!(request(&st, "check nope"), "error wrong token\n");
         assert_eq!(request(&st, &format!("check {token}")), "ok\n");
-        assert_eq!(request(&st, &format!("approve 123456 {token}")), "ok kitchen\n");
-        assert_eq!(request(&st, &format!("approve 123456 {token}")), "error no such request\n");
+        assert_eq!(request(&st, &format!("approve {c1} {token}")), "ok kitchen\n");
+        assert_eq!(request(&st, &format!("approve {c1} {token}")), "error no Chumby is asking with that code\n");
         assert_eq!(request(&st, "pending"), "ok\n");
 
         // Every change needs the token.
@@ -201,17 +209,26 @@ mod tests {
         assert!(request(&st, &format!("set kitchen {START}=a!b {token}")).starts_with("error"));
         assert!(request(&st, &format!("set lounge {START}=wx {token}")).starts_with("error no Chumby"));
 
-        st.request("654321", "lounge", &key, "192.0.2.8:4000".parse().unwrap()).unwrap();
-        assert_eq!(request(&st, "refuse 654321"), "error refuse: wrong number of words\n");
-        assert_eq!(request(&st, "refuse 654321 nope"), "error wrong token\n");
+        st.request(&c2, "lounge", &key, "192.0.2.8:4000".parse().unwrap()).unwrap();
+        assert_eq!(request(&st, &format!("refuse {c2}")), "error refuse: wrong number of words\n");
+        assert_eq!(request(&st, &format!("refuse {c2} nope")), "error wrong token\n");
         assert_eq!(request(&st, "pending").lines().count(), 2, "still asking");
-        assert_eq!(request(&st, &format!("refuse 654321 {token}")), "ok\n");
-        assert_eq!(request(&st, &format!("refuse 12 {token}")), "error not a code\n");
+        assert_eq!(request(&st, &format!("refuse {c2} {token}")), "ok\n");
+        assert!(request(&st, &format!("refuse 12 {token}")).starts_with("error not a pairing code"));
         assert_eq!(request(&st, "pending"), "ok\n");
 
         assert_eq!(request(&st, "forget kitchen"), "error forget: wrong number of words\n");
         assert_eq!(request(&st, "forget kitchen nope"), "error wrong token\n");
         assert!(request(&st, "paired").starts_with("paired kitchen "), "still paired");
+        // Another key under its name replaces it only with `replace`.
+        let other = Identity::generate().unwrap().public();
+        st.request(&c3, "kitchen", &other, "192.0.2.9:4000".parse().unwrap()).unwrap();
+        assert!(request(&st, &format!("approve {c3} {token}")).starts_with("error kitchen is already paired"));
+        assert_eq!(request(&st, &format!("replace {c3} nope")), "error wrong token\n");
+        assert_eq!(request(&st, &format!("replace {c3} {token}")), "ok kitchen\n");
+        assert_eq!(st.paired(&other).as_deref(), Some("kitchen"));
+        assert_eq!(st.paired(&key), None);
+
         assert_eq!(request(&st, &format!("forget kitchen {token}")), "ok\n");
         assert_eq!(request(&st, "paired"), "ok\n");
         assert_eq!(request(&st, "paired x"), "error paired: wrong number of words\n");
