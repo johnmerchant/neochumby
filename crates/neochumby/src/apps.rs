@@ -22,6 +22,8 @@
 //!                              program hasn't asked for the mouse: \n, \r,
 //!                              \t, \e, \\ and \xHH for what a line can't
 //!                              hold
+//!   linux=5.9                  the oldest Linux it runs on (absent: any);
+//!                              on an older one it isn't listed or opened
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
@@ -32,6 +34,7 @@
 //! stdin. With `fb`, it has the framebuffer and draws on it itself.
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use crate::conf;
 use crate::fb::rgb;
@@ -80,6 +83,9 @@ pub struct App {
     /// What a tap types in text mode while the program hasn't asked for
     /// the mouse.
     pub tap: Vec<u8>,
+    /// The oldest Linux it runs on, as (major, minor): its manifest's
+    /// `linux`. None: any.
+    pub linux: Option<(u32, u32)>,
 }
 
 /// An app's `access`: what the session gives it beyond its own directory
@@ -135,9 +141,28 @@ impl Access {
 }
 
 impl App {
-    /// Whether it can run here: what it needs of a neochumbyd it has.
+    /// Whether it runs on this Chumby's Linux (its `linux`): an app that
+    /// needs a newer one isn't listed, opened or started. When the running
+    /// Linux can't be read (a jail without /proc), it is taken to.
+    pub fn supported(&self) -> bool {
+        self.linux.is_none_or(|need| running_linux().is_none_or(|have| have >= need))
+    }
+
+    /// Whether it can run here: on this Linux, and with what it needs of a
+    /// neochumbyd.
     pub fn runnable(&self) -> bool {
-        self.needs != Needs::Required || conf::paired().is_some()
+        self.why_not().is_none()
+    }
+
+    /// Why it can't run here, or None if it can.
+    pub fn why_not(&self) -> Option<&'static str> {
+        if !self.supported() {
+            Some("it needs a newer Linux")
+        } else if self.needs == Needs::Required && conf::paired().is_none() {
+            Some("it needs a paired neochumbyd")
+        } else {
+            None
+        }
     }
 
     /// Whether its exec runs in text mode, on a terminal the session
@@ -145,6 +170,19 @@ impl App {
     pub fn text(&self) -> bool {
         !self.access.fb && !self.access.root
     }
+}
+
+/// A Linux version's (major, minor), from its first two numbers: "5.9",
+/// "2.6.16-csb".
+fn parse_linux(s: &str) -> Option<(u32, u32)> {
+    let mut n = s.trim().split(|c: char| !c.is_ascii_digit());
+    Some((n.next()?.parse().ok()?, n.next()?.parse().ok()?))
+}
+
+/// The running Linux's (major, minor), from /proc; None without /proc.
+pub fn running_linux() -> Option<(u32, u32)> {
+    static LINUX: OnceLock<Option<(u32, u32)>> = OnceLock::new();
+    *LINUX.get_or_init(|| std::fs::read_to_string("/proc/sys/kernel/osrelease").ok().and_then(|r| parse_linux(&r)))
 }
 
 /// A manifest's `tap`, its escapes undone: \n, \r, \t, \e, \\ and \xHH.
@@ -205,6 +243,7 @@ pub fn load(dir: &Path) -> Option<App> {
         access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
         font: field("font").filter(|f| !f.is_empty()),
         tap: field("tap").map(|t| unescape(&t)).unwrap_or_default(),
+        linux: field("linux").and_then(|l| parse_linux(&l)),
     })
 }
 
@@ -265,5 +304,14 @@ mod tests {
             }
         }
         std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn linux_versions() {
+        assert_eq!(parse_linux("5.9"), Some((5, 9)));
+        assert_eq!(parse_linux("2.6.16-csb"), Some((2, 6)));
+        assert_eq!(parse_linux("7.3.0-mx21-sideload\n"), Some((7, 3)));
+        assert_eq!(parse_linux("5"), None);
+        assert!((2, 6) < (5, 9) && (5, 9) <= (5, 9) && (7, 2) >= (5, 9));
     }
 }

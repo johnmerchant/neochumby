@@ -13,7 +13,8 @@
 //! goes back to the first page, leaving pairing if that's showing.
 //!
 //! An app that needs a neochumbyd this Chumby has not got is listed, greyed,
-//! and does not open.
+//! and does not open. One that needs a newer Linux (its `linux`) isn't
+//! listed.
 
 mod pair;
 
@@ -185,7 +186,13 @@ fn main() {
     let root = apps::root();
     let all = apps::all(&root);
     let mut screen = Screen {
-        listed: all.iter().enumerate().filter(|(_, a)| a.title.is_some() && a.exec.is_some()).map(|(i, _)| i).collect(),
+        // An app this Chumby's Linux is too old for isn't listed at all.
+        listed: all
+            .iter()
+            .enumerate()
+            .filter(|(_, a)| a.title.is_some() && a.exec.is_some() && a.supported())
+            .map(|(i, _)| i)
+            .collect(),
         page: 0,
         pairing: pairing_offer(),
     };
