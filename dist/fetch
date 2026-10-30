@@ -10,7 +10,8 @@
 #   dist/fetch --pathspecs [--classic]        prints the inputs' git pathspecs, one a line
 #                                             (how dev/emulate sees local changes to them)
 #
-# CI (.github/workflows/ci.yml) builds each image on every push to main and
+# CI (.github/workflows/ci.yml) builds each image on every push to main
+# (mainline weekly instead, and when a change is to mainline alone) and
 # publishes it on the rolling `dist-prebuilt` prerelease, with its source
 # beside it, named after its inputs commit: the last commit that changed
 # what the image is built from (the pathspecs below). Any later commit that
@@ -30,6 +31,12 @@
 # name these inputs and this kernel, so that another signed build can't
 # stand in for it.
 #
+# Mainline is built weekly, so most inputs commits have no build of it.
+# When there's none for these inputs, the newest mainline build on the
+# release (by upload) is fetched instead, with a line saying which inputs
+# commit it's of and that it may be older than this checkout: checked the
+# same way, its MANIFEST naming those inputs. Never for local changes.
+#
 # Exits 0 with the files in OUT. Exits 1 and leaves OUT as it was when the
 # inputs have local changes (the prebuilt image wouldn't match them), when
 # there is no build for these inputs (they changed on a branch, or CI
@@ -38,7 +45,8 @@
 #
 # NEOCHUMBY_PREBUILT overrides where the tarballs are downloaded from (a
 # mirror, or a file:// directory): safe, since only the attestation is
-# trusted.
+# trusted. The newest mainline build is found by the release's listing, or
+# a file:// directory's newest file.
 #
 # Needs git (with the full history: not a shallow clone), curl, tar and xz
 # (or a tar that reads .tar.xz, as on macOS), and gh.
@@ -149,11 +157,33 @@ stem=neochumby-$image-$inputs-$kernel
 work=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-fetch.XXXXXX")
 trap 'rm -rf "$work"' EXIT INT TERM
 
+# The inputs commit of the newest mainline build on the release, if any.
+newest_mainline() {
+    case $base in
+        file://*) ls -t "${base#file://}" ;;
+        *) gh api "repos/$repo/releases/tags/$tag" --jq '.assets[] | [.created_at, .name] | @tsv' |
+            sort -r | cut -f2 ;;
+    esac | sed -n 's/^neochumby-dist-\([0-9a-f]\{40\}\)-mainline\.tar\.xz$/\1/p' | head -n 1
+}
+
 echo "fetching $base/$stem.tar.xz"
 if ! curl -fsSL --retry 3 -o "$work/$stem.tar.xz" "$base/$stem.tar.xz"; then
-    echo "fetch: no prebuilt $image image for inputs $inputs ($kernel): CI publishes" >&2
-    echo "  only main's, once its run finishes. Build it instead: $build $out" >&2
-    exit 1
+    newest=
+    [ "$kernel" != mainline ] || newest=$(newest_mainline 2>/dev/null) || newest=
+    if [ -z "$newest" ] || [ "$newest" = "$inputs" ]; then
+        echo "fetch: no prebuilt $image image for inputs $inputs ($kernel): CI publishes" >&2
+        echo "  only main's, once its run finishes. Build it instead: $build $out" >&2
+        exit 1
+    fi
+    echo "fetch: no prebuilt mainline image for inputs $inputs (CI builds mainline weekly):" >&2
+    echo "  the newest on $tag instead, of inputs $newest, which may be older than this checkout" >&2
+    inputs=$newest
+    stem=neochumby-$image-$inputs-$kernel
+    echo "fetching $base/$stem.tar.xz"
+    if ! curl -fsSL --retry 3 -o "$work/$stem.tar.xz" "$base/$stem.tar.xz"; then
+        echo "fetch: couldn't download $stem.tar.xz. Build it instead: $build $out" >&2
+        exit 1
+    fi
 fi
 
 # The attestation: signed by ci.yml on main, here, on GitHub's own runners.
