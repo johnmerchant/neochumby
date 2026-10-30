@@ -6,14 +6,22 @@
 //!
 //!   neochumbyd serve [options]    the daemon
 //!   neochumbyd pairing            Chumbys paired and asking to pair, and
-//!                                 the start apps in the tree (tree.rs)
-//!   neochumbyd approve CODE       pair the Chumby showing CODE
+//!                                 the start and players in the tree
+//!                                 (tree.rs)
+//!   neochumbyd approve CODE [--replace]
+//!                                 pair the Chumby showing CODE (its 32
+//!                                 digits, typed from its screen); one
+//!                                 already paired under its name with
+//!                                 another key is unpaired only with
+//!                                 --replace
 //!   neochumbyd refuse CODE
 //!   neochumbyd forget NAME
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
 //!                                  sent to it when it next connects;
-//!                                  KEY= removes it. For `start`, it says
-//!                                  which apps in the tree may be named;
+//!                                  KEY= removes it. For `start` and
+//!                                  `player` (the default player), it
+//!                                  says which apps in the tree may be
+//!                                  named;
 //!                                  `delivery=sync` keeps the tree on the
 //!                                  Chumby's stick
 //!   neochumbyd manifest            what a sync sends: the tree's files,
@@ -59,7 +67,8 @@ use std::time::Duration;
 use nfsserve::tcp::{NFSTcp, NFSTcpListener};
 
 use neochumby_proto::Msg;
-use neochumby_proto::dev::{BUTTON_TAP_MS, INPUT_KEY, MAX_HOLD_MS, accepts_input};
+use neochumby_proto::dev::{BUTTON_TAP_MS, MAX_HOLD_MS};
+use neochumby_proto::settings::key;
 
 use state::State;
 
@@ -76,6 +85,7 @@ struct Args {
     operand: Option<String>,
     setting: Option<String>,
     follow: bool,
+    replace: bool,
     /// The operands after NAME, for `tap` and `button`.
     rest: Vec<String>,
     hold: Option<String>,
@@ -87,7 +97,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
+        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR]"
     );
     std::process::exit(2)
 }
@@ -98,6 +108,7 @@ fn args() -> Args {
         operand: None,
         setting: None,
         follow: false,
+        replace: false,
         rest: Vec::new(),
         hold: None,
         state: "/var/lib/neochumbyd".into(),
@@ -114,6 +125,7 @@ fn args() -> Args {
             "--nfs" => a.nfs = value(),
             "--api" => a.api = value(),
             "-f" | "--follow" => a.follow = true,
+            "--replace" => a.replace = true,
             "--hold" => a.hold = Some(value()),
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
@@ -139,13 +151,16 @@ fn main() {
     match a.command.as_str() {
         "serve" => serve(&a, state),
         "pairing" => {
-            let starts = tree::start_apps(&tree_dir);
+            let (starts, players) = (tree::start_apps(&tree_dir), tree::players(&tree_dir));
             for (name, key) in state.pairs().unwrap_or_else(|e| fail(e)) {
-                let config = state.config(&name);
-                let settings: Vec<String> = config.iter().map(|(k, v)| format!("{k}={v}")).collect();
-                println!("paired   {name}  {key}  {}", settings.join(" "));
-                let start = config.iter().find(|(k, _)| k == "start").map(|(_, v)| v.as_str());
-                if let Some(note) = tree::start_note(&name, start, &starts) {
+                let pairs: Vec<String> = state.config(&name).iter().map(|(k, v)| format!("{k}={v}")).collect();
+                println!("paired   {name}  {key}  {}", pairs.join(" "));
+                let settings = state.settings(&name);
+                let notes = [
+                    tree::start_note(&name, settings.start.as_deref(), &starts),
+                    tree::player_note(&name, settings.player.as_deref(), &players),
+                ];
+                for note in notes.into_iter().flatten() {
                     println!("         {note}");
                 }
             }
@@ -153,9 +168,10 @@ fn main() {
                 println!("asking   {}  code {}  from {}  {}", p.name, p.code, p.addr, neochumby_proto::hex(&p.key));
             }
             println!("{}", tree::hint(&starts));
+            println!("{}", tree::player_hint(&players));
         }
         "approve" => {
-            let name = state.approve(&operand()).unwrap_or_else(|e| fail(e));
+            let name = state.approve(&operand(), a.replace).unwrap_or_else(|e| fail(e));
             println!("paired {name}");
         }
         "refuse" => state.refuse(&operand()).unwrap_or_else(|e| fail(e)),
@@ -164,16 +180,23 @@ fn main() {
             let setting = a.setting.clone().unwrap_or_else(|| usage());
             let (key, value) = setting.split_once('=').unwrap_or_else(|| usage());
             state.set(&operand(), key, value).unwrap_or_else(|e| fail(e));
-            if key == "start" {
+            if key == key::START {
                 let starts = tree::start_apps(&tree_dir);
                 if !value.is_empty() && !starts.iter().any(|s| s == value) {
                     eprintln!("neochumbyd: {value} isn't a start app in the tree; the Chumby will open {}", tree::HOME);
                 }
                 println!("{}", tree::hint(&starts));
             }
-            if key == INPUT_KEY {
+            if key == key::PLAYER {
+                let players = tree::players(&tree_dir);
+                if let Some(note) = tree::player_note(&operand(), Some(value).filter(|v| !v.is_empty()), &players) {
+                    eprintln!("neochumbyd: {note}");
+                }
+                println!("{}", tree::player_hint(&players));
+            }
+            if key == key::DEV {
                 let name = operand();
-                if accepts_input(&state.config(&name)) {
+                if state.settings(&name).dev {
                     println!("{name} now takes taps and button presses from here (`neochumbyd tap`, `button`)");
                 } else {
                     println!("{name} takes no taps or button presses from here");
@@ -209,7 +232,7 @@ fn main() {
         "tap" | "button" => {
             let name = paired(&state, &operand());
             let msgs = input(&a).unwrap_or_else(|e| fail(e));
-            if !accepts_input(&state.config(&name)) {
+            if !state.settings(&name).dev {
                 fail(dev::input_off(&name));
             }
             for (i, m) in msgs.iter().enumerate() {
@@ -279,6 +302,8 @@ fn paired(state: &State, name: &str) -> String {
 
 fn serve(a: &Args, state: State) {
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
+    // Requests a daemon before this one kept: no one waits on them now.
+    state.clear_pending().unwrap_or_else(|e| fail(format!("pending: {e}")));
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     let nfs_port = a.nfs.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or_else(|| usage());
     eprintln!(

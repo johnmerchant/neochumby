@@ -30,24 +30,41 @@ binaries are static (musl), so they don't depend on its userland.
 | --- | --- | --- |
 | `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, a terminal for programs written for one, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
-| `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, or Noise as a build option | MIT |
+| `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
+| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's xterm-256color compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
+| `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
+| `apps/htop` | neochumby-htop: [htop](https://github.com/htop-dev/htop) (3.5.3, a submodule) on the library's terminal, the touchscreen its mouse (F10, Quit, is past the 64th column: the corner hold leaves it) | GPL-2.0-or-later |
+| `apps/top` | neochumby-top: [procps-ng](https://gitlab.com/procps-ng/procps)' top (4.0.7, a submodule) on the library's terminal, until tapped | GPL-2.0-or-later |
+| `apps/cmatrix` | MATRIX: [cmatrix](https://github.com/abishekvashok/cmatrix) (v2.0, a submodule) on the library's terminal, until tapped | GPL-3.0-or-later |
+| `apps/clock` | CLOCK: [tty-clock](https://github.com/xorg62/tty-clock) (8868f3e, a submodule), until tapped | BSD-3-Clause |
+| `apps/bonsai` | BONSAI: [cbonsai](https://gitlab.com/jallbrit/cbonsai) (v1.4.2, a submodule) growing a tree, a new one every 20 seconds, until tapped | GPL-3.0-only |
+| `apps/pipes` | PIPES: [pipes-rs](https://github.com/dnorhoj/pipes-rs) (v0.1.1, a submodule), pipes.sh in Rust, until tapped | GPL-3.0-only |
+| `apps/aquarium` | AQUARIUM: [asciiquarium-rs](https://github.com/cablehead/asciiquarium-rs) (beef5b7, a submodule), asciiquarium in Rust, until tapped | GPL-2.0-or-later |
+| `apps/genact` | GENACT: [genact](https://github.com/svenstaro/genact) (1.6.0, from crates.io), looking busy, until tapped | MIT |
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
+| `dist/` | The sideload image: a Buildroot build of Linux 5.9.16 with an initramfs built in (`sideload-zImage`), and the same initramfs on its own (`sideload-rootfs.cpio.gz`) | MIT |
+| `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> sideload Linux 5.9.16 kernel sideloader and QEMU demo (draft) | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
+| `emu/` | The emulator: [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit (a submodule), QEMU's `chumby-classic` machine with its runner and image tool, and the script that builds it | GPL-2.0-or-later, like QEMU (its image tool: MIT) |
 
-Everything we write is MIT, except in `apps/doom` and `apps/quake`. Doom
-and Quake link GPL engines, so each of those crates, our Rust in it
-included, is GPL and lives in its own directory, with the engine's
-upstream licence in its submodule (`apps/quake/src/span.rs` is a port of
+Everything we write is MIT, except in `apps/doom`, `apps/quake`,
+`apps/htop`, `apps/top`, `apps/cmatrix`, `apps/bonsai`, `apps/pipes` and
+`apps/aquarium`. They link GPL programs (the games' engines, htop, procps'
+top, cmatrix, cbonsai, pipes-rs, asciiquarium-rs), so each of those crates, our Rust in it included, is
+GPL and lives in its own directory, with the program's upstream licence
+in its submodule (`apps/quake/src/span.rs` is a port of
 the engine's span drawer, so it could be nothing else). `apps/fetch` links
-fastfetch, which is MIT as we are (its `LICENSE` is in its submodule). Nothing links an app: each runs as a separate
+fastfetch, which is MIT as we are (its `LICENSE` is in its submodule), and
+`crates/neochumby-ncurses` ncurses, whose licence is MIT's in other words.
+Nothing links an app: each runs as a separate
 program. The
 soft-float routines' runtime exception puts no conditions on the programs
 they're linked into.
@@ -63,13 +80,15 @@ crate's `Cargo.toml`:
 [package.metadata.neochumby]
 title = "QUAKE"                      # listed in app lists
 exec = "neochumby-quake"             # binaries, by name; exec runs in front
-colour = "8c5a28"                    # optional
+color = "8c5a28"                    # optional; `colour` works too
 service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
 neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
+access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
+player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
 ```
 
 An app can use any of these keys:
@@ -109,6 +128,18 @@ An app can use any of these keys:
   stock Chumby, unless the app in front says `button = true`: then it has
   the button. Doom and Quake fire with it. With the start app in front, a
   press is a `button` line on its pipe.
+- **`access`:** each app runs as a user of its own, jailed in a directory
+  holding only its own files, a `/tmp` of its own and what `access` lists:
+  `screen`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
+  `network` and `terminal`. It never sees the Chumby's key. `root`, listed alone, runs
+  it unjailed, as root: only `home` does, as it pairs the Chumby.
+  [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
+- **`player`:** a Chumby's default player is the one a start app's MUSIC
+  button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
+  (the start app asks the session, which tells the player's service).
+  It's named by `player=<app>` (`neochumbyd set NAME player=<app>`), else it's
+  `somafm`, else the first app with `player = true`. `neochumbyd pairing`
+  names the players in the tree.
 
 ## Building
 
@@ -116,9 +147,11 @@ You'll need Rust with the `armv5te-unknown-linux-musleabi` target and
 [zig](https://ziglang.org) on `PATH`. zig is the C compiler and linker, and
 supplies musl (`tools/zigcc`).
 
-Third-party source (Doom, Quake, fetch's fastfetch) is in git
-submodules, and fetch builds fastfetch with [CMake](https://cmake.org)
-3.21 or later. `tools/tree`, `tools/stick` and `tools/deploy` check out
+Third-party source (Doom, Quake, fetch's fastfetch, htop, procps,
+ncurses) is in git submodules, and fetch builds fastfetch with
+[CMake](https://cmake.org) 3.21 or later. ncurses is built with its own
+configure and make, which need only a shell, `make`, `awk` and a host C
+compiler. `tools/tree`, `tools/stick` and `tools/deploy` check out
 the submodules of the apps they build; for `cargo` on its own, check them
 out first:
 
@@ -129,9 +162,12 @@ cargo chumby          # the session and apps, for the Chumby
 cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux
 ```
 
-A Chumby and its neochumbyd talk TLS 1.3. To use Noise instead, build both
-with `--features neochumby-proto/noise`. Nothing is negotiated, so the two
-ends must be built the same way.
+The server half also builds for 64-bit ARM Linux, such as a Raspberry Pi
+(`rustup target add aarch64-unknown-linux-musl`, then
+`--target aarch64-unknown-linux-musl`), or natively for the machine
+building it. `tools/deploy` builds for the server it installs on, asking
+it over ssh, and `tools/tree --server-target TRIPLE` takes a Rust target
+triple (CPU, vendor, OS and C library), or `host`.
 
 ## Running it
 
@@ -145,7 +181,11 @@ apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
 apps/airplay/              neochumby-airplay, neochumby-airplay-companion, manifest
+apps/logs/                 neochumby-logs, neochumby-logs-companion, manifest
 apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.txt
+apps/htop/                 neochumby-htop, manifest
+apps/top/                  neochumby-top, manifest
+apps/cmatrix/              neochumby-cmatrix, manifest (and so on for clock, bonsai, pipes, aquarium, genact)
 ```
 
 `tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes
@@ -195,15 +235,21 @@ the mount hangs.
 
 1. Put a `neochumby.conf` holding `server=<neochumbyd's address>` on a
    neochumby stick, and boot the Chumby from it.
-2. The app list shows **PAIR**. Tap it: the Chumby shows a 6-digit code.
+2. The app list shows **PAIR**. Tap it: the Chumby shows a code of 32
+   hex digits, in eight groups of four.
 3. On the server, `neochumbyd pairing` lists the request with the same
-   code. If it matches, run `neochumbyd approve <code>`.
+   code. If it matches, run `neochumbyd approve CODE`, typing the code
+   from the Chumby's screen (case, dashes and spaces don't matter). If
+   another Chumby is already paired under the same name, `approve` says
+   so, and pairs this one in its place only with `--replace`.
 4. The Chumby writes its key, the server's key and the boot hook to
    `/psp`. Remove the stick and restart.
 
-The code comes from the connection itself, so it matches on both screens
-only if nothing sits between them. After pairing, each end checks the
-other's key on every connection.
+The code comes from the connection itself and both ends' keys, so it
+matches on both screens only if nothing sits between them, and it is too
+long for anyone in the middle to find a connection that makes it match.
+A request waits ten minutes; at most eight wait at once. After pairing,
+each end checks the other's key on every connection.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its
 companion on neochumbyd runs an AirPlay receiver named after it ("Kitchen
@@ -211,6 +257,20 @@ Chumby"), and the Chumby plays the audio. The host provides
 `shairport-sync` on `PATH`, avahi, and the base of eighty ports as
 `NEOCHUMBY_AIRPLAY_PORT` (default 7350): RTSP from the base, UDP from
 base + 10. Each Chumby keeps the same ports.
+
+**Logs** (the logs app): the Chumby's own logs first, then, on a paired
+Chumby, the host's, from its companion. ◀ and ▶ along the top go from
+log to log; dragging scrolls, and at the end it follows. The host's are
+whatever its owner lists in `<state>/apps/logs/sources` (or
+`sources.NAME` for one Chumby), one a line, a file or a command:
+
+```
+syslog=/var/log/syslog
+web=|tail -n 200 -f /srv/web/access.log
+```
+
+Without that file it serves /var/log/syslog or /var/log/messages, and the
+journal where `journalctl` runs.
 
 ### Delivery: NFS or sync
 
@@ -282,7 +342,7 @@ tools/deploy HOST doom --restart den    # deploy, then restart den on the new tr
 ```
 
 Once its owner allows it (`neochumbyd set den dev=on`; off by default),
-the same link also takes input, so the scenarios that drive the emulators
+the same link also takes input, so the scenarios that drive the emulator
 can drive a real Chumby:
 
 ```sh
@@ -312,6 +372,115 @@ times out every step that could block, and returns to the stock boot if
 anything fails. To skip it, create `/psp/neochumby-off`, or put a file
 named `neochumby-off` on a stick. neochumby never starts SSH; enable it
 yourself from the Chumby's settings (Chumby info → π) when you need it.
+
+## The emulator
+
+All emulation happens through
+[qemu-chumby](https://github.com/johnmerchant/qemu-chumby), the
+submodule `emu/qemu/qemu-chumby` at a pinned commit: QEMU's
+`chumby-classic` machine (patches against a pinned QEMU release, with the
+screen, touchscreen, top button, accelerometer, sound, serial console,
+flash and USB host working), `chumby-machine`, which runs it headless and
+drives it, and `chumby-image`, which makes its NAND image from a flash
+backup. Its README documents all three. neochumby's side is
+`dev/emulate`, which boots a neochumby tree on the machine as a Chumby
+would boot it from a stick, in one of three profiles:
+
+| Profile | Boots | Where |
+| --- | --- | --- |
+| `stock` | The Chumby's own Linux 2.6.16 firmware from your own flash backup, unmodified, with neochumby's tree on a USB stick: the stock boot runs the stick's hook | Your machine only, never CI ([legal](docs/legal.md)) |
+| `dist` | neochumby's Linux 5.9.16 (`dist/build`, below) with our own userspace, the tree on a USB stick that its `/init` mounts and runs | Anywhere: CI runs it |
+| `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook | Anywhere, once its image is built (to come) |
+
+```sh
+dev/emulate --profile dist start TREE           # TREE from tools/tree
+dev/emulate --profile dist log -f               # the console, with the session's log
+dev/emulate --profile dist tap 160 120          # touch at a pixel
+dev/emulate --profile dist shot screen.png      # screenshot
+dev/emulate --profile dist stop
+dev/e2e TREE NEOCHUMBYD OUT                     # the scenarios, on NEOCHUMBY_EMU_PROFILE (dist)
+```
+
+`dev/emulate` gets QEMU and the dist and classic images itself, the
+first time and whenever what they're built from changes: CI's prebuilt
+QEMU and images, verified (`emu/qemu/fetch`, `dist/fetch`,
+`classic/fetch`), or, when there's none for this checkout (it has local
+changes, say) or it can't be verified or run here, built from source
+(`emu/qemu/build`, `dist/build`, `classic/build`), with a line saying why.
+`--build` (or `NEOCHUMBY_BUILD=1`) always builds them from source, and
+`--no-fetch` (`NEOCHUMBY_NO_FETCH=1`) builds without trying to fetch;
+`dev/emulate prepare` does it without booting anything. Without either,
+it says so and the scenarios skip.
+
+For `stock`, make your NAND image and kernel with qemu-chumby's
+`chumby-image` (its README, "Images") and give them to `dev/emulate` as
+`NEOCHUMBY_EMU_KERNEL`, `NEOCHUMBY_EMU_NAND` and `NEOCHUMBY_EMU_PSP` (your
+factory-like settings directory), in the environment or in an `.env.local`
+beside this README that git ignores. `dev/emulate --help` has the rest:
+the stick's layout and boot hook, the settings, and what each profile
+can't do yet. The emulated Chumby never has a network (`-nic none`), so
+pairing and `delivery=sync` need a real Chumby (`dev/emulate --device`).
+
+## The sideload image
+
+`dist/build` builds the Linux 5.9.16 zImage that the kernel sideloader
+hands off to, with Buildroot. Buildroot needs Linux, so it runs in a
+container, which can be Apple's `container`, `docker` or `podman`:
+`dist/build` uses the first it finds, in that order, and
+`NEOCHUMBY_DIST_RUNTIME` overrides it. The first build downloads and
+compiles a toolchain and the kernel, which takes a long while; the work is
+kept in a volume, `neochumby-dist`, so a second build rebuilds only what
+changed (`<runtime> volume rm neochumby-dist` starts over). The volume
+holds the kernel tree because macOS's disk can't: it has files whose names
+differ only by case.
+
+```sh
+dist/build build/sideload-dist   # -> sideload-zImage, sideload-rootfs.cpio.gz
+```
+
+Or take CI's build of it, for exactly this checkout's inputs, from the
+`dist-prebuilt` release, verified with `gh attestation verify` (so it
+needs `gh`, logged in) before anything is unpacked:
+
+```sh
+dist/fetch build/sideload-dist   # the same files; --kernel stable or mainline for those kernels
+```
+
+It refuses when the inputs have local changes or have no published build
+(dist/README.md, "Prebuilt"); build it then. `dev/emulate` runs one or
+the other itself, into `build/sideload-dist`, when it needs the image.
+
+If the downloads fail with `unable to resolve host address`, the
+container's nameserver isn't answering (seen with Apple's `container`):
+give it one with `NEOCHUMBY_DIST_DNS=1.1.1.1 dist/build ...`.
+
+The initramfs's `/init` is a plain one: it mounts proc, sysfs and devtmpfs,
+logs to the kernel log, and starts busybox's shell (prompt `~ # `). The
+kernel has no NAND driver built in; `/init` loads the NAND modules only
+when `neochumby.sideloaded=1` is not on the kernel command line, which is
+when the image was flashed rather than handed off from the stock kernel.
+
+The initramfs's `/init` also runs a neochumby stick, as the stock boot
+does: it waits a few seconds for one, mounts its first partition on
+`/mnt/usb`, and runs its `userhook2` beside the console's shell. That is
+how `dev/emulate`'s dist profile boots a tree (above).
+
+The sideloader's end-to-end tests are in `tools/neochumby-kernel-sideloader`
+and run on the emulator (`dev/emulate prepare` fetches or builds QEMU
+and the image, above) through qemu-chumby's
+`chumby-machine`. Each boots the image, waits for the busybox prompt and
+checks `uname -a` for `5.9.16-mx21-sideload`:
+
+```sh
+# The flashed path: no stock firmware needed. CI runs this.
+QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
+KERNEL=$PWD/build/sideload-dist/sideload-zImage \
+python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+```
+
+`run-demo.py` is the sideloaded path, from the stock 2.6.16 kernel. It
+needs your own stock zImage and NAND backup; the sideloader's
+[README](tools/neochumby-kernel-sideloader/README.md) has the details.
 
 ## Game data
 

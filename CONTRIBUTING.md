@@ -6,7 +6,8 @@ changes easy to take.
 ## Ground rules
 
 - **Rust** for everything we write. Third-party C (Doom's doomgeneric,
-  Quake's engine, fetch's fastfetch) is a git submodule, pinned to an
+  Quake's engine, fetch's fastfetch, htop, procps, ncurses) is a git
+  submodule, pinned to an
   upstream commit and left unchanged, and linked from a Rust crate. Where
   an app needs it to do otherwise, its `build.rs` builds that file with a
   function renamed, so that the app's own takes its place, and says why
@@ -17,6 +18,14 @@ changes easy to take.
   and `tools/deploy`) checks out the submodules of the apps it builds, so a
   clone without `--recurse-submodules` works there; `cargo` alone needs
   `git submodule update --init` first.
+- **Patch files** (the kernels' and BusyBox's, under `dist/patches/`,
+  `dist/kernel/` and `classic/patches/`) are plain patches, applied with
+  `patch -p1`, with a DEP-3-style header before the diff: `Description:`
+  (the summary, then the explanation indented one space, `.` for an empty
+  line), `Author:`, `Upstream-Status:` (`Inappropriate [AI generated
+  code]` for ours, `Backport [commit]` with the original author for
+  upstream's), `Signed-off-by:`, `Claude-Session:`, then `---`; not
+  `git format-patch` output.
 - **Comments say what the code does and why the rule is what it is**, not
   how it was debugged. One paragraph is usually enough.
 - **Licences stay per crate.** Our crates are MIT. A crate that links GPL
@@ -35,22 +44,47 @@ The workspace denies `unsafe` code. Every raw system call lives in
 `crates/neochumby-sys`, behind safe functions, each `unsafe` block with a
 `// SAFETY:` comment saying why it holds; anything else needing one adds a
 function there, and uses std instead wherever std does the job safely. The
-games (Doom, Quake) and fetch are allowed it as FFI to their C. We use libc
+games (Doom, Quake), fetch, htop and top are allowed it as FFI to their C. We use libc
 rather than rustix: rustix calls the kernel directly and needs Linux 3.2,
 the Chumby runs 2.6.16, and its `ioctl` and `mmap` are `unsafe` too (see
 neochumby-sys's documentation).
 
 ## Building and checking
 
+From a clean clone, on macOS or Linux, nothing is built but our own code:
+QEMU (qemu-chumby's) and the Chumby's Linux images (dist and classic) are
+CI's, fetched and verified.
+
 ```sh
-git submodule update --init   # the third-party C: Doom, Quake, fastfetch
-rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
-# zig 0.17 on PATH (the C compiler, linker and musl): https://ziglang.org
-# CMake 3.21 or later, for fetch
+nix develop             # the tools (flake.nix); or install what dev/setup lists
+dev/setup               # checks the tools, checks out the submodules, fetches QEMU and the images
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
-tools/tree /tmp/tree doom quake airplay fetch   # a whole tree, with apps
+tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
+dev/emulate start /tmp/tree   # the tree on an emulated Chumby (Testing without a Chumby, below)
+# the end-to-end scenarios as CI runs them: boot on dist; boot and smoke on classic
+cargo build --release -p neochumbyd
+E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e
+NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic
 ```
+
+Without Nix, the tools are: Rust with the
+`armv5te-unknown-linux-musleabi` and `x86_64-unknown-linux-musl` targets
+(`rustup target add ...`), zig 0.17 on PATH (the C compiler, linker and
+musl: https://ziglang.org), CMake 3.21 or later (for fetch), Python 3.9 or
+later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
+verify CI's images' attestations with it). `dev/setup --check` says which
+are missing and how to get them on this system. `git submodule update
+--init` checks out the third-party C (Doom, Quake, fastfetch, htop, procps,
+ncurses) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
+only `classic/build` needs.
+
+The server half (neochumbyd and companions) is built for x86_64 Linux by
+default. `tools/tree --server-target aarch64-unknown-linux-musl` (64-bit
+ARM Linux) or `--server-target host` (this machine, natively; a Mac, say)
+builds companions for another, and `tools/deploy` picks the one its server
+runs. A companion must build for all three: keep anything
+platform-specific behind `cfg`, as neochumbyd does.
 
 CI runs the same checks on every pull request. To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
@@ -97,7 +131,7 @@ wrong. Pairing stays with a person (`neochumbyd pairing`, `approve`), and
 so does turning on remote input (`dev=on`): don't let a tool do that for
 you.
 
-To drive it as a scenario drives the emulators, turn on input for it
+To drive it as a scenario drives the emulator, turn on input for it
 first: `neochumbyd set NAME dev=on` (and `dev=` to turn it off again). It
 is off by default, and both neochumbyd and the Chumby refuse input
 without it: pairing a Chumby lets its server see its log and its screen,
@@ -124,57 +158,120 @@ lifted, if the link drops.
 
 ## Testing without a Chumby: dev/emulate
 
-`dev/emulate` runs a tree on a Linux PC as if it were a Chumby: the same
-static ARM binaries, unchanged, under qemu-arm user mode, chrooted in a fake
-root with the Chumby's paths. The screen is a file, and the touchscreen, top
-button and speaker are fakes you drive from outside. CI boots every pull
-request's tree with it (`dev/emulate-smoke`).
+All emulation happens through qemu-chumby (the submodule
+`emu/qemu/qemu-chumby`): QEMU's `chumby-classic` machine, the whole
+Chumby, run and driven by its `chumby-machine` runner. `dev/emulate` is
+neochumby's side of it: it puts a tree on a USB stick image, laid out as
+`tools/stick` lays one out, boots one of three profiles with the stick in
+the machine's USB port, and drives the result with the commands the
+scenarios use. It needs Python 3.9+ and QEMU with the machine. No root,
+no VM: it runs natively on Linux and macOS.
 
-It needs Linux, root, Python 3.9+, FUSE, util-linux's `mount` with loop
-devices, qemu-user's binfmt handler (static), and dosfstools for stick
-images. On a Mac, run it in a Linux VM.
+QEMU and the dist and classic images come by themselves. When `start`
+(or `dev/e2e`, once, before its scenarios) needs one that's missing, or
+was made from other inputs than the checkout's now, it fetches CI's
+prebuilt build and verifies it: QEMU by the qemu-chumby commit pinned here
+(`emu/qemu/fetch`), each image by its inputs commit and kernel
+(`dist/fetch`, `classic/fetch`). If there's none, or it can't be verified
+or doesn't run here (the inputs have local changes, `gh` isn't logged in,
+CI hasn't published it, no network), it says why in one line and builds
+from source instead (`emu/qemu/build`, which needs qemu-chumby's README's
+build dependencies; `dist/build` and `classic/build`, which need a
+container runtime). What it made, and from what, is recorded beside it, so
+the next `start` uses it as it is. One you made yourself, or give
+(`--kernel`, `$QEMU`, `--qemu`), is used as it is. `--build`
+(`NEOCHUMBY_BUILD=1`) builds from source, never fetching; `--no-fetch`
+(`NEOCHUMBY_NO_FETCH=1`) builds without trying to fetch; `dev/emulate
+prepare` does just this part.
+
+| Profile | What boots | Needs |
+| --- | --- | --- |
+| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`) |
+| `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
+| `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
+
+`--profile NAME` or `NEOCHUMBY_EMU_PROFILE` picks one. Your own settings,
+such as where your firmware is, can go in `.env.local` at the top of the
+checkout (git ignores it). Without a profile's images or QEMU, `start` and
+the scenarios exit 77, skipped (the stock profile's images are yours and
+never fetched; for the others, when neither fetching nor building works
+here).
 
 ```sh
-sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
 tools/tree /tmp/tree doom
-sudo dev/emulate start /tmp/tree     # the tree at /mnt/neochumby, as over NFS
+dev/emulate start /tmp/tree          # the dist profile, the tree on a stick
+dev/emulate log -f                   # the console, with the session's log
 dev/emulate shot home.png
 dev/emulate tap 160 102              # the second row of the home screen
 dev/emulate tap 5 5 --hold 3500      # the corner hold
 dev/emulate button press             # the top button
-dev/emulate log -f                   # what the session and its apps print
+dev/emulate exec /mnt/usb/neochumby/neochumby sensors   # on the console (dist, classic)
 dev/emulate stop
 ```
 
-- **A stick:** `sudo dev/emulate mkstick /tmp/stick.img /tmp/tree` makes a
-  FAT image laid out as `tools/stick` does, and `start --stick
-  /tmp/stick.img` mounts it at `/mnt/usb` and boots from it. Given a tree
-  as well, the session runs from the tree and the stick starts as it is.
-- **A neochumbyd:** the emulator shares the PC's network, so a neochumbyd
-  running on the PC can pair with it (`start --server 127.0.0.1 ...`).
-- **Inside:** `sudo dev/emulate exec /mnt/neochumby/neochumby sensors` runs
-  a binary beside the session.
-- **Its directory** is `/var/tmp/neochumby-emulate-UID`, root's, with the
-  screen, the log and `/psp` (kept from run to run). `--state DIR` picks
-  another; sudo drops `NEOCHUMBY_EMU`, so pass it with `sudo
-  --preserve-env=NEOCHUMBY_EMU`.
+- **The stick** is a FAT image in the emulator's directory, made afresh
+  at each `start`. Its `userhook2` is `dev/emulate-userhook2`, which puts
+  the settings and `--bind` directories in place, copies the session's log
+  to the console and runs the tree's own `userhook2`, unchanged; the
+  session's end is that hook's `neochumby exited: N`. `dev/emulate mkstick
+  IMG TREE` makes one to keep, and `start --stick IMG` boots it as it is,
+  written as the Chumby writes it.
+- **Settings:** `start --psp DIR` adds DIR's files to `/psp`: on stock, in
+  the settings partition of a copy of your NAND image (yours is never
+  written); on dist and classic, through the stick.
 - **Pictures and the like:** `start --bind DIR:/tmp/classic` puts a host
-  directory in the fake root, read-only. `dev/emulate compare RAW ...` says
-  which 320x240 RGB565 picture the screen is most like.
+  directory on the stick and links it there. `dev/emulate compare RAW ...`
+  says which 320x240 RGB565 picture the screen is most like.
+- **Its directory** is `neochumby-emulate-UID-PROFILE` in the temporary
+  directory, or `--state DIR`: the stick, the NAND copy, the console's log
+  and chumby-machine's sockets.
+- **No network.** The emulated Chumby never has one (QEMU runs with `-nic
+  none`): `--server`, pairing and `delivery=sync` need a real Chumby.
 
-The session runs as root, as on the Chumby, but without the capabilities
-that would let it out of the fake root or into the PC's settings: no
-mounts, chroot, modules, raw devices or network setup, and `/proc/sys` is
-read-only.
+`python3 dev/test_emulate.py` (CI runs it) checks the images dev/emulate
+makes and its whole control path against a stub QEMU, without firmware.
 
 ### Scenarios
 
-**neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; CI runs it
-once classic is a start app, #26). classic is the start app
-(`start=classic` in `/psp/neochumby.conf`), with pictures from
-neochumby-classic's offline smoke render, made with `NEOCHUMBY_TREE=TREE`
-so that its APPS screen lists the tree's apps: made-up data and placeholder
-artwork. The script checks that:
+`dev/e2e TREE NEOCHUMBYD OUT` runs them all on the profile and writes a
+summary to attach to a pull request; `E2E_SCENARIOS` picks some. What
+passes where, so far:
+
+| Scenario | stock | dist | Why not |
+| --- | --- | --- | --- |
+| `boot` | passes | passes (CI) | |
+| `smoke` | passes | fails | on 5.9.16 the kernel's framebuffer console blinks its cursor over the session's screen (`vt.global_cursor_default=0` stops it), so the screen seldom settles; and the session reads touches from `/dev/input/event0`, which there is the top button (the touchscreen is `event1`), so no tap reaches it; there is no `/dev/switch` either |
+| `stock` | passes | skipped | the stock firmware's own boot |
+| `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
+| `pairing`, `powercut` | skipped | skipped | they need a neochumbyd the Chumby can reach, and it has no network |
+
+The session on dist still uses the stock kernel's device nodes
+(`/dev/switch`, `/dev/accel`, `/proc/sys/sense1`), where 5.9.16 offers
+evdev, IIO, the backlight class and ALSA: the scenarios that need devices
+pass there once the session (or dist) bridges the two.
+
+**boot** (`dev/emulate-boot TREE OUT`): the boot runs the stick's hook,
+the hook runs the session from the stick, and home opens and draws.
+
+**smoke** (`dev/emulate-smoke TREE OUT`, a tree with doom): home draws, a
+tap on DOOM opens Doom (without game data it says so and exits, and home
+comes back), the corner hold restarts home, the top button reaches the
+session when it holds `/dev/switch`, `neochumby sensors` on the console
+sees a touch (dist, classic), and CHUMBY MODE ends the session cleanly.
+
+**stock** (`dev/emulate-stock TREE OUT`, a tree with `./dev/probe`, at
+most four apps; the stock profile only): the stock boot runs the hook,
+PROBE draws its pattern and sees a tap where it was made, the corner hold
+ends it and home stays, and after CHUMBY MODE the stock software carries
+on to its own screens (light and mostly pale blue; nothing of its artwork
+is compared or kept).
+
+**neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; run by
+`dev/e2e` when `NEOCHUMBY_CLASSIC_PICTURES` names the pictures). classic is
+the start app (`start=classic` in `/psp/neochumby.conf`), with pictures
+from neochumby-classic's offline smoke render, made with
+`NEOCHUMBY_TREE=TREE` so that its APPS screen lists the tree's apps:
+made-up data and placeholder artwork. The script checks that:
 - classic draws a slideshow page;
 - the top button toggles Home and back without restarting classic;
 - Home's APPS, then the DOOM tile, opens Doom through the session's pipe,
@@ -185,61 +282,58 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
-**Sync** (manual, not in CI). It needs a paired Chumby and neochumbyd's
-side of a round, so it waits until `delivery=sync` (#10) and the session
-PRs are both in `main`. Then, as root on one Linux PC (not yet run, so
-expect to adjust it):
+**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`; pending). The
+Chumby taps PAIR against a neochumbyd on the PC, and the code it logs must
+be the one `neochumbyd pairing` lists. A wrong code and a six-digit one are
+turned down, a refusal leaves `/psp` alone, and an approval (typed in
+capitals, without dashes) pins neochumbyd's key in the conf, after which
+the next boot's log reaches `neochumbyd log`. A new key under the same name
+pairs only with `--replace`, and once forgotten, the Chumby is turned away.
+It ran under the old user-mode emulator, which shared the PC's network;
+the emulated Chumby has none, so it waits for another way to reach
+neochumbyd (a serial link, say).
 
-```sh
-tools/tree /tmp/tree doom && cargo neochumbyd
-B=target/x86_64-unknown-linux-musl/release/neochumbyd
-$B serve --state /tmp/nd --tree /tmp/tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049 &
-dev/emulate mkstick /tmp/stick.img            # an empty FAT stick
-dev/emulate start --stick /tmp/stick.img --server 127.0.0.1 /tmp/tree
-dev/emulate tap 80 220                        # PAIR, on neochumby-home
-$B pairing --state /tmp/nd                    # the same code as the screen
-$B approve CODE --state /tmp/nd
-$B set chumby delivery=sync --state /tmp/nd   # the emulator's name: chumby
-dev/emulate stop
-dev/emulate start --stick /tmp/stick.img /tmp/tree   # paired now: settings fetched
-dev/emulate wait log 'neochumby-sync' 120      # the receiver's first round
-```
+**A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
+OUT`; pending on the emulator, as pairing). The Chumby pairs with a
+neochumbyd, syncs its tree to its stick (`delivery=sync`), then boots
+through the hook while a second round writes the other set, and
+`dev/emulate powercut OUT.img` cuts the power: the machine stopped where it
+is, the stick image copied as it stands, QEMU killed. Booting that copy,
+the log must show the hook running a complete set, `check-set` agreeing,
+and the next round making the new set live, which one more boot runs. With
+`--device` the person beside the Chumby is asked to pull the plug. (Every
+cut point of a round, on the host, is neochumby-sync's own crash test.)
 
-Then check, from the PC, with the stick image mounted read-only:
-- `neochumby/a/` (or `b/`) holds the tree;
-- its `.complete` marker is whole, and `current` names it;
-- `dev/emulate exec /mnt/usb/neochumby/neochumby check-set
-  /mnt/usb/neochumby/a` agrees.
+### A real Chumby: --device NAME
 
-For the next boot, the boot hook won't run here: it needs BusyBox. Start
-the set `current` names in its place, with `--run`:
+The same scenarios run on a real Chumby, paired with a neochumbyd and set
+`dev=on` (`neochumbyd set NAME dev=on`, which allows remote input), over
+its developer link: `NEOCHUMBY_EMU_DEVICE=NAME dev/emulate-smoke /tmp/tree
+/tmp/smoke`, with `NEOCHUMBY_EMU_HOST=HOST` when neochumbyd runs elsewhere
+(over ssh; its state in `NEOCHUMBYD_DIR`). `start` installs the tree there
+(`tools/deploy --tree`) and restarts the Chumby; `log` is its log from then
+on; `shot`, `tap` and `button` are neochumbyd's (`neochumbyd tap` and
+`button`; an older neochumbyd without them skips those steps). A remote
+press goes where a real one would, so it can't reach an app that reads the
+switch itself (`button = true`, Doom's FIRE): a scenario needing that skips
+on a device. Steps that need hands, like pulling the power, are
+`dev/emulate prompt` lines, shown only with `--device`.
 
-```sh
-dev/emulate start --stick /tmp/stick.img --run /mnt/usb/neochumby/a/neochumby
-```
+So that one scenario holds on every backend, it asserts on lines the
+session and apps log on purpose, compares only our own screens (with what
+changes masked), scales its waits by `dev/emulate scale`, and exits 77,
+skipped, where a backend can't do a step.
 
-Then change a file in `/tmp/tree` and wait for a round to write the other
-set and flip `current`. A power cut mid-round can be approximated by
-`dev/emulate stop` (SIGKILL) during a large file. That shows the journal
-and resume logic, not FAT's behaviour.
+What the emulator can't catch is what real devices are for:
 
-`dev/emulate --help` lists the fake devices and what each does. What it
-can't catch is what full-system emulation (the whole Chumby, its stock
-firmware included, still to come) and real devices are for:
-
-- **The 2.6.16 kernel.** System calls go to the PC's kernel. Futex flags
-  that kernel lacks, `nanosleep` failing with `EINVAL` on restart, and newer
-  calls and flags all work here and fail there.
-- **Real FAT and USB.** The stick is the PC's vfat driver on a file in
-  memory, not the old driver on a slow stick. Its directory fsync, its
-  speed, a stick pulled out and a power cut aren't reproduced.
 - **Real input.** Taps are clean: no echo after a release, no brief releases
   during a hold, and the button never bounces.
-- **Speed.** qemu on a PC isn't a 266 MHz ARM926, so frame rates and CPU
-  load mean nothing here. Only the speaker is paced, to the rate it's set to.
-- **The rest of the Chumby.** The boot hook doesn't run: the session is
-  started directly. There's no BusyBox, `btplay` or `chumby_set_volume`, no
-  accelerometer, and no overlay or backlight to see.
+- **Real USB and flash.** The stick is a file: a slow stick, one pulled
+  out, and what a stick does with a write when the power goes aren't
+  reproduced.
+- **Speed.** QEMU's ARM926 isn't a 266 MHz one, so frame rates and CPU
+  load mean little.
+- **The network.** The emulated Chumby has none.
 
 ## Writing an app
 
@@ -260,13 +354,15 @@ neochumby = { git = "https://github.com/johnmerchant/neochumby" }
 [package.metadata.neochumby]
 title = "WEATHER"                    # listed in app lists
 exec = "neochumby-weather"           # runs in front when the app is opened
-colour = "4a90d9"                    # optional
+color = "4a90d9"                    # optional; `colour` works too
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
 neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
+access = ["screen", "touch"]         # optional: what it reaches beyond its jail
+player = true                        # optional: a player (below)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -283,7 +379,11 @@ Binaries named by `exec` and `service` are built for the Chumby
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
 crash reports (`debug`), the request pipe (`session`) and a terminal for a
-program written for one (`term::run`, which `apps/fetch` uses). The screen
+program written for one (`term::run`, which `apps/fetch` uses; the
+touchscreen is its mouse, and `term::run_tapping` makes a tap type a key,
+as `apps/top` quits). A C program that uses curses depends on
+`neochumby-ncurses` and builds against `DEP_NCURSESW_INCLUDE`
+(`apps/htop/build.rs`). The screen
 is 320x240 RGB565, so prerender what you can, and keep in mind that the CPU
 is a 266 MHz ARM926 with no FPU.
 
@@ -293,12 +393,16 @@ The session (`neochumby`) runs one app at a time in front, full-screen.
 Every app is opened the same way, whoever asked for it.
 
 **When your app is opened**, the session runs its `exec`:
-- in the app's directory in the tree, in a process group of its own;
-- with `NEOCHUMBY_ROOT` (the tree) and `HOME=/tmp`. The root filesystem is
-  read-only, and so is the tree;
+- jailed, as below, in the app's directory in the tree, in a process group
+  of its own;
+- with `NEOCHUMBY_ROOT` (the tree) and `HOME=/tmp`. The tree is read-only;
+  `/tmp` is your app's own;
 - with `NEOCHUMBY_SESSION=<fd>`, its request pipe to the session (below);
+- with `NEOCHUMBY_COMPANION=<fd>` if it has a companion (below);
 - with `NEOCHUMBY_REASON` when the session has a reason to give: `button`
   when the top button opened it. Ignore values you don't know;
+- with `NEOCHUMBY_PLAYER` naming this Chumby's default player, when it
+  has one (below);
 - owning the screen until it exits. What's on the screen when it starts is
   whatever was there: draw all of it;
 - sharing the touchscreen: every reader gets every touch. The session
@@ -351,6 +455,51 @@ std::process::exit(0);
 `Pipe::from_env()` is None when the app wasn't started by the session (run
 by hand).
 
+**The jail.** The session runs as root; your app doesn't. Its `exec` and
+its `service` run as a user of their own (one uid per app, from 20000), in
+a private mount namespace, chrooted into a small tmpfs that holds:
+- your app's directory from the tree, at the same path, read-only;
+- `/tmp`, your app's own (4 MB, `nosuid,nodev,noexec`), which is `HOME`;
+- `/dev/null`, `zero`, `random` and `urandom`;
+- what its `access` lists, and nothing else:
+
+| `access` | what your app gets |
+|---|---|
+| `screen` | `/dev/fb0`, for its `exec` only, never its `service` |
+| `touch` | the touchscreen and its calibration (`/psp/ts_settings`, read-only), likewise |
+| `speaker` | `/dev/dsp`, and the speaker's handover (`neochumby::audio`). The mute and the volume are the session's: `audio` asks for them over the request pipe |
+| `accel` | the accelerometer |
+| `system` | `/proc`, `/sys` and `/etc` |
+| `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
+| `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
+| `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
+| `root` | no jail: it runs as root, as the session does. Listed alone |
+
+It may have 64 processes and 256 open files, and dumps no core. Its users
+can't signal or trace each other, or root, and can't read the Chumby's
+key or write to `/psp`.
+
+**Your binaries.** Each `exec` and `service` must be a static ARM ELF.
+Before it starts one, the session refuses a file with a `PT_LOAD` below
+`0x1000` (page zero), a `PT_INTERP`, or a non-ARM ELF, and it checks every
+executable file in your app's directory the same way. Page zero is where
+the ARM `mmap` check doesn't reach the ELF loader. Put helper programs in
+the app's directory, not in `/tmp`: `/tmp` and the speaker handover are
+`noexec`.
+
+**The network.** The stock kernel can't take the network away from a
+process. Instead, once a second, the session looks for internet sockets in
+`/proc/net`, which lists each socket with its owner's uid. If it finds one
+owned by an app whose `access` doesn't list `network`, it ends the app,
+`exec` or `service`, as if it had crashed. Unix sockets aren't counted.
+Ask for `network` if your app opens a socket at all, even briefly: an
+unlisted one is found sooner or later.
+
+List only what your app uses. `neochumby-manifest` (run by `tools/tree`)
+refuses words it doesn't know. `root` is for `home`, which pairs the
+Chumby and so writes its key. Under `dev/emulate`, which can't mount or
+chroot, every app runs unjailed, as root.
+
 **Start apps.** The start app is the one a Chumby opens at boot and comes
 back to. The owner picks it (`start=<app>`), and it defaults to
 `neochumby-home`. Declaring `start = true` lets your app be picked, and
@@ -373,6 +522,54 @@ promises:
 Without `start = true`, the session refuses the app as the start app and
 uses `neochumby-home`, so a Chumby can't be left stuck in a game.
 
+**Players.** A player is an app that keeps playing (internet radio,
+music, podcasts) and that the start app can pause and resume. A Chumby
+has a default player, which a start app's MUSIC button opens and its MUTE
+button pauses. The owner picks it
+(`player=<app>`, set like `start`); otherwise it's `somafm` if that's in the
+tree, else the first player by name, else there's none. Declaring
+`player = true` lets your app be picked, and promises:
+- it has an `exec`, which plays or shows what's playing, and lists
+  `speaker` (or `root`) in its `access` (`neochumby-manifest` refuses
+  `player` without them);
+- its **service** plays on after the `exec` exits, and acts on two lines
+  from the session: `pause` (stop playing, ready to resume) and `resume`
+  (play again). It ignores lines it doesn't know, as every service does.
+
+The session resolves the default as it starts, as it does the start app: a
+name that isn't a player here is refused, and the reason logged. It
+sets `NEOCHUMBY_PLAYER=<app>` for everything it runs, and leaves it out when
+there's no player, so a start app can grey out its MUSIC button. A
+changed `player=` applies at the next session start, as `start=` does.
+
+A start app, and its service, may also write these to the request pipe,
+and carry on (they aren't followed by an exit):
+- `player pause`, `player resume`: the session tells the default player's
+  service `pause` or `resume`;
+- `player toggle`: `pause` if the session last told it `resume` (or nothing
+  yet: it starts as playing), else `resume`.
+
+From any other app or service, `player` is refused and logged. A line
+that can't be passed on (no player, no service running, or its pipe
+full) is dropped and logged.
+
+In Rust:
+
+```rust
+use neochumby::session::{self, Pipe, Player};
+
+let mut pipe = Pipe::from_env();
+// MUSIC: open the default player, if there is one, then exit.
+if let (Some(app), Some(p)) = (session::player(), pipe.as_mut()) {
+    let _ = p.open(&app);
+}
+// MUTE, from a start app: pause or resume it, and carry on.
+if let Some(p) = pipe.as_mut() {
+    let _ = p.player(Player::Toggle);
+}
+// In the player's service: Notice::Pause and Notice::Resume.
+```
+
 ### Services
 
 What has to keep working while another app is in front (alarms, a night
@@ -380,7 +577,8 @@ schedule, music) belongs in the app's `service`. The session runs each
 app's service, where what it needs of a neochumbyd is here, for as long as
 neochumby runs:
 - with the same environment as an app (`NEOCHUMBY_ROOT`, `HOME=/tmp`,
-  `NEOCHUMBY_SESSION`), in a process group of its own;
+  `NEOCHUMBY_SESSION`), in a process group of its own, in the app's jail
+  but without the screen or the touchscreen;
 - **restarted when it exits**, after 1 second, then 2, 4 and so on up to a
   minute. A run of a minute or more starts the wait again from 1 second;
 - **told what's in front:** `front <app>` on its pipe as it starts, and
@@ -423,19 +621,32 @@ wait, and `Notice::parse`.
 named by `companion`. neochumbyd runs it for each paired Chumby that opens
 the app:
 - **Opening:** the Chumby side calls
-  `neochumby::companion::open(neochumby::companion!(), &paired, &identity)`,
-  which connects to the paired neochumbyd and returns the
-  `neochumby_proto::Session` to its companion. `companion!()` reads the
-  app's `Cargo.toml` as it compiles: an app without a `companion`, or
-  without `neochumbyd`, does not compile.
-- **Frames:** after that, frames go both ways as `Msg::Data`. On the
-  companion's side they arrive on stdin and leave on stdout, a u32
-  big-endian length then the bytes (`neochumby_proto::frame`).
+  `neochumby::companion::open(neochumby::companion!())`, which returns a
+  `Link` to its companion. `companion!()` reads the app's `Cargo.toml` as
+  it compiles: an app without a `companion`, or without `neochumbyd`, does
+  not compile.
+- **Through the session:** apps never hold the Chumby's key. The session
+  opens the connection to neochumbyd for your app, and relays its frames
+  over a socket it hands the app (`NEOCHUMBY_COMPANION`). It opens the
+  companion of the app it started, named by the app's directory, so an app
+  reaches only its own. Run by hand, as root, an app connects itself.
+- **Messages:** define a type for each direction in the app's library
+  crate, and a `neochumby_proto::channel::Channel` that pairs them (serde
+  derives; postcard on the wire). The Chumby side sends and receives them
+  with `open(...)?.typed::<YourChannel>()`, the companion with
+  `neochumby_proto::channel::stdio::<YourChannel>()`; each end can send
+  only its own direction's type, so halves that disagree don't compile.
+  `apps/logs` does this.
+- **Frames:** for raw bytes instead, `Link::send` and `Link::recv` (`None`
+  once the companion has gone). On the companion's side they arrive on
+  stdin and leave on stdout, a u32 big-endian length then the bytes
+  (`neochumby_proto::frame`); a typed message is one such frame.
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
   and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
   stdin closes.
 
-`apps/airplay` is a worked example of both halves.
+`apps/airplay` is a worked example of both halves, and `apps/logs` one
+whose companion is optional.
 
 ## Files in the tree
 
@@ -444,6 +655,69 @@ Names must be ones it can take: A-Z a-z 0-9 `.` `_` `+` `-`, not starting
 or ending with `.`, unique ignoring case, and not a DOS device name (`con`,
 `aux.txt`). `neochumbyd manifest` lists anything left out. Only files that
 change are sent, so keep names stable and leave identical files alone.
+
+## Releases
+
+`gh release create vYYYY.MM.N --generate-notes` on main (`N` counts the
+month's releases from 0: `v2026.10.0`) cuts a dated release; CI's
+`release` job then copies that commit's prebuilt, attested images and their
+sources onto it from `dist-prebuilt`, and links qemu-chumby's build (a
+manual CI run on main with `release` set does the same, creating the
+release). It builds nothing, so cut one once main's CI has finished.
+
+## Publishing the SDK crates
+
+Seven crates are published on crates.io, as an SDK for apps outside this
+repository: experimental, and any release may break them. In dependency
+order:
+
+1. `neochumby-sys`, `neochumby-proto`, `neochumby-macros`,
+   `neochumby-softfloat`
+2. `neochumby-sync`
+3. `neochumby`
+4. `neochumby-ncurses`
+
+The rest stay `publish = false`.
+
+- **Versions come from CI, not from the repository.** Nobody bumps a
+  crate's version or tags a release. On every push to main, once it
+  builds, tests and packages, CI's "Publish to crates.io" job publishes
+  each crate that changed, at crates.io's latest version plus one in the
+  last component (0.0.N, then 0.0.N+1). A crate's `version` in its
+  Cargo.toml (and in `[workspace.dependencies]`, where the others take it
+  by path and version) is only the floor: its first release, or a version
+  to jump to by raising it. It stays 0.0.1 in the repository while
+  crates.io moves on. CI writes the real versions into its own checkout,
+  never into a commit. These versions are not the bundle's dated releases
+  (vYYYY.MM.N).
+- **What counts as changed.** CI packages the crate at its latest
+  release's version, with its dependencies at their versions as this run
+  decides them, and compares that with the `.crate` on crates.io
+  (ignoring `.cargo_vcs_info.json` and `Cargo.lock`). Any difference
+  publishes a new release, whether in a source file, the manifest, a
+  dependency requirement, or workspace metadata it inherits. At 0.0.x
+  every release is incompatible with the one before, so a crate's
+  republished dependencies also republish it, with its requirement on
+  them raised. A crate not on crates.io yet is published at its floor.
+- **Records and re-runs.** CI tags each release `<crate>-v<version>`. The
+  tags are records only: comparing with crates.io decides what to
+  publish, so a re-run on the same commit publishes nothing new, and a
+  re-run after a failed run publishes what that run didn't. Running CI
+  from the Actions tab (workflow_dispatch) on main does the same, unless
+  `release` is set: a release builds and publishes nothing else. Anywhere
+  else (pull requests, or other branches), the job prints what it
+  would publish, at which versions and in which order, and runs `cargo
+  publish --dry-run` instead.
+- **What's packaged.** Each crate's `include` lists what it carries: what
+  it builds from, its README and its licence texts. neochumby-ncurses
+  carries ncurses' sources, less what its build configures out. CI's
+  "Package the SDK crates" job packages them all and builds each from its
+  package, on the host and for the Chumby (`cargo publish --dry-run`), so
+  `cargo package --list -p <crate>` and that job are where to look after
+  changing one.
+- **Later:** at 0.1 and above, `cargo semver-checks` against the published
+  release will choose between a patch and a minor release, instead of
+  every change being incompatible.
 
 ## Pull requests
 
@@ -455,3 +729,84 @@ which has `sed` but no `sha256sum`, `printf`, `od` or `head -c`. Anything
 it can't do goes in the session binary as a subcommand, like `neochumby
 check-set`. Raise its `neochumby-hook-version` line with every change: the
 session replaces the hook installed in `/psp` only with a higher version.
+
+### Test on a Chumby, or an emulated one, and show it
+
+CI builds and unit-tests everything, but it can't tell whether a change
+works on a Chumby. So a pull request that changes what runs on the Chumby
+(`crates/neochumby`, `crates/neochumby-sys`, `apps/`, `boot/`) is
+approved only once its description, or a comment, shows it running. There
+are three ways, from quickest to most faithful:
+
+1. **The emulator on the dist profile** (qemu-chumby's machine booting
+   neochumby's Linux 5.9.16, with your tree on a USB stick): `dev/e2e TREE
+   NEOCHUMBYD OUT` runs the scenarios, as CI does, or drive it by hand
+   with `dev/emulate start`, `tap`, `button`, `shot` and `log` (see
+   [Testing without a Chumby](#testing-without-a-chumby-devemulate)). It
+   runs on Linux and macOS without root, and needs no firmware; not every
+   scenario passes there yet.
+2. **The emulator on the stock profile**: the Chumby's stock 2.6.16
+   kernel and firmware, from **your own device's** flash backup
+   (qemu-chumby's README, "Images", says how to build the images; they
+   never leave your machine), booting your tree from a USB stick as a
+   Chumby does. Use it for anything that depends on the stock kernel, the
+   boot or the handover to the stock software:
+   `NEOCHUMBY_EMU_PROFILE=stock dev/e2e TREE NEOCHUMBYD OUT` runs the
+   scenarios on it, with `dev/emulate-stock`, which only it can: neochumby
+   inside the stock boot, handing back to the stock software. Put where
+   your images are in `.env.local` at the checkout's root
+   (`NEOCHUMBY_EMU_KERNEL=`, `_NAND=`, `_PSP=` lines; git ignores it), and
+   `dev/emulate` and `dev/e2e` find them. CI can't, having no firmware
+   (and it never will), so this suite is yours to run locally, and its
+   results are the evidence.
+3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
+   `neochumbyd shot` (see [On a Chumby](#on-a-chumby)). Needed for what no
+   emulator models: timing, the touchscreen's noise, a USB stick's own
+   behaviour, power cuts, the network.
+
+**The evidence to include:**
+- which of the three, and the commit you tested;
+- the commands you ran, and what they reported: `dev/e2e`'s
+  `OUT/summary.txt` (each scenario ok, skipped or FAILED), or a short log
+  excerpt showing the behaviour;
+- screenshots of **neochumby's** screens or your app's, as PNG, showing
+  the change.
+
+**Never attach:**
+- the stock software's screens or artwork (the control panel, the Chumby
+  logo or octopus, widgets), firmware, images, or anything from a
+  device's settings ([docs/legal.md](docs/legal.md));
+- anything that identifies you, your network or your device: addresses,
+  host and network names, Wi-Fi names, a device's name or serial. Cut
+  them from logs before pasting.
+
+If you couldn't test something (no Chumby, or a path no emulator covers
+yet), say which and why. A reviewer may run it on a Chumby for you.
+
+### Scenarios run everywhere
+
+The automated scenarios (`dev/emulate-boot`, `dev/emulate-smoke`,
+`dev/emulate-pairing`, `dev/emulate-powercut`, `dev/emulate-classic`,
+`dev/emulate-stock`, and any you add to `dev/e2e`) use only
+`dev/emulate`'s verbs, `start`, `log`/`wait log`, `shot`, `tap`, `button`
+and `stop`, so the same scenario runs on each of the emulator's profiles
+(`--profile stock|dist|classic`) and on a real Chumby (`--device NAME`,
+through `neochumbyd`; remote input needs that Chumby set `dev=on`). Write
+them so they pass on all of them:
+
+1. **Assert on log lines** the session and apps print on purpose
+   (`opening home`, `escape: ending …`), not on timing or on the order of
+   unrelated lines. If a scenario needs to see something happen, print a
+   line for it.
+2. **Compare screenshots by regions of our own screens**, masking what
+   changes (the clock, time-dependent pictures). Never compare against, or
+   commit, the stock software's screens.
+3. **Wait with timeouts the backend scales** (`dev/emulate scale`): the
+   emulator boots a whole Chumby first, and a real Chumby is slow.
+4. **What a backend can't do is skipped there, not failed**, with the
+   reason: remote input can't reach an app that holds the top button
+   itself (`button = true`), and the emulator has no network for a
+   neochumbyd.
+5. **Physical steps** (pull the power, plug in a stick) are prompts the
+   runner shows and waits on, checked from the log afterwards; they run
+   only with `--device` and someone there.

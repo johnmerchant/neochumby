@@ -1,0 +1,9 @@
+[target.armv5te-unknown-linux-musleabi]
+linker = "rust-lld"
+rustflags = [
+  "-C", "link-arg=-Tlink.ld",
+  "-C", "link-arg=-static",
+  "-C", "link-arg=-no-pie",
+  "-C", "link-arg=--build-id=none",
+  "-C", "relocation-model=static",
+]

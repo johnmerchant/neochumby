@@ -1,0 +1,25 @@
+Description: kbuild: split "config %config" for make 3.82 and later
+ GNU make 3.82 refuses a rule mixing an explicit and a pattern target
+ ("mixed implicit and normal rules"). Mainline fixed it in 2.6.36 (commit
+ 31110ebbec86); this is the same change for 2.6.16's top-level Makefile.
+Author: Sam Ravnborg <sam@ravnborg.org>
+Upstream-Status: Backport [31110ebbec8688c6e9597b641101afc94e1c762a, kbuild: fix make incompatibility]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Fc77Z6fVVe4rWJxPT
+---
+--- a/Makefile
++++ b/Makefile
+@@ -439,7 +439,12 @@
+ include $(srctree)/arch/$(ARCH)/Makefile
+ export KBUILD_DEFCONFIG
+
+-config %config: scripts_basic outputmakefile FORCE
++config: scripts_basic outputmakefile FORCE
++	$(Q)mkdir -p include/linux
++	$(Q)$(MAKE) $(build)=scripts/kconfig $@
++	$(Q)$(MAKE) -C $(srctree) KBUILD_SRC= .kernelrelease
++
++%config: scripts_basic outputmakefile FORCE
+ 	$(Q)mkdir -p include/linux
+ 	$(Q)$(MAKE) $(build)=scripts/kconfig $@
+ 	$(Q)$(MAKE) -C $(srctree) KBUILD_SRC= .kernelrelease

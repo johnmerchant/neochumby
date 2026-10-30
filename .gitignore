@@ -1,4 +1,5 @@
 /target
+/crates/neochumby-init/target
 # Game data is never committed: Doom and Quake WADs/PAKs are fetched onto
 # the server by hand (see README).
 *.wad
@@ -8,6 +9,9 @@
 # Captures and profiles from the device.
 *.raw
 *.prof
+
+# Your own settings, such as where your firmware images are (dev/emulate).
+/.env.local
 
 # Agents' worktrees
 /.claude/

@@ -1,0 +1,270 @@
+#!/usr/bin/env python3
+"""Boots classic/build's image on QEMU's chumby-classic machine and checks
+that it comes up as the stock kernel does: the Chumby's drivers loaded and
+their devices answering, driven from QMP (the button, the accelerometer,
+the pen, the headphones). With --stick, also that a neochumby stick's
+userhook2 runs from /mnt/usb.
+
+  classic/boot-test QEMU ZIMAGE [--stick IMG [--want TEXT]] [--log FILE]
+
+--stick IMG attaches IMG (a FAT disk image) as a USB stick; --want TEXT is
+what its userhook2 must print on the console. The console goes to --log
+(default: stdout at the end). Exits 0 if every check passed.
+"""
+import argparse
+import json
+import os
+import re
+import select
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+
+PROMPT = b"/ # "
+
+ap = argparse.ArgumentParser()
+ap.add_argument("qemu")
+ap.add_argument("kernel")
+ap.add_argument("--stick")
+ap.add_argument("--want")
+ap.add_argument("--log")
+ap.add_argument("--timeout", type=float, default=180)
+a = ap.parse_args()
+
+tmp = tempfile.mkdtemp(prefix="classic-")
+con_path = os.path.join(tmp, "con")
+qmp_path = os.path.join(tmp, "qmp")
+wav = os.path.join(tmp, "out.wav")
+args = [a.qemu, "-audiodev", f"wav,id=snd0,path={wav}", "-M", "chumby-classic,audiodev=snd0",
+        "-kernel", a.kernel,
+        "-append", "console=ttyS0,38400",
+        "-serial", f"unix:{con_path},server=on,wait=off",
+        "-qmp", f"unix:{qmp_path},server=on,wait=off",
+        "-display", "none", "-monitor", "none", "-no-reboot", "-nic", "none",
+        "-icount", "shift=auto,sleep=off"]
+if a.stick:
+    args += ["-drive", f"if=none,id=stick,file={a.stick},format=raw",
+             "-device", "usb-storage,drive=stick"]
+qemu = subprocess.Popen(args, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+
+def connect(path):
+    for _ in range(400):
+        if os.path.exists(path):
+            s = socket.socket(socket.AF_UNIX)
+            try:
+                s.connect(path)
+                return s
+            except OSError:
+                s.close()
+        if qemu.poll() is not None:
+            sys.exit("boot-test: QEMU exited: " + qemu.stderr.read().decode(errors="replace"))
+        time.sleep(0.05)
+    sys.exit(f"boot-test: no {path}")
+
+
+con = connect(con_path)
+qmp = connect(qmp_path)
+qf = qmp.makefile("rw")
+
+
+def qmp_cmd(cmd, **arguments):
+    qf.write(json.dumps({"execute": cmd, "arguments": arguments}) + "\n")
+    qf.flush()
+    while True:
+        r = json.loads(qf.readline())
+        if "return" in r or "error" in r:
+            if "error" in r:
+                raise RuntimeError(f"{cmd}: {r['error']}")
+            return r["return"]
+
+
+json.loads(qf.readline())  # the greeting
+qmp_cmd("qmp_capabilities")
+
+buf = bytearray()
+
+
+def pump(until=None, secs=10):
+    end = time.time() + secs
+    start = len(buf)
+    while time.time() < end:
+        if until is not None and re.search(until, bytes(buf[start:])):
+            return True
+        r, _, _ = select.select([con], [], [], 0.1)
+        if r:
+            d = con.recv(65536)
+            if not d:
+                break
+            buf.extend(d)
+    return until is None
+
+
+def run(cmd, secs=20):
+    """CMD's output, from the console."""
+    # The markers as the shell prints them differ from their echo (the
+    # quotes), so the echoed line, wrapped or not, never matches.
+    n = time.time_ns()
+    begin, end = f"==B{n}==", f"==E{n}=="
+    line = f"echo ==B\"{n}\"==; {cmd}; echo; echo ==E\"{n}\"=="
+    start = len(buf)
+    # A few bytes at a time, as a person types: the UART's receive FIFO
+    # overruns (garbling the line) if the guest is busy elsewhere.
+    for i in range(0, len(line), 8):
+        con.sendall(line[i:i + 8].encode())
+        time.sleep(0.04)
+    con.sendall(b"\r")
+    if not pump(re.escape(end.encode()) + rb"\r?\n" + re.escape(PROMPT), secs):
+        raise RuntimeError(f"no prompt after {cmd!r}")
+    out = bytes(buf[start:]).decode(errors="replace").replace("\r", "")
+    out = out.split(begin + "\n", 1)[1].split(end, 1)[0]
+    return out.rstrip("\n")
+
+
+failed = []
+
+
+def check(what, ok, detail=""):
+    print(f"{'ok  ' if ok else 'FAIL'} {what}" + (f": {detail}" if detail and not ok else ""))
+    if not ok:
+        failed.append(what)
+
+
+try:
+    t0 = time.time()
+    booted = pump(re.escape(PROMPT), a.timeout)
+    check("boots to a shell on ttyS0", booted)
+    if not booted:
+        raise RuntimeError("no shell")
+    print(f"     (shell after {time.time() - t0:.0f} s)")
+    pump(None, 1)
+    # The stick's hook runs in the background and writes to the console;
+    # wait for it before typing at the prompt.
+    if a.stick:
+        want = a.want or "stick: userhook2 exited"
+        got = pump(re.escape(want.encode()), 60) or want.encode() in buf
+        check(f"the stick's userhook2 ran ({want!r})", got)
+        pump(None, 1)
+        con.sendall(b"\r")
+        pump(re.escape(PROMPT), 5)
+
+    check("uname -r is the stock kernel's", run("uname -r") == "2.6.16-csb", run("uname -r"))
+    mods = run("cat /proc/modules")
+    for m in ("chumby_tsc2100", "chumby_sense1", "chumby_udma", "chumby_timer", "chumby_accel"):
+        check(f"module {m} loaded", re.search(rf"^{m} ", mods, re.M) is not None, mods)
+    # The kernel's messages, from the console: the stock config's 16 KB log
+    # buffer has lost the first of them by now (its drivers are chatty).
+    klog = bytes(buf).decode(errors="replace")
+    for what, pat in (("the i.MX21 USB host", r"IMX21 USB Host Controller"),
+                      ("the NAND", r"NAND device: Manufacturer ID"),
+                      ("the framebuffer", r"i\.MX Framebuffer driver"),
+                      ("chumby-tsc2100 (touch)", r"Chumby TI-TSC2100 TouchScreen Driver"),
+                      ("chumby-tsc2100 (audio)", r"Chumby TI-TSC2100 ALSA Audio Driver"),
+                      ("chumby_sense1", r"Chumby sensor suite 1 driver .*\(HW-v3\.8\)"),
+                      ("chumby_udma", r"UserDMA device major="),
+                      ("chumby_timer", r"Chumby timerx"),
+                      ("chumby_accel", r"Chumby accelerometer driver"),
+                      ("chumby_accel (DC ID EEPROM)", r"Chumby DC ID EEPROM driver")):
+        m = re.search(pat, klog)
+        check(f"kernel log: {what}", m is not None)
+        if m:
+            line = klog[klog.rfind("\n", 0, m.start()) + 1:klog.find("\n", m.end())].strip()
+            print(f"     {line}")
+    devs = run("ls -l /dev/switch /dev/accel /dev/dcid /dev/timerx /dev/udma /dev/fb0 /dev/dsp /dev/input/event0")
+    check("device nodes", "No such file" not in devs, devs)
+
+    # The button: /dev/switch reads one byte, 1 while it's held.
+    rd = "dd if=/dev/switch bs=1 count=1 2>/dev/null | od -An -tu1"
+    qmp_cmd("qom-set", path="/machine", property="button", value=True)
+    pump(None, 0.5)
+    down = run(rd).strip()
+    qmp_cmd("qom-set", path="/machine", property="button", value=False)
+    pump(None, 0.5)
+    up = run(rd).strip()
+    check("/dev/switch follows the button", (down, up) == ("1", "0"), f"down {down!r}, up {up!r}")
+
+    # The headphones: /proc/sys/sense1/hpin.
+    qmp_cmd("qom-set", path="/machine", property="headphones", value=True)
+    pump(None, 0.5)
+    hp_in = run("cat /proc/sys/sense1/hpin").strip()
+    qmp_cmd("qom-set", path="/machine", property="headphones", value=False)
+    pump(None, 0.5)
+    hp_out = run("cat /proc/sys/sense1/hpin").strip()
+    check("/proc/sys/sense1/hpin follows the headphones", hp_in != hp_out, f"in {hp_in!r}, out {hp_out!r}")
+    sense = run("for f in /proc/sys/sense1/*; do echo $f=$(cat $f); done")
+    check("/proc/sys/sense1 readable", "brightness=" in sense and "spkmute=" in sense, sense)
+
+    # The accelerometer: /dev/accel reads a struct accelReadData, whose
+    # third to fifth words are the latest sample's x, y and z (2048 is 0 g,
+    # 819.2 counts a g). Tilt it along x.
+    rd = "dd if=/dev/accel bs=64 count=1 2>/dev/null | od -An -tu4 -j8 -N12"
+    flat = run(rd).split()
+    qmp_cmd("qom-set", path="/machine", property="accel-x", value=800)
+    pump(None, 1)
+    tilted = run(rd).split()
+    qmp_cmd("qom-set", path="/machine", property="accel-x", value=0)
+    ok = (len(flat) == 3 and len(tilted) == 3 and all(v.isdigit() for v in flat + tilted)
+          and int(tilted[0]) - int(flat[0]) > 400 and flat[1:] == tilted[1:])
+    check("/dev/accel follows a tilt", ok, f"{flat} -> {tilted}")
+    print(f"     x, y, z flat {flat}, tilted 0.8 g on x {tilted}")
+    dc = run("cat /proc/DCversion")
+    check("/proc/DCversion (the DC ID EEPROM)", dc.strip() != "" and "No such" not in dc, dc)
+
+    # The pen: an event on /dev/input/event0 for a touch.
+    run("rm -f /tmp/ev; (dd if=/dev/input/event0 bs=16 count=4 of=/tmp/ev 2>/dev/null &)")
+    pump(None, 0.5)
+    qmp_cmd("input-send-event", events=[
+        {"type": "abs", "data": {"axis": "x", "value": 16000}},
+        {"type": "abs", "data": {"axis": "y", "value": 16000}},
+        {"type": "btn", "data": {"button": "left", "down": True}}])
+    pump(None, 1)
+    qmp_cmd("input-send-event", events=[{"type": "btn", "data": {"button": "left", "down": False}}])
+    pump(None, 1)
+    # struct input_event: 8 bytes of time, then type, code, value; EV_ABS
+    # (3) or EV_KEY (1) for BTN_TOUCH (0x14a).
+    ev = run("od -An -tu2 -w16 /tmp/ev | awk '{print $5, $6, $7}'")
+    types = {line.split()[0] for line in ev.splitlines() if line.split()}
+    check("touch events on /dev/input/event0", bool(types & {"1", "3"}), ev)
+    print("     type code value: " + "; ".join(ev.splitlines()))
+
+    # The screen: white written to /dev/fb0 reaches the display.
+    fb = run("tr '\\000' '\\377' </dev/zero | dd of=/dev/fb0 bs=1024 count=150 2>&1 | tail -n 1")
+    pump(None, 1)
+    shot = os.path.join(tmp, "screen.ppm")
+    qmp_cmd("screendump", filename=shot)
+    data = open(shot, "rb").read()
+    hdr = data.split(b"\n", 3)
+    pixels = hdr[3]
+    white = sum(1 for i in range(0, len(pixels) - 2, 3) if pixels[i:i + 3] == b"\xff\xff\xff")
+    check("/dev/fb0 to the screen", fb.startswith("153600 bytes") and white == 320 * 240,
+          f"{fb}; {hdr[1]!r}, {white} white pixels")
+    print(f"     screendump {hdr[1].decode()}: {white} white pixels")
+
+    # The sound card: what's written to /dev/dsp reaches QEMU's audio.
+    size = lambda: os.path.getsize(wav) if os.path.exists(wav) else 0
+    before = size()
+    dsp = run("dd if=/dev/zero of=/dev/dsp bs=4096 count=8 2>&1 | tail -n 1")
+    pump(None, 1)
+    grew = size() - before
+    check("/dev/dsp to QEMU's audio", dsp.startswith("32768 bytes") and grew > 0, f"{dsp}; wav +{grew}")
+    print(f"     {dsp}; the wav grew {grew} bytes")
+except Exception as e:  # noqa: BLE001 - reported as a failure
+    check("console session", False, str(e))
+finally:
+    qemu.terminate()
+    try:
+        qemu.wait(5)
+    except subprocess.TimeoutExpired:
+        qemu.kill()
+    log = bytes(buf).decode(errors="replace").replace("\r", "")
+    if a.log:
+        open(a.log, "w").write(log)
+    else:
+        print("---- console ----\n" + log)
+    shutil.rmtree(tmp, ignore_errors=True)
+
+print("boot-test: " + ("all passed" if not failed else f"{len(failed)} failed: " + ", ".join(failed)))
+sys.exit(1 if failed else 0)

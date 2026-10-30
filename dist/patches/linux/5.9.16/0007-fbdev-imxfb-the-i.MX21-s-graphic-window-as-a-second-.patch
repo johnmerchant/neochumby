@@ -1,0 +1,423 @@
+Description: fbdev: imxfb: the i.MX21's graphic window as a second framebuffer
+ The i.MX21's and i.MX27's LCD controller blends a second plane, the
+ graphic window, over the screen, with an alpha value and a six-bit-per-
+ channel colour key. The Chumby Classic's stock 2.6.16 kernel has it as
+ /dev/fb1, the panel's size at (0,0), and controls it through
+ /proc/driver/imxfb/{enable,alpha,key,key_en}; its software uses both.
+ .
+ With FB_IMX_GRAPHIC_WINDOW, imxfb does the same on the i.MX21 and i.MX27:
+ - fb1 has fb0's mode (check_var hands it back whatever is asked) and its
+   own write-combined buffer, cleared to black.
+ - The proc files read and write as the stock kernel's: a write is a
+   number in any base and whatever follows it is ignored; enable and
+   key_en read "0" or "1", alpha "0x%x", and key "0xRRGGBB" with six bits
+   per channel.
+ - The window starts as the stock firmware leaves it: on, alpha 0x80,
+   black keyed out, so the black window shows nothing.
+ - LGWCR is kept in the driver, so blanking doesn't lose it and reads
+   don't need the clocks. Turning the window on stops the controller's
+   AHB clock around the write, as the stock kernel does.
+ .
+ Unlike the stock kernel, setting fb0's mode leaves the window alone.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+diff --git a/drivers/video/fbdev/Kconfig b/drivers/video/fbdev/Kconfig
+index 402e85450..f695e0adc 100644
+--- a/drivers/video/fbdev/Kconfig
++++ b/drivers/video/fbdev/Kconfig
+@@ -341,6 +341,16 @@ config FB_IMX
+ 	select FB_MODE_HELPERS
+ 	select VIDEOMODE_HELPERS
+ 
++config FB_IMX_GRAPHIC_WINDOW
++	bool "i.MX21/27 graphic window as a second framebuffer"
++	depends on FB_IMX && PROC_FS
++	help
++	  The i.MX21's and i.MX27's LCD controller can blend a second plane,
++	  the graphic window, over the screen, with an alpha value and a
++	  colour key. Say Y to have it as a second framebuffer the size of the
++	  panel at (0,0), controlled through /proc/driver/imxfb/{enable,alpha,
++	  key,key_en} as on the Chumby Classic's stock 2.6.16 kernel.
++
+ config FB_CYBER2000
+ 	tristate "CyberPro 2000/2010/5000 support"
+ 	depends on FB && PCI && (BROKEN || !SPARC64)
+diff --git a/drivers/video/fbdev/imxfb.c b/drivers/video/fbdev/imxfb.c
+index 884b16efa..070546f50 100644
+--- a/drivers/video/fbdev/imxfb.c
++++ b/drivers/video/fbdev/imxfb.c
+@@ -34,6 +34,10 @@
+ #include <linux/math64.h>
+ #include <linux/of.h>
+ #include <linux/of_device.h>
++#include <linux/mutex.h>
++#include <linux/proc_fs.h>
++#include <linux/seq_file.h>
++#include <linux/uaccess.h>
+ 
+ #include <linux/regulator/consumer.h>
+ 
+@@ -115,6 +119,23 @@
+ #define LCDISR_EOF	(1<<1)
+ #define LCDISR_BOF	(1<<0)
+ 
++/* The graphic window (i.MX21 and i.MX27) */
++#define LCDC_LGWSAR	0x50
++#define LCDC_LGWSR	0x54
++#define LCDC_LGWVPWR	0x58
++#define LCDC_LGWPOR	0x5C
++#define LCDC_LGWPR	0x60
++#define LCDC_LGWCR	0x64
++#define LGWCR_GWAV(x)	(((x) & 0xff) << 24)
++#define LGWCR_GWAV_MASK	(0xff << 24)
++#define LGWCR_GWCKE	(1<<23)
++#define LGWCR_GWE	(1<<22)
++#define LGWCR_GWCKR(x)	(((x) & 0x3f) << 12)
++#define LGWCR_GWCKG(x)	(((x) & 0x3f) << 6)
++#define LGWCR_GWCKB(x)	((x) & 0x3f)
++#define LGWCR_GWCK_MASK	0x3ffff
++#define LCDC_LGWDCR	0x68
++
+ #define IMXFB_LSCR1_DEFAULT 0x00120300
+ 
+ #define LCDC_LAUSCR	0x80
+@@ -173,6 +194,16 @@ struct imxfb_info {
+ 
+ 	struct regulator	*lcd_pwr;
+ 	int			lcd_pwr_enabled;
++
++#ifdef CONFIG_FB_IMX_GRAPHIC_WINDOW
++	/* The graphic window, a second framebuffer */
++	struct fb_info		*gw;
++	dma_addr_t		gw_dma;
++	u_int			gw_size;
++	/* LGWCR as the window should be, kept while the clocks are off */
++	u32			lgwcr;
++	struct mutex		gw_lock;
++#endif
+ };
+ 
+ static const struct platform_device_id imxfb_devtype[] = {
+@@ -483,6 +514,25 @@ static int imxfb_set_par(struct fb_info *info)
+ 	return 0;
+ }
+ 
++#ifdef CONFIG_FB_IMX_GRAPHIC_WINDOW
++static void imxfb_gw_setup(struct imxfb_info *fbi)
++{
++	struct fb_var_screeninfo *var = &fbi->gw->var;
++
++	writel(fbi->gw_dma, fbi->regs + LCDC_LGWSAR);
++	writel(SIZE_XMAX(var->xres) | (var->yres & YMAX_MASK_IMX21),
++		fbi->regs + LCDC_LGWSR);
++	writel(VPW_VPW(var->xres * var->bits_per_pixel / 8 / 4),
++		fbi->regs + LCDC_LGWVPWR);
++	writel(0, fbi->regs + LCDC_LGWPOR);
++	/* at (0,0) */
++	writel(0, fbi->regs + LCDC_LGWPR);
++	/* the stock Chumby kernel's DMA marks: high mark 3, trigger mark 8 */
++	writel(0x00030008, fbi->regs + LCDC_LGWDCR);
++	writel(fbi->lgwcr, fbi->regs + LCDC_LGWCR);
++}
++#endif
++
+ static int imxfb_enable_controller(struct imxfb_info *fbi)
+ {
+ 	int ret;
+@@ -492,6 +542,11 @@ static int imxfb_enable_controller(struct imxfb_info *fbi)
+ 
+ 	pr_debug("Enabling LCD controller\n");
+ 
++#ifdef CONFIG_FB_IMX_GRAPHIC_WINDOW
++	if (fbi->gw)
++		imxfb_gw_setup(fbi);
++#endif
++
+ 	writel(fbi->map_dma, fbi->regs + LCDC_SSA);
+ 
+ 	/* panning offset 0 (0 pixel offset)        */
+@@ -578,6 +633,256 @@ static const struct fb_ops imxfb_ops = {
+ 	.fb_blank	= imxfb_blank,
+ };
+ 
++#ifdef CONFIG_FB_IMX_GRAPHIC_WINDOW
++/*
++ * The graphic window: a plane the size of the panel at (0,0), blended over
++ * the screen. It has the screen's mode and nothing to choose, and it shows
++ * only while the controller runs; fb0 blanks both.
++ */
++static int imxfb_gw_check_var(struct fb_var_screeninfo *var,
++			      struct fb_info *info)
++{
++	u32 activate = var->activate;
++
++	*var = info->var;
++	var->activate = activate;
++	return 0;
++}
++
++static const struct fb_ops imxfb_gw_ops = {
++	.owner		= THIS_MODULE,
++	.fb_check_var	= imxfb_gw_check_var,
++	.fb_setcolreg	= imxfb_setcolreg,
++	.fb_fillrect	= cfb_fillrect,
++	.fb_copyarea	= cfb_copyarea,
++	.fb_imageblit	= cfb_imageblit,
++};
++
++/* Changes the window's LGWCR bits under mask to val. */
++static void imxfb_gw_update(struct imxfb_info *fbi, u32 mask, u32 val)
++{
++	u32 old, new;
++
++	mutex_lock(&fbi->gw_lock);
++	old = fbi->lgwcr;
++	new = (old & ~mask) | (val & mask);
++	fbi->lgwcr = new;
++	if (fbi->enabled) {
++		bool on = !(old & LGWCR_GWE) && (new & LGWCR_GWE);
++
++		/*
++		 * The stock Chumby kernel stops the controller's AHB clock
++		 * while it turns the window on.
++		 */
++		if (on)
++			clk_disable(fbi->clk_ahb);
++		writel(new, fbi->regs + LCDC_LGWCR);
++		if (on)
++			clk_enable(fbi->clk_ahb);
++	}
++	mutex_unlock(&fbi->gw_lock);
++}
++
++/*
++ * /proc/driver/imxfb/{enable,alpha,key,key_en}, which read and write as on
++ * the stock Chumby kernel: a write takes a number in any base (0x hex,
++ * decimal, 0 octal) and ignores what follows it; the key is 0xRRGGBB with
++ * six bits per channel.
++ */
++static int imxfb_gw_parse(const char __user *ubuf, size_t count,
++			  unsigned long *val)
++{
++	char buf[32];
++	size_t n = min(count, sizeof(buf) - 1);
++
++	if (copy_from_user(buf, ubuf, n))
++		return -EFAULT;
++	buf[n] = '\0';
++	*val = simple_strtoul(buf, NULL, 0);
++	return 0;
++}
++
++static int imxfb_gw_enable_show(struct seq_file *m, void *v)
++{
++	struct imxfb_info *fbi = m->private;
++
++	seq_printf(m, "%d\n", !!(fbi->lgwcr & LGWCR_GWE));
++	return 0;
++}
++
++static void imxfb_gw_enable_store(struct imxfb_info *fbi, unsigned long val)
++{
++	imxfb_gw_update(fbi, LGWCR_GWE, val ? LGWCR_GWE : 0);
++}
++
++static int imxfb_gw_alpha_show(struct seq_file *m, void *v)
++{
++	struct imxfb_info *fbi = m->private;
++
++	seq_printf(m, "0x%x\n", (fbi->lgwcr >> 24) & 0xff);
++	return 0;
++}
++
++static void imxfb_gw_alpha_store(struct imxfb_info *fbi, unsigned long val)
++{
++	imxfb_gw_update(fbi, LGWCR_GWAV_MASK, LGWCR_GWAV(val));
++}
++
++static int imxfb_gw_key_show(struct seq_file *m, void *v)
++{
++	struct imxfb_info *fbi = m->private;
++
++	seq_printf(m, "0x%02x%02x%02x\n", (fbi->lgwcr >> 12) & 0x3f,
++		   (fbi->lgwcr >> 6) & 0x3f, fbi->lgwcr & 0x3f);
++	return 0;
++}
++
++static void imxfb_gw_key_store(struct imxfb_info *fbi, unsigned long val)
++{
++	imxfb_gw_update(fbi, LGWCR_GWCK_MASK, LGWCR_GWCKR(val >> 16) |
++			LGWCR_GWCKG(val >> 8) | LGWCR_GWCKB(val));
++}
++
++static int imxfb_gw_key_en_show(struct seq_file *m, void *v)
++{
++	struct imxfb_info *fbi = m->private;
++
++	seq_printf(m, "%d\n", !!(fbi->lgwcr & LGWCR_GWCKE));
++	return 0;
++}
++
++static void imxfb_gw_key_en_store(struct imxfb_info *fbi, unsigned long val)
++{
++	imxfb_gw_update(fbi, LGWCR_GWCKE, val ? LGWCR_GWCKE : 0);
++}
++
++#define IMXFB_GW_PROC(name)						\
++static int imxfb_gw_##name##_open(struct inode *inode, struct file *file) \
++{									\
++	return single_open(file, imxfb_gw_##name##_show, PDE_DATA(inode)); \
++}									\
++									\
++static ssize_t imxfb_gw_##name##_write(struct file *file,		\
++		const char __user *ubuf, size_t count, loff_t *ppos)	\
++{									\
++	unsigned long val;						\
++	int ret = imxfb_gw_parse(ubuf, count, &val);			\
++									\
++	if (ret)							\
++		return ret;						\
++	imxfb_gw_##name##_store(PDE_DATA(file_inode(file)), val);	\
++	return count;							\
++}									\
++									\
++static const struct proc_ops imxfb_gw_##name##_ops = {			\
++	.proc_open	= imxfb_gw_##name##_open,			\
++	.proc_read	= seq_read,					\
++	.proc_write	= imxfb_gw_##name##_write,			\
++	.proc_lseek	= seq_lseek,					\
++	.proc_release	= single_release,				\
++}
++
++IMXFB_GW_PROC(enable);
++IMXFB_GW_PROC(alpha);
++IMXFB_GW_PROC(key);
++IMXFB_GW_PROC(key_en);
++
++static int imxfb_gw_probe(struct platform_device *pdev, struct fb_info *info)
++{
++	struct imxfb_info *fbi = info->par;
++	struct proc_dir_entry *dir;
++	struct fb_info *gw;
++	int ret;
++
++	gw = framebuffer_alloc(0, &pdev->dev);
++	if (!gw)
++		return -ENOMEM;
++
++	gw->pseudo_palette = devm_kcalloc(&pdev->dev, 16, sizeof(u32),
++					  GFP_KERNEL);
++	if (!gw->pseudo_palette) {
++		ret = -ENOMEM;
++		goto failed_palette;
++	}
++
++	gw->par = fbi;
++	gw->fbops = &imxfb_gw_ops;
++	gw->flags = info->flags;
++	gw->fix = info->fix;
++	gw->var = info->var;
++	gw->var.xoffset = 0;
++	gw->var.yoffset = 0;
++
++	fbi->gw_size = PAGE_ALIGN(gw->fix.line_length * gw->var.yres);
++	gw->screen_buffer = dma_alloc_wc(&pdev->dev, fbi->gw_size,
++					 &fbi->gw_dma, GFP_KERNEL);
++	if (!gw->screen_buffer) {
++		ret = -ENOMEM;
++		goto failed_palette;
++	}
++	/* Black */
++	memset(gw->screen_buffer, 0, fbi->gw_size);
++	gw->fix.smem_start = fbi->gw_dma;
++	gw->fix.smem_len = gw->fix.line_length * gw->var.yres;
++
++	ret = fb_alloc_cmap(&gw->cmap, 256, 0);
++	if (ret < 0)
++		goto failed_cmap;
++
++	/*
++	 * As the stock Chumby firmware leaves it: on, half alpha, and black
++	 * keyed out, so a black window shows nothing.
++	 */
++	mutex_init(&fbi->gw_lock);
++	fbi->lgwcr = LGWCR_GWAV(0x80) | LGWCR_GWCKE | LGWCR_GWE;
++	fbi->gw = gw;
++
++	ret = register_framebuffer(gw);
++	if (ret < 0)
++		goto failed_register;
++
++	dir = proc_mkdir("driver/imxfb", NULL);
++	if (!dir ||
++	    !proc_create_data("enable", 0644, dir, &imxfb_gw_enable_ops, fbi) ||
++	    !proc_create_data("alpha", 0644, dir, &imxfb_gw_alpha_ops, fbi) ||
++	    !proc_create_data("key", 0644, dir, &imxfb_gw_key_ops, fbi) ||
++	    !proc_create_data("key_en", 0644, dir, &imxfb_gw_key_en_ops, fbi)) {
++		ret = -ENOMEM;
++		goto failed_proc;
++	}
++
++	return 0;
++
++failed_proc:
++	remove_proc_subtree("driver/imxfb", NULL);
++	unregister_framebuffer(gw);
++failed_register:
++	fbi->gw = NULL;
++	fb_dealloc_cmap(&gw->cmap);
++failed_cmap:
++	dma_free_wc(&pdev->dev, fbi->gw_size, gw->screen_buffer, fbi->gw_dma);
++failed_palette:
++	framebuffer_release(gw);
++	return ret;
++}
++
++static void imxfb_gw_remove(struct platform_device *pdev,
++			    struct imxfb_info *fbi)
++{
++	struct fb_info *gw = fbi->gw;
++
++	if (!gw)
++		return;
++
++	remove_proc_subtree("driver/imxfb", NULL);
++	unregister_framebuffer(gw);
++	fbi->gw = NULL;
++	fb_dealloc_cmap(&gw->cmap);
++	dma_free_wc(&pdev->dev, fbi->gw_size, gw->screen_buffer, fbi->gw_dma);
++	framebuffer_release(gw);
++}
++#endif
++
+ /*
+  * imxfb_activate_var():
+  *	Configures LCD Controller based on entries in var parameter.  Settings are
+@@ -1046,6 +1351,14 @@ static int imxfb_probe(struct platform_device *pdev)
+ 
+ 	lcd->props.max_contrast = 0xff;
+ 
++#ifdef CONFIG_FB_IMX_GRAPHIC_WINDOW
++	if (!is_imx1_fb(fbi)) {
++		ret = imxfb_gw_probe(pdev, info);
++		if (ret)
++			dev_warn(&pdev->dev, "no graphic window: %d\n", ret);
++	}
++#endif
++
+ 	imxfb_enable_controller(fbi);
+ 	fbi->pdev = pdev;
+ 
+@@ -1086,6 +1399,9 @@ static int imxfb_remove(struct platform_device *pdev)
+ 
+ 	imxfb_disable_controller(fbi);
+ 
++#ifdef CONFIG_FB_IMX_GRAPHIC_WINDOW
++	imxfb_gw_remove(pdev, fbi);
++#endif
+ 	unregister_framebuffer(info);
+ 	fb_dealloc_cmap(&info->cmap);
+ 	pdata = dev_get_platdata(&pdev->dev);

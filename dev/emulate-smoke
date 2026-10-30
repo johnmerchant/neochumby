@@ -1,29 +1,37 @@
 #!/bin/sh
-# dev/emulate's smoke test, which CI runs: boots a tree's session as a
-# Chumby would and drives it from outside, checking that
+# dev/emulate's smoke test: boots a tree's session as a Chumby would, from
+# a USB stick, and drives it from outside, checking that
 #   - the home screen draws, and a tap on DOOM opens Doom (without game data
 #     it says so and exits, and the home screen comes back);
-#   - the fake devices behave (dev/emulate selftest);
-#   - neochumby sensors, run beside the session, sees a touch; and the top
-#     button reaches whoever reads it (sensors, or the session itself once
-#     it holds /dev/switch);
 #   - holding the top-left corner for three seconds restarts the home screen;
-#   - CHUMBY MODE ends the session cleanly;
-#   - the same tree boots from a FAT stick image.
-# Screenshots, the session's log and the sensors output go in OUT.
+#   - the top button reaches the session, when it holds /dev/switch;
+#   - neochumby sensors, run on the console beside the session, sees a
+#     touch (where the console has a shell during the session: dist,
+#     classic);
+#   - CHUMBY MODE ends the session cleanly.
+# Screenshots and the console go in OUT.
 #
-#   sudo dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
+#   dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
+#
+# On dev/emulate's profile (NEOCHUMBY_EMU_PROFILE: dist, CI's; stock, your
+# own firmware; classic) or on a real Chumby (NEOCHUMBY_EMU_DEVICE=NAME,
+# paired and set dev=on). The waits scale with `dev/emulate scale`; a
+# backend that can't run at all (no images, a neochumbyd from before
+# remote input) makes it exit 77.
 set -eu
 tree=${1:?usage: dev/emulate-smoke TREE OUT}
 out=${2:?usage: dev/emulate-smoke TREE OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$out"
-state=$out/state
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-smoke.XXXXXX")
+trap 'emu stop >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
+backend=$(emu backend)
+slow=$(emu scale)
 step() { echo "== $*"; }
 fail() {
   echo "FAIL: $*"
-  echo "-- the session's log:"
+  echo "-- the console:"
   emu log || true
   emu stop || true
   exit 1
@@ -34,38 +42,56 @@ opened_home() {
   i=0
   until [ "$(count 'neochumby: opening home')" -ge "$1" ]; do
     i=$((i + 1))
-    [ "$i" -lt 300 ] || fail "$2"
+    [ "$i" -lt $((600 * slow)) ] || fail "$2"
     sleep 0.1
   done
-  emu wait screen 30 || fail "$2"
+  emu wait screen $((30 * slow)) || fail "$2"
 }
 
 # Where to tap: neochumby-home's layout, rows of apps from y=44, 36 high
 # with 4 between, in name order, those with a title and exec; CHUMBY MODE
-# along the bottom. What happened is read from the session's log.
-row=0
-found=
+# along the bottom. More than four apps go three to a page, with MORE in
+# the fourth row. What happened is read from the session's log.
+index=
+listed=0
 for d in $(ls "$tree/apps"); do
   m=$tree/apps/$d/manifest
   grep -q '^title=' "$m" && grep -q '^exec=' "$m" || continue
-  [ "$d" = doom ] && found=1 && break
-  row=$((row + 1))
+  [ "$d" = doom ] && index=$listed
+  listed=$((listed + 1))
 done
-[ -n "$found" ] && [ "$row" -lt 4 ] || fail "the tree needs doom among its first four listed apps"
-doom_y=$((44 + row * 40 + 18))
+[ -n "$index" ] || fail "the tree needs doom"
+row_y() { echo $((44 + $1 * 40 + 18)); }
+if [ "$listed" -le 4 ]; then
+  page=0 row=$index
+else
+  page=$((index / 3)) row=$((index % 3))
+fi
 
-step "boot"
-emu start "$tree"
+step "boot ($backend)"
+if emu start "$tree"; then :; else
+  code=$?
+  [ "$code" = 77 ] && exit 77
+  fail "dev/emulate start failed ($code)"
+fi
+# The whole boot, then the session.
+emu wait log 'neochumby: opening home' $((100 * slow)) || fail "the session didn't open home"
 opened_home 1 "the home screen didn't open"
 emu shot "$out/1-home.png"
 
 step "tap DOOM"
-emu tap 160 "$doom_y"
-# Without game data Doom exits at once; with it, it draws its bars.
 i=0
-until emu log | grep -q 'neochumby-doom: no IWAD found' || [ "$(emu pixel 160 2)" = "#180000" ]; do
+while [ "$i" -lt "$page" ]; do
+  emu tap 160 "$(row_y 3)"
+  sleep 0.5
   i=$((i + 1))
-  [ "$i" -lt 300 ] || fail "DOOM didn't open"
+done
+emu tap 160 "$(row_y "$row")"
+emu wait log 'neochumby: opening doom' $((10 * slow)) || fail "the session didn't open DOOM"
+# Without game data Doom exits at once, saying so; with it, it runs.
+i=0
+until emu log | grep -q 'neochumby-doom: no IWAD found' || [ "$i" -ge $((30 * slow)) ]; do
+  i=$((i + 1))
   sleep 0.1
 done
 emu shot "$out/2-doom.png"
@@ -76,56 +102,50 @@ else
   echo "Doom is running"
 fi
 
-step "the devices"
-emu selftest || fail "dev/emulate selftest"
-
 step "the corner hold (the escape hatch)"
 before=$(count 'neochumby: opening home')
 emu tap 5 5 --hold 3600
-emu wait log 'neochumby: escape: ending' 10 || fail "the corner hold didn't end the home screen"
+emu wait log 'neochumby: escape: ending' $((10 * slow)) || fail "the corner hold didn't end the home screen"
 opened_home $((before + 1)) "the home screen didn't come back after the escape"
 emu shot "$out/3-escaped.png"
 
 # A session that holds the top button itself (proposal 0002) keeps
-# /dev/switch open.
-if emu status | grep -q 'button_open: True'; then
+# /dev/switch open; a real Chumby's session always does. Home is in front
+# here: a remote press can't reach an app that reads the switch itself
+# (button = true, Doom's FIRE), so a step that needs that is skipped on a
+# device.
+if [ "$backend" = device ] || emu status | grep -q 'button_open: True'; then
   step "the top button, to the session"
   emu button press
-  emu wait log 'neochumby: the top button: ' 10 || fail "the session didn't act on the top button"
-  emu wait screen 30 || fail "the home screen didn't come back after the top button"
-  session_button=1
+  emu wait log 'neochumby: the top button: ' $((10 * slow)) || fail "the session didn't act on the top button"
+  emu wait screen $((30 * slow)) || fail "the home screen didn't come back after the top button"
+  button=
 else
-  session_button=
+  echo "skipped: the top button (the session hasn't /dev/switch)"
+  button=" the top button,"
 fi
 
-step "neochumby sensors: a touch, and the top button unless the session has it"
-emu button down
-(sleep 1 && emu tap 200 20 && emu button up) &
-emu exec --for 2.5 /mnt/neochumby/neochumby sensors > "$out/sensors.txt" 2>&1 || fail "neochumby sensors: $(cat "$out/sensors.txt")"
-wait
-if [ -z "$session_button" ]; then
-  grep -q 'squeeze=true' "$out/sensors.txt" || fail "sensors didn't see the button held"
-  grep -q 'squeeze=false' "$out/sensors.txt" || fail "sensors didn't see the button released"
-fi
-grep -q 'Down { x: 200, y: 20,' "$out/sensors.txt" || fail "sensors didn't see the touch at (200, 20)"
+# The console's shell runs beside the session on dist and classic.
+case $backend in
+dist | classic)
+  step "neochumby sensors: a touch"
+  (sleep 3 && emu tap 200 20) &
+  emu exec --for 6 /mnt/usb/neochumby/neochumby sensors > "$out/sensors.txt" 2>&1 || true
+  wait
+  grep -q 'Down { x: 200, y: 20,' "$out/sensors.txt" || fail "sensors didn't see the touch at (200, 20): $(cat "$out/sensors.txt")"
+  sensors=
+  ;;
+*) sensors=" sensors," ;;
+esac
 
 step "CHUMBY MODE"
 emu tap 160 220
-emu wait exit 20 || fail "CHUMBY MODE didn't end the session"
+emu wait exit $((20 * slow)) || fail "CHUMBY MODE didn't end the session"
 [ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
 emu log > "$out/log.txt"
-
-step "boot from a stick"
-emu mkstick --force "$out/stick.img" "$tree"
-emu start --stick "$out/stick.img"
-opened_home 1 "the home screen didn't open from the stick"
-emu shot "$out/4-stick.png"
-emu tap 160 220
-emu wait exit 20 || fail "CHUMBY MODE didn't end the session from the stick"
-emu log > "$out/log-stick.txt"
-
-echo "-- the session's log, from the tree:"
+# The boot carries on after the session: the machine is stopped.
+emu stop
+echo "-- the console:"
 cat "$out/log.txt"
-echo "-- and from the stick:"
-cat "$out/log-stick.txt"
-echo "dev/emulate-smoke: all passed"
+skipped=$(echo "$button$sensors" | sed 's/,$//')
+echo "dev/emulate-smoke: all passed ($backend${skipped:+; skipped:$skipped})"

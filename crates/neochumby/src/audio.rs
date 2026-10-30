@@ -56,6 +56,7 @@ use neochumby_sys::oss::{self, AFMT_S16_LE, Setting};
 use neochumby_sys::speaker::{Handover, Take};
 
 use crate::debug;
+use crate::session::{Pipe, Request};
 
 const DSP: &str = "/dev/dsp";
 const SPEAKER_MUTE: &str = "/proc/sys/sense1/spkmute";
@@ -191,8 +192,13 @@ const BUSY_RETRY: Duration = Duration::from_secs(2);
 /// else's, or /dev/dsp can't be opened, what is written is dropped and the
 /// clock stands in for the speaker, so the game goes on as if it played.
 /// Writes never block: what /dev/dsp has no room for waits here for the next
-/// write or [`Stream::played`]. If the driver takes another rate, the stream
-/// is resampled to it.
+/// write or [`Stream::played`]. The speaker plays at least [`DEVICE_RATE`],
+/// and the stream is resampled to whatever rate the driver takes.
+///
+/// The Chumby's driver plays nothing of a fragment (8 KiB, whatever is
+/// asked) until it is full. So the bytes in the last, part-filled one count
+/// as played: the game mixes on past them, and the fragment fills. At
+/// DEVICE_RATE a fragment is under 50 ms of sound, which is what that costs.
 pub struct Stream {
     channels: u32,
     rate: u32,
@@ -209,7 +215,15 @@ pub struct Stream {
     retry: Option<Instant>,
     /// The speaker went to a newer player: it is taken back only once free.
     yielded: bool,
+    /// Bytes written to /dev/dsp since it was opened: where in a fragment
+    /// the next byte falls.
+    sent: u64,
+    /// What [`Stream::played`] last said.
+    played: u64,
 }
+
+/// The least rate the speaker plays a [`Stream`] at, in Hz.
+const DEVICE_RATE: u32 = 44100;
 
 impl Stream {
     /// A stream of `channels` channels at `rate` Hz, played at the master
@@ -226,6 +240,8 @@ impl Stream {
             resample: Resample::new(channels as usize),
             retry: None,
             yielded: false,
+            sent: 0,
+            played: 0,
         };
         s.poll();
         s
@@ -239,13 +255,25 @@ impl Stream {
     /// Frames played so far, never more than [`Stream::written`]: a stream
     /// that has run dry plays the next frame written at once.
     pub fn played(&mut self) -> u64 {
+        let p = self.measure();
+        // Never back: a fragment that fills takes what it held off the
+        // count, and an engine that reads a position going back (Quake's)
+        // takes it for a pass of its ring.
+        self.played = self.played.max(p).min(self.written);
+        self.played
+    }
+
+    fn measure(&mut self) -> u64 {
         self.poll();
         self.flush();
         let frame = 2 * self.channels as u64;
         let device = self.speaker.as_ref().map(|sp| (sp.rate() as u64, sp.space()));
         if let Some((dev_rate, Ok(space))) = device {
             self.clock = None;
-            let waiting = (space.queued + self.pending.len()) as u64 / frame;
+            // What waits in a part-filled fragment won't play until it is
+            // full: it counts as played, so more is mixed to fill it.
+            let held = if space.fragment > 0 { (self.sent % space.fragment as u64) as usize } else { 0 };
+            let waiting = (space.queued.saturating_sub(held) + self.pending.len()) as u64 / frame;
             return self.written.saturating_sub(waiting * self.rate as u64 / dev_rate);
         }
         let (since, from) = *self.clock.get_or_insert((Instant::now(), self.written));
@@ -292,6 +320,7 @@ impl Stream {
             return;
         }
         self.pending.drain(..n);
+        self.sent += n as u64;
     }
 
     /// Yields the speaker if a newer player has asked for it, and takes it
@@ -312,9 +341,10 @@ impl Stream {
             return;
         }
         let first = self.retry.is_none();
-        match Speaker::open(self.channels, self.rate, self.volume) {
+        match Speaker::open(self.channels, self.rate.max(DEVICE_RATE), self.volume) {
             Ok(sp) if sp.channels() == self.channels => {
                 self.speaker = Some(sp);
+                self.sent = 0;
                 self.resample = Resample::new(self.channels as usize);
                 self.retry = None;
                 self.yielded = false;
@@ -423,24 +453,47 @@ impl Drop for Claim {
 
 /// The master volume set and the speaker unmuted while held; dropping it
 /// mutes the speaker and puts the volume back.
-struct Volume {
-    before: Option<u32>,
+///
+/// Only root can mute or set the volume (the kernel checks the mute on
+/// every write), so a jailed app asks the session to, over its request
+/// pipe (`speaker <volume>`, `speaker off`); the session puts back the
+/// volume the Chumby booted with.
+enum Volume {
+    Set { before: Option<u32> },
+    Asked(Pipe),
+    Unasked,
 }
 
 impl Volume {
     fn at(volume: u32) -> Volume {
+        if !neochumby_sys::process::is_root() {
+            let Some(mut pipe) = Pipe::from_env() else {
+                report("the speaker", Err(io::Error::other("not root, and no session to ask")));
+                return Volume::Unasked;
+            };
+            report("asking the session for the speaker", pipe.send(&Request::Speaker(Some(volume)).line()));
+            return Volume::Asked(pipe);
+        }
         let before = self::volume();
         report(SET_VOLUME, set_volume(volume));
         report(SPEAKER_MUTE, mute(false));
-        Volume { before }
+        Volume::Set { before }
     }
 }
 
 impl Drop for Volume {
     fn drop(&mut self) {
-        report(SPEAKER_MUTE, mute(true));
-        if let Some(v) = self.before {
-            report(SET_VOLUME, set_volume(v));
+        match self {
+            Volume::Set { before } => {
+                report(SPEAKER_MUTE, mute(true));
+                if let Some(v) = *before {
+                    report(SET_VOLUME, set_volume(v));
+                }
+            }
+            Volume::Asked(pipe) => {
+                report("giving the speaker back to the session", pipe.send(&Request::Speaker(None).line()));
+            }
+            Volume::Unasked => {}
         }
     }
 }

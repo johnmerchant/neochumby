@@ -1,7 +1,9 @@
 //! Pairing, from neochumby-home's PAIR button: this Chumby asks the
 //! neochumbyd it was booted with to pair, and shows the code the two derive
-//! from their connection. Someone runs `neochumbyd approve <code>` on the
-//! server, having seen the same code there. Only then does anything get
+//! from their connection: 32 hex digits, too many for anyone in the middle
+//! to make both ends show alike. Someone runs `neochumbyd approve CODE` on
+//! the server, typing the code from this screen, having seen the same code
+//! listed there. Only then does anything get
 //! written to /psp: this Chumby's key, the conf with the server's key
 //! pinned, and the boot hook, so it boots from the server with no stick.
 
@@ -15,7 +17,7 @@ use std::time::Duration;
 use neochumby::conf;
 use neochumby::fb::{self, Fb, rgb};
 use neochumby::input::{Touch, Touchscreen};
-use neochumby_proto::{Identity, Msg, Session, hex};
+use neochumby_proto::{Identity, Msg, Unverified, hex};
 
 const BG: u16 = rgb(16, 16, 32);
 
@@ -38,7 +40,8 @@ fn ask(
     };
     let addr = (server, api_port).to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("no address")?;
     let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| e.to_string())?;
-    let mut s = Session::connect(tcp, &identity).map_err(|e| e.to_string())?;
+    // Pairing is how the server's key is learnt: none to check yet.
+    let mut s = Unverified::connect(tcp, &identity).map_err(|e| e.to_string())?;
     s.send(&Msg::Pair { name: conf::name() }).map_err(|e| e.to_string())?;
     let _ = tx.send(Progress::Code(s.code()));
     let Msg::Paired { nfs_port, path } = s.recv().map_err(|e| e.to_string())? else {
@@ -107,19 +110,30 @@ pub fn run(
         while let Ok(p) = rx.try_recv() {
             match p {
                 Progress::Code(code) => {
-                    let cmd = format!("neochumbyd approve {code}");
+                    // In the log too, for dev/emulate-pairing to compare.
+                    eprintln!("neochumby-home: pairing with {server}, showing {code}");
+                    // Eight groups of four: four to a line.
+                    let (first, second) = code.split_at(code.len().min(19));
+                    let second = second.trim_start_matches('-');
+                    let green = rgb(120, 220, 120);
                     screen(
                         fb,
                         &[
                             ("PAIRING", 3, rgb(255, 200, 120)),
                             ("on the server, run", 1, white),
-                            (&cmd, 1, white),
-                            (&code, 4, rgb(120, 220, 120)),
+                            ("neochumbyd approve CODE", 1, white),
+                            ("typing this code:", 1, white),
+                            (first, 2, green),
+                            (second, 2, green),
                         ],
                         true,
                     );
                 }
                 Progress::Done(r) => {
+                    match &r {
+                        Ok(()) => eprintln!("neochumby-home: paired with {server}"),
+                        Err(e) => eprintln!("neochumby-home: not paired: {e}"),
+                    }
                     let ok = r.is_ok();
                     let msg = match &r {
                         Ok(()) => "remove any stick, restart".to_string(),

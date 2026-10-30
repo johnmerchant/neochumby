@@ -1,6 +1,6 @@
 #!/bin/sh
-# neochumby-classic under dev/emulate, which CI runs: the start app and its
-# service, with a renderer's output for pictures. It checks that
+# neochumby-classic under dev/emulate: the start app and its service, with a
+# renderer's output for pictures. It checks that
 #   - classic, the start app (start=classic in /psp/neochumby.conf), draws
 #     a slideshow page;
 #   - the top button, which the session holds, toggles Home and back, with
@@ -11,20 +11,28 @@
 #     the same process afterwards;
 #   - CHUMBY on Home ends the session with exit 0.
 #
-#   sudo dev/emulate-classic TREE PICTURES OUT
+#   dev/emulate-classic TREE PICTURES OUT
 #
 # TREE from tools/tree, with classic and doom. PICTURES is a renderer's
 # output (manifest.txt and its pictures), such as neochumby-classic's offline
 # smoke render (its tests/smoke.py's renders(), with NEOCHUMBY_TREE=TREE so
 # its APPS screen lists TREE's apps): made-up data and placeholder artwork.
-# Where to tap comes from the manifest's tap zones.
+# Where to tap comes from the manifest's tap zones. The pictures reach
+# classic through /tmp/classic (--bind: on the stick, linked there), as the
+# emulated Chumby has no network for a renderer; a real Chumby shows its own
+# renderer's, which these comparisons can't know, so it is skipped (77).
 set -eu
+if [ "$("$(dirname "$0")/emulate" backend)" = device ]; then
+  echo "dev/emulate-classic: skipped: the pictures are known only on the emulated Chumby"
+  exit 77
+fi
 tree=${1:?usage: dev/emulate-classic TREE PICTURES OUT}
 pictures=${2:?usage: dev/emulate-classic TREE PICTURES OUT}
 out=${3:?usage: dev/emulate-classic TREE PICTURES OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 state=$out/state
 emu() { "$dev/emulate" --state "$state" "$@"; }
+slow=$(emu scale)
 step() { echo "== $*"; }
 fail() {
   echo "FAIL: $*"
@@ -69,23 +77,30 @@ screens=
 for s in home home_night apps_p0 apps_p0_night confirm confirm_night; do
   [ -f "$pictures/$s.raw" ] && screens="$screens $pictures/$s.raw"
 done
+# What changes on classic's own screens, left out of the comparisons: the
+# clock and the ticker, the animated icons, and Home's live panes.
+masks="--mask 160,14,160,30 --mask 0,216,320,24"
+masks="$masks $(awk '$1 == "sprite" { printf " --mask %d,%d,%d,%d", $7, $8, $4, $5 }
+  $1 == "pane" { printf " --mask %d,%d,%d,%d", $6, $7, $4, $5 }' "$pictures/manifest.txt")"
 # Waits for the screen to be one of these (the best match, by name).
 showing() {
-  emu compare --min "$2" --wait 60 --want "$1" $pages $screens || fail "the screen isn't $1"
+  emu compare --min "$2" --wait $((60 * slow)) --want "$1" $masks $pages $screens || fail "the screen isn't $1"
 }
 slideshow() { showing '^(?!home|apps_p|confirm)' 0.6; }
 
 step "boot classic"
-emu start --psp "$out/psp" --bind "$pictures:/tmp/classic" "$tree"
-emu wait log 'neochumby: opening classic' 30 || fail "the session didn't open classic"
+r=0
+emu start --psp "$out/psp" --bind "$pictures:/tmp/classic" "$tree" || r=$?
+[ "$r" -eq 0 ] || exit "$r"
+emu wait log 'neochumby: opening classic' $((100 * slow)) || fail "the session didn't open classic"
 slideshow
 emu shot "$out/1-slideshow.png"
-emu wait log 'neochumby: service classic started' 30 || fail "classic's service didn't start"
+emu wait log 'neochumby: service classic started' $((30 * slow)) || fail "classic's service didn't start"
 [ "$(emu status | grep 'button_open')" = "  button_open: True" ] || fail "the session hasn't the top button"
 
 step "the top button: Home, and back"
 emu button press
-emu wait log 'neochumby: the top button: told classic' 10 || fail "the session didn't tell classic"
+emu wait log 'neochumby: the top button: told classic' $((10 * slow)) || fail "the session didn't tell classic"
 showing '^home' 0.5
 emu shot "$out/2-home.png"
 emu button press
@@ -99,14 +114,14 @@ tap $apps_at # Home's APPS
 showing '^apps_p0' 0.5
 emu shot "$out/3-apps.png"
 tap $doom_at # the DOOM tile
-emu wait log 'neochumby: classic asks: open doom' 10 || fail "classic didn't ask to open doom"
-emu wait log 'neochumby: opening doom' 10 || fail "the session didn't open doom"
-emu wait log 'neochumby-classic-service: doom in front' 10 || fail "the service wasn't told Doom is in front"
-emu wait log 'neochumby-doom: no IWAD found' 10 || fail "Doom didn't run"
+emu wait log 'neochumby: classic asks: open doom' $((10 * slow)) || fail "classic didn't ask to open doom"
+emu wait log 'neochumby: opening doom' $((10 * slow)) || fail "the session didn't open doom"
+emu wait log 'neochumby-classic-service: doom in front' $((10 * slow)) || fail "the service wasn't told Doom is in front"
+emu wait log 'neochumby-doom: no IWAD found' $((10 * slow)) || fail "Doom didn't run"
 i=0
 until [ "$(count 'neochumby: opening classic')" = 2 ]; do
   i=$((i + 1))
-  [ "$i" -lt 100 ] || fail "the session didn't open classic again after Doom"
+  [ "$i" -lt $((100 * slow)) ] || fail "the session didn't open classic again after Doom"
   sleep 0.1
 done
 slideshow
@@ -122,10 +137,11 @@ showing '^home' 0.5
 tap $confirm_at # Home's CHUMBY
 showing '^confirm' 0.5
 tap $yes_at # yes
-emu wait log 'neochumby: classic asks: chumby-mode' 10 || fail "classic didn't ask for CHUMBY MODE"
-emu wait exit 20 || fail "the session didn't end"
+emu wait log 'neochumby: classic asks: chumby-mode' $((10 * slow)) || fail "classic didn't ask for CHUMBY MODE"
+emu wait exit $((20 * slow)) || fail "the session didn't end"
 [ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
 
-echo "-- the session's log:"
+echo "-- the console:"
 emu log | tee "$out/log.txt"
+emu stop
 echo "dev/emulate-classic: all passed"

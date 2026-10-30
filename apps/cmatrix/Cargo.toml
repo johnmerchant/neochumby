@@ -1,0 +1,24 @@
+[package]
+name = "neochumby-cmatrix"
+description = "cmatrix on the Chumby Classic, on neochumby's terminal, as a neochumby app"
+# cmatrix is GPL-3.0, and this binary links it.
+license = "GPL-3.0-or-later"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+neochumby.workspace = true
+neochumby-ncurses.workspace = true
+
+[build-dependencies]
+cc = "1"
+
+[package.metadata.neochumby]
+title = "MATRIX"
+exec = "neochumby-cmatrix"
+access = ["screen", "touch", "terminal"]
+color = "20c040"
+
+[lints]
+workspace = true

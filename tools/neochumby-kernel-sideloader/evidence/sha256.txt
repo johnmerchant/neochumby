@@ -1,0 +1,11 @@
+# Artifacts of the captured NANDLESS QEMU run (2026-10-29, QEMU 11.1.2
+# chumby-classic).  Rebuilds may differ in build timestamps; these hashes
+# identify the evidence.
+bd2add65420db4f825d37a566572ae219d987096176b4d65c7593f3e6eed138b  neochumby-kernel-sideloader
+d1999152a554a27660a15e2be43e4efc241e0c8c476565a31591b7d6cdb93d3a  nandless-zImage (with built-in initramfs)
+1a1fd0204102a7489fbb26515b2a31803f7294341ac5f39854dec29ff128dc63  nandless-rootfs.cpio.gz
+338cb4db0e2c4203e2dabbca49cbc00f2574a02ae67b73edad130da0fe1e67be  nandless-payload.bin (zImage only, built-in initramfs)
+0fee1760a70e33609e4750bbd5fbf7239e1c121a967a71ded152a712e81d1aaf  stock 2.6.16 zImage
+5779fd4223e09f0e96eea13296f7147cf1e4baa90632368a0f5743504129db86  original sanitized NAND
+ff57973ffa2d9c47c015fe01d0733b015fefdce955536504693df8284f64b773  scratch NAND (before and after the run)
+2d62c79b9b6e48025d4d5ea68689a6322b1a02aa5791b0fe058f340ace3910b6  qemu-system-arm (QEMU 11.1.2 + chumby-classic)

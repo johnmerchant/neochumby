@@ -1,0 +1,8 @@
+# Our options over the stock kernel's .config (the one classic/linux
+# carries, Chumby's for firmware 1.7.1). classic/build fails if any line
+# here didn't make it into the kernel's .config as written.
+
+# The initramfs, built in: classic/build's tree of BusyBox, the Chumby's
+# modules and classic/rootfs, and classic/initramfs.list's device nodes
+# (paths in the build's container).
+CONFIG_INITRAMFS_SOURCE="/work/rootfs /work/initramfs.list"

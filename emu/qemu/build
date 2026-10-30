@@ -1,0 +1,37 @@
+#!/bin/sh
+# build: builds qemu-system-arm with the chumby-classic machine from
+# qemu-chumby (the submodule beside this script, at the commit this
+# repository pins), into emu/qemu/out/obj/qemu-system-arm.
+#
+# qemu-chumby's own build script fetches the QEMU release it pins, checks
+# the tarball's SHA-256 and applies the patches. All of neochumby's
+# emulation runs on this binary, through qemu-chumby's chumby-machine
+# (dev/emulate, the sideloader's tests).
+#
+# Exits 2, having done nothing, when a build dependency is missing (the
+# list is qemu-chumby's README's): dev/emulate then says it can't build
+# QEMU here, rather than that the build failed.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+src=$here/qemu-chumby
+
+missing=
+for c in "${CC:-cc}" ninja pkg-config python3; do
+    command -v "$c" >/dev/null 2>&1 || missing="$missing $c"
+done
+if [ -z "$missing" ]; then
+    for p in glib-2.0 pixman-1; do
+        pkg-config --exists "$p" || missing="$missing $p"
+    done
+fi
+if [ -n "$missing" ]; then
+    echo "emu/qemu/build: needs$missing (qemu-chumby's README, \"Building\", lists the build dependencies)" >&2
+    exit 2
+fi
+
+if [ ! -x "$src/build" ]; then
+    git -C "$here" submodule update --init qemu-chumby
+fi
+
+exec "$src/build" "$here/out"

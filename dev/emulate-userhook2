@@ -1,0 +1,42 @@
+#!/bin/sh
+# dev/emulate's boot hook: userhook2 on the stick dev/emulate makes, which
+# the emulated Chumby's boot runs from /mnt/usb as a Chumby runs a stick's
+# (the stock firmware's rcS; dist's and classic's /init). It runs the
+# tree's own hook, neochumby/userhook2, unchanged, after
+#   - copying the stick's emulate/psp into /psp, for the profiles whose
+#     settings aren't on the NAND (dist, classic);
+#   - linking each --bind directory (emulate/bind/N) at its path;
+# and copies the hook's log to the console, which is how dev/emulate
+# follows the session: its "neochumby exited: N" is the session's end.
+
+LOG=/tmp/neochumby.log
+STICK=/mnt/usb
+E=$STICK/emulate
+
+echo "emutest: stick mounted"
+if [ -d "$E/psp" ]; then
+  mkdir -p /psp
+  cp -R "$E/psp/." /psp/
+fi
+if [ -f "$E/binds" ]; then
+  while read -r n path; do
+    mkdir -p "${path%/*}"
+    rm -rf "$path"
+    ln -s "$E/bind/$n" "$path"
+  done <"$E/binds"
+fi
+[ -f "$STICK/neochumby/userhook2" ] || {
+  echo "emutest: the stick holds no neochumby/userhook2"
+  exit 0
+}
+: >>"$LOG"
+tail -f "$LOG" &
+tail=$!
+sh "$STICK/neochumby/userhook2"
+status=$?
+# tail looks at the log once a second: lets it copy the last lines, so
+# that what follows comes after them on the console.
+sleep 2
+kill "$tail"
+echo "emutest: hook returned: $status"
+exit 0

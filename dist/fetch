@@ -1,0 +1,198 @@
+#!/bin/sh
+# fetch: puts the image CI built from exactly this checkout's inputs in OUT,
+# in the layout dist/build OUT (or classic/build OUT) writes, instead of
+# building it:
+#
+#   dist/fetch [--kernel 5.9.16|stable|mainline] OUT   OUT/sideload-zImage, OUT/sideload-rootfs.cpio.gz
+#   dist/fetch --classic OUT                  OUT/classic-zImage, OUT/classic-rootfs.cpio.gz,
+#                                             OUT/classic-config (what classic/fetch runs)
+#   dist/fetch --inputs [--classic]           prints the inputs commit, and nothing else
+#   dist/fetch --pathspecs [--classic]        prints the inputs' git pathspecs, one a line
+#                                             (how dev/emulate sees local changes to them)
+#
+# CI (.github/workflows/ci.yml) builds each image on every push to main and
+# publishes it on the rolling `dist-prebuilt` prerelease, with its source
+# beside it, named after its inputs commit: the last commit that changed
+# what the image is built from (the pathspecs below). Any later commit that
+# leaves those alone has the same inputs commit, and so the same image:
+#
+#   neochumby-dist-<inputs>-<kernel>.tar.xz          (5.9.16, stable, mainline)
+#   neochumby-classic-<inputs>-2.6.16.tar.xz
+#   ... and each one's -source.tar, its corresponding source
+#
+# A build is made after the commit that defines it, so its digest can't be
+# committed here. Instead each tarball carries a GitHub artifact
+# attestation, signed by this repository's ci.yml running on main, and
+# `gh attestation verify` checks it before anything is extracted. (The
+# release itself is not trusted: anyone who can write to it could replace
+# an asset, but not sign one as main's CI.) That needs gh, logged in;
+# without it this refuses the download. Then the tarball's MANIFEST must
+# name these inputs and this kernel, so that another signed build can't
+# stand in for it.
+#
+# Exits 0 with the files in OUT. Exits 1 and leaves OUT as it was when the
+# inputs have local changes (the prebuilt image wouldn't match them), when
+# there is no build for these inputs (they changed on a branch, or CI
+# hasn't published main's yet), or when the download fails to verify: then
+# build it with dist/build OUT (or classic/build OUT). 2 for bad arguments.
+#
+# NEOCHUMBY_PREBUILT overrides where the tarballs are downloaded from (a
+# mirror, or a file:// directory): safe, since only the attestation is
+# trusted.
+#
+# Needs git (with the full history: not a shallow clone), curl, tar and xz
+# (or a tar that reads .tar.xz, as on macOS), and gh.
+set -eu
+
+repo=johnmerchant/neochumby
+tag=dist-prebuilt
+base=${NEOCHUMBY_PREBUILT:-https://github.com/$repo/releases/download/$tag}
+signer=https://github.com/$repo/.github/workflows/ci.yml@refs/heads/main
+
+usage() {
+    echo "usage: dist/fetch [--kernel 5.9.16|stable|mainline] OUT"
+    echo "       dist/fetch --classic OUT"
+    echo "       dist/fetch --inputs [--classic | --kernel K]"
+    echo "       dist/fetch --pathspecs [--classic]"
+}
+
+image=dist
+kernel=
+inputs_only=
+pathspecs=
+while [ $# -gt 0 ]; do
+    case $1 in
+        --kernel) [ $# -ge 2 ] || { usage >&2; exit 2; }; kernel=$2; shift 2 ;;
+        --kernel=*) kernel=${1#*=}; shift ;;
+        --classic) image=classic; shift ;;
+        --inputs) inputs_only=1; shift ;;
+        --pathspecs) inputs_only=1; pathspecs=1; shift ;;
+        -h | --help) usage; exit 0 ;;
+        --) shift; break ;;
+        -*) usage >&2; exit 2 ;;
+        *) break ;;
+    esac
+done
+case $image-$kernel in
+    dist-) kernel=5.9.16 ;;
+    dist-5.9.16 | dist-stable | dist-mainline | classic-2.6.16) ;;
+    classic-) kernel=2.6.16 ;;
+    *) echo "fetch: no $image image for kernel $kernel (dist: 5.9.16, stable or mainline; --classic: 2.6.16)" >&2; exit 2 ;;
+esac
+if [ -n "$inputs_only" ]; then
+    [ $# = 0 ] || { usage >&2; exit 2; }
+else
+    [ $# = 1 ] || { usage >&2; exit 2; }
+    out=$1
+fi
+
+# What each image is built from: everything its build reads. Keep these in
+# step with the image cache keys in ci.yml's dist and classic jobs. dist's
+# packages (dist/package/) may build crates/neochumby-init, which uses
+# crates/neochumby-sys. classic/linux is the kernel's submodule: its pinned
+# commit is part of classic/.
+if [ "$image" = dist ]; then
+    set -- dist ':(exclude)dist/README.md' ':(exclude)dist/fetch' ':(exclude)dist/kernel-sync' \
+        crates/neochumby-init crates/neochumby-sys
+    files="sideload-zImage sideload-rootfs.cpio.gz"
+    build="dist/build"
+    [ "$kernel" = 5.9.16 ] || build="NEOCHUMBY_DIST_KERNEL=$kernel dist/build"
+else
+    set -- classic ':(exclude)classic/README.md' ':(exclude)classic/boot-test' \
+        ':(exclude)classic/fetch'
+    files="classic-zImage classic-rootfs.cpio.gz classic-config"
+    build="classic/build"
+fi
+
+if [ -n "$pathspecs" ]; then
+    printf '%s\n' "$@"
+    exit 0
+fi
+
+root=$(cd "$(dirname "$0")" && git rev-parse --show-toplevel)
+cd "$root"
+if [ "$(git rev-parse --is-shallow-repository)" = true ]; then
+    echo "fetch: this is a shallow clone, whose history can't say which commit last changed" >&2
+    echo "  the image's inputs: git fetch --unshallow" >&2
+    exit 1
+fi
+inputs=$(git log -1 --format=%H -- "$@")
+case $inputs in
+    *[!0-9a-f]* | "") echo "fetch: no commit changed the $image image's inputs" >&2; exit 1 ;;
+esac
+if [ -n "$inputs_only" ]; then
+    echo "$inputs"
+    exit 0
+fi
+
+# Local edits to the inputs: the prebuilt image is of the commit, not of them.
+dirty=$(git status --porcelain --untracked-files=all --ignore-submodules=dirty -- "$@")
+if [ -n "$dirty" ]; then
+    echo "fetch: the $image image's inputs have local changes, so no prebuilt image matches them:" >&2
+    echo "$dirty" | sed 's/^/  /' >&2
+    echo "  build it instead: $build $out" >&2
+    exit 1
+fi
+
+if ! command -v gh >/dev/null 2>&1; then
+    echo "fetch: needs gh (https://cli.github.com) to verify the prebuilt image's attestation;" >&2
+    echo "  install it and run gh auth login, or build it instead: $build $out" >&2
+    exit 1
+fi
+if ! gh auth status >/dev/null 2>&1; then
+    echo "fetch: gh isn't logged in, which verifying the prebuilt image's attestation needs:" >&2
+    echo "  run gh auth login, or build it instead: $build $out" >&2
+    exit 1
+fi
+
+stem=neochumby-$image-$inputs-$kernel
+work=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-fetch.XXXXXX")
+trap 'rm -rf "$work"' EXIT INT TERM
+
+echo "fetching $base/$stem.tar.xz"
+if ! curl -fsSL --retry 3 -o "$work/$stem.tar.xz" "$base/$stem.tar.xz"; then
+    echo "fetch: no prebuilt $image image for inputs $inputs ($kernel): CI publishes" >&2
+    echo "  only main's, once its run finishes. Build it instead: $build $out" >&2
+    exit 1
+fi
+
+# The attestation: signed by ci.yml on main, here, on GitHub's own runners.
+if ! gh attestation verify "$work/$stem.tar.xz" --repo "$repo" \
+    --cert-identity "$signer" --source-ref refs/heads/main \
+    --deny-self-hosted-runners >"$work/verify.log" 2>&1; then
+    cat "$work/verify.log" >&2
+    echo "fetch: $stem.tar.xz isn't attested by $repo's CI on main: refused." >&2
+    echo "  Build it instead: $build $out" >&2
+    exit 1
+fi
+echo "verified: attested by $signer"
+
+mkdir "$work/x"
+if command -v xz >/dev/null 2>&1; then
+    xz -dc "$work/$stem.tar.xz" | tar -xf - -C "$work/x"
+else
+    tar -xJf "$work/$stem.tar.xz" -C "$work/x"
+fi
+m=$work/x/$stem/MANIFEST
+for want in "image: $image" "kernel: $kernel" "inputs: $inputs"; do
+    if ! grep -qxF "$want" "$m" 2>/dev/null; then
+        echo "fetch: $stem.tar.xz's MANIFEST doesn't say \"$want\": refused" >&2
+        exit 1
+    fi
+done
+for f in $files; do
+    if [ ! -f "$work/x/$stem/$f" ] || [ -L "$work/x/$stem/$f" ]; then
+        echo "fetch: $stem.tar.xz has no $f: refused" >&2
+        exit 1
+    fi
+done
+
+mkdir -p "$out"
+for f in $files; do
+    cp "$work/x/$stem/$f" "$out/$f.part"
+done
+for f in $files; do
+    mv "$out/$f.part" "$out/$f"
+    echo "$image: $out/$f"
+done
+echo "fetched the $image image ($kernel) for inputs $inputs; its source: $base/$stem-source.tar"
