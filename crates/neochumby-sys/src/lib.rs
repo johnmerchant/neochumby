@@ -10,8 +10,9 @@
 //! `unsafe` block here carries a `// SAFETY:` comment saying why it holds
 //! (clippy's `undocumented_unsafe_blocks`, denied workspace-wide), and each
 //! public function is safe to call with any arguments. Where std does the
-//! job safely it is used instead: `File::try_lock` for lock files,
-//! `Child::kill` for SIGKILL to one process.
+//! job safely it is used instead, such as `Child::kill` for SIGKILL to one
+//! process, unless it needs a Rust newer than Buildroot's (1.88), which
+//! builds this crate for ncinit: `fs::try_lock` is flock(2) for that.
 //!
 //! The calls are the ones the Chumby's stock firmware supports: Linux
 //! 2.6.16, static musl, an ARM926. Nothing here may use a newer system

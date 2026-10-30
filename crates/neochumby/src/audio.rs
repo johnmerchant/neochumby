@@ -14,16 +14,22 @@
 //! takes the speaker: whoever holds it is asked to yield, stops its player
 //! and drops its guard, and may start again once the speaker is free.
 //! Processes agree on this through two files in /tmp/neochumby:
-//! - `speaker`: the holder's pid. Creating an [`Unmuted`] or a [`Speaker`]
-//!   writes it, failing if another live process's pid is there; dropping
-//!   the guard removes it. A dead process's claim is ignored and replaced.
-//! - `speaker.yield`: the pid of the process asking for the speaker. A
-//!   newcomer that finds the speaker held writes it, and its guard's
-//!   creation fails with [`io::ErrorKind::WouldBlock`]; it tries again
-//!   soon, which renews the request, and taking the speaker removes it. A
-//!   request counts while its process is alive and for five seconds after
-//!   it was last written. While one is pending, a second newcomer waits
-//!   (also `WouldBlock`) and asks the first once that one holds the speaker.
+//! - `speaker`: the holder's pid and start time. Creating an [`Unmuted`] or
+//!   a [`Speaker`] writes it, failing if another live process is there;
+//!   dropping the guard removes it. A dead process's claim (or one whose
+//!   pid now belongs to another process) is ignored and replaced.
+//! - `speaker.yield`: the process asking for the speaker, and when, by the
+//!   monotonic clock. A newcomer that finds the speaker held writes it, and
+//!   its guard's creation fails with [`io::ErrorKind::WouldBlock`]; it tries
+//!   again soon, which renews the request, and taking the speaker removes
+//!   it. A request counts while its process is alive and for five seconds
+//!   after it was last written. While one is pending, a second newcomer
+//!   waits (also `WouldBlock`) and asks the first once that one holds the
+//!   speaker.
+//!
+//! A newcomer takes a lock on the directory while it looks, so two can't
+//! both take the speaker; one that finds another taking it also fails with
+//! `WouldBlock`. neochumby_sys::speaker has the files' format.
 //!
 //! The holder polls its guard's `yield_requested` as it plays and, when it
 //! is true, stops its player (and waits for it to exit, if it has another
