@@ -24,6 +24,12 @@
 # there yet. It runs on `gh release create vYYYY.MM.N --generate-notes`
 # (CONTRIBUTING.md, "Releases"), or by hand with `release`, which creates
 # the release itself; then every other job is skipped.
+#
+# The jobs that boot the emulator take qemu-chumby's own prebuilt
+# qemu-system-arm for the commit the submodule pins (emu/qemu/fetch: from
+# its `prebuilt` release, SHA-256 checked), and build it from source with
+# emu/qemu/build only when there is none for that commit, as when a pull
+# request moves the submodule to a commit not yet on qemu-chumby's main.
 name: CI
 
 on:
@@ -397,8 +403,22 @@ jobs:
       - uses: actions/checkout@v4
       - run: git submodule update --init emu/qemu/qemu-chumby
 
-      # emu/qemu/qemu-chumby's build dependencies (its README has the list).
+      # QEMU: qemu-chumby's own build of the commit pinned here, from its
+      # prebuilt release (emu/qemu/fetch). When there's none (a pull request
+      # moving the submodule to a commit not yet on qemu-chumby's main), built
+      # from source as before, with its build dependencies (its README has the
+      # list), and cached.
+      - name: Fetch QEMU
+        id: qemu
+        run: |
+          if emu/qemu/fetch; then
+            echo prebuilt=true >> "$GITHUB_OUTPUT"
+          else
+            echo prebuilt=false >> "$GITHUB_OUTPUT"
+          fi
+
       - name: QEMU build dependencies
+        if: steps.qemu.outputs.prebuilt != 'true'
         run: |
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends \
@@ -408,17 +428,18 @@ jobs:
 
       - name: Restore QEMU
         id: qemu-cache
+        if: steps.qemu.outputs.prebuilt != 'true'
         uses: actions/cache/restore@v4
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
 
       - name: Build QEMU
-        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         run: emu/qemu/build
 
       - name: Save QEMU
-        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: emu/qemu/out
@@ -481,8 +502,22 @@ jobs:
       - uses: actions/checkout@v4
       - run: git submodule update --init emu/qemu/qemu-chumby
 
-      # emu/qemu/qemu-chumby's build dependencies (its README has the list).
+      # QEMU: qemu-chumby's own build of the commit pinned here, from its
+      # prebuilt release (emu/qemu/fetch). When there's none (a pull request
+      # moving the submodule to a commit not yet on qemu-chumby's main), built
+      # from source as before, with its build dependencies (its README has the
+      # list), and cached.
+      - name: Fetch QEMU
+        id: qemu
+        run: |
+          if emu/qemu/fetch; then
+            echo prebuilt=true >> "$GITHUB_OUTPUT"
+          else
+            echo prebuilt=false >> "$GITHUB_OUTPUT"
+          fi
+
       - name: QEMU build dependencies
+        if: steps.qemu.outputs.prebuilt != 'true'
         run: |
           sudo apt-get update -q
           sudo apt-get install -yq --no-install-recommends \
@@ -492,17 +527,18 @@ jobs:
 
       - name: Restore QEMU
         id: qemu-cache
+        if: steps.qemu.outputs.prebuilt != 'true'
         uses: actions/cache/restore@v4
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
 
       - name: Build QEMU
-        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         run: emu/qemu/build
 
       - name: Save QEMU
-        if: steps.qemu-cache.outputs.cache-hit != 'true'
+        if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: emu/qemu/out
@@ -621,30 +657,47 @@ jobs:
         if: steps.test.outputs.boot == 'true'
         run: git submodule update --init emu/qemu/qemu-chumby
 
-      - name: QEMU build dependencies
+      # The stick's tools.
+      - name: mtools and dosfstools
         if: steps.test.outputs.boot == 'true'
         run: |
           sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends mtools dosfstools
+
+      # QEMU as the e2e job gets it: prebuilt, else built (and cached).
+      - name: Fetch QEMU
+        id: qemu
+        if: steps.test.outputs.boot == 'true'
+        run: |
+          if emu/qemu/fetch; then
+            echo prebuilt=true >> "$GITHUB_OUTPUT"
+          else
+            echo prebuilt=false >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: QEMU build dependencies
+        if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true'
+        run: |
           sudo apt-get install -yq --no-install-recommends \
             build-essential python3 python3-venv ninja-build pkg-config \
             libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
-            curl xz-utils patch mtools dosfstools
+            curl xz-utils patch
 
-      # The same cache as the sideload job's QEMU.
+      # The same cache as the other jobs' QEMU.
       - name: Restore QEMU
         id: qemu-cache
-        if: steps.test.outputs.boot == 'true'
+        if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true'
         uses: actions/cache/restore@v4
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
 
       - name: Build QEMU
-        if: steps.test.outputs.boot == 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
+        if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         run: emu/qemu/build
 
       - name: Save QEMU
-        if: steps.test.outputs.boot == 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
+        if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         uses: actions/cache/save@v4
         with:
           path: emu/qemu/out
