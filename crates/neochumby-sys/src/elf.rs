@@ -1,5 +1,6 @@
-//! What an app may run: a static ARM ELF whose segments stay above the
-//! first user page.
+//! What an app may run: an ARM ELF whose segments stay above the first
+//! user page, static, or naming as its interpreter the one loader the
+//! caller allows (the dist image's musl, on Linux 5.9 and later).
 //!
 //! The ARM 2.6.16 `mmap` path rejects `MAP_FIXED` below `PAGE_SIZE`
 //! (`FIRST_USER_ADDRESS` in `arch/arm/kernel/sys_arm.c`), but the ELF loader
@@ -47,9 +48,11 @@ fn u32_at(b: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([b[at], b[at + 1], b[at + 2], b[at + 3]])
 }
 
-/// Whether `path` is a static ARM ELF whose `PT_LOAD` segments do not map
-/// page 0. Reads only the ELF header and program headers.
-pub fn check(path: &Path) -> io::Result<()> {
+/// Whether `path` is an ARM ELF whose `PT_LOAD` segments do not map page
+/// 0, and which is static or names `loader` as its interpreter (None: no
+/// interpreter is allowed); the interpreter it names, if any. Reads only
+/// the ELF header, the program headers and the interpreter's name.
+pub fn check(path: &Path, loader: Option<&str>) -> io::Result<Option<String>> {
     let mut f = fs::File::open(path).map_err(|e| invalid(format!("{}: {e}", path.display())))?;
     let len = f.metadata()?.len();
     let mut eh = [0u8; 52];
@@ -92,6 +95,7 @@ pub fn check(path: &Path) -> io::Result<()> {
     let mut table = vec![0u8; table_len as usize];
     f.seek(SeekFrom::Start(e_phoff as u64))?;
     f.read_exact(&mut table)?;
+    let mut interpreter = None;
     for i in 0..e_phnum as usize {
         let p = &table[i * e_phentsize as usize..];
         let p_type = u32_at(p, 0);
@@ -100,7 +104,16 @@ pub fn check(path: &Path) -> io::Result<()> {
         let p_filesz = u32_at(p, 16);
         let p_memsz = u32_at(p, 20);
         if p_type == PT_INTERP {
-            return Err(invalid(format!("{}: needs an interpreter, which the jail doesn't have", path.display())));
+            let named = read_interpreter(&mut f, len, p_offset, p_filesz)
+                .ok_or_else(|| invalid(format!("{}: an unreadable interpreter", path.display())))?;
+            if loader != Some(named.as_str()) {
+                return Err(invalid(format!(
+                    "{}: needs an interpreter, {named}, which the jail doesn't have",
+                    path.display()
+                )));
+            }
+            interpreter = Some(named);
+            continue;
         }
         if p_type != PT_LOAD {
             continue;
@@ -118,7 +131,21 @@ pub fn check(path: &Path) -> io::Result<()> {
             return Err(invalid(format!("{}: a PT_LOAD is past the end of the file", path.display())));
         }
     }
-    Ok(())
+    Ok(interpreter)
+}
+
+/// The path a `PT_INTERP` segment of `size` bytes at `offset` holds, NUL
+/// and all; None if it is past the end of the file, too long for a path,
+/// or not text.
+fn read_interpreter(f: &mut fs::File, len: u64, offset: u32, size: u32) -> Option<String> {
+    if size == 0 || size > 256 || offset as u64 + size as u64 > len {
+        return None;
+    }
+    let mut b = vec![0u8; size as usize];
+    f.seek(SeekFrom::Start(offset.into())).ok()?;
+    f.read_exact(&mut b).ok()?;
+    let name = b.strip_suffix(b"\0").unwrap_or(&b);
+    String::from_utf8(name.to_vec()).ok().filter(|n| n.starts_with('/') && !n.contains('\0'))
 }
 
 /// Whether `path` starts with a 32-bit little-endian ARM ELF header. A
@@ -133,15 +160,16 @@ fn is_arm_elf(path: &Path) -> bool {
     f.read_exact(&mut h).is_ok() && &h[0..4] == b"\x7fELF" && h[4] == 1 && h[5] == 1 && u16_at(&h, 18) == EM_ARM
 }
 
-/// Checks every executable regular file under `dir`, so a helper ELF cannot
-/// hide beside the app's `exec`. Symlinks are checked by their target; a
-/// symlink whose target is not an executable file is ignored. The tree is
-/// read-only to the app, so one scan when it starts is enough.
-pub fn check_app_dir(dir: &Path) -> io::Result<()> {
-    check_dir(dir, 0)
+/// Checks every executable regular file under `dir`, as [`check`] with
+/// `loader`, so a helper ELF cannot hide beside the app's `exec`. Symlinks
+/// are checked by their target; a symlink whose target is not an
+/// executable file is ignored. The tree is read-only to the app, so one
+/// scan when it starts is enough.
+pub fn check_app_dir(dir: &Path, loader: Option<&str>) -> io::Result<()> {
+    check_dir(dir, 0, loader)
 }
 
-fn check_dir(dir: &Path, depth: usize) -> io::Result<()> {
+fn check_dir(dir: &Path, depth: usize, loader: Option<&str>) -> io::Result<()> {
     if depth > MAX_DEPTH {
         return Ok(());
     }
@@ -151,7 +179,7 @@ fn check_dir(dir: &Path, depth: usize) -> io::Result<()> {
         let path = entry.path();
         let meta = fs::symlink_metadata(&path)?;
         if meta.file_type().is_dir() {
-            check_dir(&path, depth + 1)?;
+            check_dir(&path, depth + 1, loader)?;
             continue;
         }
         let target = if meta.file_type().is_symlink() {
@@ -167,7 +195,7 @@ fn check_dir(dir: &Path, depth: usize) -> io::Result<()> {
         // candidate; the app's own exec/service are checked strictly
         // before this scan.
         if target.is_file() && target.permissions().mode() & 0o111 != 0 && is_arm_elf(&path) {
-            check(&path)?;
+            check(&path, loader)?;
         }
     }
     Ok(())
@@ -221,7 +249,7 @@ mod tests {
         let d = temp("ok");
         let p = d.join("app");
         write(&p, &elf(&[(PT_LOAD, 0x1000, 0x10000, 0x100, 0x100)]));
-        check(&p).unwrap();
+        check(&p, None).unwrap();
         fs::remove_dir_all(d).unwrap();
     }
 
@@ -230,7 +258,7 @@ mod tests {
         let d = temp("page0");
         let p = d.join("app");
         write(&p, &elf(&[(PT_LOAD, 0x1000, 0, 0x1000, 0x1000)]));
-        let e = check(&p).unwrap_err();
+        let e = check(&p, None).unwrap_err();
         assert!(e.to_string().contains("page 0"), "{e}");
         fs::remove_dir_all(d).unwrap();
     }
@@ -240,8 +268,25 @@ mod tests {
         let d = temp("interp");
         let p = d.join("app");
         write(&p, &elf(&[(PT_INTERP, 0x1000, 0, 4, 4), (PT_LOAD, 0x1000, 0x10000, 0x100, 0x100)]));
-        let e = check(&p).unwrap_err();
+        let e = check(&p, None).unwrap_err();
         assert!(e.to_string().contains("interpreter"), "{e}");
+        fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn only_the_loader_allowed_may_be_named() {
+        let d = temp("loader");
+        let p = d.join("app");
+        let loader = "/lib/ld-musl-arm.so.1";
+        let mut b =
+            elf(&[(PT_INTERP, 0x1000, 0, loader.len() as u32 + 1, 0), (PT_LOAD, 0x1000, 0x10000, 0x100, 0x100)]);
+        b[0x1000..0x1000 + loader.len()].copy_from_slice(loader.as_bytes());
+        write(&p, &b);
+        assert_eq!(check(&p, Some(loader)).unwrap().as_deref(), Some(loader));
+        assert!(check(&p, None).is_err());
+        assert!(check(&p, Some("/lib/ld-linux.so.3")).unwrap_err().to_string().contains(loader));
+        check_app_dir(&d, Some(loader)).unwrap();
+        assert!(check_app_dir(&d, None).is_err());
         fs::remove_dir_all(d).unwrap();
     }
 
@@ -252,9 +297,9 @@ mod tests {
         let mut b = elf(&[(PT_LOAD, 0x1000, 0x10000, 0x100, 0x100)]);
         b[18..20].copy_from_slice(&3u16.to_le_bytes());
         write(&p, &b);
-        assert!(check(&p).is_err());
+        assert!(check(&p, None).is_err());
         write(&p, b"\x7fELF");
-        assert!(check(&p).is_err());
+        assert!(check(&p, None).is_err());
         fs::remove_dir_all(d).unwrap();
     }
 
@@ -268,7 +313,7 @@ mod tests {
         let mut mode = fs::metadata(&p).unwrap().permissions();
         mode.set_mode(0o755);
         fs::set_permissions(&p, mode).unwrap();
-        check_app_dir(&d).unwrap();
+        check_app_dir(&d, None).unwrap();
         fs::remove_dir_all(d).unwrap();
     }
 
@@ -277,17 +322,17 @@ mod tests {
         let d = temp("helpers");
         let good = d.join("good");
         write(&good, &elf(&[(PT_LOAD, 0x1000, 0x10000, 0x100, 0x100)]));
-        check_app_dir(&d).unwrap();
+        check_app_dir(&d, None).unwrap();
 
         let bad = d.join("bad");
         write(&bad, &elf(&[(PT_LOAD, 0x1000, 0, 0x1000, 0x1000)]));
         let mut mode = fs::metadata(&bad).unwrap().permissions();
         mode.set_mode(0o755);
         fs::set_permissions(&bad, mode).unwrap();
-        assert!(check_app_dir(&d).is_err());
+        assert!(check_app_dir(&d, None).is_err());
 
         fs::remove_file(&bad).unwrap();
-        check_app_dir(&d).unwrap();
+        check_app_dir(&d, None).unwrap();
         fs::remove_dir_all(d).unwrap();
     }
 }

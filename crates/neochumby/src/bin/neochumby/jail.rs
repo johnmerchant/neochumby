@@ -34,6 +34,13 @@
 //!             plain files, none setuid or setgid, readable as their
 //!             modes say (the session's log is root's, 0644)
 //!
+//! An app built for the dist's Linux (5.9 and later) may be linked
+//! dynamically, against the image's own libraries: its executables may name
+//! the image's musl loader, LOADER, and no other, as their interpreter, and
+//! then its jail has the image's /lib, /usr/lib and /usr/share/terminfo
+//! too, where they are (root's, so read-only to it). On the stock 2.6,
+//! whose libraries aren't the image's, every executable must be static.
+//!
 //! Each app runs as its own uid (from FIRST_UID, in the tree's name order:
 //! an app's exec and its service share one), with a group of the same id
 //! and, if it lists `speaker`, SPEAKER_GID beside it. Its devices are made
@@ -71,11 +78,24 @@ pub const OFF_ENV: &str = "NEOCHUMBY_JAIL";
 /// What looking hosts up needs, for `network`: copies, as the app starts.
 const NAMES: [&str; 2] = ["/etc/resolv.conf", "/etc/hosts"];
 
+/// The dist image's musl loader, the one interpreter an app may name.
+const LOADER: &str = "/lib/ld-musl-arm.so.1";
+/// What a dynamically linked app has of the image: its libraries, and
+/// ncurses' terminal descriptions.
+const SHARED: [&str; 3] = ["/lib", "/usr/lib", "/usr/share/terminfo"];
+
 const PROCESSES: u32 = 64;
 const FILES: u32 = 256;
 /// The jail's root and the app's /tmp, in KiB.
 const ROOT_KIB: u32 = 256;
 const TMP_KIB: u32 = 4096;
+
+/// The loader an app may name as its interpreter: the image's musl, on the
+/// dist's Linux, where it is there; on the stock 2.6 (osrelease 2.x), none.
+fn loader() -> Option<&'static str> {
+    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    (!release.starts_with("2.") && Path::new(LOADER).exists()).then_some(LOADER)
+}
 
 /// What an app is started as: its exec, in front, or its service.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -191,8 +211,9 @@ pub fn start(
     // The ELF loader maps a PT_LOAD at vaddr 0 even though the ARM mmap
     // path refuses MAP_FIXED below PAGE_SIZE. Refuse such a file before
     // exec, wherever it hides in the app's directory.
-    neochumby_sys::elf::check(exe)?;
-    neochumby_sys::elf::check_app_dir(&app.dir)?;
+    let loader = loader();
+    let dynamic = neochumby_sys::elf::check(exe, loader)?.is_some();
+    neochumby_sys::elf::check_app_dir(&app.dir, loader)?;
     let uid = number(app)?;
     let a = app.access;
     let front = role == Role::Front;
@@ -208,6 +229,11 @@ pub fn start(
     for d in ["null", "zero", "random", "urandom"] {
         let p = format!("/dev/{d}");
         j.device(&p, Path::new(&p), 0o666, 0, 0)?;
+    }
+    if dynamic {
+        for d in SHARED.iter().map(Path::new).filter(|d| d.is_dir()) {
+            j.bind(d, &d.to_string_lossy())?;
+        }
     }
     if a.fb && front {
         j.device("/dev/fb0", Path::new("/dev/fb0"), 0o600, uid, uid)?;

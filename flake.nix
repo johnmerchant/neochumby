@@ -47,6 +47,9 @@
               rust
               pkgs.zig_0_17
               pkgs.cmake
+              # neochumby-ncurses finds the dist image's ncurses with it
+              # (a tree for Linux 5.9 and later).
+              pkgs.pkg-config
               pkgs.python3
               pkgs.gh
               pkgs.jq
