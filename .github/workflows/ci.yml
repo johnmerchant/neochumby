@@ -419,7 +419,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/classic
-          key: neochumby-classic-image-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**') }}
+          key: neochumby-classic-image-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init') }}
 
       # classic/build's work (the toolchain, the downloads and the build
       # trees), restored from the nearest earlier build whatever changed:
@@ -430,7 +430,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/neochumby-classic
-          key: neochumby-classic-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**') }}
+          key: neochumby-classic-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init') }}
           restore-keys: neochumby-classic-
 
       - name: Build the image
