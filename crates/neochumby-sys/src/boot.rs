@@ -178,12 +178,19 @@ pub fn reap() -> Option<u32> {
 /// How many columns the terminal `tty` has (TIOCGWINSZ), or None if it
 /// isn't a terminal or doesn't say.
 pub fn columns(tty: &File) -> Option<u16> {
+    size(tty).map(|(cols, _)| cols)
+}
+
+/// The terminal `tty`'s columns and rows (TIOCGWINSZ), or None if it isn't
+/// a terminal or doesn't say how wide it is; rows 0 if it doesn't say how
+/// tall.
+pub fn size(tty: &File) -> Option<(u16, u16)> {
     // SAFETY: winsize is plain data, for which all zeroes is valid.
     let mut ws: libc::winsize = unsafe { mem::zeroed() };
     // SAFETY: TIOCGWINSZ writes one winsize into `ws`, a live one of ours;
     // the descriptor is open, owned by `tty`.
     let r = unsafe { libc::ioctl(tty.as_raw_fd(), libc::TIOCGWINSZ as _, &mut ws) };
-    (r == 0 && ws.ws_col > 0).then_some(ws.ws_col)
+    (r == 0 && ws.ws_col > 0).then_some((ws.ws_col, ws.ws_row))
 }
 
 fn cstring(b: &[u8]) -> io::Result<CString> {

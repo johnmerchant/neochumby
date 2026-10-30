@@ -13,6 +13,7 @@
 
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used, clippy::panic))]
 
+mod logo;
 mod modules;
 mod status;
 mod uevent;
@@ -306,7 +307,9 @@ fn mount_kernel_fs() {
             }
         }
     }
-    // Only now: the screen's console is in /dev, devtmpfs.
+    // Only now: the screen's console is in /dev, devtmpfs. The logo first,
+    // under the kernel's Tux, then the steps.
+    screen(&logo::for_screen());
     screen_step("Mounting /proc, /sys and /dev", if ok { Status::Ok } else { Status::Failed });
     for dir in ["/tmp", "/mnt"] {
         let _ = fs::create_dir_all(dir);
