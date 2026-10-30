@@ -24,7 +24,8 @@
 //! parent's threads.
 //!
 //! What failed before execve comes back to [`Jail::spawn`] as its error,
-//! naming the step, through a pipe closed on exec.
+//! naming the step, through a pipe closed on exec. So does a seal the
+//! kernel refused ([`Jail::seal`]), which the child carries on past.
 
 // libc's constants and ids differ in type between glibc and musl: the casts
 // that are needed on one are no-ops on the other.
@@ -45,12 +46,19 @@ use std::process::{Child, ExitStatus};
 pub struct Process {
     pid: u32,
     status: Option<ExitStatus>,
+    unsealed: bool,
 }
 
 impl Process {
     /// The process's id, which is also its group's (it leads one).
     pub fn id(&self) -> u32 {
         self.pid
+    }
+
+    /// Whether the kernel refused one of its jail's seals ([`Jail::seal`]),
+    /// so what was bound there kept its source's flags.
+    pub fn unsealed(&self) -> bool {
+        self.unsealed
     }
 
     /// Waits for it to exit and reaps it; its exit. Once reaped, the same
@@ -83,7 +91,7 @@ impl From<Child> for Process {
     /// and is waited on only through this from now on. (Dropping a Child
     /// neither waits for nor kills it.)
     fn from(child: Child) -> Process {
-        Process { pid: child.id(), status: None }
+        Process { pid: child.id(), status: None, unsealed: false }
     }
 }
 
@@ -123,6 +131,9 @@ enum Step {
         fstype: Option<CString>,
         flags: libc::c_ulong,
         data: Option<CString>,
+        /// Whether the kernel may refuse it with EINVAL, and the child
+        /// carry on without it (a seal).
+        soft: bool,
     },
     Dir {
         path: CString,
@@ -208,6 +219,63 @@ pub fn mount_tmpfs(path: &Path, size_kib: u32, mode: u32, uid: u32, gid: u32, no
     Ok(())
 }
 
+/// The flags a remount of what is bound from `from` keeps: those of the
+/// mount it is on, but nosuid, nodev and noexec. 2.6.16 applies them to
+/// that mount's filesystem as a whole, not to the bind alone, so they must
+/// be as they are. Its statfs reports none (no ST_VALID), so there they
+/// come from /proc/mounts: the options of the last mount listed with the
+/// longest prefix of `from`.
+fn kept_flags(from: &Path) -> io::Result<libc::c_ulong> {
+    const ST_VALID: libc::c_ulong = 0x20;
+    let source = cstring(from.as_os_str().as_bytes())?;
+    // SAFETY: a statvfs is plain integers, for which all zeroes is a
+    // value.
+    let mut st: libc::statvfs = unsafe { std::mem::zeroed() };
+    // SAFETY: statvfs(2) reads a NUL-terminated path that outlives the call
+    // and writes into `st`, a live statvfs.
+    if unsafe { libc::statvfs(source.as_ptr(), &mut st) } != 0 {
+        return Err(io::Error::last_os_error());
+    }
+    let kept = (libc::MS_RDONLY
+        | libc::MS_SYNCHRONOUS
+        | libc::MS_MANDLOCK
+        | libc::MS_DIRSYNC
+        | libc::MS_NOATIME
+        | libc::MS_NODIRATIME
+        | libc::MS_RELATIME) as libc::c_ulong;
+    // The ST_ flags are the MS_ flags, bit for bit.
+    if st.f_flag as libc::c_ulong & ST_VALID != 0 {
+        return Ok(st.f_flag as libc::c_ulong & kept);
+    }
+    let from = std::fs::canonicalize(from)?;
+    let from = from.to_str().ok_or_else(|| io::Error::other("a path that isn't UTF-8"))?;
+    let mounts = std::fs::read_to_string("/proc/mounts")?;
+    let mut on: Option<(usize, &str)> = None;
+    for line in mounts.lines() {
+        let mut f = line.split(' ');
+        let (Some(_), Some(at), Some(_), Some(opts)) = (f.next(), f.next(), f.next(), f.next()) else { continue };
+        let covers = at == "/" || from == at || from.strip_prefix(at).is_some_and(|r| r.starts_with('/'));
+        if covers && on.is_none_or(|(len, _)| at.len() >= len) {
+            on = Some((at.len(), opts));
+        }
+    }
+    let opts = on.map(|(_, o)| o).ok_or_else(|| io::Error::other("not in /proc/mounts"))?;
+    let mut flags = 0;
+    for o in opts.split(',') {
+        flags |= match o {
+            "ro" => libc::MS_RDONLY,
+            "sync" => libc::MS_SYNCHRONOUS,
+            "mand" => libc::MS_MANDLOCK,
+            "dirsync" => libc::MS_DIRSYNC,
+            "noatime" => libc::MS_NOATIME,
+            "nodiratime" => libc::MS_NODIRATIME,
+            "relatime" => libc::MS_RELATIME,
+            _ => 0,
+        } as libc::c_ulong;
+    }
+    Ok(flags)
+}
+
 impl Jail {
     /// A jail whose root is a tmpfs of `size_kib` mounted (in its own
     /// namespace) on `mount_point`, an empty directory on the host that
@@ -222,6 +290,7 @@ impl Jail {
             fstype: Some(cstring(b"tmpfs")?),
             flags: libc::MS_NOSUID as libc::c_ulong,
             data: Some(cstring(format!("mode=755,size={size_kib}k").as_bytes())?),
+            soft: false,
         });
         Ok(j)
     }
@@ -265,14 +334,15 @@ impl Jail {
             fstype: Some(cstring(b"tmpfs")?),
             flags: (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as libc::c_ulong,
             data: Some(cstring(format!("mode={mode:o},uid={uid},gid={gid},size={size_kib}k").as_bytes())?),
+            soft: false,
         });
         Ok(self)
     }
 
     /// The host's directory or file `from`, bound on `to`. A bind mount
-    /// keeps the flags of the mount it is from (2.6.16 can't change them),
-    /// so what is bound must be `nosuid` where it comes from, or hold
-    /// nothing setuid.
+    /// keeps the flags of the mount it is from, unless it is sealed
+    /// ([`Jail::seal`]), so what is bound must be `nosuid` where it comes
+    /// from, or hold nothing setuid.
     pub fn bind(&mut self, from: &Path, to: &str) -> io::Result<&mut Jail> {
         let meta = std::fs::metadata(from)?;
         if meta.is_dir() {
@@ -293,6 +363,31 @@ impl Jail {
             fstype: None,
             flags: libc::MS_BIND as libc::c_ulong,
             data: None,
+            soft: false,
+        });
+        Ok(self)
+    }
+
+    /// Makes what is bound on `to` (from the host's `from`) `noexec,
+    /// nosuid,nodev`: a bind remount, keeping the flags it has from
+    /// `from`'s mount (kept_flags). A kernel that refuses one (EINVAL)
+    /// leaves what is bound as it is, and the child carries on, which
+    /// [`Process::unsealed`] says; any other failure is the jail's, as any
+    /// step's is. 5.9 seals the bind alone; 2.6.16 seals it too, and
+    /// remounts the filesystem it is from with the flags it has.
+    pub fn seal(&mut self, from: &Path, to: &str) -> io::Result<&mut Jail> {
+        let kept = kept_flags(from)?;
+        let target = self.host(to)?;
+        self.steps.push(Step::Mount {
+            what: "sealing a bind mount",
+            source: cstring(from.as_os_str().as_bytes())?,
+            target,
+            fstype: None,
+            flags: kept
+                | (libc::MS_REMOUNT | libc::MS_BIND | libc::MS_NOEXEC | libc::MS_NOSUID | libc::MS_NODEV)
+                    as libc::c_ulong,
+            data: None,
+            soft: true,
         });
         Ok(self)
     }
@@ -334,6 +429,7 @@ impl Jail {
             fstype: Some(cstring(fstype.as_bytes())?),
             flags: (libc::MS_NOSUID | libc::MS_NODEV | libc::MS_NOEXEC) as libc::c_ulong,
             data: None,
+            soft: false,
         });
         Ok(self)
     }
@@ -362,6 +458,10 @@ impl Jail {
         plan.run(libc::CLONE_NEWNS)
     }
 }
+
+/// Marks a report from the child as a seal refused, carried on past, not
+/// what failed.
+const CARRIED_ON: u32 = 1 << 31;
 
 /// Everything the child needs, built before the clone.
 struct Plan<'a> {
@@ -442,27 +542,41 @@ impl<'a> Plan<'a> {
         }
         // SAFETY: closing our copy of the write end; the child has its own.
         unsafe { libc::close(wr) };
-        let mut report = [0u8; 8];
-        let mut got = 0;
-        while got < report.len() {
-            // SAFETY: read(2) into the rest of `report`, a live buffer.
-            let n = unsafe { libc::read(rd, report[got..].as_mut_ptr().cast(), report.len() - got) };
-            if n > 0 {
-                got += n as usize;
-            } else if n == 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+        let mut process = Process { pid: pid as u32, status: None, unsealed: false };
+        // Reports, each a step and an errno, until the pipe closes on exec
+        // (or the child exits): a seal refused, carried on past, or what
+        // failed, last.
+        let mut failed = None;
+        loop {
+            let mut report = [0u8; 8];
+            let mut got = 0;
+            while got < report.len() {
+                // SAFETY: read(2) into the rest of `report`, a live buffer.
+                let n = unsafe { libc::read(rd, report[got..].as_mut_ptr().cast(), report.len() - got) };
+                if n > 0 {
+                    got += n as usize;
+                } else if n == 0 || io::Error::last_os_error().kind() != io::ErrorKind::Interrupted {
+                    break;
+                }
+            }
+            if got < report.len() {
                 break;
+            }
+            let step = u32::from_ne_bytes([report[0], report[1], report[2], report[3]]);
+            let errno = i32::from_ne_bytes([report[4], report[5], report[6], report[7]]);
+            if step & CARRIED_ON != 0 {
+                process.unsealed = true;
+            } else {
+                failed = Some((step as usize, errno));
             }
         }
         // SAFETY: closing the read end, which we opened.
         unsafe { libc::close(rd) };
-        let mut process = Process { pid: pid as u32, status: None };
-        if got == 0 {
+        let Some((step, errno)) = failed else {
             // The pipe closed on exec: the program is running.
             return Ok(process);
-        }
+        };
         let _ = process.wait();
-        let step = u32::from_ne_bytes([report[0], report[1], report[2], report[3]]) as usize;
-        let errno = i32::from_ne_bytes([report[4], report[5], report[6], report[7]]);
         let what = self.describe(step);
         let e = io::Error::from_raw_os_error(errno);
         Err(io::Error::new(e.kind(), format!("{what}: {e}")))
@@ -491,17 +605,18 @@ impl<'a> Plan<'a> {
     ///
     /// Only in the child of [`Plan::run`]'s clone.
     unsafe fn child(&self, wr: RawFd, argv: &[*const libc::c_char], envp: &[*const libc::c_char]) -> ! {
-        let fail = |step: usize| -> ! {
-            let errno = io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        let report = |step: u32, errno: i32| {
             let mut report = [0u8; 8];
-            report[..4].copy_from_slice(&(step as u32).to_ne_bytes());
+            report[..4].copy_from_slice(&step.to_ne_bytes());
             report[4..].copy_from_slice(&errno.to_ne_bytes());
-            // SAFETY: write(2) from a live buffer, then _exit(2): both are
-            // plain system calls.
-            unsafe {
-                libc::write(wr, report.as_ptr().cast(), report.len());
-                libc::_exit(127)
-            }
+            // SAFETY: write(2) from a live buffer: a plain system call.
+            unsafe { libc::write(wr, report.as_ptr().cast(), report.len()) };
+        };
+        let errno = || io::Error::last_os_error().raw_os_error().unwrap_or(0);
+        let fail = |step: usize| -> ! {
+            report(step as u32, errno());
+            // SAFETY: _exit(2), a plain system call.
+            unsafe { libc::_exit(127) }
         };
         // SAFETY: everything below is a system call on descriptors and
         // C strings built before the clone, or on plain integers.
@@ -546,6 +661,10 @@ impl<'a> Plan<'a> {
                     }
                 };
                 if !ok {
+                    if matches!(s, Step::Mount { soft: true, .. }) && errno() == libc::EINVAL {
+                        report(i as u32 | CARRIED_ON, libc::EINVAL);
+                        continue;
+                    }
                     fail(i);
                 }
             }
@@ -698,6 +817,60 @@ mod tests {
         let mut p = j.spawn("/bin/sh", &[OsStr::new("-c"), OsStr::new(script)], &[], "/", &user, &[]).unwrap();
         assert!(p.wait().unwrap().success());
         assert_eq!(std::fs::read_dir(&mp).unwrap().count(), 0, "the jail's mounts were its own");
+        std::fs::remove_dir(&mp).unwrap();
+    }
+
+    /// A sealed bind mount is written and read, but nothing copied into it
+    /// runs (EACCES). As root on Linux 5.9 or later, which can seal one:
+    /// run by hand, as above.
+    #[test]
+    #[ignore]
+    fn nothing_runs_from_a_sealed_bind() {
+        let tmp = std::env::temp_dir();
+        let mp = tmp.join(format!("neochumby-seal-test-{}", std::process::id()));
+        let store = tmp.join(format!("neochumby-seal-store-{}", std::process::id()));
+        std::fs::create_dir_all(&mp).unwrap();
+        std::fs::create_dir_all(&store).unwrap();
+        std::os::unix::fs::chown(&store, Some(20000), Some(20000)).unwrap();
+        let mut j = Jail::new(&mp, 256).unwrap();
+        j.tmpfs("/tmp", 64, 0o700, 20000, 20000).unwrap();
+        for d in ["/bin", "/lib", "/lib64", "/usr"] {
+            if Path::new(d).is_dir() {
+                j.bind(Path::new(d), d).unwrap();
+            }
+        }
+        j.bind(&store, "/s").unwrap().seal(&store, "/s").unwrap();
+        let user = User { uid: 20000, gid: 20000, groups: vec![] };
+        let script = "cp /bin/sh /s/sh && chmod 755 /s/sh && echo hi > /s/f && test \"$(cat /s/f)\" = hi \
+                      && ! /s/sh -c true 2>/tmp/e && grep -q 'Permission denied' /tmp/e";
+        let mut p = j.spawn("/bin/sh", &[OsStr::new("-c"), OsStr::new(script)], &[], "/", &user, &[]).unwrap();
+        assert!(!p.unsealed(), "this kernel can't seal a bind mount");
+        assert!(p.wait().unwrap().success());
+        assert_eq!(std::fs::read_to_string(store.join("f")).unwrap(), "hi\n", "what it wrote lasts");
+        std::fs::remove_dir(&mp).unwrap();
+        std::fs::remove_dir_all(&store).unwrap();
+    }
+
+    /// A seal the kernel refuses (EINVAL: here, on what isn't a bind's
+    /// root, as a kernel that can't seal one refuses any) is carried on
+    /// past, and said. As root on Linux: run by hand, as above.
+    #[test]
+    #[ignore]
+    fn a_refused_seal_is_carried_on_past() {
+        let mp = std::env::temp_dir().join(format!("neochumby-unsealed-test-{}", std::process::id()));
+        std::fs::create_dir_all(&mp).unwrap();
+        let mut j = Jail::new(&mp, 256).unwrap();
+        j.dirs("/a/b").unwrap();
+        for d in ["/bin", "/lib", "/lib64", "/usr"] {
+            if Path::new(d).is_dir() {
+                j.bind(Path::new(d), d).unwrap();
+            }
+        }
+        j.seal(Path::new("/bin"), "/a/b").unwrap();
+        let user = User { uid: 20000, gid: 20000, groups: vec![] };
+        let mut p = j.spawn("/bin/sh", &[OsStr::new("-c"), OsStr::new("true")], &[], "/", &user, &[]).unwrap();
+        assert!(p.unsealed());
+        assert!(p.wait().unwrap().success());
         std::fs::remove_dir(&mp).unwrap();
     }
 }
