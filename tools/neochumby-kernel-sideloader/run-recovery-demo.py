@@ -70,8 +70,9 @@ def main():
             if before.strip() != "0":
                 print("ERROR: recovery check failed: mxc_nand loaded before root asked", file=sys.stderr)
                 ok = False
+            # Kernel messages on the console would break the lines checked.
             _, loaded = m.exec(
-                "modprobe cmdlinepart; modprobe mxc_nand && modprobe mtdblock && "
+                "dmesg -n 1; modprobe cmdlinepart; modprobe mxc_nand && modprobe mtdblock && "
                 "cat /proc/mtd && ls /dev/mtdblock0 && grep '^mxc_nand ' /proc/modules",
                 60,
             )
@@ -91,6 +92,7 @@ def main():
     for pattern, what in loaded_checks:
         if not re.search(pattern, loaded, re.M):
             print(f"ERROR: recovery check failed after root's modprobe: {what}", file=sys.stderr)
+            print(loaded, file=sys.stderr)
             ok = False
     if not re.search(r"^Linux \(none\) (5\.9\.16|7\.2\.13)-mx21-sideload #\d+ .* armv5tejl GNU/Linux$", uname, re.M):
         print("ERROR: recovery check failed: uname -a is not a sideload kernel (5.9.16 or 7.2.13)", file=sys.stderr)
