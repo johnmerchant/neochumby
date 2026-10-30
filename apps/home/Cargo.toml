@@ -14,8 +14,11 @@ neochumby-sys.workspace = true
 [package.metadata.neochumby]
 exec = "neochumby-home"
 start = true
-# It pairs the Chumby (writing /psp) and lists every app in the tree.
+# It pairs the Chumby (writing /psp) and lists every app in the tree; in
+# text mode, without fb, as its rows fall where they did on the framebuffer
+# in Spleen 8x16 (src/main.rs).
 access = ["root"]
+font = "spleen-8x16"
 
 [lints]
 workspace = true

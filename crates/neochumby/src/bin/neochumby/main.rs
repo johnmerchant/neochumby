@@ -24,13 +24,22 @@
 //!                             accelerometer
 //!   neochumby check-set DIR   for the boot hook: exits 0 if the synced set
 //!                             in DIR is complete (neochumby_sync)
+//!   neochumby terminal ...    the session's own: shows a text-mode app's
+//!                             terminal (terminal.rs)
+//!
+//! A text-mode app (one whose access doesn't list `fb`) runs on a terminal
+//! the session shows (terminal.rs), in the font and colours the settings
+//! name (`font=`, `colors=`), from the server or else /psp/neochumby.conf.
 //!
 //! With `delivery=sync` in its settings, the session also runs
 //! neochumby-sync from the tree as a service of its own (restarted like
 //! the apps' services), which keeps a copy of the tree on the stick for the
 //! boot hook to run. A tree made for a stick has no neochumby-sync, and
 //! needs none. The session also keeps the boot hook in
-//! /psp up to date with the tree's (conf::refresh_hook).
+//! /psp up to date with the tree's (conf::refresh_hook), and neochumby-boot
+//! beside it, which checks a tree over NFS before anything in it runs
+//! (neochumby::verified). Started by neochumby-boot, the session runs from
+//! a checked copy, and checks each program it runs too.
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs is described in
@@ -48,6 +57,7 @@ mod run;
 mod services;
 mod start;
 mod storage;
+mod terminal;
 
 use std::fs::{File, OpenOptions};
 use std::io::Read;
@@ -66,6 +76,7 @@ use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
+use neochumby::verified;
 use neochumby_proto::{Delivery, Settings};
 
 /// The escape hatch: a touch held this long in this corner. The resistive
@@ -262,6 +273,9 @@ struct Chumby {
     remote: Option<Arc<devlink::Remote>>,
     /// The backlight as the Chumby booted with it.
     boot_brightness: Option<u32>,
+    /// The tree, and the owner's font and colours, for terminals.
+    root: std::path::PathBuf,
+    look: terminal::Look,
 }
 
 impl run::Device for Chumby {
@@ -349,6 +363,10 @@ impl run::Device for Chumby {
     fn speaker_group(&self) -> Option<u32> {
         audio::holder().and_then(neochumby_sys::process::group_of)
     }
+
+    fn terminal(&mut self, app: &App) -> std::io::Result<Option<(terminal::Terminal, File)>> {
+        terminal::open(app, &self.root, &self.look).map(Some)
+    }
 }
 
 fn session() {
@@ -361,6 +379,18 @@ fn session() {
         Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
         Ok(false) => {}
         Err(e) => eprintln!("neochumby: {}: {e}", conf::HOOK),
+    }
+    // As the hook is, and from the same trees: what checks a tree over NFS
+    // on the next boot.
+    if conf::paired().is_some() && root != Path::new(conf::STICK_TREE) {
+        match verified::install_boot(&root) {
+            Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", verified::BOOT),
+            Ok(false) => {}
+            Err(e) => eprintln!("neochumby: {}: {e}", verified::BOOT),
+        }
+    }
+    if verified::on() {
+        eprintln!("neochumby: the tree is checked against neochumbyd's signed manifest");
     }
 
     // The master volume as the boot set it from /psp/volume: nothing has
@@ -378,6 +408,16 @@ fn session() {
         Some(m) => eprintln!("neochumby: the player is {}", m.name),
         None => eprintln!("neochumby: no player here (player = true in a manifest)"),
     }
+    // The owner's font and colours for text-mode apps, as `start` is
+    // chosen: names, checked as each terminal opens.
+    let setting = |key: &str| {
+        let server = settings.other.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        server.or_else(|| conf::get(conf::CONF, key))
+    };
+    let look = terminal::Look { font: setting("font"), colors: setting("colors") };
+    // On a kernel with a console on the screen, its cursor would blink over
+    // what apps draw.
+    neochumby::term::vt::quiet();
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
@@ -396,6 +436,8 @@ fn session() {
                 restart: link.as_ref().map(devlink::Link::restart_flag),
                 remote: link.as_ref().map(devlink::Link::remote),
                 boot_brightness: std::fs::read_to_string(BRIGHTNESS).ok().and_then(|s| s.trim().parse().ok()),
+                root: root.clone(),
+                look,
             };
             // On either ending, the loop has closed the button, stopped the
             // services (neochumby-sync with them) and put the speaker back.
@@ -411,10 +453,11 @@ fn session() {
             link.release();
         }
         // Just after a deploy, the NFS client may still hold the replaced
-        // file's handle: the first try fails as stale, and drops it.
+        // file's handle: the first try fails as stale, and drops it. A
+        // checked tree is checked again, from its new manifest.
         let exe = root.join("neochumby");
         for _ in 0..5 {
-            let e = Command::new(&exe).exec();
+            let e = if verified::on() { verified::boot(&root) } else { Command::new(&exe).exec() };
             eprintln!("neochumby: restart: {}: {e}", exe.display());
             neochumby::sleep_ms(1000);
         }
@@ -457,6 +500,8 @@ fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
         companion: false,
         access: neochumby::apps::Access { root: true, ..Default::default() },
         player: false,
+        font: None,
+        tap: Vec::new(),
     }]
 }
 
@@ -486,6 +531,7 @@ fn main() {
         None => session(),
         Some("sensors") => sensors(),
         Some("check-set") => check_set(std::env::args().nth(2)),
+        Some("terminal") => terminal::serve(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some(other) => {
             eprintln!("neochumby: unknown command {other}");
             std::process::exit(2);

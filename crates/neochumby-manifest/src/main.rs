@@ -14,6 +14,12 @@
 //! (absent: the app never needs one), and an app with a `companion` must
 //! set it: only a neochumbyd runs companions. It is stated, not inferred
 //! from `companion`.
+//!
+//! An app's exec runs in text mode, on a terminal, unless its `access`
+//! lists `fb`. In text mode, `font` names its terminal's font ([`FONTS`],
+//! or a PSF file in its directory), and `tap` what a tap types while the
+//! program hasn't asked for the mouse, written to the manifest with
+//! escapes ([`escape`]).
 
 use std::process::ExitCode;
 
@@ -32,7 +38,13 @@ const KEYS: &[&str] = &[
     "interrupt",
     "player",
     "access",
+    "font",
+    "tap",
 ];
+
+/// The fonts built in, as neochumby::term::font has them: Spleen, in every
+/// size.
+const FONTS: &[&str] = &["spleen-5x8", "spleen-6x12", "spleen-8x16", "spleen-12x24", "spleen-16x32", "spleen-32x64"];
 /// The keys among them that are true or false:
 /// - `start`: the app may be the start app;
 /// - `button`: while in front, it gets the top button;
@@ -47,9 +59,12 @@ const FLAGS: &[&str] = &["start", "button", "interrupt", "player"];
 const SPELLINGS: &[(&str, &str)] = &[("colour", "color")];
 
 /// What an app may list in `access`, as the session grants it (jail.rs);
-/// without it, an app has only its own directory and a /tmp of its own:
-/// - `screen`: /dev/fb0, for its `exec` (in front), never its service;
-/// - `touch`: the touchscreen and its calibration, likewise;
+/// without it, an app has only its own directory and a /tmp of its own,
+/// and its `exec` a terminal:
+/// - `fb`: /dev/fb0, for its `exec` (in front), never its service, in place
+///   of a terminal: it draws the screen itself;
+/// - `touch`: the touchscreen and its calibration, likewise (in text mode,
+///   touches come on stdin without it);
 /// - `speaker`: /dev/dsp and the speaker's handover; the mute and the
 ///   volume are the session's, asked for over the request pipe;
 /// - `accel`: the accelerometer;
@@ -64,13 +79,34 @@ const SPELLINGS: &[(&str, &str)] = &[("colour", "color")];
 /// - `storage`: a directory of its own that lasts across boots
 ///   (/psp/apps/<name>, NEOCHUMBY_STORAGE), shared by its exec and service,
 ///   capped at 64 KiB;
-/// - `root`: no jail: it runs as root, as the session does. Listed alone.
+/// - `root`: no jail: it runs as root, as the session does. Listed alone,
+///   or with `fb` for an app that draws the screen itself (without it, a
+///   root app runs in text mode too).
 const ACCESS: &[&str] =
-    &["screen", "touch", "speaker", "accel", "system", "network", "terminal", "logs", "storage", "root"];
+    &["fb", "touch", "speaker", "accel", "system", "network", "terminal", "logs", "storage", "root"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {
     !s.is_empty() && !s.contains(['\n', '\r', '='])
+}
+
+/// `tap`'s keys as a manifest's value: printable ASCII as it is, and \n,
+/// \r, \t, \e, \\ and \xHH for the rest (and for `=`), as
+/// neochumby::apps::unescape reads them.
+fn escape(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        match b {
+            b'\n' => out.push_str(r"\n"),
+            b'\r' => out.push_str(r"\r"),
+            b'\t' => out.push_str(r"\t"),
+            0x1b => out.push_str(r"\e"),
+            b'\\' => out.push_str(r"\\"),
+            b'=' | 0..0x20 | 0x7f.. => out.push_str(&format!(r"\x{b:02x}")),
+            _ => out.push(b as char),
+        }
+    }
+    out
 }
 
 /// `access`'s list, checked, as one value.
@@ -80,11 +116,14 @@ fn access(list: &[Value]) -> Result<String, String> {
         match v.as_str() {
             Some(w) if words.contains(&w) => return Err(format!("access: {w} twice")),
             Some(w) if ACCESS.contains(&w) => words.push(w),
+            Some("screen") => {
+                return Err(r#"access: "screen" is "fb" now, for an app that draws the screen itself; without it, the app runs in text mode, on a terminal"#.into());
+            }
             _ => return Err(format!("access: {v} is not one of {}", ACCESS.join(", "))),
         }
     }
-    if words.contains(&"root") && words.len() > 1 {
-        return Err("access: root is everything already; list it alone".into());
+    if words.contains(&"root") && words.iter().any(|w| !matches!(*w, "root" | "fb")) {
+        return Err("access: root is everything already; list it alone, or with fb".into());
     }
     if words.is_empty() {
         return Err("access: an empty list; leave it out".into());
@@ -112,6 +151,7 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         let value = match (FLAGS.contains(key), v) {
             (false, Value::Array(a)) if *key == "access" => access(a)?,
             (false, _) if *key == "access" => return Err("access: not a list of strings".into()),
+            (false, Value::String(s)) if *key == "tap" => escape(s),
             (false, Value::String(s)) => s.clone(),
             (false, _) => return Err(format!("{key}: not a string")),
             (true, Value::Boolean(b)) => b.to_string(),
@@ -140,6 +180,27 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         };
         if !listed("speaker") && !listed("root") {
             return Err(r#"player: a player plays, so its access lists "speaker""#.into());
+        }
+    }
+    let fb = meta.get("access").and_then(Value::as_array).is_some_and(|a| a.iter().any(|v| v.as_str() == Some("fb")));
+    for key in ["font", "tap"] {
+        if !meta.contains_key(key) {
+            continue;
+        }
+        if fb {
+            return Err(format!("{key}: an app with fb draws the screen itself, and has no terminal"));
+        }
+        if !meta.contains_key("exec") {
+            return Err(format!("{key}: only an exec has a terminal"));
+        }
+    }
+    if let Some(f) = meta.get("font").and_then(Value::as_str) {
+        let file = (f.ends_with(".psf") || f.ends_with(".psfu")) && !f.contains('/') && !f.starts_with('.');
+        if !file && !FONTS.contains(&f) {
+            return Err(format!(
+                "font: {f} is not one of {}, or a .psf or .psfu file in the app's directory",
+                FONTS.join(", ")
+            ));
         }
     }
     if meta.contains_key("companion") && !meta.contains_key("neochumbyd") {
@@ -226,13 +287,34 @@ mod tests {
 
     #[test]
     fn access_is_a_list_of_what_the_session_grants() {
-        assert_eq!(manifest(&wrap(r#"access = ["screen", "touch"]"#)).unwrap(), "access=screen,touch\n");
+        assert_eq!(manifest(&wrap(r#"access = ["fb", "touch"]"#)).unwrap(), "access=fb,touch\n");
         assert_eq!(manifest(&wrap(r#"access = ["root"]"#)).unwrap(), "access=root\n");
         assert_eq!(manifest(&wrap(r#"access = ["speaker", "storage"]"#)).unwrap(), "access=speaker,storage\n");
-        for bad in [r#"access = "screen""#, r#"access = ["disk"]"#, r#"access = ["screen", "screen"]"#, "access = []"] {
+        for bad in [r#"access = "screen""#, r#"access = ["disk"]"#, r#"access = ["fb", "fb"]"#, "access = []"] {
             assert!(manifest(&wrap(bad)).unwrap_err().starts_with("access:"), "{bad}");
         }
-        assert!(manifest(&wrap(r#"access = ["root", "screen"]"#)).unwrap_err().contains("alone"));
+        assert_eq!(manifest(&wrap(r#"access = ["root", "fb"]"#)).unwrap(), "access=root,fb\n");
+        assert!(manifest(&wrap(r#"access = ["root", "touch"]"#)).unwrap_err().contains("alone"));
+        // The old word for fb, refused with what replaced it.
+        let e = manifest(&wrap(r#"access = ["screen", "touch"]"#)).unwrap_err();
+        assert!(e.contains(r#""fb""#) && e.contains("text mode"), "{e}");
+    }
+
+    #[test]
+    fn a_text_mode_app_has_a_font_and_a_tap() {
+        let m = manifest(&wrap("exec = \"neochumby-x\"\nfont = \"spleen-8x16\"\ntap = \"q\"")).unwrap();
+        assert_eq!(m, "exec=neochumby-x\nfont=spleen-8x16\ntap=q\n");
+        let own = manifest(&wrap("exec = \"neochumby-x\"\nfont = \"mine.psfu\"\ntap = \"\\n=\\u001b\\\\\"")).unwrap();
+        assert_eq!(own, "exec=neochumby-x\nfont=mine.psfu\ntap=\\n\\x3d\\e\\\\\n");
+        for bad in ["font = \"spleen-7x9\"", "font = \"../x.psf\"", "font = \"/x.psfu\""] {
+            let e = manifest(&wrap(&format!("exec = \"neochumby-x\"\n{bad}"))).unwrap_err();
+            assert!(e.starts_with("font:"), "{bad}: {e}");
+        }
+        // Not without a terminal: with fb, or without an exec.
+        let e = manifest(&wrap("exec = \"neochumby-x\"\nfont = \"spleen-8x16\"\naccess = [\"fb\"]")).unwrap_err();
+        assert!(e.starts_with("font:") && e.contains("fb"), "{e}");
+        assert!(manifest(&wrap("service = \"neochumby-x\"\ntap = \"q\"")).unwrap_err().starts_with("tap:"));
+        assert!(manifest(&wrap("exec = \"neochumby-x\"\ntap = \"\"")).unwrap_err().starts_with("tap:"));
     }
 
     #[test]
@@ -251,7 +333,7 @@ mod tests {
                 .unwrap_err()
                 .starts_with("player:")
         );
-        for access in ["", r#"access = ["screen", "touch"]"#] {
+        for access in ["", r#"access = ["fb", "touch"]"#] {
             let e = manifest(&wrap(&format!("exec = \"neochumby-x\"\nplayer = true\n{access}"))).unwrap_err();
             assert!(e.starts_with("player:") && e.contains("speaker"), "{e}");
         }

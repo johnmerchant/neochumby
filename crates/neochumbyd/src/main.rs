@@ -302,6 +302,8 @@ fn paired(state: &State, name: &str) -> String {
 
 fn serve(a: &Args, state: State) {
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
+    // The same key again, to sign the tree's manifest for NFS (nfs.rs).
+    let signer = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
     // Requests a daemon before this one kept: no one waits on them now.
     state.clear_pending().unwrap_or_else(|e| fail(format!("pending: {e}")));
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
@@ -328,7 +330,7 @@ fn serve(a: &Args, state: State) {
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));
     rt.block_on(async {
-        let fs = nfs::TreeFs::new(tree);
+        let fs = nfs::TreeFs::new(tree, Box::new(move |m| signer.sign(m)));
         let listener = NFSTcpListener::bind(&a.nfs, fs).await.unwrap_or_else(|e| fail(format!("{}: {e}", a.nfs)));
         listener.handle_forever().await.unwrap_or_else(|e| fail(e));
     });
