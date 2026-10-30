@@ -42,7 +42,7 @@ fn main() {
     };
     let mut cmd = Command::new(exe);
     cmd.arg("top");
-    match neochumby::term::run_tapping(cmd, b"q") {
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-top: top: {s}"),
         Ok(_) => {}
         Err(e) => {
