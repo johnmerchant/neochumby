@@ -98,7 +98,8 @@ paired_keys() { nd pairing | sed -n 's/^paired *[a-z0-9_-]* *\([0-9a-f]*\).*/\1/
 # Taps PAIR on the home screen, and waits for the request: its code.
 pair() {
   emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
-  emu tap 80 220 # PAIR
+  emu wait log "neochumby-home: showing" $((30 * slow)) || fail "home didn't draw"
+  emu tap 80 232 --hold 300 # PAIR, in the bottom row
   until_ok 30 has_asking || fail "the Chumby didn't ask to pair"
   code=$(asking)
   [ "${#code}" -eq 39 ] || fail "the code is $code: not eight groups of four"

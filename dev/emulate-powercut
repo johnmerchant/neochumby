@@ -124,7 +124,8 @@ size=$(du -sm "$work" | cut -f1)
 emu start --psp "$out/psp0" --size $((size * 3 + 24 + 64)) --server "$sock" "$work"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
-emu tap 80 220 # PAIR
+emu wait log "neochumby-home: showing" $((30 * slow)) || fail "home didn't draw"
+emu tap 80 232 --hold 300 # PAIR, in the bottom row
 i=0
 until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9a-f-]*\).*/\1/p') && [ -n "$code" ]; do
   i=$((i + 1))

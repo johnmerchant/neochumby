@@ -90,7 +90,8 @@ emu wait log 'neochumby: neochumbyd over the serial line' $((60 * slow)) || fail
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 until_ok 30 grep -q 'serial line .* connected' "$out/neochumbyd.log" || fail "the emulator didn't connect to neochumbyd"
 emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
-emu tap 80 220 # PAIR
+emu wait log "neochumby-home: showing" $((30 * slow)) || fail "home didn't draw"
+emu tap 80 232 --hold 300 # PAIR, in the bottom row
 until_ok 60 has_asking || fail "the Chumby didn't ask to pair"
 code=$(asking)
 name=$(asking_name)
