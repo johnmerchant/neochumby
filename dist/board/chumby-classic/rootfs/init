@@ -35,5 +35,22 @@ else
     done < /proc/modules
 fi
 
+# A neochumby stick, as the stock boot runs one: its first partition on
+# /mnt/usb, and its boot hook, userhook2, beside the console's shell. A
+# stick can take several seconds to show up (more when a control transfer
+# times out and the hub tries it again).
+i=0
+while [ ! -b /dev/sda1 ] && [ "$i" -lt 15 ]; do
+    sleep 1
+    i=$((i + 1))
+done
+if [ -b /dev/sda1 ] && mkdir -p /mnt/usb && mount -t vfat /dev/sda1 /mnt/usb; then
+    log "stick mounted on /mnt/usb"
+    if [ -x /mnt/usb/userhook2 ]; then
+        log "running /mnt/usb/userhook2"
+        /mnt/usb/userhook2 </dev/null >/dev/console 2>&1 &
+    fi
+fi
+
 log "starting shell"
 exec setsid -c /bin/sh -i </dev/console >/dev/console 2>&1

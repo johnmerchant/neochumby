@@ -1,0 +1,19 @@
+ash: the fallbacks for an old libc, for Linux 2.6.16
+
+The toolchain's glibc defines F_DUPFD_CLOEXEC and O_CLOEXEC, but Linux
+2.6.16 predates both (2.6.24 and 2.6.23): fcntl(F_DUPFD_CLOEXEC) fails with
+EINVAL, so ash can't run a script ("sh: 3: Invalid argument"), and
+O_CLOEXEC is ignored. ash has fallbacks for a libc without them (F_DUPFD,
+then FD_CLOEXEC); use those.
+
+--- a/shell/ash.c
++++ b/shell/ash.c
+@@ -290,6 +290,8 @@
+ # define IF_NOT_FEATURE_SH_STANDALONE(...) __VA_ARGS__
+ #endif
+
++#undef F_DUPFD_CLOEXEC
++#undef O_CLOEXEC
+ #ifndef F_DUPFD_CLOEXEC
+ # define F_DUPFD_CLOEXEC F_DUPFD
+ #endif

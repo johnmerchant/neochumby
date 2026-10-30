@@ -105,7 +105,7 @@ wrong. Pairing stays with a person (`neochumbyd pairing`, `approve`), and
 so does turning on remote input (`dev=on`): don't let a tool do that for
 you.
 
-To drive it as a scenario drives the emulators, turn on input for it
+To drive it as a scenario drives the emulator, turn on input for it
 first: `neochumbyd set NAME dev=on` (and `dev=` to turn it off again). It
 is off by default, and both neochumbyd and the Chumby refuse input
 without it: pairing a Chumby lets its server see its log and its screen,
@@ -132,126 +132,103 @@ lifted, if the link drops.
 
 ## Testing without a Chumby: dev/emulate
 
-`dev/emulate` runs a tree on a Linux PC as if it were a Chumby: the same
-static ARM binaries, unchanged, under qemu-arm user mode, chrooted in a fake
-root with the Chumby's paths. The screen is a file, and the touchscreen, top
-button and speaker are fakes you drive from outside. CI boots every pull
-request's tree with it (`dev/emulate-smoke`).
+All emulation happens through qemu-chumby (the submodule
+`emu/qemu/qemu-chumby`): QEMU's `chumby-classic` machine, the whole
+Chumby, run and driven by its `chumby-machine` runner. `dev/emulate` is
+neochumby's side of it: it puts a tree on a USB stick image, laid out as
+`tools/stick` lays one out, boots one of three profiles with the stick in
+the machine's USB port, and drives the result with the commands the
+scenarios use. It needs Python 3.9+ and QEMU with the machine
+(`emu/qemu/build`; qemu-chumby's README lists its build dependencies). No
+root, no VM: it runs natively on Linux and macOS.
 
-It needs Linux, root, Python 3.9+, FUSE, util-linux's `mount` with loop
-devices, qemu-user's binfmt handler (static), and dosfstools for stick
-images. On a Mac, it runs itself in Linux that shares the checkout (below).
+| Profile | What boots | Needs |
+| --- | --- | --- |
+| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `dist/build build/sideload-dist` (or `NEOCHUMBY_EMU_DIST_KERNEL`) |
+| `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
+| `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic/classic-zImage`); to come |
+
+`--profile NAME` or `NEOCHUMBY_EMU_PROFILE` picks one. Your own settings,
+such as where your firmware is, can go in `.env.local` at the top of the
+checkout (git ignores it). Without a profile's images or QEMU, `start` and
+the scenarios exit 77, skipped.
 
 ```sh
-sudo apt install qemu-user-binfmt dosfstools    # Debian, Ubuntu (older: qemu-user-static)
+emu/qemu/build                       # once: QEMU with the machine
 tools/tree /tmp/tree doom
-sudo dev/emulate start /tmp/tree     # the tree at /mnt/neochumby, as over NFS
+dev/emulate start /tmp/tree          # the dist profile, the tree on a stick
+dev/emulate log -f                   # the console, with the session's log
 dev/emulate shot home.png
 dev/emulate tap 160 102              # the second row of the home screen
 dev/emulate tap 5 5 --hold 3500      # the corner hold
 dev/emulate button press             # the top button
-dev/emulate log -f                   # what the session and its apps print
+dev/emulate exec /mnt/usb/neochumby/neochumby sensors   # on the console (dist, classic)
 dev/emulate stop
 ```
 
-- **A stick:** `sudo dev/emulate mkstick /tmp/stick.img /tmp/tree` makes a
-  FAT image laid out as `tools/stick` does, and `start --stick
-  /tmp/stick.img` mounts it at `/mnt/usb` and boots from it. Given a tree
-  as well, the session runs from the tree and the stick starts as it is.
-- **A neochumbyd:** the emulator shares the PC's network, so a neochumbyd
-  running on the PC can pair with it (`start --server 127.0.0.1 ...`).
-- **Inside:** `sudo dev/emulate exec /mnt/neochumby/neochumby sensors` runs
-  a binary beside the session.
-- **Its directory** is `/var/tmp/neochumby-emulate-UID`, root's, with the
-  screen, the log and `/psp` (kept from run to run). `--state DIR` picks
-  another; sudo drops `NEOCHUMBY_EMU`, so pass it with `sudo
-  --preserve-env=NEOCHUMBY_EMU`.
+- **The stick** is a FAT image in the emulator's directory, made afresh
+  at each `start`. Its `userhook2` is `dev/emulate-userhook2`, which puts
+  the settings and `--bind` directories in place, copies the session's log
+  to the console and runs the tree's own `userhook2`, unchanged; the
+  session's end is that hook's `neochumby exited: N`. `dev/emulate mkstick
+  IMG TREE` makes one to keep, and `start --stick IMG` boots it as it is,
+  written as the Chumby writes it.
+- **Settings:** `start --psp DIR` adds DIR's files to `/psp`: on stock, in
+  the settings partition of a copy of your NAND image (yours is never
+  written); on dist and classic, through the stick.
 - **Pictures and the like:** `start --bind DIR:/tmp/classic` puts a host
-  directory in the fake root, read-only. `dev/emulate compare RAW ...` says
-  which 320x240 RGB565 picture the screen is most like.
+  directory on the stick and links it there. `dev/emulate compare RAW ...`
+  says which 320x240 RGB565 picture the screen is most like.
+- **Its directory** is `neochumby-emulate-UID-PROFILE` in the temporary
+  directory, or `--state DIR`: the stick, the NAND copy, the console's log
+  and chumby-machine's sockets.
+- **No network.** The emulated Chumby never has one (QEMU runs with `-nic
+  none`): `--server`, pairing and `delivery=sync` need a real Chumby.
 
-The session runs as root, as on the Chumby, but without the capabilities
-that would let it out of the fake root or into the PC's settings: no
-mounts, chroot, modules, raw devices or network setup, and `/proc/sys` is
-read-only.
-
-### On a Mac
-
-`dev/emulate` needs Linux, so on a Mac it runs itself in Linux that shares
-this checkout at the same path. Every command, run from inside the checkout
-with paths inside it, goes there and runs as root there, so no sudo.
-
-One of:
-- **Apple's `container`** (macOS 26 or later, Apple silicon): install it
-  from github.com/apple/container and run `container system start`. It is
-  used if installed. Its kernel has no vfat, so stick images (`mkstick`,
-  `start --stick IMG`, the sync scenario) need Lima.
-- **Lima**: `brew install lima`. Set `NEOCHUMBY_EMU_VM=lima` to use it when
-  `container` is installed too.
-
-```sh
-tools/tree target/emu-tree doom
-dev/emulate vm start                 # once per boot; the first one builds the image or VM
-dev/emulate-smoke target/emu-tree target/emu-smoke    # the smoke scenario
-dev/emulate start target/emu-tree    # or by hand, as on Linux, without sudo
-dev/emulate shot home.png
-dev/emulate stop
-dev/emulate vm exec CMD ...          # anything else, as root, in that Linux
-```
-
-The emulator's directory stays inside that Linux (`/var/tmp`): a folder
-shared from the Mac can't hold its control socket, so don't give `--state` a
-path in the checkout.
-
-If the first `vm start` with `container` can't resolve names (apt-get exits
-100), build the image with a DNS server named, then start again:
-
-```sh
-container build --dns 1.1.1.1 -t neochumby-emulate -f dev/Containerfile dev
-dev/emulate vm start
-```
-
-To clean up: `dev/emulate vm stop` (it starts again with `vm start`), or
-`dev/emulate vm delete` to remove the container or VM. With `container`, the
-image stays (`container image rm neochumby-emulate`, about 100 MB). With
-Lima, its downloaded Ubuntu image stays in Lima's cache (`limactl prune`).
-
-### Testing the developer link in dev/emulate
-
-A neochumbyd beside the emulator pairs with it and drives it as it would a
-real Chumby (its name is `chumby`). The touchscreen and button are
-dev/emulate's fakes, so this tests the protocol and the session, not the
-Chumby's drivers. On Linux, run `$B` as root; on a Mac, put `dev/emulate vm
-exec` before each `$B`.
-
-```sh
-tools/tree target/emu-tree doom && cargo neochumbyd
-B=target/x86_64-unknown-linux-musl/release/neochumbyd
-N="--state /var/tmp/nd"
-$B serve $N --tree target/emu-tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049   # in another terminal
-dev/emulate start --server 127.0.0.1 target/emu-tree
-dev/emulate tap 80 220                 # PAIR
-$B pairing $N                          # the code on the screen
-$B approve CODE $N                     # the screen says PAIRED
-dev/emulate stop
-dev/emulate start --server 127.0.0.1 target/emu-tree   # neochumbyd: chumby connected
-$B set chumby dev=on $N
-$B tap chumby 160 62 $N                # DOOM: "home asks: open doom"
-$B tap chumby 5 5 --hold 3500 $N       # the corner hold: "escape", home again
-$B button chumby tap $N                # "the top button: told home"
-$B shot chumby nd.png $N && dev/emulate shot emu.png  # the same pixels
-$B set chumby dev= $N                  # tap and button refused again
-dev/emulate stop
-```
+`python3 dev/test_emulate.py` (CI runs it) checks the images dev/emulate
+makes and its whole control path against a stub QEMU, without firmware.
 
 ### Scenarios
 
-**neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; CI runs it
-once classic is a start app, #26). classic is the start app
-(`start=classic` in `/psp/neochumby.conf`), with pictures from
-neochumby-classic's offline smoke render, made with `NEOCHUMBY_TREE=TREE`
-so that its APPS screen lists the tree's apps: made-up data and placeholder
-artwork. The script checks that:
+`dev/e2e TREE NEOCHUMBYD OUT` runs them all on the profile and writes a
+summary to attach to a pull request; `E2E_SCENARIOS` picks some. What
+passes where, so far:
+
+| Scenario | stock | dist | Why not |
+| --- | --- | --- | --- |
+| `boot` | passes | passes (CI) | |
+| `smoke` | passes | fails | on 5.9.16 the kernel's framebuffer console blinks its cursor over the session's screen (`vt.global_cursor_default=0` stops it), so the screen seldom settles; and the session reads touches from `/dev/input/event0`, which there is the top button (the touchscreen is `event1`), so no tap reaches it; there is no `/dev/switch` either |
+| `stock` | passes | skipped | the stock firmware's own boot |
+| `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
+| `pairing`, `powercut` | skipped | skipped | they need a neochumbyd the Chumby can reach, and it has no network |
+
+The session on dist still uses the stock kernel's device nodes
+(`/dev/switch`, `/dev/accel`, `/proc/sys/sense1`), where 5.9.16 offers
+evdev, IIO, the backlight class and ALSA: the scenarios that need devices
+pass there once the session (or dist) bridges the two.
+
+**boot** (`dev/emulate-boot TREE OUT`): the boot runs the stick's hook,
+the hook runs the session from the stick, and home opens and draws.
+
+**smoke** (`dev/emulate-smoke TREE OUT`, a tree with doom): home draws, a
+tap on DOOM opens Doom (without game data it says so and exits, and home
+comes back), the corner hold restarts home, the top button reaches the
+session when it holds `/dev/switch`, `neochumby sensors` on the console
+sees a touch (dist, classic), and CHUMBY MODE ends the session cleanly.
+
+**stock** (`dev/emulate-stock TREE OUT`, a tree with `./dev/probe`, at
+most four apps; the stock profile only): the stock boot runs the hook,
+PROBE draws its pattern and sees a tap where it was made, the corner hold
+ends it and home stays, and after CHUMBY MODE the stock software carries
+on to its own screens (light and mostly pale blue; nothing of its artwork
+is compared or kept).
+
+**neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; run by
+`dev/e2e` when `NEOCHUMBY_CLASSIC_PICTURES` names the pictures). classic is
+the start app (`start=classic` in `/psp/neochumby.conf`), with pictures
+from neochumby-classic's offline smoke render, made with
+`NEOCHUMBY_TREE=TREE` so that its APPS screen lists the tree's apps:
+made-up data and placeholder artwork. The script checks that:
 - classic draws a slideshow page;
 - the top button toggles Home and back without restarting classic;
 - Home's APPS, then the DOOM tile, opens Doom through the session's pipe,
@@ -262,90 +239,27 @@ artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
-**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`, run by CI, user
-mode only). The emulated Chumby taps PAIR against a neochumbyd on the PC,
-and the code it logs must be the one `neochumbyd pairing` lists. A wrong
-code and a six-digit one are turned down, a refusal leaves `/psp` alone,
-and an approval (typed in capitals, without dashes) pins neochumbyd's key
-in the conf, after which the next boot's log reaches `neochumbyd log`. A
-new key under the same name pairs only with `--replace`, and once
-forgotten, the Chumby is turned away.
+**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`; pending). The
+Chumby taps PAIR against a neochumbyd on the PC, and the code it logs must
+be the one `neochumbyd pairing` lists. A wrong code and a six-digit one are
+turned down, a refusal leaves `/psp` alone, and an approval (typed in
+capitals, without dashes) pins neochumbyd's key in the conf, after which
+the next boot's log reaches `neochumbyd log`. A new key under the same name
+pairs only with `--replace`, and once forgotten, the Chumby is turned away.
+It ran under the old user-mode emulator, which shared the PC's network;
+the emulated Chumby has none, so it waits for another way to reach
+neochumbyd (a serial link, say).
 
 **A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
-OUT`, run by CI). The emulated Chumby pairs with a neochumbyd on the PC
-through neochumby-home's PAIR, syncs its tree to a FAT stick image
-(`delivery=sync`), then boots through the real boot hook (`start --boot`,
-under a static busybox) while a second round writes the other set. `sudo
-dev/emulate powercut OUT.img` then cuts the power: the session is frozen
-where it is, the stick image copied as it stands (whatever the PC's kernel
-hadn't written to it is lost), and everything killed. Booting that copy,
+OUT`; pending on the emulator, as pairing). The Chumby pairs with a
+neochumbyd, syncs its tree to its stick (`delivery=sync`), then boots
+through the hook while a second round writes the other set, and
+`dev/emulate powercut OUT.img` cuts the power: the machine stopped where it
+is, the stick image copied as it stands, QEMU killed. Booting that copy,
 the log must show the hook running a complete set, `check-set` agreeing,
-and the next round making the new set live, which one more boot runs. A
-cut that came too late is tried again, sooner. With `--device` the person
-beside the Chumby is asked to pull the plug; the full-system machine skips
-it until qemu-chumby has USB. (Every cut point of a round, on the host, is
-neochumby-sync's own crash test.)
-
-**Sync** (manual, not in CI). It needs a paired Chumby and neochumbyd's
-side of a round, so it waits until `delivery=sync` (#10) and the session
-PRs are both in `main`. Then, as root on one Linux PC (not yet run, so
-expect to adjust it):
-
-```sh
-tools/tree /tmp/tree doom && cargo neochumbyd
-B=target/x86_64-unknown-linux-musl/release/neochumbyd
-$B serve --state /tmp/nd --tree /tmp/tree --api 127.0.0.1:7340 --nfs 127.0.0.1:2049 &
-dev/emulate mkstick /tmp/stick.img            # an empty FAT stick
-dev/emulate start --stick /tmp/stick.img --server 127.0.0.1 /tmp/tree
-dev/emulate tap 80 220                        # PAIR, on neochumby-home
-$B pairing --state /tmp/nd                    # the same code as the screen
-$B approve CODE --state /tmp/nd
-$B set chumby delivery=sync --state /tmp/nd   # the emulator's name: chumby
-dev/emulate stop
-dev/emulate start --stick /tmp/stick.img /tmp/tree   # paired now: settings fetched
-dev/emulate wait log 'neochumby-sync' 120      # the receiver's first round
-```
-
-Then check, from the PC, with the stick image mounted read-only:
-- `neochumby/a/` (or `b/`) holds the tree;
-- its `.complete` marker is whole, and `current` names it;
-- `dev/emulate exec /mnt/usb/neochumby/neochumby check-set
-  /mnt/usb/neochumby/a` agrees.
-
-For the next boot, the boot hook won't run here: it needs BusyBox. Start
-the set `current` names in its place, with `--run`:
-
-```sh
-dev/emulate start --stick /tmp/stick.img --run /mnt/usb/neochumby/a/neochumby
-```
-
-Then change a file in `/tmp/tree` and wait for a round to write the other
-set and flip `current`. A power cut mid-round can be approximated by
-`dev/emulate stop` (SIGKILL) during a large file. That shows the journal
-and resume logic, not FAT's behaviour.
-
-### The whole Chumby: --machine chumby-classic
-
-`--machine chumby-classic` (or `NEOCHUMBY_EMU_MACHINE=chumby-classic`)
-boots the stock 2.6.16 firmware on QEMU's chumby-classic machine
-(`emu/qemu/build`), with the tree in the NAND's Cache partition as a stick
-and a test boot hook in the settings. It needs no root and runs natively on
-a Mac. The firmware is your own device's (`--kernel`, `--nand`,
-`--factory-psp`, or `NEOCHUMBY_EMU_KERNEL`, `_NAND`, `_PSP`; see
-`emu/README.md`), and it stays on your machine: never in the repository,
-CI or an attachment (`docs/legal.md`). Without it, `start` and the
-scenarios exit 77, skipped.
-
-```sh
-export NEOCHUMBY_EMU_MACHINE=chumby-classic NEOCHUMBY_EMU_KERNEL=... NEOCHUMBY_EMU_NAND=... NEOCHUMBY_EMU_PSP=...
-dev/emulate-smoke /tmp/tree /tmp/smoke     # the same scenario, its user-mode steps skipped
-```
-
-Touches go over QMP (`input-send-event`), screenshots are `screendump`,
-and `log` is the console. The top button, `exec`, `selftest`, `--stick`
-and `--bind` are user mode's only, for now. `python3 dev/test_emulate.py`
-(run by CI) checks its images against `chumby-emu`'s and its control path
-against a stub QEMU.
+and the next round making the new set live, which one more boot runs. With
+`--device` the person beside the Chumby is asked to pull the plug. (Every
+cut point of a round, on the host, is neochumby-sync's own crash test.)
 
 ### A real Chumby: --device NAME
 
@@ -367,22 +281,16 @@ session and apps log on purpose, compares only our own screens (with what
 changes masked), scales its waits by `dev/emulate scale`, and exits 77,
 skipped, where a backend can't do a step.
 
-`dev/emulate --help` lists the fake devices and what each does. What user
-mode can't catch is what the full-system machine and real devices are for:
+What the emulator can't catch is what real devices are for:
 
-- **The 2.6.16 kernel.** System calls go to the PC's kernel. Futex flags
-  that kernel lacks, `nanosleep` failing with `EINVAL` on restart, and newer
-  calls and flags all work here and fail there.
-- **Real FAT and USB.** The stick is the PC's vfat driver on a file in
-  memory, not the old driver on a slow stick. Its directory fsync, its
-  speed, a stick pulled out and a power cut aren't reproduced.
 - **Real input.** Taps are clean: no echo after a release, no brief releases
   during a hold, and the button never bounces.
-- **Speed.** qemu on a PC isn't a 266 MHz ARM926, so frame rates and CPU
-  load mean nothing here. Only the speaker is paced, to the rate it's set to.
-- **The rest of the Chumby.** The boot hook doesn't run: the session is
-  started directly. There's no BusyBox, `btplay` or `chumby_set_volume`, no
-  accelerometer, and no overlay or backlight to see.
+- **Real USB and flash.** The stick is a file: a slow stick, one pulled
+  out, and what a stick does with a write when the power goes aren't
+  reproduced.
+- **Speed.** QEMU's ARM926 isn't a 266 MHz one, so frame rates and CPU
+  load mean little.
+- **The network.** The emulated Chumby has none.
 
 ## Writing an app
 
@@ -724,28 +632,31 @@ works on a Chumby. So a pull request that changes what runs on the Chumby
 approved only once its description, or a comment, shows it running. There
 are three ways, from quickest to most faithful:
 
-1. **`dev/emulate`** (user mode, on Linux, or a Linux VM on a Mac): your
-   tree's binaries against fake devices, on the PC's kernel. `sudo dev/e2e
-   TREE NEOCHUMBYD OUT` runs every scenario, as CI does, or drive it by
-   hand with `start`, `tap`, `button`, `shot` and `log`. Enough for most
-   app and session changes.
-2. **The emulator** (`emu/`, QEMU with the Chumby Classic machine): the
-   Chumby's stock 2.6.16 kernel and firmware, from **your own device's**
-   flash backup (`emu/README.md` says how to build the images; they never
-   leave your machine). Use it for anything that depends on the kernel,
-   the flash, FAT, the boot or the handover to the stock software:
-   `NEOCHUMBY_EMU_MACHINE=chumby-classic dev/e2e TREE NEOCHUMBYD OUT` runs
-   the same scenarios on it, and `dev/emulate-stock`, which only it can:
-   neochumby inside the stock boot, handing back to the stock software.
-   Put where your images are in `.env.local` at the checkout's root
+1. **The emulator on the dist profile** (qemu-chumby's machine booting
+   neochumby's Linux 5.9.16, with your tree on a USB stick): `dev/e2e TREE
+   NEOCHUMBYD OUT` runs the scenarios, as CI does, or drive it by hand
+   with `dev/emulate start`, `tap`, `button`, `shot` and `log` (see
+   [Testing without a Chumby](#testing-without-a-chumby-devemulate)). It
+   runs on Linux and macOS without root, and needs no firmware; not every
+   scenario passes there yet.
+2. **The emulator on the stock profile**: the Chumby's stock 2.6.16
+   kernel and firmware, from **your own device's** flash backup
+   (qemu-chumby's README, "Images", says how to build the images; they
+   never leave your machine), booting your tree from a USB stick as a
+   Chumby does. Use it for anything that depends on the stock kernel, the
+   boot or the handover to the stock software:
+   `NEOCHUMBY_EMU_PROFILE=stock dev/e2e TREE NEOCHUMBYD OUT` runs the
+   scenarios on it, with `dev/emulate-stock`, which only it can: neochumby
+   inside the stock boot, handing back to the stock software. Put where
+   your images are in `.env.local` at the checkout's root
    (`NEOCHUMBY_EMU_KERNEL=`, `_NAND=`, `_PSP=` lines; git ignores it), and
-   `dev/emulate` and `dev/e2e` find them. CI can't, having no firmware (and it never
-   will), so this suite is yours to run locally, and its results are the
-   evidence.
+   `dev/emulate` and `dev/e2e` find them. CI can't, having no firmware
+   (and it never will), so this suite is yours to run locally, and its
+   results are the evidence.
 3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
    `neochumbyd shot` (see [On a Chumby](#on-a-chumby)). Needed for what no
    emulator models: timing, the touchscreen's noise, a USB stick's own
-   behaviour, power cuts.
+   behaviour, power cuts, the network.
 
 **The evidence to include:**
 - which of the three, and the commit you tested;
@@ -768,12 +679,14 @@ yet), say which and why. A reviewer may run it on a Chumby for you.
 
 ### Scenarios run everywhere
 
-The automated scenarios (`dev/emulate-smoke`, `dev/emulate-pairing`, `dev/emulate-powercut`,
-`dev/emulate-classic`, `dev/emulate-stock`, and any you add to `dev/e2e`) use only `dev/emulate`'s verbs, `start`, `log`/`wait log`,
-`shot`, `tap`, `button` and `stop`, so the same scenario runs on user
-mode, on the emulator (`--machine chumby-classic`) and on a real Chumby
-(`--device NAME`, through `neochumbyd`; remote input needs that Chumby set
-`dev=on`). Write them so they pass on all three:
+The automated scenarios (`dev/emulate-boot`, `dev/emulate-smoke`,
+`dev/emulate-pairing`, `dev/emulate-powercut`, `dev/emulate-classic`,
+`dev/emulate-stock`, and any you add to `dev/e2e`) use only
+`dev/emulate`'s verbs, `start`, `log`/`wait log`, `shot`, `tap`, `button`
+and `stop`, so the same scenario runs on each of the emulator's profiles
+(`--profile stock|dist|classic`) and on a real Chumby (`--device NAME`,
+through `neochumbyd`; remote input needs that Chumby set `dev=on`). Write
+them so they pass on all of them:
 
 1. **Assert on log lines** the session and apps print on purpose
    (`opening home`, `escape: ending …`), not on timing or on the order of
@@ -782,12 +695,12 @@ mode, on the emulator (`--machine chumby-classic`) and on a real Chumby
 2. **Compare screenshots by regions of our own screens**, masking what
    changes (the clock, time-dependent pictures). Never compare against, or
    commit, the stock software's screens.
-3. **Wait with timeouts the backend scales**: user mode is fast, a real
-   Chumby and the emulator in real time are not.
+3. **Wait with timeouts the backend scales** (`dev/emulate scale`): the
+   emulator boots a whole Chumby first, and a real Chumby is slow.
 4. **What a backend can't do is skipped there, not failed**, with the
    reason: remote input can't reach an app that holds the top button
-   itself (`button = true`), and there's no stick on the emulator until
-   it models USB.
+   itself (`button = true`), and the emulator has no network for a
+   neochumbyd.
 5. **Physical steps** (pull the power, plug in a stick) are prompts the
    runner shows and waits on, checked from the log afterwards; they run
    only with `--device` and someone there.

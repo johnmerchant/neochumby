@@ -9,11 +9,16 @@
 # paired only with --replace, in place of the old one; and once forgotten,
 # the Chumby is turned away.
 #
-#   sudo dev/emulate-pairing TREE NEOCHUMBYD OUT
+#   dev/emulate-pairing TREE NEOCHUMBYD OUT
 #
 # TREE from tools/tree; NEOCHUMBYD the x86_64 neochumbyd built with it.
-# User mode only: the full-system machine and a real Chumby are skipped
-# (77), as pairing a real one is its owner's to do.
+# Pending: it needs the Chumby to reach a neochumbyd on this PC, and the
+# emulated Chumby has no network (qemu-chumby always runs it with -nic
+# none), so every profile skips it (77) until the session can reach
+# neochumbyd another way (a serial link, say). It ran under dev/emulate's
+# old user mode, which shared the PC's network; the steps below are that
+# scenario, kept for the port. A real Chumby is skipped too: pairing one is
+# its owner's to do.
 set -eu
 tree=${1:?usage: dev/emulate-pairing TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/emulate-pairing TREE NEOCHUMBYD OUT}
@@ -35,10 +40,8 @@ fail() {
 backend=$(emu backend)
 slow=$(emu scale)
 
-if [ "$backend" != user ]; then
-  echo "dev/emulate-pairing: skipped: pairing runs in user mode only (this is $backend)"
-  exit 77
-fi
+echo "dev/emulate-pairing: skipped: pending: the emulated Chumby has no network to reach neochumbyd (this is $backend)"
+exit 77
 
 # The session's files and the home screen: all pairing needs.
 work=$out/tree

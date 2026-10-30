@@ -53,7 +53,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `dist/` | The sideload image: a Buildroot build of Linux 5.9.16 with an initramfs built in (`sideload-zImage`), and the same initramfs on its own (`sideload-rootfs.cpio.gz`) | MIT |
 | `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> sideload Linux 5.9.16 kernel sideloader and QEMU demo (draft) | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
-| `emu/` | The emulator: QEMU's `chumby-classic` machine, from [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit, which boots the stock firmware from your own flash backup; and chumby-emu, a host tool that builds its images | MIT (the machine: GPL-2.0-or-later, like QEMU) |
+| `emu/` | The emulator: [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit (a submodule), QEMU's `chumby-classic` machine with its runner and image tool, and the script that builds it | GPL-2.0-or-later, like QEMU (its image tool: MIT) |
 
 Everything we write is MIT, except in `apps/doom`, `apps/quake`,
 `apps/htop`, `apps/top`, `apps/cmatrix`, `apps/bonsai`, `apps/pipes` and
@@ -342,7 +342,7 @@ tools/deploy HOST doom --restart den    # deploy, then restart den on the new tr
 ```
 
 Once its owner allows it (`neochumbyd set den dev=on`; off by default),
-the same link also takes input, so the scenarios that drive the emulators
+the same link also takes input, so the scenarios that drive the emulator
 can drive a real Chumby:
 
 ```sh
@@ -375,27 +375,41 @@ yourself from the Chumby's settings (Chumby info → π) when you need it.
 
 ## The emulator
 
-QEMU's `chumby-classic` machine runs a Chumby without the device: the
-stock kernel, root disk and settings partition from your own flash
-backup, unmodified, to the stock control panel, with the screen,
-touchscreen, serial console and flash working. The machine lives in
-[qemu-chumby](https://github.com/johnmerchant/qemu-chumby) (patches
-against a pinned QEMU release); `emu/` builds it at a pinned commit and
-makes the images. [`emu/README.md`](emu/README.md) has the details.
+All emulation happens through
+[qemu-chumby](https://github.com/johnmerchant/qemu-chumby), the
+submodule `emu/qemu/qemu-chumby` at a pinned commit: QEMU's
+`chumby-classic` machine (patches against a pinned QEMU release, with the
+screen, touchscreen, top button, accelerometer, sound, serial console,
+flash and USB host working), `chumby-machine`, which runs it headless and
+drives it, and `chumby-image`, which makes its NAND image from a flash
+backup. Its README documents all three. neochumby's side is
+`dev/emulate`, which boots a neochumby tree on the machine as a Chumby
+would boot it from a stick, in one of three profiles:
+
+| Profile | Boots | Where |
+| --- | --- | --- |
+| `stock` | The Chumby's own Linux 2.6.16 firmware from your own flash backup, unmodified, with neochumby's tree on a USB stick: the stock boot runs the stick's hook | Your machine only, never CI ([legal](docs/legal.md)) |
+| `dist` | neochumby's Linux 5.9.16 (`dist/build`, below) with our own userspace, the tree on a USB stick that its `/init` mounts and runs | Anywhere: CI runs it |
+| `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook | Anywhere, once its image is built (to come) |
 
 ```sh
-emu/qemu/build                       # QEMU with the machine (deps: emu/README.md)
-(cd emu && cargo build --release)    # chumby-emu, the image tools
-emu/target/release/chumby-emu mkpsp PSPDIR psp.jffs2
-emu/target/release/chumby-emu mknand BACKUPDIR psp.jffs2 nand.img
-emu/qemu/run zImage nand.img         # console on stdio, QMP on qmp.sock
-emu/qemu/qemu-chumby/chumby-ctl qmp.sock tap 160 120      # touch at a pixel
-emu/qemu/qemu-chumby/chumby-ctl qmp.sock shot screen.png  # screenshot
+emu/qemu/build                                  # QEMU with the machine (deps: qemu-chumby's README)
+dev/emulate --profile dist start TREE           # TREE from tools/tree
+dev/emulate --profile dist log -f               # the console, with the session's log
+dev/emulate --profile dist tap 160 120          # touch at a pixel
+dev/emulate --profile dist shot screen.png      # screenshot
+dev/emulate --profile dist stop
+dev/e2e TREE NEOCHUMBYD OUT                     # the scenarios, on NEOCHUMBY_EMU_PROFILE (dist)
 ```
 
-The NAND image is written as the Chumby writes its flash; add `-snapshot`
-to keep it unchanged, and `-icount shift=auto,sleep=off` to boot in a few
-seconds rather than in real time.
+For `stock`, make your NAND image and kernel with qemu-chumby's
+`chumby-image` (its README, "Images") and give them to `dev/emulate` as
+`NEOCHUMBY_EMU_KERNEL`, `NEOCHUMBY_EMU_NAND` and `NEOCHUMBY_EMU_PSP` (your
+factory-like settings directory), in the environment or in an `.env.local`
+beside this README that git ignores. `dev/emulate --help` has the rest:
+the stick's layout and boot hook, the settings, and what each profile
+can't do yet. The emulated Chumby never has a network (`-nic none`), so
+pairing and `delivery=sync` need a real Chumby (`dev/emulate --device`).
 
 ## The sideload image
 
@@ -424,9 +438,15 @@ kernel has no NAND driver built in; `/init` loads the NAND modules only
 when `neochumby.sideloaded=1` is not on the kernel command line, which is
 when the image was flashed rather than handed off from the stock kernel.
 
-The end-to-end tests are in `tools/neochumby-kernel-sideloader` and need
-the emulator's QEMU (`emu/qemu/build`, above). Each boots the image, waits
-for the busybox prompt and checks `uname -a` for `5.9.16-mx21-sideload`:
+The initramfs's `/init` also runs a neochumby stick, as the stock boot
+does: it waits a few seconds for one, mounts its first partition on
+`/mnt/usb`, and runs its `userhook2` beside the console's shell. That is
+how `dev/emulate`'s dist profile boots a tree (above).
+
+The sideloader's end-to-end tests are in `tools/neochumby-kernel-sideloader`
+and run on the emulator (`emu/qemu/build`, above) through qemu-chumby's
+`chumby-machine`. Each boots the image, waits for the busybox prompt and
+checks `uname -a` for `5.9.16-mx21-sideload`:
 
 ```sh
 # The flashed path: no stock firmware needed. CI runs this.
