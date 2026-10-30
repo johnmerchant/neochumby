@@ -6,7 +6,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::{MAX_MSG, Msg, PublicKey, hex, invalid, pairing_code, unhex};
 
@@ -76,15 +76,20 @@ impl Session {
     /// The Chumby's side: opens the handshake. Its peer's key is not yet
     /// checked.
     pub(crate) fn client(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
-        Session::handshake(tcp, me, true)
+        Session::handshake(tcp, me, true, None)
     }
 
-    /// neochumbyd's side, its peer's key not yet checked.
-    pub(crate) fn server(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
-        Session::handshake(tcp, me, false)
+    /// neochumbyd's side, its peer's key not yet checked; the handshake by
+    /// `deadline`, if one is given.
+    pub(crate) fn server(tcp: TcpStream, me: &Identity, deadline: Option<Instant>) -> io::Result<Session> {
+        Session::handshake(tcp, me, false, deadline)
     }
 
-    fn handshake(mut tcp: TcpStream, me: &Identity, initiator: bool) -> io::Result<Session> {
+    /// XX, by `deadline` if one is given; the socket's read timeout is put
+    /// back as it was.
+    fn handshake(tcp: TcpStream, me: &Identity, initiator: bool, deadline: Option<Instant>) -> io::Result<Session> {
+        let was = tcp.read_timeout()?;
+        let mut io = crate::ByDeadline { tcp: &tcp, deadline };
         let b = builder()?.local_private_key(&me.private).map_err(invalid)?.prologue(PROLOGUE).map_err(invalid)?;
         let mut hs = if initiator { b.build_initiator() } else { b.build_responder() }.map_err(invalid)?;
         let mut buf = vec![0u8; NOISE_MAX];
@@ -94,13 +99,14 @@ impl Session {
         while !hs.is_handshake_finished() {
             if ours {
                 let n = hs.write_message(&[], &mut buf).map_err(invalid)?;
-                send_frame(&mut tcp, &buf[..n])?;
+                send_frame(&mut io, &buf[..n])?;
             } else {
-                let n = recv_frame(&mut tcp, &mut buf)?;
+                let n = recv_frame(&mut io, &mut buf)?;
                 hs.read_message(&buf[..n], &mut scratch).map_err(invalid)?;
             }
             ours = !ours;
         }
+        tcp.set_read_timeout(was)?;
         let peer = key(hs.get_remote_static().unwrap_or_default())?;
         let h = hs.get_handshake_hash();
         // The handshake hash covers both static keys (XX).
@@ -200,14 +206,14 @@ impl Session {
     }
 }
 
-fn send_frame(s: &mut TcpStream, b: &[u8]) -> io::Result<()> {
+fn send_frame(s: &mut impl Write, b: &[u8]) -> io::Result<()> {
     let mut f = Vec::with_capacity(2 + b.len());
     f.extend_from_slice(&(b.len() as u16).to_be_bytes());
     f.extend_from_slice(b);
     s.write_all(&f)
 }
 
-fn recv_frame(s: &mut TcpStream, buf: &mut [u8]) -> io::Result<usize> {
+fn recv_frame(s: &mut impl Read, buf: &mut [u8]) -> io::Result<usize> {
     let mut len = [0u8; 2];
     s.read_exact(&mut len)?;
     let n = u16::from_be_bytes(len) as usize;
