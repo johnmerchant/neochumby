@@ -12,9 +12,11 @@
 //!
 //! and, as its `access` lists:
 //!
-//!   screen    /dev/fb0                     (its exec only)
-//!   touch     /dev/input/event0, and the calibration, /psp/ts_settings,
-//!             read-only                    (its exec only)
+//!   fb        /dev/fb0                     (its exec only; without it, its
+//!             exec has a terminal as its stdin and stdout, which the
+//!             session shows: neochumby::term)
+//!   touch     the touchscreen (neochumby::input::touchscreen), and the
+//!             calibration, /psp/ts_settings, read-only (its exec only)
 //!   speaker   /dev/dsp, and /tmp/neochumby, where processes hand the
 //!             speaker over (neochumby::audio), shared by every app that
 //!             lists it (a nosuid, nodev, noexec tmpfs); the mute and the
@@ -171,8 +173,9 @@ fn logs() -> Vec<std::path::PathBuf> {
 }
 
 /// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
-/// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment and the
-/// descriptors in `keep`.
+/// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment, the
+/// descriptors in `keep`, and `terminal`, if given, as its stdin and
+/// stdout.
 pub fn start(
     app: &App,
     exe: &Path,
@@ -180,6 +183,7 @@ pub fn start(
     root: &Path,
     mut env: Vec<(String, String)>,
     keep: &[RawFd],
+    terminal: Option<RawFd>,
 ) -> io::Result<Process> {
     if !READY.get().copied().unwrap_or(false) {
         return Err(io::Error::other("the jail couldn't be prepared"));
@@ -205,11 +209,14 @@ pub fn start(
         let p = format!("/dev/{d}");
         j.device(&p, Path::new(&p), 0o666, 0, 0)?;
     }
-    if a.screen && front {
+    if a.fb && front {
         j.device("/dev/fb0", Path::new("/dev/fb0"), 0o600, uid, uid)?;
     }
     if a.touch && front {
-        j.device(input::TOUCHSCREEN, Path::new(input::TOUCHSCREEN), 0o600, uid, uid)?;
+        // At the same path, which the app is told (input::TOUCHSCREEN_ENV).
+        let touch = input::touchscreen();
+        j.device(&touch, Path::new(&touch), 0o600, uid, uid)?;
+        env.push((input::TOUCHSCREEN_ENV.into(), touch));
         if let Ok(c) = std::fs::read(input::CALIBRATION) {
             j.file(input::CALIBRATION, c, 0o444, 0, 0)?;
         }
@@ -250,6 +257,9 @@ pub fn start(
         }
     }
     j.limit(Limit::Processes(PROCESSES)).limit(Limit::Files(FILES)).limit(Limit::Core(0));
+    if let Some(t) = terminal {
+        j.stdio(t, t);
+    }
 
     env.push(("NEOCHUMBY_ROOT".into(), path(root)?));
     env.push(("HOME".into(), "/tmp".into()));
