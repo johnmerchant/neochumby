@@ -50,6 +50,7 @@
               pkgs.python3
               pkgs.gh
               pkgs.jq
+              pkgs.xz
               pkgs.git
             ];
             # tools/zigcc and its siblings call zig by name; the macOS SDK

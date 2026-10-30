@@ -1,0 +1,152 @@
+#!/bin/sh
+# dev/setup: makes a clean clone ready to build neochumby and test it on the
+# emulated Chumby, without building QEMU or the Chumby's Linux, and says
+# what's missing and how to get it.
+#
+#   dev/setup              check the tools, check out the submodules, and
+#                          fetch qemu-chumby's QEMU and CI's images (verified)
+#   dev/setup --check      only check; change nothing
+#
+# With Nix, `nix develop` (flake.nix) has every tool. Without it, install
+# what this lists. Exits 0 when everything is ready, 1 if something's
+# missing (each with a line on how to get it).
+set -u
+here=$(cd "$(dirname "$0")/.." && pwd)
+cd "$here" || exit 1
+check_only=
+[ "${1:-}" = --check ] && check_only=1
+
+missing=0
+ok() { printf '  ok       %s\n' "$1"; }
+bad() {
+    printf '  missing  %s\n           %s\n' "$1" "$2"
+    missing=1
+}
+
+# How to install a thing, by platform: the hint after "missing".
+os=$(uname -s)
+pm=
+if [ "$os" = Darwin ]; then
+    pm=brew
+elif command -v nixos-version >/dev/null 2>&1; then
+    pm=nix
+elif command -v apt-get >/dev/null 2>&1; then
+    pm=apt
+elif command -v dnf >/dev/null 2>&1; then
+    pm=dnf
+elif command -v pacman >/dev/null 2>&1; then
+    pm=pacman
+fi
+how() { # BREW APT DNF PACMAN
+    if command -v nix >/dev/null 2>&1; then
+        echo "nix develop (flake.nix), or: $(how_pm "$@")"
+    else
+        how_pm "$@"
+    fi
+}
+how_pm() {
+    case $pm in
+        brew) echo "brew install $1" ;;
+        apt) echo "sudo apt install $2" ;;
+        dnf) echo "sudo dnf install $3" ;;
+        pacman) echo "sudo pacman -S $4" ;;
+        nix) echo "nix develop (flake.nix)" ;;
+        *) echo "install $1" ;;
+    esac
+}
+
+echo "Tools"
+if command -v python3 >/dev/null 2>&1 &&
+    python3 -c 'import sys; sys.exit(sys.version_info < (3, 9))'; then
+    ok "python3 ($(python3 -c 'import platform; print(platform.python_version())'))"
+else
+    bad "Python 3.9 or later" "$(how python3 python3 python3 python)"
+fi
+if command -v cargo >/dev/null 2>&1; then
+    ok "cargo ($(cargo --version | cut -d' ' -f2))"
+    targets=$(rustc --print sysroot 2>/dev/null)/lib/rustlib
+    for t in armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl; do
+        if [ -d "$targets/$t" ]; then
+            ok "Rust target $t"
+        else
+            bad "Rust target $t" "rustup target add $t (or nix develop)"
+        fi
+    done
+else
+    bad "Rust (cargo)" "https://rustup.rs, or nix develop"
+fi
+zig_want=$(sed -n 's/^  ZIG_VERSION: *//p' .github/workflows/ci.yml)
+if command -v zig >/dev/null 2>&1 && [ "$(zig version)" = "$zig_want" ]; then
+    ok "zig $zig_want"
+elif command -v zig >/dev/null 2>&1; then
+    bad "zig $zig_want (this is $(zig version))" "https://ziglang.org/download/#release-$zig_want, or nix develop"
+else
+    bad "zig $zig_want" "https://ziglang.org/download/#release-$zig_want, or nix develop"
+fi
+if command -v cmake >/dev/null 2>&1; then
+    ok "cmake (for the fetch app)"
+else
+    bad "CMake 3.21 or later (for the fetch app)" "$(how cmake cmake cmake cmake)"
+fi
+for t in git curl tar; do
+    if command -v "$t" >/dev/null 2>&1; then
+        ok "$t"
+    else
+        bad "$t" "$(how "$t" "$t" "$t" "$t")"
+    fi
+done
+# The prebuilt tarballs are .tar.xz: bsdtar (macOS's) reads them itself.
+if tar --version 2>/dev/null | grep -q bsdtar || command -v xz >/dev/null 2>&1; then
+    ok "xz (for the prebuilt tarballs)"
+else
+    bad "xz (for the prebuilt tarballs)" "$(how xz xz-utils xz xz)"
+fi
+# dist/fetch and classic/fetch verify CI's images' attestations with gh;
+# without it, they're built from source (in a container) instead.
+if ! command -v gh >/dev/null 2>&1; then
+    bad "gh, logged in (verifies the prebuilt images)" "$(how gh gh gh github-cli), then: gh auth login"
+elif ! gh auth status >/dev/null 2>&1; then
+    bad "gh logged in (verifies the prebuilt images)" "gh auth login"
+else
+    ok "gh, logged in"
+fi
+
+echo "Submodules"
+# The apps' third-party C, and qemu-chumby (its chumby-machine drives the
+# emulator). classic/linux, the 2.6.16 kernel, is left out (update = none):
+# classic/build fetches it only when it builds from source.
+if git submodule status | grep -v " classic/linux" | grep -q "^-"; then
+    if [ -n "$check_only" ]; then
+        bad "submodules checked out" "git submodule update --init (or dev/setup)"
+    elif git submodule update --init --quiet; then
+        ok "submodules checked out"
+    else
+        bad "submodules checked out" "git submodule update --init"
+    fi
+else
+    ok "submodules checked out"
+fi
+
+echo "The emulator: QEMU and the images, prebuilt"
+if [ -n "$check_only" ]; then
+    echo "  (not fetched: --check)"
+elif [ "$missing" = 0 ]; then
+    for profile in dist classic; do
+        if NEOCHUMBY_EMU_PROFILE=$profile dev/emulate prepare; then
+            ok "$profile profile ready"
+        else
+            bad "$profile profile" "see dev/emulate prepare's message above"
+        fi
+    done
+else
+    echo "  (after the tools above)"
+fi
+
+if [ "$missing" = 0 ]; then
+    echo
+    echo "Ready. Next:"
+    echo "  cargo chumby && cargo build --release -p neochumbyd"
+    echo "  tools/tree /tmp/tree doom && dev/emulate start /tmp/tree"
+    echo "  dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e"
+fi
+exit "$missing"
