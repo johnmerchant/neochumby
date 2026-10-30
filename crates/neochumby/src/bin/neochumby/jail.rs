@@ -26,6 +26,8 @@
 //!             sockets (network.rs)
 //!   terminal  /dev/ptmx and the Chumby's /dev/pts, for pseudo-terminals
 //!             (neochumby::term)
+//!   storage   /psp/apps/<name>, its own, lasting across boots and shared
+//!             by its exec and service (storage.rs)
 //!   logs      the Chumby's logs, each file bound at its own path: the
 //!             session's (/tmp/neochumby.log), /tmp's other *.log and
 //!             /var/log's files, as they are when the app starts; only
@@ -144,6 +146,11 @@ fn number(app: &App) -> io::Result<u32> {
     Ok(FIRST_UID + i as u32)
 }
 
+/// The uid `app` runs as, if it runs jailed.
+pub fn owner(app: &App) -> Option<u32> {
+    if jailed(app) { number(app).ok() } else { None }
+}
+
 /// The uid of `app`, if it runs jailed without `network`: one the session
 /// ends if it finds it with an internet socket.
 pub fn offline(app: &App) -> Option<u32> {
@@ -171,8 +178,9 @@ fn logs() -> Vec<std::path::PathBuf> {
 }
 
 /// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
-/// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment and the
-/// descriptors in `keep`.
+/// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment, the
+/// descriptors in `keep`, and `storage` (its directory in /psp) bound in at
+/// the same path.
 pub fn start(
     app: &App,
     exe: &Path,
@@ -180,6 +188,7 @@ pub fn start(
     root: &Path,
     mut env: Vec<(String, String)>,
     keep: &[RawFd],
+    storage: Option<&Path>,
 ) -> io::Result<Process> {
     if !READY.get().copied().unwrap_or(false) {
         return Err(io::Error::other("the jail couldn't be prepared"));
@@ -234,6 +243,11 @@ pub fn start(
         // uid's terminals are listed there but closed to this one.
         j.device("/dev/ptmx", Path::new("/dev/ptmx"), 0o666, 0, 0)?;
         j.bind(Path::new("/dev/pts"), "/dev/pts")?;
+    }
+    if let Some(s) = storage {
+        // Its own, already: the session made it so (storage.rs). /psp isn't
+        // `nosuid`, but nothing setuid in it can be any uid but the app's.
+        j.bind(s, &path(s)?)?;
     }
     if a.logs {
         for f in logs() {
