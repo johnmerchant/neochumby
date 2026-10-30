@@ -22,7 +22,7 @@ color = "8c5a28"
 # A game: no service may replace it in front, and the top button fires.
 interrupt = false
 button = true
-access = ["screen", "touch", "speaker", "network"]
+access = ["fb", "touch", "speaker", "network"]
 
 [lints]
 workspace = true

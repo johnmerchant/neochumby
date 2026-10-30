@@ -1,10 +1,12 @@
-//! Box-drawing and block characters, drawn rather than taken from the font
-//! (as terminals do): embedded-graphics' 5x8 has Latin-1 only, and these
-//! must meet their neighbours exactly. Each is a 5x8 bitmap, a row a byte,
-//! its top five bits the pixels from the left, laid out as misc-fixed's
-//! own: light lines on row 3 and column 2.
+//! Box-drawing and block characters for a font that hasn't them (Spleen's
+//! 5x8 and 6x12 have no blocks), drawn as terminals draw them, so that they
+//! meet their neighbours. Each is a 5x8 bitmap, a row a byte, its top five
+//! bits the pixels from the left, laid out as misc-fixed's own: light lines
+//! on row 3 and column 2. The terminal scales it to its font's cell.
 
-use super::grid::{CELL_H, CELL_W};
+/// The bitmaps' size.
+pub const CELL_W: usize = 5;
+pub const CELL_H: usize = 8;
 
 #[derive(Clone, Copy, PartialEq)]
 enum Line {
