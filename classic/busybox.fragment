@@ -1,15 +1,15 @@
 # BusyBox: its defconfig with these options in place of its own.
 # classic/build fails if any line here didn't make it into its .config.
 
-# One static binary (glibc 2.8, the toolchain's).
+# One static binary (musl, zig's: classic/build).
 CONFIG_STATIC=y
 
 # One shell, ash (patches/busybox/ fits it to 2.6.16).
 # CONFIG_HUSH is not set
 
-# Applets that need more than glibc 2.8 or the toolchain's kernel headers
-# give: Linux capabilities, getrandom(), setns(), syncfs() and newer
-# netlink flags.
+# Applets for what 2.6.16 hasn't: Linux capabilities, getrandom(), setns(),
+# syncfs() and newer netlink flags. (Left out when BusyBox linked the old
+# toolchain's glibc 2.8, which hadn't them either; left out still, on musl.)
 # CONFIG_SETPRIV is not set
 # CONFIG_RUN_INIT is not set
 # CONFIG_SEEDRNG is not set
@@ -22,3 +22,14 @@ CONFIG_STATIC=y
 # CONFIG_IPTUNNEL is not set
 # CONFIG_IPRULE is not set
 # CONFIG_IPNEIGH is not set
+
+# tc: BusyBox 1.36.1's needs CBQ's netlink definitions (TCA_CBQ_*), which
+# Linux's headers dropped in 6.8, and zig's musl comes with newer ones: it
+# doesn't compile against them (the old toolchain's had them).
+# CONFIG_TC is not set
+
+# Without BusyBox's trick of a const pointer to each applet's globals
+# (BB_GLOBAL_CONST, libbb.h), which clang, zig's compiler, doesn't keep to:
+# it reads the pointer before the applet has set it (awk crashed at once).
+# libbb.h's own way to turn it off.
+CONFIG_EXTRA_CFLAGS="-DBB_GLOBAL_CONST=''"
