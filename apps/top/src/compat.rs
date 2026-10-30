@@ -142,7 +142,8 @@ pub unsafe extern "C" fn top_pselect(
     // As select counts: each descriptor once for each set it is ready in.
     let mut ready = 0;
     for p in &fds {
-        let marks = [(r, libc::POLLIN | libc::POLLHUP | libc::POLLERR), (w, libc::POLLOUT | libc::POLLERR), (e, libc::POLLPRI)];
+        let marks =
+            [(r, libc::POLLIN | libc::POLLHUP | libc::POLLERR), (w, libc::POLLOUT | libc::POLLERR), (e, libc::POLLPRI)];
         for (set, bits) in marks {
             if !set.is_null() && p.revents & bits != 0 {
                 // SAFETY: set is an fd_set, and p.fd is below FD_SETSIZE.
