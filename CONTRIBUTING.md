@@ -86,7 +86,9 @@ builds companions for another, and `tools/deploy` picks the one its server
 runs. A companion must build for all three: keep anything
 platform-specific behind `cfg`, as neochumbyd does.
 
-CI runs the same checks on every pull request. To run them yourself:
+CI runs the same checks on every pull request (and builds the dist image
+for 5.9.16 and stable; mainline weekly, or when a change is to it alone:
+dist/README.md, "Mainline, weekly"). To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
 crates), and `cargo test -p neochumby-proto -p neochumby-sync -p
@@ -190,7 +192,7 @@ prepare` does just this part.
 
 | Profile | What boots | Needs |
 | --- | --- | --- |
-| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`) |
+| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`; CI builds mainline weekly, so that may be its newest build, not this checkout's) |
 | `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
 | `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
 
@@ -771,6 +773,9 @@ month's releases from 0: `v2026.10.0`) cuts a dated release; CI's
 sources onto it from `dist-prebuilt`, and links qemu-chumby's build (a
 manual CI run on main with `release` set does the same, creating the
 release). It builds nothing, so cut one once main's CI has finished.
+The mainline kernel track's image isn't in a release: CI builds it only
+weekly (dist/README.md, "Mainline, weekly"), and the newest is on
+`dist-prebuilt`.
 
 ## Publishing the SDK crates
 
