@@ -18,7 +18,13 @@ png = "0.18"
 # 2.6.16.
 rustix = { version = "1", features = ["fs"] }
 serde_json = "1"
-tokio = { version = "1", features = ["rt-multi-thread", "macros"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 
 [lints]
 workspace = true
+
+# End to end on loopback. It runs its own binary again as an app's server program,
+# so it has a main of its own rather than the test harness.
+[[test]]
+name = "server"
+harness = false

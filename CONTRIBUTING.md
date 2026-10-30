@@ -100,6 +100,25 @@ dependency must pass `cargo deny`: a licence not yet allowed, or a source
 other than crates.io, is added to `deny.toml` in the same pull request,
 saying why.
 
+neochumbyd's tests include one end to end on loopback
+(`crates/neochumbyd/tests/server.rs`): a Chumby pairs, and a server
+program approves it through the admin socket, sandboxed where the system
+can, and checks that it can't read neochumbyd's key or the owner's token.
+`neochumby-sys`'s tests check the sandbox itself; on Linux they need
+Landlock, and in CI they fail without it.
+
+One test needs root, as it changes uids: apps' programs under uids of
+their own (`isolate::tests::as_root`, `--app-uids`). CI runs it with sudo.
+On a Linux machine, run it as CI does, or as root in a container (rootless
+podman will do), where it leaves nothing behind. Run as CI does, it leaves
+a directory in `/tmp`, owned by made-up uids, to remove as root:
+
+```sh
+bin=$(cargo test -p neochumbyd --no-run --message-format=json |
+  jq -r 'select(.profile.test and .target.kind == ["bin"]) | .executable')
+sudo "$bin" --ignored --exact isolate::tests::as_root
+```
+
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its
 tests run whole sync rounds over a real session on loopback, with a
@@ -203,8 +222,9 @@ prepare` does just this part.
 | `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
 
 `--profile NAME` or `NEOCHUMBY_EMU_PROFILE` picks one. Your own settings,
-such as where your firmware is, can go in `.env.local` at the top of the
-checkout (git ignores it). Without a profile's images or QEMU, `start` and
+such as where your firmware is, can go in `~/.config/neochumby/env.local`,
+shared by every checkout, or in `.env.local` at the top of a checkout
+(git ignores it), which wins over it. Without a profile's images or QEMU, `start` and
 the scenarios exit 77, skipped (the stock profile's images are yours and
 never fetched; for the others, when neither fetching nor building works
 here).
@@ -376,6 +396,8 @@ exec = "neochumby-weather"           # runs in front when the app is opened
 color = "4a90d9"                    # optional; `colour` works too
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
+server = "neochumby-weather-web"     # optional: once on the server
+listen = [8080]                      # optional: the ports `server` may bind
 neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
@@ -396,7 +418,8 @@ for a `git+` app (in `~/.cache/neochumby/app-sources`), and a crate
 published to crates.io carries their files in its package.
 
 Binaries named by `exec` and `service` are built for the Chumby
-(`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
+(`armv5te-unknown-linux-musleabi`), and a `companion` and a `server` for
+the server. An app may be only a server program. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
 crash reports (`debug`) and the request pipe (`session`). A program
@@ -763,11 +786,45 @@ the app:
   stdin and leave on stdout, a u32 big-endian length then the bytes
   (`neochumby_proto::frame`); a typed message is one such frame.
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
-  and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
-  stdin closes.
+  and `NEOCHUMBY_STATE` (a directory of its own, also its HOME, with its
+  TMPDIR in it). It should exit when its stdin closes.
+- **The sandbox:** it may write only its own directory, and read the tree
+  and the system ([SECURITY](SECURITY.md) has the details). Its stderr goes
+  to neochumbyd's log. It gets only a short list of neochumbyd's
+  environment: what it needs from the host comes in a `NEOCHUMBY_`
+  variable, such as AirPlay's `NEOCHUMBY_AIRPLAY_PORT`.
+- **Its own uid:** with `--app-uids`, a companion runs as a uid of its
+  app's own (the same as its app's server program), with no other
+  groups. Keep everything it writes in `NEOCHUMBY_STATE`: it can't write
+  neochumbyd's state, the tree or another app's directory.
 
 `apps/airplay` is a worked example of both halves, and `apps/logs` one
 whose companion is optional.
+
+**Server programs.** A server half that runs once on the server for all
+its Chumbys, not once per Chumby (a household web page), is named by
+`server`:
+- **Starting:** neochumbyd starts it when it starts, sandboxed as a
+  companion is. If it exits, it is started again after 1 s, then 2, 4 and
+  so on up to a minute.
+- **Stopping:** when neochumbyd stops, it gets SIGTERM, and SIGKILL five
+  seconds later.
+- **Environment:** `NEOCHUMBY_STATE` (the app's own directory, shared with
+  its companions; its working directory and HOME, with its TMPDIR in it)
+  and `NEOCHUMBY_TREE` (the app tree, to read the apps' manifests). Its
+  stdout and stderr go to neochumbyd's log.
+- **Ports:** it may bind only the TCP ports `listen` names, on kernels
+  whose Landlock can say (Linux 6.7 on).
+- **The admin socket,** if its owner allows it (`neochumbyd allow <app>
+  pairing`): descriptor 3, with `NEOCHUMBY_ADMIN=3`. Mark it close-on-exec
+  as the program starts (in Python, `os.set_inheritable(3, False)`). It's
+  lines of text: send `paired`, `pending`, `approve CODE TOKEN`,
+  `refuse CODE TOKEN`, `forget NAME TOKEN`, `set NAME KEY=VALUE TOKEN` or
+  `check TOKEN`; the answer is lines of data, then `ok` or
+  `error MESSAGE`. `crates/neochumbyd/src/admin.rs` has the details.
+- **Every change needs the owner.** Changes take the owner's token
+  (`neochumbyd token`). A web page asks the person for it, and should
+  check it (`check TOKEN`) before it lets them change anything.
 
 ## Files in the tree
 
@@ -878,11 +935,14 @@ are three ways, from quickest to most faithful:
    `NEOCHUMBY_EMU_PROFILE=stock dev/e2e TREE NEOCHUMBYD OUT` runs the
    scenarios on it, with `dev/emulate-stock`, which only it can: neochumby
    inside the stock boot, handing back to the stock software. Put where
-   your images are in `.env.local` at the checkout's root
-   (`NEOCHUMBY_EMU_KERNEL=`, `_NAND=`, `_PSP=` lines; git ignores it), and
-   `dev/emulate` and `dev/e2e` find them. CI can't, having no firmware
-   (and it never will), so this suite is yours to run locally, and its
-   results are the evidence.
+   your images are in `~/.config/neochumby/env.local`, which every
+   checkout and worktree shares, or in `.env.local` at a checkout's root,
+   which wins over it (git ignores it): `NEOCHUMBY_EMU_KERNEL=`, `_NAND=`,
+   `_PSP=` lines, and for a real Chumby with `--device`, where its
+   neochumbyd is (`NEOCHUMBY_EMU_HOST=`, `NEOCHUMBYD_DIR=`). `dev/emulate`
+   and `dev/e2e` find them. CI can't, having no firmware (and it never
+   will), so this suite is yours to run locally, and its results are the
+   evidence.
 3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
    `neochumbyd shot` (see [On a Chumby](#on-a-chumby)). Needed for what no
    emulator models: timing, the touchscreen's noise, a USB stick's own
