@@ -131,7 +131,11 @@ An app can use any of these keys:
 - **`access`:** each app runs as a user of its own, jailed in a directory
   holding only its own files, a `/tmp` of its own and what `access` lists:
   `screen`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
-  `network` and `terminal`. It never sees the Chumby's key. `root`, listed alone, runs
+  `network`, `terminal`, `logs` (the Chumby's logs, read-only) and `storage`
+  (a small directory of its own in `/psp`, kept across boots). The session
+  does for it what only root may: the mute and volume, the stock stream
+  player (`play`), and, for the start app, the backlight (`brightness`). It
+  never sees the Chumby's key. `root`, listed alone, runs
   it unjailed, as root: only `home` does, as it pairs the Chumby.
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
 - **`player`:** a Chumby's default player is the one a start app's MUSIC
@@ -456,9 +460,8 @@ give it one with `NEOCHUMBY_DIST_DNS=1.1.1.1 dist/build ...`.
 
 The initramfs's `/init` is a plain one: it mounts proc, sysfs and devtmpfs,
 logs to the kernel log, and starts busybox's shell (prompt `~ # `). The
-kernel has no NAND driver built in; `/init` loads the NAND modules only
-when `neochumby.sideloaded=1` is not on the kernel command line, which is
-when the image was flashed rather than handed off from the stock kernel.
+kernel has no NAND driver built in, and `/init` never loads the NAND
+modules, flashed or sideloaded: only root does (`modprobe mxc_nand`).
 
 The initramfs's `/init` also runs a neochumby stick, as the stock boot
 does: it waits a few seconds for one, mounts its first partition on
