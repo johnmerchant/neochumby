@@ -16,7 +16,9 @@ BR2_GCC_VERSION_13_X=y
 BR2_KERNEL_HEADERS_VERSION=y
 BR2_DEFAULT_KERNEL_VERSION="5.9.16"
 BR2_PACKAGE_HOST_LINUX_HEADERS_CUSTOM_5_9=y
-BR2_STATIC_LIBS=y
+# Shared libraries as well as static ones: the apps built for this Linux
+# link the image's ncurses (below) dynamically. ncinit stays static.
+BR2_SHARED_STATIC_LIBS=y
 
 # Compiles go through ccache, so a build whose output was thrown away (a
 # config change, a cold CI cache) still reuses what it compiled before.
@@ -85,6 +87,14 @@ BR2_TARGET_ROOTFS_INITRAMFS=y
 # /init: ncinit (crates/neochumby-init), which loads the NAND recovery
 # modules (only when flashed) and every other module as its device appears.
 BR2_PACKAGE_NEOCHUMBY_INIT=y
+
+# ncurses, wide-character, with its terminfo (Buildroot's few entries, the
+# console's `linux` among them), for the apps whose programs use curses:
+# neochumby-ncurses links this one, through pkg-config, in a tree for
+# Linux 5.9 and later, and dist/build ships its headers and libraries
+# beside the image (OUT/sideload-sysroot.tar.gz) to build them against.
+BR2_PACKAGE_NCURSES=y
+BR2_PACKAGE_NCURSES_WCHAR=y
 
 # The initramfs userhook2 kexecs with, beside the zImage.
 BR2_TARGET_ROOTFS_CPIO=y
