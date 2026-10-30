@@ -1,6 +1,6 @@
 // Builds doomgeneric (C, third_party/) into the binary; our platform layer
-// (src/platform.rs) provides the DG_* functions it calls, and csrc/sound.c
-// its sound module (FEATURE_SOUND), mixed by src/sound.rs.
+// (src/platform.rs) provides the DG_* functions it calls, and src/sound.rs
+// its sound module (FEATURE_SOUND).
 const DOOM: &[&str] = &[
     "dummy",
     "am_map",
@@ -86,15 +86,16 @@ const DOOM: &[&str] = &[
 
 fn main() {
     let dir = "third_party/doomgeneric/doomgeneric";
+    // i_sound.c includes SDL_mixer.h for FEATURE_SOUND and uses nothing
+    // from it: an empty one will do.
+    let out = std::path::PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    std::fs::write(out.join("SDL_mixer.h"), "").unwrap();
     let mut build = cc::Build::new();
     for f in DOOM {
         build.file(format!("{dir}/{f}.c"));
     }
     build
-        .file("csrc/sound.c")
-        .include(dir)
-        // csrc's SDL_mixer.h, which i_sound.c includes for FEATURE_SOUND.
-        .include("csrc")
+        .include(&out)
         .define("FEATURE_SOUND", None)
         // The Chumby's screen: Doom's 320x200 centred in 320x240, unscaled.
         .define("DOOMGENERIC_RESX", "320")
@@ -108,5 +109,4 @@ fn main() {
         .flag_if_supported("-w")
         .compile("doomgeneric");
     println!("cargo:rerun-if-changed={dir}");
-    println!("cargo:rerun-if-changed=csrc");
 }
