@@ -70,10 +70,11 @@ def main():
             if before.strip() != "0":
                 print("ERROR: recovery check failed: mxc_nand loaded before root asked", file=sys.stderr)
                 ok = False
-            # Kernel messages on the console would break the lines checked.
+            # Kernel messages on the console would break the lines checked,
+            # as would ls's colours: test -b, not ls.
             _, loaded = m.exec(
                 "dmesg -n 1; modprobe cmdlinepart; modprobe mxc_nand && modprobe mtdblock && "
-                "cat /proc/mtd && ls /dev/mtdblock0 && grep '^mxc_nand ' /proc/modules",
+                "cat /proc/mtd && test -b /dev/mtdblock0 && echo /dev/mtdblock0 && grep '^mxc_nand ' /proc/modules",
                 60,
             )
         except cm.Error as e:
