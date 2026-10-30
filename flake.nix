@@ -6,8 +6,9 @@
   #
   # Rust (stable, with the Chumby's, the server's and 64-bit ARM's musl
   # targets), zig 0.17 (the C compiler, linker and musl, as CI pins it),
-  # CMake (for fetch), Python 3 (dev/emulate and friends), gh (dist/fetch
-  # verifies the prebuilt images' attestations with it) and jq. QEMU and the
+  # CMake (for fetch and WAMR), libclang (WAMR's bindings), Python 3
+  # (dev/emulate and friends), gh (dist/fetch verifies the prebuilt images'
+  # attestations with it) and jq. QEMU and the
   # Chumby's Linux images aren't built: dev/emulate fetches qemu-chumby's
   # prebuilt QEMU and CI's images, verified. Without Nix, CONTRIBUTING.md
   # lists the same tools, and dev/setup says which are missing.
@@ -53,6 +54,10 @@
               pkgs.xz
               pkgs.git
             ];
+            # wamr-sys generates WAMR's bindings with bindgen, which loads
+            # libclang; nixpkgs' doesn't find its own builtin headers.
+            LIBCLANG_PATH = "${pkgs.llvmPackages_18.libclang.lib}/lib";
+            BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.llvmPackages_18.libclang.lib}/lib/clang/18/include";
             # tools/zigcc and its siblings call zig by name; the macOS SDK
             # Nix's stdenv puts in the environment would steer zig's own
             # cross compilation, so leave zig to find what it needs.

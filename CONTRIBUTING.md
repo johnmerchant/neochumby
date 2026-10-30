@@ -14,11 +14,12 @@ changes easy to take.
   (`apps/quake/build.rs`). A change that can't be made that way goes in a
   fork, as a commit marked with a comment naming the app
   (`// neochumby-quake: ...`), and the submodule is pinned to that commit:
-  no patch files applied at build time. WAMR (`crates/neochumby-wamr`) is
-  the exception: its submodule is pinned to a release, and its one fix,
-  waiting on upstream, is a patch in the project's format
-  (`crates/neochumby-wamr/patches/`), which its `build.rs` applies to a
-  copy of the file it changes. `tools/tree` (and so `tools/stick`
+  no patch files applied at build time. WAMR is the exception: it comes
+  from our fork of wamr-rust-sdk
+  ([johnmerchant/wamr-rust-sdk](https://github.com/johnmerchant/wamr-rust-sdk)),
+  pinned by commit in `crates/neochumby-wamr/Cargo.toml`, whose `wamr-sys`
+  pins WAMR to a release and applies its `patches/` (in the project's
+  format) to a copy of WAMR's source as it builds. `tools/tree` (and so `tools/stick`
   and `tools/deploy`) checks out the submodules of the apps it builds, so a
   clone without `--recurse-submodules` works there; `cargo` alone needs
   `git submodule update --init` first.
@@ -76,7 +77,7 @@ NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree targe
 Without Nix, the tools are: Rust with the
 `armv5te-unknown-linux-musleabi` and `x86_64-unknown-linux-musl` targets
 (`rustup target add ...`), zig 0.17 on PATH (the C compiler, linker and
-musl: https://ziglang.org), CMake 3.21 or later (for fetch), Python 3.9 or
+musl: https://ziglang.org), CMake 3.21 or later (for fetch and WAMR), libclang (for WAMR's bindings), Python 3.9 or
 later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
 verify CI's images' attestations with it). `dev/setup --check` says which
 are missing and how to get them on this system. `git submodule update

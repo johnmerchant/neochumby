@@ -24,73 +24,34 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use crate::{Error, Func, Import, ImportKind, Trap};
 
-type ModuleT = *mut c_void;
-type InstT = *mut c_void;
-type ExecEnvT = *mut c_void;
-type FunctionT = *mut c_void;
+use wamr_sys::{
+    InstantiationArgs, NativeSymbol, WASMExecEnv, WASMModuleCommon, WASMModuleInstanceCommon,
+    log_level_t_WASM_LOG_LEVEL_ERROR, package_type_t_Wasm_Module_AoT, wasm_exec_env_t, wasm_import_t,
+    wasm_memory_get_cur_page_count, wasm_runtime_addr_app_to_native, wasm_runtime_call_wasm,
+    wasm_runtime_clear_exception, wasm_runtime_create_exec_env, wasm_runtime_deinstantiate,
+    wasm_runtime_destroy_exec_env, wasm_runtime_get_custom_data, wasm_runtime_get_default_memory,
+    wasm_runtime_get_exception, wasm_runtime_get_function_attachment, wasm_runtime_get_import_count,
+    wasm_runtime_get_import_type, wasm_runtime_get_module_inst, wasm_runtime_get_module_package_type,
+    wasm_runtime_init, wasm_runtime_instantiate_ex, wasm_runtime_load, wasm_runtime_lookup_function,
+    wasm_runtime_register_natives_raw, wasm_runtime_set_custom_data, wasm_runtime_set_exception,
+    wasm_runtime_get_version, wasm_runtime_set_log_level, wasm_runtime_unload, wasm_runtime_validate_app_addr,
+};
 
-/// `NativeSymbol` (lib_export.h).
-#[repr(C)]
-struct NativeSymbol {
-    symbol: *const c_char,
-    func_ptr: *mut c_void,
-    signature: *const c_char,
-    attachment: *mut c_void,
-}
-
-/// `InstantiationArgs` (wasm_export.h).
-#[repr(C)]
-struct InstantiationArgs {
-    default_stack_size: u32,
-    host_managed_heap_size: u32,
-    max_memory_pages: u32,
-}
-
-/// `wasm_import_t` (wasm_export.h); the union is one pointer.
-#[repr(C)]
-struct RawImport {
-    module_name: *const c_char,
-    name: *const c_char,
-    kind: u32,
-    linked: bool,
-    u: *mut c_void,
-}
-
-/// `package_type_t`'s AOT value.
-const PACKAGE_AOT: u32 = 1;
+type InstT = wamr_sys::wasm_module_inst_t;
+type ExecEnvT = wasm_exec_env_t;
 
 unsafe extern "C" {
-    fn wasm_runtime_init() -> bool;
-    fn wasm_runtime_set_log_level(level: u32);
+    /// WAMR's platform layer, which wasm_export.h (and so wamr-sys) leaves
+    /// out: the calling thread's stack bounds, found once and kept.
     fn os_thread_get_stack_boundary() -> *mut u8;
-    fn wasm_runtime_register_natives_raw(module: *const c_char, symbols: *mut NativeSymbol, n: u32) -> bool;
-    fn wasm_runtime_load(buf: *mut u8, size: u32, err: *mut c_char, err_size: u32) -> ModuleT;
-    fn wasm_runtime_unload(module: ModuleT);
-    fn wasm_runtime_get_module_package_type(module: ModuleT) -> u32;
-    fn wasm_runtime_get_import_count(module: ModuleT) -> i32;
-    fn wasm_runtime_get_import_type(module: ModuleT, index: i32, out: *mut RawImport);
-    fn wasm_runtime_instantiate_ex(
-        module: ModuleT,
-        args: *const InstantiationArgs,
-        err: *mut c_char,
-        err_size: u32,
-    ) -> InstT;
-    fn wasm_runtime_deinstantiate(inst: InstT);
-    fn wasm_runtime_set_custom_data(inst: InstT, data: *mut c_void);
-    fn wasm_runtime_get_custom_data(inst: InstT) -> *mut c_void;
-    fn wasm_runtime_lookup_function(inst: InstT, name: *const c_char) -> FunctionT;
-    fn wasm_runtime_create_exec_env(inst: InstT, stack_size: u32) -> ExecEnvT;
-    fn wasm_runtime_destroy_exec_env(env: ExecEnvT);
-    fn wasm_runtime_call_wasm(env: ExecEnvT, f: FunctionT, argc: u32, argv: *mut u32) -> bool;
-    fn wasm_runtime_get_exception(inst: InstT) -> *const c_char;
-    fn wasm_runtime_set_exception(inst: InstT, msg: *const c_char);
-    fn wasm_runtime_clear_exception(inst: InstT);
-    fn wasm_runtime_get_default_memory(inst: InstT) -> *mut c_void;
-    fn wasm_memory_get_cur_page_count(mem: *mut c_void) -> u64;
-    fn wasm_runtime_get_module_inst(env: ExecEnvT) -> InstT;
-    fn wasm_runtime_get_function_attachment(env: ExecEnvT) -> *mut c_void;
-    fn wasm_runtime_validate_app_addr(inst: InstT, offset: u64, size: u64) -> bool;
-    fn wasm_runtime_addr_app_to_native(inst: InstT, offset: u64) -> *mut c_void;
+}
+
+/// The runtime's release, as WAMR reports it (`2.4.5`).
+pub fn release() -> String {
+    let (mut major, mut minor, mut patch) = (0u32, 0u32, 0u32);
+    // SAFETY: writes three live u32s; needs no initialised runtime.
+    unsafe { wasm_runtime_get_version(&mut major, &mut minor, &mut patch) };
+    format!("{major}.{minor}.{patch}")
 }
 
 static INITIALISED: AtomicBool = AtomicBool::new(false);
@@ -112,7 +73,7 @@ impl Runtime {
             return Err(Error::Init("wasm_runtime_init failed".into()));
         }
         // SAFETY: the runtime is initialised; this sets a global level.
-        unsafe { wasm_runtime_set_log_level(1) };
+        unsafe { wasm_runtime_set_log_level(log_level_t_WASM_LOG_LEVEL_ERROR) };
         // WAMR finds this thread's stack the first time a module runs, and
         // keeps it: glibc reads /proc/self/maps for that, which a process
         // locked down after loading its module can no longer open. Found
@@ -185,7 +146,7 @@ fn copied(p: *const c_char) -> String {
 
 /// A loaded module.
 pub struct Module<'r> {
-    raw: NonNull<c_void>,
+    raw: NonNull<WASMModuleCommon>,
     _bytes: Vec<u8>,
     _runtime: PhantomData<&'r Runtime>,
 }
@@ -194,7 +155,7 @@ impl Module<'_> {
     /// Whether it was loaded from AOT-compiled code rather than bytecode.
     pub fn is_aot(&self) -> bool {
         // SAFETY: `raw` is a loaded module until Drop.
-        unsafe { wasm_runtime_get_module_package_type(self.raw.as_ptr()) == PACKAGE_AOT }
+        unsafe { wasm_runtime_get_module_package_type(self.raw.as_ptr()) == package_type_t_Wasm_Module_AoT }
     }
 
     /// What it imports, and whether each was linked.
@@ -203,13 +164,7 @@ impl Module<'_> {
         let n = unsafe { wasm_runtime_get_import_count(self.raw.as_ptr()) };
         let mut v = Vec::new();
         for i in 0..n.max(0) {
-            let mut r = RawImport {
-                module_name: std::ptr::null(),
-                name: std::ptr::null(),
-                kind: 0,
-                linked: false,
-                u: std::ptr::null_mut(),
-            };
+            let mut r = wasm_import_t::default();
             // SAFETY: `i` is below the count WAMR gave; `r` is a live
             // wasm_import_t for it to fill.
             unsafe { wasm_runtime_get_import_type(self.raw.as_ptr(), i, &mut r) };
@@ -266,8 +221,8 @@ impl Drop for Module<'_> {
 
 /// An instance of a module.
 pub struct Instance<'m> {
-    raw: NonNull<c_void>,
-    env: NonNull<c_void>,
+    raw: NonNull<WASMModuleInstanceCommon>,
+    env: NonNull<WASMExecEnv>,
     state: *mut Box<dyn Any>,
     _module: PhantomData<&'m Module<'m>>,
 }

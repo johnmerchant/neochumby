@@ -39,7 +39,3 @@
 	url = https://github.com/johnmerchant/chumby-linux-2.6.16
 	update = none
 	shallow = true
-[submodule "crates/neochumby-wamr/third_party/wamr"]
-	path = crates/neochumby-wamr/third_party/wamr
-	url = https://github.com/bytecodealliance/wasm-micro-runtime
-	shallow = true

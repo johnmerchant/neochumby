@@ -3,11 +3,19 @@
 //! interface: load a module (bytecode, or AOT-compiled for the Chumby),
 //! see what it imports, give it the host's functions, run it.
 //!
-//! What is built (build.rs): WAMR's AOT loader for ARMv5TE and its fast
-//! interpreter, with bounds checks, and none of its own WASI, threads,
-//! SIMD or JIT. Its host API is whatever [`Runtime::register`] is given:
-//! neochumby-wasm, the runner, gives each app only what its manifest grants.
-//! On other machines (tests) only the interpreter is built.
+//! WAMR itself is built by `wamr-sys`, from neochumby's fork of
+//! wamr-rust-sdk (github.com/johnmerchant/wamr-rust-sdk), pinned: WAMR-2.4.5
+//! with the fork's patches (the fast interpreter's loader, alignment-safe
+//! on ARMv5), its AOT loader and fast interpreter, with bounds checks, and
+//! none of its WASI, SIMD or JIT (`default-features = false`, `aot` and
+//! `fast-interp`); for an armv5te target, as ARMV5TE. wamr-rust-sdk's own
+//! safe API isn't used: it registers host functions only by bare
+//! pointer, with no signature, attachment or raw arguments, and has no way
+//! to list a module's imports, keep host state on an instance or check a
+//! module's memory, which the runner's host API and import policy are
+//! built on. This crate is that layer, over wamr-sys's bindings. Its host
+//! API is whatever [`Runtime::register`] is given: neochumby-wasm, the
+//! runner, gives each app only what its manifest grants.
 //!
 //! ```no_run
 //! use neochumby_wamr::{Func, Runtime, Val};
@@ -29,9 +37,11 @@ mod runtime;
 
 pub use runtime::{Caller, Instance, Memory, Module, Runtime};
 
-/// WAMR's version, as built (`2.4.5-25bd7eb63e82`, with the commit when
-/// the build could see it): part of what an `.aot` file is compiled for.
-pub const VERSION: &str = env!("NEOCHUMBY_WAMR_VERSION");
+/// WAMR's release, as wamr-sys pins it: part of what an `.aot` file is
+/// compiled for. A test checks it against the runtime's own.
+pub const VERSION: &str = "2.4.5";
+
+pub use runtime::release;
 
 /// How a host function's exit (`Trap::Exit`) is marked in the module's
 /// exception, to tell it from a trap.

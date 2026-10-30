@@ -1,18 +1,21 @@
 [package]
 name = "neochumby-wamr"
 description = "WAMR, the WebAssembly Micro Runtime, built for the Chumby Classic, with a small safe interface"
-# Our Rust is MIT; WAMR (third_party/wamr), which this crate builds and
-# links, is Apache-2.0 WITH LLVM-exception.
+# Our Rust is MIT; WAMR and wamr-sys, which this crate links, are
+# Apache-2.0 WITH LLVM-exception.
 license = "MIT AND Apache-2.0 WITH LLVM-exception"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 repository.workspace = true
 
-[build-dependencies]
-cc = "1"
-# Applies patches/ to copies of the files they change.
-diffy = "0.4"
+# WAMR, built: neochumby's fork of wamr-rust-sdk, pinned (lib.rs says
+# why only its sys crate).
+[dependencies.wamr-sys]
+git = "https://github.com/johnmerchant/wamr-rust-sdk"
+rev = "1c829ab70eab55267f1b58ba61c7cec6137008eb"
+default-features = false
+features = ["aot", "fast-interp"]
 
 [dev-dependencies]
 wat = "1"
