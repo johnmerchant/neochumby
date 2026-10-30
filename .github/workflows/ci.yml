@@ -6,7 +6,8 @@
 # changed, and the end-to-end scenarios run on it (5.9.16), on qemu-chumby's
 # emulated Chumby. And,
 # when the image, the sideloader or the emulator changes (or on demand), the
-# sideload image's recovery path tested.
+# sideload image's recovery path tested. The SDK crates packaged as
+# crates.io would take them (see CONTRIBUTING.md).
 #
 # The images, prebuilt: the dist image for each kernel (5.9.16, 7.2.13)
 # and the classic image (2.6.16), each with its corresponding source. The
@@ -176,6 +177,48 @@ jobs:
             ${{ runner.temp }}/tree
             ${{ runner.temp }}/tree.neochumbyd
           retention-days: 3
+
+  # The SDK crates, packaged as crates.io would take them and each built
+  # from its package alone, so that packaging can't break unnoticed. cargo
+  # packages them together, so each one's dependencies among them resolve to
+  # their packages, not to crates.io. neochumby builds only for the Chumby
+  # (and its softfloat and ncurses' C need zig there); the rest build on
+  # the host too.
+  crates:
+    name: Package the SDK crates
+    # Not for a release, which builds nothing.
+    if: github.event_name != 'release' && !inputs.release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv5te-unknown-linux-musleabi
+      - uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: zig-${{ env.ZIG_VERSION }}-
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: On the host
+        run: |
+          cargo package -p neochumby-sys -p neochumby-proto -p neochumby-macros \
+            -p neochumby-softfloat -p neochumby-sync -p neochumby-ncurses
+      - name: For the Chumby, as cargo publish would
+        run: |
+          cargo publish --dry-run --target armv5te-unknown-linux-musleabi \
+            -p neochumby-sys -p neochumby-proto -p neochumby-macros -p neochumby-softfloat \
+            -p neochumby-sync -p neochumby -p neochumby-ncurses
+      - name: What each carries
+        run: |
+          for c in target/package/*.crate; do
+            printf '%s: %s files, %s bytes\n' "$c" "$(tar tzf "$c" | wc -l)" "$(stat -c %s "$c")"
+          done
 
   # Whether this run needs the sideload job's recovery test and the classic
   # job's boot tests: only when what they test or build changed, on demand,

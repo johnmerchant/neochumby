@@ -3,6 +3,10 @@
 //! `delivery=nfs`, mounts the tree from neochumbyd on every boot. Each
 //! Chumby's owner chooses (`neochumbyd set NAME delivery=sync`).
 //!
+//! **Experimental and unstable**: any release may break anything. Built
+//! for [neochumby](https://github.com/johnmerchant/neochumby), and
+//! published to start an SDK for it.
+//!
 //! On the stick (FAT), in its neochumby directory:
 //!
 //!   current        "a" or "b": the live set

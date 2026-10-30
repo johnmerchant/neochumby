@@ -622,6 +622,35 @@ sources onto it from `dist-prebuilt`, and links qemu-chumby's build (a
 manual CI run on main with `release` set does the same, creating the
 release). It builds nothing, so cut one once main's CI has finished.
 
+## Publishing the SDK crates
+
+Seven crates are published on crates.io, as an SDK for apps outside this
+repository: experimental, and any release may break them. In dependency
+order:
+
+1. `neochumby-sys`, `neochumby-proto`, `neochumby-macros`,
+   `neochumby-softfloat`
+2. `neochumby-sync`
+3. `neochumby`
+4. `neochumby-ncurses`
+
+The rest stay `publish = false`.
+
+- **Versions.** Each of the seven has its own semver `version` in its
+  Cargo.toml (0.0.x while nothing is stable), not the workspace's: the
+  bundle's dated releases (vYYYY.MM.N) don't version the crates. Raising a
+  crate's version means raising it in `[workspace.dependencies]` too, where
+  the others take it by path and version.
+- **What's packaged.** Each crate's `include` lists what it carries: what
+  it builds from, its README and its licence texts. neochumby-ncurses
+  carries ncurses' sources, less what its build configures out. CI's
+  "Package the SDK crates" job packages them all and builds each from its
+  package, on the host and for the Chumby (`cargo publish --dry-run`), so
+  `cargo package --list -p <crate>` and that job are where to look after
+  changing one.
+- **Later:** `cargo semver-checks` against the published versions, once
+  there is a baseline worth keeping compatible with.
+
 ## Pull requests
 
 Keep a pull request to one change, explain why in its description, and make
