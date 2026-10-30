@@ -1,0 +1,344 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: John Merchant <john@johnmerchant.dev>
+Date: Fri, 30 Oct 2026 05:13:36 +1030
+Subject: [PATCH 09/13] Input: add the TSC2100 touchscreen
+
+Pen-down interrupt (PINTDAV), then host-controlled X, Y and Z1/Z2
+conversions every 10 ms while the pen is down, as tsc2007 does.
+Pressure is Z1 * 4096 / Z2. Raw 12-bit coordinates, with the usual
+touchscreen properties for inversion and swapping.
+
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+ drivers/input/touchscreen/Kconfig      |  12 ++
+ drivers/input/touchscreen/Makefile     |   1 +
+ drivers/input/touchscreen/tsc2100_ts.c | 285 +++++++++++++++++++++++++
+ 3 files changed, 298 insertions(+)
+ create mode 100644 drivers/input/touchscreen/tsc2100_ts.c
+
+diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
+index 9b9ae8ac3..d26c98ed2 100644
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -1169,6 +1169,18 @@ config TOUCHSCREEN_TSC2005
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called tsc2005.
+ 
++config TOUCHSCREEN_TSC2100
++	tristate "TSC2100 based touchscreens"
++	depends on MFD_TSC2100
++	help
++	  Say Y here if you have a TSC2100 based touchscreen, such as the
++	  Chumby Classic's.
++
++	  If unsure, say N.
++
++	  To compile this driver as a module, choose M here: the
++	  module will be called tsc2100_ts.
++
+ config TOUCHSCREEN_TSC2007
+ 	tristate "TSC2007 based touchscreens"
+ 	depends on I2C
+diff --git a/drivers/input/touchscreen/Makefile b/drivers/input/touchscreen/Makefile
+index bfd9de833..d1fed4d02 100644
+--- a/drivers/input/touchscreen/Makefile
++++ b/drivers/input/touchscreen/Makefile
+@@ -97,6 +97,7 @@ obj-$(CONFIG_TOUCHSCREEN_TSC2004)	+= tsc2004.o
+ obj-$(CONFIG_TOUCHSCREEN_TSC2005)	+= tsc2005.o
+ tsc2007-y := tsc2007_core.o
+ tsc2007-$(CONFIG_TOUCHSCREEN_TSC2007_IIO)	+= tsc2007_iio.o
++obj-$(CONFIG_TOUCHSCREEN_TSC2100)	+= tsc2100_ts.o
+ obj-$(CONFIG_TOUCHSCREEN_TSC2007)	+= tsc2007.o
+ obj-$(CONFIG_TOUCHSCREEN_WACOM_W8001)	+= wacom_w8001.o
+ obj-$(CONFIG_TOUCHSCREEN_WACOM_I2C)	+= wacom_i2c.o
+diff --git a/drivers/input/touchscreen/tsc2100_ts.c b/drivers/input/touchscreen/tsc2100_ts.c
+new file mode 100644
+index 000000000..b0acd78be
+--- /dev/null
++++ b/drivers/input/touchscreen/tsc2100_ts.c
+@@ -0,0 +1,285 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * TI TSC2100 touchscreen
++ *
++ * The chip's PINTDAV output, set to signal the pen alone, interrupts on
++ * pen down. The threaded handler then converts X, Y, Z1 and Z2 one at a
++ * time, host controlled, and reports a sample every few milliseconds
++ * until the pen lifts, as tsc2007 does.
++ *
++ * Based on the Chumby Classic's 2.6.16 chumby-tsc2100 driver.
++ */
++
++#include <linux/delay.h>
++#include <linux/input.h>
++#include <linux/input/touchscreen.h>
++#include <linux/interrupt.h>
++#include <linux/mfd/tsc2100.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++#include <linux/regmap.h>
++#include <linux/spi/spi.h>
++
++#define TSC2100_ADC_MAX		0xfff
++#define TSC2100_POLL_MS		10
++#define TSC2100_CONV_TIMEOUT_US	10000
++
++/* 12-bit, mean of 4, 1 MHz conversion clock, 500 us panel settling */
++#define TSC2100_ADC_DEFAULT	(TSC2100_ADC_RES_12BIT | TSC2100_ADC_AVG_4 | \
++				 TSC2100_ADC_CL_1MHZ | TSC2100_ADC_PV_500US)
++
++struct tsc2100_ts {
++	struct device *dev;
++	struct regmap *regmap;
++	struct input_dev *input;
++	struct touchscreen_properties prop;
++	int irq;
++	bool stopped;
++};
++
++static int tsc2100_ts_pendown(struct tsc2100_ts *ts)
++{
++	unsigned int adc;
++	int ret;
++
++	ret = regmap_read(ts->regmap, TSC2100_REG_ADC, &adc);
++	if (ret)
++		return ret;
++
++	return !!(adc & TSC2100_ADC_PSTCM);
++}
++
++/* Start one host-controlled conversion and read its result. */
++static int tsc2100_ts_convert(struct tsc2100_ts *ts, unsigned int mode,
++			      unsigned int status_bit, unsigned int reg,
++			      unsigned int *val)
++{
++	unsigned int status;
++	int ret;
++
++	ret = regmap_write(ts->regmap, TSC2100_REG_ADC,
++			   TSC2100_ADC_DEFAULT | TSC2100_ADC_ADSCM(mode));
++	if (ret)
++		return ret;
++
++	ret = regmap_read_poll_timeout(ts->regmap, TSC2100_REG_STATUS, status,
++				       status & status_bit, 100,
++				       TSC2100_CONV_TIMEOUT_US);
++	if (ret)
++		return ret;
++
++	return regmap_read(ts->regmap, reg, val);
++}
++
++static int tsc2100_ts_sample(struct tsc2100_ts *ts, unsigned int *x,
++			     unsigned int *y, unsigned int *p)
++{
++	unsigned int z1, z2;
++	int ret;
++
++	ret = tsc2100_ts_convert(ts, TSC2100_ADSCM_X, TSC2100_STATUS_XSTAT,
++				 TSC2100_REG_X, x);
++	if (!ret)
++		ret = tsc2100_ts_convert(ts, TSC2100_ADSCM_Y,
++					 TSC2100_STATUS_YSTAT,
++					 TSC2100_REG_Y, y);
++	if (!ret)
++		ret = tsc2100_ts_convert(ts, TSC2100_ADSCM_Z,
++					 TSC2100_STATUS_Z2STAT,
++					 TSC2100_REG_Z1, &z1);
++	if (!ret)
++		ret = regmap_read(ts->regmap, TSC2100_REG_Z2, &z2);
++	if (ret)
++		return ret;
++
++	*x &= TSC2100_ADC_MAX;
++	*y &= TSC2100_ADC_MAX;
++
++	/*
++	 * Z1/Z2 rises as the touch resistance falls, that is with a firmer
++	 * press: scale it to the ADC's range, and never report a press as
++	 * zero.
++	 */
++	z1 &= TSC2100_ADC_MAX;
++	z2 &= TSC2100_ADC_MAX;
++	if (z2)
++		*p = min_t(unsigned int, z1 * (TSC2100_ADC_MAX + 1) / z2,
++			   TSC2100_ADC_MAX);
++	else
++		*p = TSC2100_ADC_MAX;
++	*p = max(*p, 1U);
++
++	return 0;
++}
++
++static void tsc2100_ts_idle(struct tsc2100_ts *ts)
++{
++	regmap_write(ts->regmap, TSC2100_REG_ADC,
++		     TSC2100_ADC_DEFAULT | TSC2100_ADC_ADSCM(TSC2100_ADSCM_NONE));
++}
++
++static irqreturn_t tsc2100_ts_irq(int irq, void *handle)
++{
++	struct tsc2100_ts *ts = handle;
++	struct input_dev *input = ts->input;
++	unsigned int x, y, p;
++	bool touched = false;
++
++	while (!ts->stopped && tsc2100_ts_pendown(ts) > 0) {
++		if (tsc2100_ts_sample(ts, &x, &y, &p)) {
++			dev_dbg(ts->dev, "conversion timed out\n");
++			break;
++		}
++
++		/* The pen may have lifted during the conversions. */
++		if (tsc2100_ts_pendown(ts) <= 0)
++			break;
++
++		touchscreen_report_pos(input, &ts->prop, x, y, false);
++		input_report_abs(input, ABS_PRESSURE, p);
++		input_report_key(input, BTN_TOUCH, 1);
++		input_sync(input);
++		touched = true;
++
++		msleep(TSC2100_POLL_MS);
++	}
++
++	if (touched) {
++		input_report_abs(input, ABS_PRESSURE, 0);
++		input_report_key(input, BTN_TOUCH, 0);
++		input_sync(input);
++	}
++
++	tsc2100_ts_idle(ts);
++
++	return IRQ_HANDLED;
++}
++
++static int tsc2100_ts_hw_init(struct tsc2100_ts *ts)
++{
++	int ret;
++
++	/* PINTDAV goes low for the pen only, not for finished conversions. */
++	ret = regmap_write(ts->regmap, TSC2100_REG_STATUS,
++			   TSC2100_STATUS_PINTDAV(TSC2100_PINTDAV_PEN));
++	if (ret)
++		return ret;
++
++	/* The internal reference, which keeps the samples quiet. */
++	ret = regmap_write(ts->regmap, TSC2100_REG_REF, TSC2100_REF_DEFAULT);
++	if (ret)
++		return ret;
++
++	tsc2100_ts_idle(ts);
++
++	return 0;
++}
++
++static int tsc2100_ts_open(struct input_dev *input)
++{
++	struct tsc2100_ts *ts = input_get_drvdata(input);
++
++	ts->stopped = false;
++	/* Make sure the IRQ setting is visible before re-enabling it. */
++	mb();
++	enable_irq(ts->irq);
++
++	return 0;
++}
++
++static void tsc2100_ts_close(struct input_dev *input)
++{
++	struct tsc2100_ts *ts = input_get_drvdata(input);
++
++	ts->stopped = true;
++	/* Make sure the stop flag is visible to the IRQ thread. */
++	mb();
++	disable_irq(ts->irq);
++}
++
++static int tsc2100_ts_probe(struct platform_device *pdev)
++{
++	struct device *dev = &pdev->dev;
++	struct spi_device *spi = to_spi_device(dev->parent);
++	struct input_dev *input;
++	struct tsc2100_ts *ts;
++	int ret;
++
++	if (spi->irq <= 0) {
++		dev_err(dev, "no pen interrupt\n");
++		return -EINVAL;
++	}
++
++	ts = devm_kzalloc(dev, sizeof(*ts), GFP_KERNEL);
++	if (!ts)
++		return -ENOMEM;
++
++	ts->dev = dev;
++	ts->irq = spi->irq;
++	ts->regmap = dev_get_regmap(dev->parent, NULL);
++	if (!ts->regmap)
++		return -ENODEV;
++
++	input = devm_input_allocate_device(dev);
++	if (!input)
++		return -ENOMEM;
++
++	input->name = "tsc2100_ts";
++	input->phys = "tsc2100/input0";
++	input->id.bustype = BUS_SPI;
++	input->open = tsc2100_ts_open;
++	input->close = tsc2100_ts_close;
++
++	input_set_capability(input, EV_KEY, BTN_TOUCH);
++	input_set_abs_params(input, ABS_X, 0, TSC2100_ADC_MAX, 0, 0);
++	input_set_abs_params(input, ABS_Y, 0, TSC2100_ADC_MAX, 0, 0);
++	input_set_abs_params(input, ABS_PRESSURE, 0, TSC2100_ADC_MAX, 0, 0);
++
++	/*
++	 * The touchscreen properties, if any, are on the TSC2100's node.
++	 * Without them the axes stay as set above.
++	 */
++	if (!dev->of_node && dev->parent->of_node)
++		device_set_of_node_from_dev(dev, dev->parent);
++	touchscreen_parse_properties(input, false, &ts->prop);
++
++	ts->input = input;
++	input_set_drvdata(input, ts);
++
++	ret = tsc2100_ts_hw_init(ts);
++	if (ret) {
++		dev_err(dev, "failed to set up the controller: %d\n", ret);
++		return ret;
++	}
++
++	ts->stopped = true;
++	ret = devm_request_threaded_irq(dev, ts->irq, NULL, tsc2100_ts_irq,
++					IRQF_TRIGGER_FALLING | IRQF_ONESHOT,
++					"tsc2100", ts);
++	if (ret) {
++		dev_err(dev, "failed to request IRQ %d: %d\n", ts->irq, ret);
++		return ret;
++	}
++	/* Until the device is opened. */
++	disable_irq(ts->irq);
++
++	ret = input_register_device(input);
++	if (ret) {
++		dev_err(dev, "failed to register input device: %d\n", ret);
++		return ret;
++	}
++
++	return 0;
++}
++
++static struct platform_driver tsc2100_ts_driver = {
++	.driver = {
++		.name = "tsc2100-ts",
++	},
++	.probe = tsc2100_ts_probe,
++};
++module_platform_driver(tsc2100_ts_driver);
++
++MODULE_DESCRIPTION("TI TSC2100 touchscreen driver");
++MODULE_LICENSE("GPL v2");
++MODULE_ALIAS("platform:tsc2100-ts");

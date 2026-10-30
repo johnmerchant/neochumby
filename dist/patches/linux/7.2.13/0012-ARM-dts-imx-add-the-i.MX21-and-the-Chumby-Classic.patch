@@ -1,0 +1,861 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: John Merchant <john@johnmerchant.dev>
+Date: Fri, 30 Oct 2026 05:13:39 +1030
+Subject: [PATCH 12/13] ARM: dts: imx: add the i.MX21 and the Chumby Classic
+
+imx21.dtsi follows imx27.dtsi with the i.MX21's memory map, interrupts,
+clocks and DMA requests. The SSIs name their DMA channels "rx" and
+"tx", as the dmaengine PCM looks them up.
+
+The Chumby Classic (hardware 3.8) translates its former board file: the
+panel, the keypad port as GPIO (button, LCD power, speaker shutdown,
+Wi-Fi power), the TSC2100 on CSPI3, the accelerometer on CSPI1, the PWM
+backlight and three USB host ports. Its boot loader passes ATAGs, so
+the DTB is appended to the zImage.
+
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+ .../devicetree/bindings/arm/fsl.yaml          |   6 +
+ arch/arm/boot/dts/nxp/imx/Makefile            |   2 +
+ .../boot/dts/nxp/imx/imx21-chumby-classic.dts | 371 +++++++++++++++
+ arch/arm/boot/dts/nxp/imx/imx21.dtsi          | 423 ++++++++++++++++++
+ 4 files changed, 802 insertions(+)
+ create mode 100644 arch/arm/boot/dts/nxp/imx/imx21-chumby-classic.dts
+ create mode 100644 arch/arm/boot/dts/nxp/imx/imx21.dtsi
+
+diff --git a/Documentation/devicetree/bindings/arm/fsl.yaml b/Documentation/devicetree/bindings/arm/fsl.yaml
+index 86876311e..4939f1cee 100644
+--- a/Documentation/devicetree/bindings/arm/fsl.yaml
++++ b/Documentation/devicetree/bindings/arm/fsl.yaml
+@@ -21,6 +21,12 @@ properties:
+               - fsl,imx1ads
+           - const: fsl,imx1
+ 
++      - description: i.MX21 based Boards
++        items:
++          - enum:
++              - chumby,classic
++          - const: fsl,imx21
++
+       - description: i.MX23 based Boards
+         items:
+           - enum:
+diff --git a/arch/arm/boot/dts/nxp/imx/Makefile b/arch/arm/boot/dts/nxp/imx/Makefile
+index 1a2539fa1..bf755e9c4 100644
+--- a/arch/arm/boot/dts/nxp/imx/Makefile
++++ b/arch/arm/boot/dts/nxp/imx/Makefile
+@@ -2,6 +2,8 @@
+ dtb-$(CONFIG_SOC_IMX1) += \
+ 	imx1-ads.dtb \
+ 	imx1-apf9328.dtb
++dtb-$(CONFIG_SOC_IMX21) += \
++	imx21-chumby-classic.dtb
+ dtb-$(CONFIG_SOC_IMX25) += \
+ 	imx25-eukrea-mbimxsd25-baseboard.dtb \
+ 	imx25-eukrea-mbimxsd25-baseboard-cmo-qvga.dtb \
+diff --git a/arch/arm/boot/dts/nxp/imx/imx21-chumby-classic.dts b/arch/arm/boot/dts/nxp/imx/imx21-chumby-classic.dts
+new file mode 100644
+index 000000000..3e59f3afc
+--- /dev/null
++++ b/arch/arm/boot/dts/nxp/imx/imx21-chumby-classic.dts
+@@ -0,0 +1,371 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Chumby Classic (hardware 3.8): a Freescale i.MX21 with 64 MiB of SDRAM,
++ * 64 MiB of NAND flash, a 320x240 TFT, a TI TSC2100 touchscreen
++ * controller and audio codec on CSPI3, a Kionix accelerometer on CSPI1
++ * and a top button.
++ *
++ * The values here come from Chumby's 2.6.16 board file (mx21ads.c), its
++ * imxfb and its chumby-tsc2100 driver. Its boot loader passes ATAGs and
++ * no device tree, so append this DTB to the zImage
++ * (CONFIG_ARM_APPENDED_DTB, CONFIG_ARM_ATAG_DTB_COMPAT).
++ */
++
++/dts-v1/;
++#include "imx21.dtsi"
++
++/ {
++	model = "Chumby Classic";
++	compatible = "chumby,classic", "fsl,imx21";
++
++	chosen {
++		stdout-path = &uart1;
++	};
++
++	memory@c0000000 {
++		device_type = "memory";
++		reg = <0xc0000000 0x04000000>;
++	};
++
++	backlight: backlight {
++		compatible = "pwm-backlight";
++		/*
++		 * As the stock kernel sets the PWM up: PERCLK1 (44.33 MHz) / 2
++		 * and PWMP 0xfffc, a 2.956 ms period. Brightness b is a duty
++		 * cycle of b%.
++		 */
++		pwms = <&pwm 0 2956421 0>;
++		brightness-levels = <0 100>;
++		num-interpolated-steps = <100>;
++		default-brightness-level = <100>;
++	};
++
++	/* The top button, keypad row 0. The KPP can't interrupt for it. */
++	button {
++		compatible = "gpio-keys-polled";
++		label = "chumby-button";
++		poll-interval = <20>;
++
++		button-top {
++			label = "top";
++			linux,code = <KEY_ENTER>;
++			gpios = <&kpp 0 GPIO_ACTIVE_LOW>;
++			debounce-interval = <20>;
++		};
++	};
++
++	/* The LCD's supply, switched by LCD_PWRON (keypad column 2) */
++	reg_lcd: regulator-lcd {
++		compatible = "regulator-fixed";
++		regulator-name = "LCD";
++		regulator-min-microvolt = <3300000>;
++		regulator-max-microvolt = <3300000>;
++		gpio = <&kpp 10 GPIO_ACTIVE_HIGH>;
++		enable-active-high;
++		/*
++		 * The boot loader leaves the panel on. imxfb only switches
++		 * this supply through the LCD class, which nothing does at
++		 * boot, so keep it on rather than let it be turned off as
++		 * unused.
++		 */
++		regulator-boot-on;
++		regulator-always-on;
++	};
++
++	sound {
++		compatible = "chumby,imx21-tsc2100-audio";
++		model = "TSC2100";
++		ssi-controller = <&ssi1>;
++		audio-codec = <&tsc2100_codec>;
++		/* Keypad column 4 shuts the speaker amplifier down when high */
++		speaker-gpios = <&kpp 12 GPIO_ACTIVE_LOW>;
++	};
++};
++
++&audmux {
++	status = "okay";
++};
++
++/* CSPI1: the sensor card. It decodes its two select lines, SS0 and SS1. */
++&cspi1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_cspi1>;
++	cs-gpios = <&gpio4 28 GPIO_ACTIVE_LOW>, <&gpio4 27 GPIO_ACTIVE_LOW>;
++	status = "okay";
++
++	accelerometer@0 {
++		compatible = "kionix,kxp74";
++		reg = <0>;
++		spi-max-frequency = <1000000>;
++		spi-cpol;
++		spi-cpha;
++	};
++};
++
++/* CSPI3: the TSC2100, mode 1, 16-bit words, chip select active low */
++&cspi3 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_cspi3>;
++	status = "okay";
++
++	tsc2100: touchscreen-codec@0 {
++		compatible = "ti,tsc2100";
++		reg = <0>;
++		pinctrl-names = "default";
++		pinctrl-0 = <&pinctrl_tsc2100>;
++		spi-max-frequency = <8000000>;
++		spi-cpha;
++		/* PINTDAV: low while the pen is down */
++		interrupt-parent = <&gpio5>;
++		interrupts = <19 IRQ_TYPE_EDGE_FALLING>;
++
++		tsc2100_codec: codec {
++			compatible = "ti,tsc2100-codec";
++			#sound-dai-cells = <0>;
++		};
++	};
++};
++
++&fb {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_fb>;
++	display = <&display0>;
++	lcd-supply = <&reg_lcd>;
++	fsl,lpccr = <0x00a903c0>;
++	fsl,dmacr = <0x00020008>;
++	fsl,lscr1 = <0x00000000>;
++	status = "okay";
++
++	/*
++	 * As the stock imxfb programs it for hardware 3.8: PCR 0xcad80084,
++	 * HCR 0x0800133e and VCR 0x10001204. The pixel clock is the stock
++	 * one, LSCLK 33.25 MHz / 5.
++	 */
++	display0: display0 {
++		model = "Chumby-QVGA";
++		bits-per-pixel = <16>;
++		/* TFT, COLOR, FLMPOL, LPPOL, OEPOL, SCLKIDLE, SCLK_SEL */
++		fsl,pcr = <0xc0d80080>;
++
++		display-timings {
++			native-mode = <&qvga>;
++
++			qvga: timing0 {
++				clock-frequency = <6650000>;
++				hactive = <320>;
++				vactive = <240>;
++				hfront-porch = <20>;
++				hback-porch = <65>;
++				hsync-len = <3>;
++				vfront-porch = <18>;
++				vback-porch = <4>;
++				vsync-len = <4>;
++			};
++		};
++	};
++};
++
++&iomuxc {
++	chumby {
++		pinctrl_cspi1: cspi1grp {
++			fsl,pins = <
++				0x7d 0x004 0x0	/* PD29_PF_CSPI1_SCLK */
++				0x7e 0x000 0x0	/* PD30_PF_CSPI1_MISO */
++				0x7f 0x004 0x0	/* PD31_PF_CSPI1_MOSI */
++				0x7b 0x036 0x0	/* PD27 GPIO out: SS1 */
++				0x7c 0x036 0x0	/* PD28 GPIO out: SS0 */
++			>;
++		};
++
++		pinctrl_cspi3: cspi3grp {
++			fsl,pins = <
++				0x92 0x001 0x0	/* PE18_AF_CSPI3_MISO */
++				0x95 0x005 0x0	/* PE21_AF_CSPI3_SS */
++				0x96 0x005 0x0	/* PE22_AF_CSPI3_MOSI */
++				0x97 0x005 0x0	/* PE23_AF_CSPI3_SCLK */
++			>;
++		};
++
++		pinctrl_fb: fbgrp {
++			fsl,pins = <
++				0x05 0x004 0x0	/* PA5_PF_LSCLK */
++				0x06 0x004 0x0	/* PA6_PF_LD0 */
++				0x07 0x004 0x0	/* PA7_PF_LD1 */
++				0x08 0x004 0x0	/* PA8_PF_LD2 */
++				0x09 0x004 0x0	/* PA9_PF_LD3 */
++				0x0a 0x004 0x0	/* PA10_PF_LD4 */
++				0x0b 0x004 0x0	/* PA11_PF_LD5 */
++				0x0c 0x004 0x0	/* PA12_PF_LD6 */
++				0x0d 0x004 0x0	/* PA13_PF_LD7 */
++				0x0e 0x004 0x0	/* PA14_PF_LD8 */
++				0x0f 0x004 0x0	/* PA15_PF_LD9 */
++				0x10 0x004 0x0	/* PA16_PF_LD10 */
++				0x11 0x004 0x0	/* PA17_PF_LD11 */
++				0x12 0x004 0x0	/* PA18_PF_LD12 */
++				0x13 0x004 0x0	/* PA19_PF_LD13 */
++				0x14 0x004 0x0	/* PA20_PF_LD14 */
++				0x15 0x004 0x0	/* PA21_PF_LD15 */
++				0x16 0x004 0x0	/* PA22_PF_LD16 */
++				0x1c 0x004 0x0	/* PA28_PF_HSYNC */
++				0x1d 0x004 0x0	/* PA29_PF_VSYNC */
++				0x1f 0x004 0x0	/* PA31_PF_OE_ACD */
++			>;
++		};
++
++		pinctrl_nfc: nfcgrp {
++			fsl,pins = <
++				0xa0 0x000 0x0	/* PF0_PF_NRFB */
++				0xa1 0x000 0x0	/* PF1_PF_NFCE */
++				0xa2 0x000 0x0	/* PF2_PF_NFWP */
++				0xa3 0x000 0x0	/* PF3_PF_NFCLE */
++				0xa4 0x000 0x0	/* PF4_PF_NFALE */
++				0xa5 0x000 0x0	/* PF5_PF_NFRE */
++				0xa6 0x000 0x0	/* PF6_PF_NFWE */
++				0xa7 0x000 0x0	/* PF7_PF_NFIO0 */
++				0xa8 0x000 0x0	/* PF8_PF_NFIO1 */
++				0xa9 0x000 0x0	/* PF9_PF_NFIO2 */
++				0xaa 0x000 0x0	/* PF10_PF_NFIO3 */
++				0xab 0x000 0x0	/* PF11_PF_NFIO4 */
++				0xac 0x000 0x0	/* PF12_PF_NFIO5 */
++				0xad 0x000 0x0	/* PF13_PF_NFIO6 */
++				0xae 0x000 0x0	/* PF14_PF_NFIO7 */
++			>;
++		};
++
++		pinctrl_pwm: pwmgrp {
++			fsl,pins = <
++				0x85 0x004 0x0	/* PE5_PF_PWMO */
++			>;
++		};
++
++		pinctrl_ssi: ssigrp {
++			fsl,pins = <
++				0x54 0x000 0x1	/* PC20_PF_SSI1_FS */
++				0x55 0x000 0x1	/* PC21_PF_SSI1_RXD */
++				0x56 0x000 0x1	/* PC22_PF_SSI1_TXD */
++				0x57 0x000 0x1	/* PC23_PF_SSI1_CLK */
++				0x58 0x000 0x1	/* PC24_PF_SSI2_FS */
++				0x59 0x000 0x1	/* PC25_PF_SSI2_RXD */
++				0x5a 0x000 0x1	/* PC26_PF_SSI2_TXD */
++				0x5b 0x000 0x1	/* PC27_PF_SSI2_CLK */
++			>;
++		};
++
++		pinctrl_tsc2100: tsc2100grp {
++			fsl,pins = <
++				0x93 0x032 0x1	/* PE19 GPIO in: PINTDAV */
++			>;
++		};
++
++		pinctrl_uart1: uart1grp {
++			fsl,pins = <
++				0x8c 0x004 0x0	/* PE12_PF_UART1_TXD */
++				0x8d 0x000 0x0	/* PE13_PF_UART1_RXD */
++				0x8e 0x004 0x0	/* PE14_PF_UART1_CTS */
++				0x8f 0x000 0x0	/* PE15_PF_UART1_RTS */
++			>;
++		};
++
++		pinctrl_uart3: uart3grp {
++			fsl,pins = <
++				0x88 0x004 0x0	/* PE8_PF_UART3_TXD */
++				0x89 0x000 0x0	/* PE9_PF_UART3_RXD */
++			>;
++		};
++
++		pinctrl_usbh: usbhgrp {
++			fsl,pins = <
++				0x37 0x000 0x0	/* PB23_PF_USB_PWR */
++				0x39 0x000 0x1	/* PB25_PF_USBH1_ON */
++				0x3a 0x000 0x0	/* PB26_PF_USBH1_FS */
++				0x3b 0x000 0x1	/* PB27_PF_USBH1_OE */
++				0x3c 0x000 0x1	/* PB28_PF_USBH1_TXDM */
++				0x3d 0x000 0x1	/* PB29_PF_USBH1_TXDP */
++				0x3e 0x000 0x1	/* PB30_PF_USBH1_RXDM */
++				0x3f 0x000 0x1	/* PB31_PF_USBH1_RXDP */
++				0x73 0x002 0x1	/* PD19_AOUT_USBH2_RXDM */
++				0x74 0x002 0x1	/* PD20_AOUT_USBH2_RXDP */
++				0x75 0x006 0x1	/* PD21_AIN_USBH2_FS */
++				0x76 0x006 0x1	/* PD22_AIN_USBH2_OE */
++				0x77 0x006 0x1	/* PD23_AIN_USBH2_TXDM */
++				0x78 0x006 0x1	/* PD24_AIN_USBH2_TXDP */
++				0x48 0x000 0x1	/* PC8_PF_USBOTG_FS */
++				0x49 0x000 0x1	/* PC9_PF_USBOTG_OE */
++				0x4a 0x000 0x1	/* PC10_PF_USBOTG_TXDM */
++				0x4b 0x000 0x1	/* PC11_PF_USBOTG_TXDP */
++				0x4c 0x000 0x1	/* PC12_PF_USBOTG_RXDM */
++				0x4d 0x000 0x1	/* PC13_PF_USBOTG_RXDP */
++			>;
++		};
++	};
++};
++
++/*
++ * The keypad port is not a keypad here: its columns switch power and its
++ * rows read the button and the headphone jack. Lines 0-7 are the rows,
++ * lines 8-15 the columns.
++ */
++&kpp {
++	compatible = "fsl,imx21-kpp-gpio";
++	gpio-controller;
++	#gpio-cells = <2>;
++	gpio-line-names = "BUTTON", "", "", "HP_DETECT", "", "", "", "",
++			  "WIFI_ON", "", "LCD_PWRON", "", "SPK_OFF", "", "", "";
++	status = "okay";
++
++	/*
++	 * The stock kernel drives every column high. Keep Wi-Fi on
++	 * (column 0) and the unused columns as it does; LCD_PWRON and
++	 * SPK_OFF belong to the LCD regulator and the sound card.
++	 */
++	columns-hog {
++		gpio-hog;
++		gpios = <8 GPIO_ACTIVE_HIGH>, <9 GPIO_ACTIVE_HIGH>,
++			<11 GPIO_ACTIVE_HIGH>, <13 GPIO_ACTIVE_HIGH>,
++			<14 GPIO_ACTIVE_HIGH>, <15 GPIO_ACTIVE_HIGH>;
++		output-high;
++	};
++};
++
++&nfc {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_nfc>;
++	nand-bus-width = <8>;
++	nand-ecc-mode = "hw";
++	status = "okay";
++};
++
++&pwm {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_pwm>;
++	status = "okay";
++};
++
++/* Sound: the TSC2100's codec, the I2S master, on SSI1 */
++&ssi1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_ssi>;
++	status = "okay";
++};
++
++/* The console */
++&uart1 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_uart1>;
++	uart-has-rtscts;
++	status = "okay";
++};
++
++/* The crypto processor */
++&uart3 {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_uart3>;
++	status = "okay";
++};
++
++/* Host 1 (the internal hub), host 2 and the OTG port as a host */
++&usbh {
++	pinctrl-names = "default";
++	pinctrl-0 = <&pinctrl_usbh>;
++	status = "okay";
++};
+diff --git a/arch/arm/boot/dts/nxp/imx/imx21.dtsi b/arch/arm/boot/dts/nxp/imx/imx21.dtsi
+new file mode 100644
+index 000000000..7a139514f
+--- /dev/null
++++ b/arch/arm/boot/dts/nxp/imx/imx21.dtsi
+@@ -0,0 +1,423 @@
++// SPDX-License-Identifier: GPL-2.0+
++//
++// Freescale i.MX21, from imx27.dtsi and the i.MX21 memory map and
++// interrupts of the former arch/arm/mach-imx/mx21.h.
++
++#include <dt-bindings/clock/imx21-clock.h>
++#include <dt-bindings/gpio/gpio.h>
++#include <dt-bindings/input/input.h>
++#include <dt-bindings/interrupt-controller/irq.h>
++
++/ {
++	#address-cells = <1>;
++	#size-cells = <1>;
++	/*
++	 * The decompressor and also some bootloaders rely on a
++	 * pre-existing /chosen node to be available to insert the
++	 * command line and merge other ATAGS info.
++	 */
++	chosen {};
++
++	aliases {
++		gpio0 = &gpio1;
++		gpio1 = &gpio2;
++		gpio2 = &gpio3;
++		gpio3 = &gpio4;
++		gpio4 = &gpio5;
++		gpio5 = &gpio6;
++		i2c0 = &i2c1;
++		serial0 = &uart1;
++		serial1 = &uart2;
++		serial2 = &uart3;
++		serial3 = &uart4;
++		spi0 = &cspi1;
++		spi1 = &cspi2;
++		spi2 = &cspi3;
++	};
++
++	aitc: aitc-interrupt-controller@10040000 {
++		compatible = "fsl,imx21-aitc", "fsl,avic";
++		interrupt-controller;
++		#interrupt-cells = <1>;
++		reg = <0x10040000 0x1000>;
++	};
++
++	cpus {
++		#size-cells = <0>;
++		#address-cells = <1>;
++
++		cpu: cpu@0 {
++			device_type = "cpu";
++			reg = <0>;
++			compatible = "arm,arm926ej-s";
++			clocks = <&clks IMX21_CLK_FCLK>;
++		};
++	};
++
++	soc: soc {
++		#address-cells = <1>;
++		#size-cells = <1>;
++		compatible = "simple-bus";
++		interrupt-parent = <&aitc>;
++		ranges;
++
++		aipi1: bus@10000000 { /* AIPI1 */
++			compatible = "fsl,aipi-bus", "simple-bus";
++			#address-cells = <1>;
++			#size-cells = <1>;
++			reg = <0x10000000 0x20000>;
++			ranges;
++
++			dma: dma-controller@10001000 {
++				compatible = "fsl,imx21-dma";
++				reg = <0x10001000 0x1000>;
++				interrupts = <32>;
++				clocks = <&clks IMX21_CLK_DMA_GATE>,
++					 <&clks IMX21_CLK_DMA_HCLK_GATE>;
++				clock-names = "ipg", "ahb";
++				#dma-cells = <1>;
++				dma-channels = <16>;
++			};
++
++			wdog: watchdog@10002000 {
++				compatible = "fsl,imx21-wdt";
++				reg = <0x10002000 0x1000>;
++				interrupts = <27>;
++				clocks = <&clks IMX21_CLK_WDOG_GATE>;
++			};
++
++			gpt1: timer@10003000 {
++				compatible = "fsl,imx21-gpt";
++				reg = <0x10003000 0x1000>;
++				interrupts = <26>;
++				clocks = <&clks IMX21_CLK_GPT1_IPG_GATE>,
++					 <&clks IMX21_CLK_PER1>;
++				clock-names = "ipg", "per";
++			};
++
++			gpt2: timer@10004000 {
++				compatible = "fsl,imx21-gpt";
++				reg = <0x10004000 0x1000>;
++				interrupts = <25>;
++				clocks = <&clks IMX21_CLK_GPT2_IPG_GATE>,
++					 <&clks IMX21_CLK_PER1>;
++				clock-names = "ipg", "per";
++			};
++
++			gpt3: timer@10005000 {
++				compatible = "fsl,imx21-gpt";
++				reg = <0x10005000 0x1000>;
++				interrupts = <24>;
++				clocks = <&clks IMX21_CLK_GPT3_IPG_GATE>,
++					 <&clks IMX21_CLK_PER1>;
++				clock-names = "ipg", "per";
++			};
++
++			pwm: pwm@10006000 {
++				#pwm-cells = <3>;
++				compatible = "fsl,imx21-pwm", "fsl,imx1-pwm";
++				reg = <0x10006000 0x1000>;
++				interrupts = <23>;
++				clocks = <&clks IMX21_CLK_PWM_IPG_GATE>,
++					 <&clks IMX21_CLK_PER1>;
++				clock-names = "ipg", "per";
++				status = "disabled";
++			};
++
++			rtc: rtc@10007000 {
++				compatible = "fsl,imx21-rtc";
++				reg = <0x10007000 0x1000>;
++				interrupts = <22>;
++				clocks = <&clks IMX21_CLK_CKIL>,
++					 <&clks IMX21_CLK_RTC_GATE>;
++				clock-names = "ref", "ipg";
++			};
++
++			kpp: kpp@10008000 {
++				compatible = "fsl,imx21-kpp";
++				reg = <0x10008000 0x1000>;
++				interrupts = <21>;
++				clocks = <&clks IMX21_CLK_KPP_GATE>;
++				status = "disabled";
++			};
++
++			owire: owire@10009000 {
++				compatible = "fsl,imx21-owire";
++				reg = <0x10009000 0x1000>;
++				clocks = <&clks IMX21_CLK_OWIRE_GATE>;
++				status = "disabled";
++			};
++
++			uart1: serial@1000a000 {
++				compatible = "fsl,imx21-uart";
++				reg = <0x1000a000 0x1000>;
++				interrupts = <20>;
++				clocks = <&clks IMX21_CLK_UART1_IPG_GATE>,
++					 <&clks IMX21_CLK_PER1>;
++				clock-names = "ipg", "per";
++				status = "disabled";
++			};
++
++			uart2: serial@1000b000 {
++				compatible = "fsl,imx21-uart";
++				reg = <0x1000b000 0x1000>;
++				interrupts = <19>;
++				clocks = <&clks IMX21_CLK_UART2_IPG_GATE>,
++					 <&clks IMX21_CLK_PER1>;
++				clock-names = "ipg", "per";
++				status = "disabled";
++			};
++
++			uart3: serial@1000c000 {
++				compatible = "fsl,imx21-uart";
++				reg = <0x1000c000 0x1000>;
++				interrupts = <18>;
++				clocks = <&clks IMX21_CLK_UART3_IPG_GATE>,
++					 <&clks IMX21_CLK_PER1>;
++				clock-names = "ipg", "per";
++				status = "disabled";
++			};
++
++			uart4: serial@1000d000 {
++				compatible = "fsl,imx21-uart";
++				reg = <0x1000d000 0x1000>;
++				interrupts = <17>;
++				clocks = <&clks IMX21_CLK_UART4_IPG_GATE>,
++					 <&clks IMX21_CLK_PER1>;
++				clock-names = "ipg", "per";
++				status = "disabled";
++			};
++
++			cspi1: spi@1000e000 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				compatible = "fsl,imx21-cspi";
++				reg = <0x1000e000 0x1000>;
++				interrupts = <16>;
++				clocks = <&clks IMX21_CLK_CSPI1_IPG_GATE>,
++					 <&clks IMX21_CLK_PER2>;
++				clock-names = "ipg", "per";
++				status = "disabled";
++			};
++
++			cspi2: spi@1000f000 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				compatible = "fsl,imx21-cspi";
++				reg = <0x1000f000 0x1000>;
++				interrupts = <15>;
++				clocks = <&clks IMX21_CLK_CSPI2_IPG_GATE>,
++					 <&clks IMX21_CLK_PER2>;
++				clock-names = "ipg", "per";
++				status = "disabled";
++			};
++
++			ssi1: ssi@10010000 {
++				#sound-dai-cells = <0>;
++				compatible = "fsl,imx21-ssi";
++				reg = <0x10010000 0x1000>;
++				interrupts = <14>;
++				clocks = <&clks IMX21_CLK_SSI1_GATE>;
++				clock-names = "ipg";
++				dmas = <&dma 12>, <&dma 13>;
++				dma-names = "rx", "tx";
++				fsl,fifo-depth = <8>;
++				status = "disabled";
++			};
++
++			ssi2: ssi@10011000 {
++				#sound-dai-cells = <0>;
++				compatible = "fsl,imx21-ssi";
++				reg = <0x10011000 0x1000>;
++				interrupts = <13>;
++				clocks = <&clks IMX21_CLK_SSI2_GATE>;
++				clock-names = "ipg";
++				dmas = <&dma 8>, <&dma 9>;
++				dma-names = "rx", "tx";
++				fsl,fifo-depth = <8>;
++				status = "disabled";
++			};
++
++			i2c1: i2c@10012000 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				compatible = "fsl,imx21-i2c";
++				reg = <0x10012000 0x1000>;
++				interrupts = <12>;
++				clocks = <&clks IMX21_CLK_I2C_GATE>;
++				status = "disabled";
++			};
++
++			sdhci1: mmc@10013000 {
++				compatible = "fsl,imx21-mmc";
++				reg = <0x10013000 0x1000>;
++				interrupts = <11>;
++				clocks = <&clks IMX21_CLK_SDHC1_IPG_GATE>,
++					 <&clks IMX21_CLK_PER2>;
++				clock-names = "ipg", "per";
++				dmas = <&dma 7>;
++				dma-names = "rx-tx";
++				status = "disabled";
++			};
++
++			sdhci2: mmc@10014000 {
++				compatible = "fsl,imx21-mmc";
++				reg = <0x10014000 0x1000>;
++				interrupts = <10>;
++				clocks = <&clks IMX21_CLK_SDHC2_IPG_GATE>,
++					 <&clks IMX21_CLK_PER2>;
++				clock-names = "ipg", "per";
++				dmas = <&dma 6>;
++				dma-names = "rx-tx";
++				status = "disabled";
++			};
++
++			iomuxc: pinmux@10015000 {
++				compatible = "fsl,imx21-iomuxc";
++				reg = <0x10015000 0x600>;
++				#address-cells = <1>;
++				#size-cells = <1>;
++				ranges;
++
++				gpio1: gpio@10015000 {
++					compatible = "fsl,imx21-gpio";
++					reg = <0x10015000 0x100>;
++					clocks = <&clks IMX21_CLK_GPIO_GATE>;
++					interrupts = <8>;
++					gpio-controller;
++					#gpio-cells = <2>;
++					interrupt-controller;
++					#interrupt-cells = <2>;
++				};
++
++				gpio2: gpio@10015100 {
++					compatible = "fsl,imx21-gpio";
++					reg = <0x10015100 0x100>;
++					clocks = <&clks IMX21_CLK_GPIO_GATE>;
++					interrupts = <8>;
++					gpio-controller;
++					#gpio-cells = <2>;
++					interrupt-controller;
++					#interrupt-cells = <2>;
++				};
++
++				gpio3: gpio@10015200 {
++					compatible = "fsl,imx21-gpio";
++					reg = <0x10015200 0x100>;
++					clocks = <&clks IMX21_CLK_GPIO_GATE>;
++					interrupts = <8>;
++					gpio-controller;
++					#gpio-cells = <2>;
++					interrupt-controller;
++					#interrupt-cells = <2>;
++				};
++
++				gpio4: gpio@10015300 {
++					compatible = "fsl,imx21-gpio";
++					reg = <0x10015300 0x100>;
++					clocks = <&clks IMX21_CLK_GPIO_GATE>;
++					interrupts = <8>;
++					gpio-controller;
++					#gpio-cells = <2>;
++					interrupt-controller;
++					#interrupt-cells = <2>;
++				};
++
++				gpio5: gpio@10015400 {
++					compatible = "fsl,imx21-gpio";
++					reg = <0x10015400 0x100>;
++					clocks = <&clks IMX21_CLK_GPIO_GATE>;
++					interrupts = <8>;
++					gpio-controller;
++					#gpio-cells = <2>;
++					interrupt-controller;
++					#interrupt-cells = <2>;
++				};
++
++				gpio6: gpio@10015500 {
++					compatible = "fsl,imx21-gpio";
++					reg = <0x10015500 0x100>;
++					clocks = <&clks IMX21_CLK_GPIO_GATE>;
++					interrupts = <8>;
++					gpio-controller;
++					#gpio-cells = <2>;
++					interrupt-controller;
++					#interrupt-cells = <2>;
++				};
++			};
++
++			audmux: audmux@10016000 {
++				compatible = "fsl,imx21-audmux";
++				reg = <0x10016000 0x1000>;
++				clocks = <&clks IMX21_CLK_DUMMY>;
++				clock-names = "audmux";
++				status = "disabled";
++			};
++
++			cspi3: spi@10017000 {
++				#address-cells = <1>;
++				#size-cells = <0>;
++				compatible = "fsl,imx21-cspi";
++				reg = <0x10017000 0x1000>;
++				interrupts = <6>;
++				clocks = <&clks IMX21_CLK_CSPI3_IPG_GATE>,
++					 <&clks IMX21_CLK_PER2>;
++				clock-names = "ipg", "per";
++				status = "disabled";
++			};
++		};
++
++		aipi2: bus@10020000 { /* AIPI2 */
++			compatible = "fsl,aipi-bus", "simple-bus";
++			#address-cells = <1>;
++			#size-cells = <1>;
++			reg = <0x10020000 0x20000>;
++			ranges;
++
++			fb: fb@10021000 {
++				compatible = "fsl,imx21-fb";
++				interrupts = <61>;
++				reg = <0x10021000 0x1000>;
++				clocks = <&clks IMX21_CLK_LCDC_IPG_GATE>,
++					 <&clks IMX21_CLK_LCDC_HCLK_GATE>,
++					 <&clks IMX21_CLK_PER3>;
++				clock-names = "ipg", "ahb", "per";
++				status = "disabled";
++			};
++
++			usbh: usb@10024000 {
++				compatible = "fsl,imx21-usbh";
++				reg = <0x10024000 0x2000>;
++				interrupts = <55>;
++				clocks = <&clks IMX21_CLK_USB_GATE>,
++					 <&clks IMX21_CLK_USB_HCLK_GATE>;
++				clock-names = "per", "ahb";
++				status = "disabled";
++			};
++
++			clks: ccm@10027000 {
++				compatible = "fsl,imx21-ccm";
++				reg = <0x10027000 0x800>;
++				#clock-cells = <1>;
++			};
++		};
++
++		nfc: nand-controller@df003000 {
++			#address-cells = <1>;
++			#size-cells = <1>;
++			compatible = "fsl,imx21-nand";
++			reg = <0xdf003000 0x1000>;
++			interrupts = <29>;
++			clocks = <&clks IMX21_CLK_NFC_GATE>;
++			status = "disabled";
++		};
++
++		iram: sram@ffffe800 {
++			compatible = "mmio-sram";
++			reg = <0xffffe800 0x1800>;
++			ranges = <0 0xffffe800 0x1800>;
++			#address-cells = <1>;
++			#size-cells = <1>;
++		};
++	};
++};

@@ -18,6 +18,11 @@
 # over.
 #
 #   dist/build OUT
+#
+# NEOCHUMBY_DIST_KERNEL=7.2.13 builds the 7.2.13 kernel instead
+# (configs/chumby_classic_linux7_defconfig: the i.MX21 as a device-tree
+# platform, patches/linux/7.2.13). The default is 5.9.16. Switching
+# rebuilds the kernel.
 set -eu
 VERSION=2026.02.3
 SHA256=5a59e7501b0b4ec52c41f4bfa79412320e0b37eae5f719605a258e8d0c6fc7fb
@@ -27,6 +32,25 @@ if [ "${1:-}" = --inside ]; then
   root=$2
   out=$3
   br=/work/buildroot-$VERSION
+  o=/work/output
+  kernel=${4:-5.9.16}
+  case $kernel in
+  5.9.16)
+    defconfig=chumby_classic_defconfig
+    fragment=linux.fragment
+    zimage=zImage
+    ;;
+  7.2.13)
+    defconfig=chumby_classic_linux7_defconfig
+    fragment=linux7.fragment
+    # The zImage with the Chumby's DTB appended (BR2_LINUX_KERNEL_APPENDED_ZIMAGE)
+    zimage=zImage.imx21-chumby-classic
+    ;;
+  *)
+    echo "dist/build: NEOCHUMBY_DIST_KERNEL is 5.9.16 or 7.2.13, not $kernel" >&2
+    exit 2
+    ;;
+  esac
   # Downloads and ccache's objects apart from the output, so CI can keep
   # them when the output is stale.
   export BR2_DL_DIR=/work/dl BR2_CCACHE_DIR=/work/ccache
@@ -36,41 +60,47 @@ if [ "${1:-}" = --inside ]; then
     tar xJf /work/br.tar.xz -C /work
     rm /work/br.tar.xz
   fi
-  make -C "$br" O=/work/output BR2_EXTERNAL="$root/dist" chumby_classic_defconfig
+  # Switching kernels: Buildroot keeps the other kernel's tree and its
+  # modules in target/, which would end up in the initramfs.
+  if [ -d $o/build ] && [ "$(cat $o/.neochumby-kernel 2>/dev/null)" != "$kernel" ]; then
+    rm -rf $o/build/linux-[0-9]* $o/target/lib/modules
+  fi
+  make -C "$br" O=$o BR2_EXTERNAL="$root/dist" $defconfig
+  echo "$kernel" >$o/.neochumby-kernel
   # Bootlin's toolchain where it runs (x86_64, so CI), over the defconfig's.
   # Kconfig would drop it silently anywhere else, so check it took.
   if [ "$(uname -m)" = x86_64 ]; then
-    cat "$root/dist/board/chumby-classic/bootlin.config" >>/work/output/.config
-    make -C "$br" O=/work/output olddefconfig
-    grep -qx BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_ARMV5_EABI_MUSL_STABLE=y /work/output/.config || {
+    cat "$root/dist/board/chumby-classic/bootlin.config" >>$o/.config
+    make -C "$br" O=$o olddefconfig
+    grep -qx BR2_TOOLCHAIN_EXTERNAL_BOOTLIN_ARMV5_EABI_MUSL_STABLE=y $o/.config || {
       echo "dist/build: Bootlin's toolchain didn't take" >&2
       exit 1
     }
   fi
-  make -C "$br" O=/work/output
+  make -C "$br" O=$o
   # Kconfig drops an option whose dependencies aren't met, silently: every
   # line of the fragment has to be in the kernel's .config as written.
   # (The kernel builds in linux-<version>; Buildroot knows where.)
-  config=$(make -s -C "$br" O=/work/output printvars VARS=LINUX_DIR | sed 's/^[^=]*=//')/.config
+  config=$(make -s -C "$br" O=$o printvars VARS=LINUX_DIR | sed 's/^[^=]*=//')/.config
   missing=0
-  grep -E '^(CONFIG_|# CONFIG_)' "$root/dist/board/chumby-classic/linux.fragment" |
+  grep -E '^(CONFIG_|# CONFIG_)' "$root/dist/board/chumby-classic/$fragment" |
     while IFS= read -r line; do
       grep -qxF "$line" "$config" || {
         echo "dist/build: not in the kernel's .config: $line" >&2
         exit 1
       }
     done || missing=1
-  test -x /work/output/target/init || {
+  test -x $o/target/init || {
     echo "dist/build: /init missing from the sideload rootfs" >&2
     exit 1
   }
-  find /work/output/target/lib/modules -name mxc_nand.ko | grep -q . || {
+  find $o/target/lib/modules -name mxc_nand.ko | grep -q . || {
     echo "dist/build: mxc_nand.ko missing from the sideload initramfs" >&2
     exit 1
   }
   mkdir -p "$out"
-  cp /work/output/images/zImage "$out/sideload-zImage"
-  cp /work/output/images/rootfs.cpio.gz "$out/sideload-rootfs.cpio.gz"
+  cp "$o/images/$zimage" "$out/sideload-zImage"
+  cp $o/images/rootfs.cpio.gz "$out/sideload-rootfs.cpio.gz"
   [ "$missing" = 0 ] || exit 1
   echo "sideload: $out/sideload-zImage (initramfs built in)"
   echo "sideload: $out/sideload-rootfs.cpio.gz (external initramfs)"
@@ -117,4 +147,4 @@ dns=
 [ -n "${NEOCHUMBY_DIST_DNS:-}" ] && dns="--dns $NEOCHUMBY_DIST_DNS"
 # shellcheck disable=SC2086
 exec "$runtime" run --rm $size $dns $work_mount -v "$root:$root" -v "$out:$out" \
-  neochumby-dist sh "$root/dist/build" --inside "$root" "$out"
+  neochumby-dist sh "$root/dist/build" --inside "$root" "$out" "${NEOCHUMBY_DIST_KERNEL:-5.9.16}"
