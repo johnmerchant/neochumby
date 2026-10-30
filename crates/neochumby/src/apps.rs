@@ -129,8 +129,10 @@ fn parse_color(s: &str) -> Option<u16> {
     Some(rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
 
+/// The app in `dir`, from its manifest: checked against the tree's signed
+/// manifest where the tree is checked (crate::verified).
 pub fn load(dir: &Path) -> Option<App> {
-    let manifest = std::fs::read_to_string(dir.join("manifest")).ok()?;
+    let manifest = String::from_utf8(crate::verified::read(&dir.join("manifest")).ok()?).ok()?;
     let field = |k: &str| {
         manifest
             .lines()

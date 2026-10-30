@@ -112,7 +112,10 @@ impl<'a> Launch<'a> {
         let process = if jail::jailed(self.app) {
             jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep, self.storage.as_deref())?
         } else {
-            let mut cmd = Command::new(self.exe);
+            // Root and unjailed: from its checked copy, in a checked tree
+            // (neochumby::verified), which it may check its own reads
+            // against too.
+            let mut cmd = Command::new(neochumby::verified::exe(self.exe)?);
             cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", self.root).env("HOME", "/tmp");
             cmd.env_remove(session::PLAYER_ENV);
             cmd.envs(self.env).process_group(0);

@@ -51,6 +51,12 @@ impl Identity {
     pub fn public(&self) -> PublicKey {
         self.public
     }
+
+    /// None: an X25519 key can't sign, so a Noise build's neochumbyd
+    /// serves no signed manifest (neochumby_sync::signed).
+    pub fn sign(&self, _msg: &[u8]) -> Option<[u8; 64]> {
+        None
+    }
 }
 
 /// An open, authenticated connection.

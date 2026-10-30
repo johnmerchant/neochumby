@@ -30,7 +30,10 @@
 //! the apps' services), which keeps a copy of the tree on the stick for the
 //! boot hook to run. A tree made for a stick has no neochumby-sync, and
 //! needs none. The session also keeps the boot hook in
-//! /psp up to date with the tree's (conf::refresh_hook).
+//! /psp up to date with the tree's (conf::refresh_hook), and neochumby-boot
+//! beside it, which checks a tree over NFS before anything in it runs
+//! (neochumby::verified). Started by neochumby-boot, the session runs from
+//! a checked copy, and checks each program it runs too.
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs is described in
@@ -66,6 +69,7 @@ use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
+use neochumby::verified;
 use neochumby_proto::{Delivery, Settings};
 
 /// The escape hatch: a touch held this long in this corner. The resistive
@@ -362,6 +366,18 @@ fn session() {
         Ok(false) => {}
         Err(e) => eprintln!("neochumby: {}: {e}", conf::HOOK),
     }
+    // As the hook is, and from the same trees: what checks a tree over NFS
+    // on the next boot.
+    if conf::paired().is_some() && root != Path::new(conf::STICK_TREE) {
+        match verified::install_boot(&root) {
+            Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", verified::BOOT),
+            Ok(false) => {}
+            Err(e) => eprintln!("neochumby: {}: {e}", verified::BOOT),
+        }
+    }
+    if verified::on() {
+        eprintln!("neochumby: the tree is checked against neochumbyd's signed manifest");
+    }
 
     // The master volume as the boot set it from /psp/volume: nothing has
     // played yet.
@@ -411,10 +427,11 @@ fn session() {
             link.release();
         }
         // Just after a deploy, the NFS client may still hold the replaced
-        // file's handle: the first try fails as stale, and drops it.
+        // file's handle: the first try fails as stale, and drops it. A
+        // checked tree is checked again, from its new manifest.
         let exe = root.join("neochumby");
         for _ in 0..5 {
-            let e = Command::new(&exe).exec();
+            let e = if verified::on() { verified::boot(&root) } else { Command::new(&exe).exec() };
             eprintln!("neochumby: restart: {}: {e}", exe.display());
             neochumby::sleep_ms(1000);
         }

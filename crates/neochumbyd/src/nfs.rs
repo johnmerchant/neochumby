@@ -18,6 +18,11 @@
 //!   path is walked from the tree's root one directory at a time, none of
 //!   them opened through a link ([`Beneath`]), so a directory swapped for
 //!   a link while it is being served leads nowhere.
+//! - The tree's manifest, signed with neochumbyd's key, is served as
+//!   `.neochumby-manifest` in the root (neochumby_sync::signed), made from
+//!   the tree as it is when asked for, at most a second old. It is no file
+//!   of the tree, and isn't listed. A Chumby checks what it mounted against
+//!   it before it runs anything.
 
 use std::collections::HashMap;
 use std::ffi::{OsStr, OsString};
@@ -26,7 +31,8 @@ use std::io::{self, Read, Seek, SeekFrom};
 use std::os::fd::OwnedFd;
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 use std::path::{Component, Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, Mutex, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use async_trait::async_trait;
 use nfsserve::nfs::{fattr3, fileid3, filename3, ftype3, nfs_fh3, nfspath3, nfsstat3, nfstime3, sattr3, specdata3};
@@ -34,13 +40,32 @@ use nfsserve::vfs::{DirEntry, NFSFileSystem, ReadDirResult, VFSCapabilities};
 use rustix::fs::{AtFlags, CWD, FileType, Mode, OFlags, Stat};
 
 const ROOT: fileid3 = 1;
+/// The signed manifest's id.
+const MANIFEST: fileid3 = 2;
+/// How long a manifest made is served before the tree is looked at again.
+const MANIFEST_FRESH: Duration = Duration::from_secs(1);
 /// In every handle: "neochumb".
 const GENERATION: u64 = 0x6e65_6f63_6875_6d62;
+
+/// What signs the manifest: neochumbyd's identity, or nothing (a Noise
+/// build's key can't sign).
+pub type Signer = Box<dyn Fn(&[u8]) -> Option<[u8; 64]> + Send + Sync>;
 
 pub struct TreeFs {
     root: Beneath,
     /// id → path relative to the root.
     paths: RwLock<HashMap<fileid3, PathBuf>>,
+    signer: Signer,
+    hashes: neochumby_sync::serve::Hashes,
+    manifest: Mutex<Option<Made>>,
+}
+
+/// The manifest last made: when, its text, and since when it has been that
+/// text (its mtime as served).
+struct Made {
+    at: Instant,
+    text: Arc<Vec<u8>>,
+    since: SystemTime,
 }
 
 /// The tree's root, and the paths beneath it, each walked from the root a
@@ -127,8 +152,8 @@ fn is_symlink(st: &Stat) -> bool {
     kind(st) == FileType::Symlink
 }
 
-/// FNV-1a over the path and inode, folded to 32 bits, clear of 0 (reserved)
-/// and 1 (the root).
+/// FNV-1a over the path and inode, folded to 32 bits, clear of 0 (reserved),
+/// 1 (the root) and 2 (the manifest).
 #[allow(clippy::unnecessary_cast)] // st_ino's type differs by system.
 fn id_for(rel: &Path, meta: &Stat) -> fileid3 {
     let mut h: u64 = 0xcbf2_9ce4_8422_2325;
@@ -136,7 +161,7 @@ fn id_for(rel: &Path, meta: &Stat) -> fileid3 {
         h = (h ^ *b as u64).wrapping_mul(0x0000_0100_0000_01b3);
     }
     let id = (h ^ (h >> 32)) & 0xffff_ffff;
-    if id < 2 { id + 2 } else { id }
+    if id <= MANIFEST { id + MANIFEST + 1 } else { id }
 }
 
 /// A file's attributes as served: owned by root, with no setuid or setgid
@@ -174,9 +199,76 @@ fn attr(id: fileid3, meta: &Stat) -> fattr3 {
 }
 
 impl TreeFs {
-    pub fn new(root: PathBuf) -> TreeFs {
+    pub fn new(root: PathBuf, signer: Signer) -> TreeFs {
         let paths = HashMap::from([(ROOT, PathBuf::new())]);
-        TreeFs { root: Beneath(root), paths: RwLock::new(paths) }
+        TreeFs {
+            root: Beneath(root),
+            paths: RwLock::new(paths),
+            signer,
+            hashes: Default::default(),
+            manifest: Mutex::new(None),
+        }
+    }
+
+    /// The tree's signed manifest, and since when it has been what it is;
+    /// None if it can't be made (a tree a Chumby would refuse, or no key
+    /// that signs).
+    fn manifest(&self) -> Option<(Arc<Vec<u8>>, SystemTime)> {
+        let mut m = self.manifest.lock().unwrap();
+        if let Some(made) = &*m
+            && made.at.elapsed() < MANIFEST_FRESH
+        {
+            return Some((made.text.clone(), made.since));
+        }
+        let text = match self.sign() {
+            Ok(t) => Arc::new(t),
+            Err(e) => {
+                eprintln!("neochumbyd: the tree's signed manifest: {e}");
+                *m = None;
+                return None;
+            }
+        };
+        let since = match &*m {
+            Some(old) if old.text == text => old.since,
+            _ => SystemTime::now(),
+        };
+        *m = Some(Made { at: Instant::now(), text: text.clone(), since });
+        Some((text, since))
+    }
+
+    /// The tree's manifest as it is now, signed.
+    fn sign(&self) -> io::Result<Vec<u8>> {
+        let tree = neochumby_sync::serve::scan(&self.root.0, &self.hashes)?;
+        let entries = tree.manifest();
+        neochumby_sync::manifest::validate(&entries, &neochumby_sync::LIMITS)?;
+        let mut sig = None;
+        let text = neochumby_sync::signed::sign(&entries, |m| {
+            sig = (self.signer)(m);
+            sig.unwrap_or([0; 64])
+        });
+        sig.ok_or_else(|| io::Error::other("this build's key can't sign"))?;
+        Ok(text.into_bytes())
+    }
+
+    /// The manifest's attributes: a plain file, root's, read-only.
+    fn manifest_attr(text: &[u8], since: SystemTime) -> fattr3 {
+        let t = since.duration_since(UNIX_EPOCH).unwrap_or_default();
+        let time = nfstime3 { seconds: t.as_secs() as u32, nseconds: t.subsec_nanos() };
+        fattr3 {
+            ftype: ftype3::NF3REG,
+            mode: 0o444,
+            nlink: 1,
+            uid: 0,
+            gid: 0,
+            size: text.len() as u64,
+            used: text.len() as u64,
+            rdev: specdata3::default(),
+            fsid: 0,
+            fileid: MANIFEST,
+            atime: time,
+            mtime: time,
+            ctime: time,
+        }
     }
 
     /// The relative path of `id`, if it is still the file it was.
@@ -273,6 +365,9 @@ impl NFSFileSystem for TreeFs {
                 return self.remember(&parent, &meta);
             }
             _ if name.is_empty() || name.contains(&b'/') || name.contains(&0) => return Err(nfsstat3::NFS3ERR_NOENT),
+            _ if dirid == ROOT && name == neochumby_sync::signed::FILE.as_bytes() => {
+                return self.manifest().map(|_| MANIFEST).ok_or(nfsstat3::NFS3ERR_NOENT);
+            }
             _ => {}
         }
         let child = rel.join(OsStr::from_bytes(name));
@@ -281,11 +376,21 @@ impl NFSFileSystem for TreeFs {
     }
 
     async fn getattr(&self, id: fileid3) -> Result<fattr3, nfsstat3> {
+        if id == MANIFEST {
+            let (text, since) = self.manifest().ok_or(nfsstat3::NFS3ERR_STALE)?;
+            return Ok(Self::manifest_attr(&text, since));
+        }
         let (_, meta) = self.meta(id)?;
         Ok(attr(id, &meta))
     }
 
     async fn read(&self, id: fileid3, offset: u64, count: u32) -> Result<(Vec<u8>, bool), nfsstat3> {
+        if id == MANIFEST {
+            let (text, _) = self.manifest().ok_or(nfsstat3::NFS3ERR_STALE)?;
+            let from = (offset as usize).min(text.len());
+            let to = from.saturating_add(count as usize).min(text.len());
+            return Ok((text[from..to].to_vec(), to == text.len()));
+        }
         let (rel, meta) = self.meta(id)?;
         if !is_file(&meta) {
             return Err(nfsstat3::NFS3ERR_INVAL);
@@ -405,7 +510,11 @@ mod tests {
         std::fs::write(root.join("neochumby"), b"launcher").unwrap();
         std::fs::write(root.join("apps/doom/manifest"), b"title=DOOM\n").unwrap();
         std::os::unix::fs::symlink("/etc", root.join("apps/escape")).unwrap();
-        (root.clone(), TreeFs::new(root))
+        (root.clone(), TreeFs::new(root, no_key()))
+    }
+
+    fn no_key() -> Signer {
+        Box::new(|_| None)
     }
 
     #[tokio::test]
@@ -435,7 +544,7 @@ mod tests {
         assert_eq!(names, [b"doom".to_vec(), b"escape".to_vec()]);
 
         // A restarted server knows the handle; a replaced file's is stale.
-        let fresh = TreeFs::new(root.clone());
+        let fresh = TreeFs::new(root.clone(), no_key());
         let fh = fs.id_to_fh(m);
         assert_eq!(fresh.getattr(fresh.fh_to_id(&fh).unwrap()).await.unwrap().fileid, m);
         std::fs::write(root.join("apps/doom/manifest.new"), b"title=DOOM2\n").unwrap();
@@ -472,5 +581,52 @@ mod tests {
         assert_eq!(b.names(Path::new("")).unwrap(), [OsString::from("apps")]);
         assert!(b.stat(Path::new("../state/identity")).is_err());
         std::fs::remove_dir_all(base).unwrap();
+    }
+
+    /// The signed manifest is served in the root, made from the tree as it
+    /// is, and checks with neochumbyd's key; a file changed in the tree
+    /// changes it.
+    #[tokio::test]
+    async fn serves_the_signed_manifest() {
+        let root = std::env::temp_dir().join(format!("neochumbyd-signed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("apps/home")).unwrap();
+        std::fs::write(root.join("neochumby"), b"the session").unwrap();
+        std::fs::write(root.join("apps/home/manifest"), b"exec=neochumby-home\n").unwrap();
+        let id = Arc::new(neochumby_proto::Identity::generate().unwrap());
+        let key = id.public();
+        let fs = TreeFs::new(root.clone(), Box::new(move |m| id.sign(m)));
+        let name = neochumby_sync::signed::FILE.as_bytes();
+
+        let m = fs.lookup(ROOT, &name.into()).await.unwrap();
+        assert_eq!(m, MANIFEST);
+        let a = fs.getattr(m).await.unwrap();
+        let (text, eof) = fs.read(m, 0, a.size as u32 + 10).await.unwrap();
+        assert!(eof && text.len() as u64 == a.size && a.mode == 0o444);
+        let v = neochumby_sync::signed::open(&text, &key).unwrap();
+        assert_eq!(v.read(&root, "neochumby").unwrap(), b"the session");
+        // Read in pieces, as a client does: the same bytes.
+        let (head, eof) = fs.read(m, 0, 10).await.unwrap();
+        assert!(!eof && head == text[..10]);
+        // Not listed, and nowhere but the root.
+        let names: Vec<_> = fs.readdir(ROOT, 0, 10).await.unwrap().entries.into_iter().map(|e| e.name.0).collect();
+        assert!(!names.contains(&name.to_vec()));
+        let apps = fs.lookup(ROOT, &b"apps".as_slice().into()).await.unwrap();
+        assert!(fs.lookup(apps, &name.into()).await.is_err());
+
+        // The tree changes: so does the manifest, once it's a second old.
+        std::fs::write(root.join("neochumby"), b"the session, tampered with").unwrap();
+        std::thread::sleep(MANIFEST_FRESH);
+        let a = fs.getattr(m).await.unwrap();
+        let (text2, _) = fs.read(m, 0, a.size as u32).await.unwrap();
+        assert_ne!(text, text2);
+        let v2 = neochumby_sync::signed::open(&text2, &key).unwrap();
+        assert!(v.read(&root, "neochumby").is_err(), "the old manifest refuses the new file");
+        assert!(v2.read(&root, "neochumby").is_ok());
+
+        // With no key that signs, there is none.
+        let unsigned = TreeFs::new(root.clone(), no_key());
+        assert!(unsigned.lookup(ROOT, &name.into()).await.is_err());
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

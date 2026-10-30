@@ -40,6 +40,11 @@
 //! anew in its jail, its own; the host's /dev is left as it is. It may have
 //! PROCESSES processes, FILES descriptors and no core dumps.
 //!
+//! In a checked tree (neochumby::verified), mounted `noexec`, each of the
+//! app's programs (its exec or service, and every other ARM ELF or script
+//! in its directory that is executable) is bound over from its checked
+//! copy: only those can run in the jail, and only as checked.
+//!
 //! `access = ["root"]` (home) and the session's own services
 //! (neochumby-sync) run as before: root, unjailed.
 //!
@@ -198,6 +203,7 @@ pub fn start(
     // exec, wherever it hides in the app's directory.
     neochumby_sys::elf::check(exe)?;
     neochumby_sys::elf::check_app_dir(&app.dir)?;
+    let programs = programs(app, exe)?;
     let uid = number(app)?;
     let a = app.access;
     let front = role == Role::Front;
@@ -209,6 +215,9 @@ pub fn start(
 
     let mut j = Jail::new(Path::new(MOUNT_POINT), ROOT_KIB)?;
     j.bind(&app.dir, &dir)?;
+    for (copy, at) in &programs {
+        j.bind_over(copy, at)?;
+    }
     j.tmpfs("/tmp", TMP_KIB, 0o700, uid, uid)?;
     for d in ["null", "zero", "random", "urandom"] {
         let p = format!("/dev/{d}");
@@ -272,7 +281,11 @@ pub fn start(
     // and the time zone.
     for (k, v) in std::env::vars() {
         // Not NEOCHUMBY_PLAYER: only the session's choice (child.rs).
-        let ours = k.starts_with("NEOCHUMBY_") && k != OFF_ENV && k != neochumby::session::PLAYER_ENV;
+        // Nor the checked tree's manifest, which is root's.
+        let ours = k.starts_with("NEOCHUMBY_")
+            && k != OFF_ENV
+            && k != neochumby::session::PLAYER_ENV
+            && k != neochumby::verified::ENV;
         if (ours && !env.iter().any(|(e, _)| *e == k)) || k == "TZ" {
             env.push((k, v));
         }
@@ -280,4 +293,54 @@ pub fn start(
     let user = User { uid, gid: uid, groups };
     let args: [&OsStr; 0] = [];
     j.spawn(&exe, &args, &env, &dir, &user, keep)
+}
+
+/// In a checked tree, `app`'s programs: `exe`, and every executable ARM
+/// ELF or script in its directory, each with its checked copy (refused if
+/// it isn't the file the signed manifest names). None otherwise. The tree
+/// is mounted `noexec`, so a file not among them can't run, whatever it
+/// is by the time it would; each copy is checked as `exe` is.
+fn programs(app: &App, exe: &Path) -> io::Result<Vec<(std::path::PathBuf, String)>> {
+    if !neochumby::verified::on() {
+        return Ok(Vec::new());
+    }
+    let mut found = vec![exe.to_path_buf()];
+    executables(&app.dir, 0, &mut found)?;
+    found.sort();
+    found.dedup();
+    let mut out = Vec::with_capacity(found.len());
+    for p in found {
+        let copy = neochumby::verified::exe(&p)?;
+        neochumby_sys::elf::check(&copy)?;
+        let at = p.to_str().ok_or_else(|| io::Error::other(format!("{}: not UTF-8", p.display())))?;
+        out.push((copy, at.to_string()));
+    }
+    Ok(out)
+}
+
+/// Executable plain files under `dir` that the Chumby could run: an ARM
+/// ELF, or a script. (A companion, built for the server, can't.)
+fn executables(dir: &Path, depth: usize, out: &mut Vec<std::path::PathBuf>) -> io::Result<()> {
+    if depth > 8 {
+        return Ok(());
+    }
+    for e in std::fs::read_dir(dir)? {
+        let p = e?.path();
+        let m = std::fs::symlink_metadata(&p)?;
+        if m.is_dir() {
+            executables(&p, depth + 1, out)?;
+        } else if m.is_file() && m.mode() & 0o111 != 0 && runnable(&p) {
+            out.push(p);
+        }
+    }
+    Ok(())
+}
+
+/// Whether `p` starts as an ARM ELF (32-bit, little-endian, machine 40)
+/// or a script does.
+fn runnable(p: &Path) -> bool {
+    use std::io::Read;
+    let mut h = Vec::new();
+    let _ = std::fs::File::open(p).and_then(|f| f.take(20).read_to_end(&mut h));
+    h.starts_with(b"#!") || (h.len() == 20 && h.starts_with(b"\x7fELF\x01\x01") && h[18..20] == [40, 0])
 }
