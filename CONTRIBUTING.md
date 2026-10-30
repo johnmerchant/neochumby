@@ -43,15 +43,33 @@ neochumby-sys's documentation).
 
 ## Building and checking
 
+From a clean clone, on macOS or Linux, nothing is built but our own code:
+QEMU (qemu-chumby's) and the Chumby's Linux images (dist and classic) are
+CI's, fetched and verified.
+
 ```sh
-git submodule update --init   # the third-party C: Doom, Quake, fastfetch, htop, procps, ncurses
-rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
-# zig 0.17 on PATH (the C compiler, linker and musl): https://ziglang.org
-# CMake 3.21 or later, for fetch
+nix develop             # the tools (flake.nix); or install what dev/setup lists
+dev/setup               # checks the tools, checks out the submodules, fetches QEMU and the images
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
 tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
+dev/emulate start /tmp/tree   # the tree on an emulated Chumby (Testing without a Chumby, below)
+# the end-to-end scenarios as CI runs them: boot on dist; boot and smoke on classic
+cargo build --release -p neochumbyd
+E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e
+NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic
 ```
+
+Without Nix, the tools are: Rust with the
+`armv5te-unknown-linux-musleabi` and `x86_64-unknown-linux-musl` targets
+(`rustup target add ...`), zig 0.17 on PATH (the C compiler, linker and
+musl: https://ziglang.org), CMake 3.21 or later (for fetch), Python 3.9 or
+later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
+verify CI's images' attestations with it). `dev/setup --check` says which
+are missing and how to get them on this system. `git submodule update
+--init` checks out the third-party C (Doom, Quake, fastfetch, htop, procps,
+ncurses) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
+only `classic/build` needs.
 
 The server half (neochumbyd and companions) is built for x86_64 Linux by
 default. `tools/tree --server-target aarch64-unknown-linux-musl` (64-bit
