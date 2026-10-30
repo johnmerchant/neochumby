@@ -95,6 +95,9 @@ BR2_PACKAGE_NEOCHUMBY_INIT=y
 # beside the image (OUT/sideload-sysroot.tar.gz) to build them against.
 BR2_PACKAGE_NCURSES=y
 BR2_PACKAGE_NCURSES_WCHAR=y
+# Without what nothing links (board/chumby-classic/post-build.sh): the
+# rootfs is the initramfs, which the sideloader's 7 MiB window holds.
+BR2_ROOTFS_POST_BUILD_SCRIPT="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/board/chumby-classic/post-build.sh"
 
 # The initramfs userhook2 kexecs with, beside the zImage.
 BR2_TARGET_ROOTFS_CPIO=y
