@@ -1,6 +1,6 @@
 # The SHA-256 of qemu-chumby's prebuilt QEMU for the commit the submodule
 # pins, which emu/qemu/fetch checks; emu/qemu/fetch --pin writes it.
-# qemu-chumby da1a67884b564206fd218ff3c29144b25b2160f7
-0a04c749a29953ef4c83c93f5522aa5fe6e8c75f667b0c92d198b6af767ff894  qemu-chumby-da1a67884b564206fd218ff3c29144b25b2160f7-linux-x86_64.tar.xz
-0cbeec5ac1c9e9d290b6d55d9d91c093c7389a46c7eef15085346fa340eb2151  qemu-chumby-da1a67884b564206fd218ff3c29144b25b2160f7-linux-aarch64.tar.xz
-96b4e94158f265fe709ab8bacdbb6d40ba39cc366887b99462fc73454c9d76ff  qemu-chumby-da1a67884b564206fd218ff3c29144b25b2160f7-macos-arm64.tar.xz
+# qemu-chumby bf761eaada3119842a9518179041ad9b2269a038
+1e9796881923ff44460ab7193cb9707ca3e243fe592ea80b1e926606891a83fd  qemu-chumby-bf761eaada3119842a9518179041ad9b2269a038-linux-x86_64.tar.xz
+aada9a9fc288064ccf1e0b153afaf3b4e399f86b7f01a36c03cddd46f57cd5e5  qemu-chumby-bf761eaada3119842a9518179041ad9b2269a038-linux-aarch64.tar.xz
+961c09f19b3b6d9854b8e3593acda54ba3eaf469596e6c80b5607eaa0a6bf488  qemu-chumby-bf761eaada3119842a9518179041ad9b2269a038-macos-arm64.tar.xz
