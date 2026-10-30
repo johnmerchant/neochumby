@@ -1,0 +1,38 @@
+Description: ARM: map the whole kernel image at boot, not just its first 4 MB
+ 2.6.16's head.S maps four 1 MB sections for the kernel, so a kernel whose
+ image ends past 4 MB (ours, with its initramfs built in) faults before
+ paging_init(), silently. Later mainline kernels map up to the end of the
+ image with this same loop.
+Author: Nicolas Pitre <nico@cam.org>
+Upstream-Status: Backport [e98ff7f6d8164c5636538998fb7d1e08b1fbbddd, [ARM] 4224/2: allow XIP kernel to boot again]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Fc77Z6fVVe4rWJxPT
+---
+--- a/arch/arm/kernel/head.S
++++ b/arch/arm/kernel/head.S
+@@ -295,17 +295,18 @@
+ 	/*
+ 	 * Now setup the pagetables for our kernel direct
+ 	 * mapped region.  We round TEXTADDR down to the
+-	 * nearest megabyte boundary.  It is assumed that
+-	 * the kernel fits within 4 contigous 1MB sections.
++	 * nearest megabyte boundary, and map 1MB sections
++	 * up to the end of the kernel (_end).
+ 	 */
+ 	add	r0, r4,  #(TEXTADDR & 0xff000000) >> 18	@ start of kernel
+ 	str	r3, [r0, #(TEXTADDR & 0x00f00000) >> 18]!
+-	add	r3, r3, #1 << 20
+-	str	r3, [r0, #4]!			@ KERNEL + 1MB
+-	add	r3, r3, #1 << 20
+-	str	r3, [r0, #4]!			@ KERNEL + 2MB
++	ldr	r6, =(_end - 1)
++	add	r0, r0, #4
++	add	r6, r4, r6, lsr #18
++1:	cmp	r0, r6
+ 	add	r3, r3, #1 << 20
+-	str	r3, [r0, #4]			@ KERNEL + 3MB
++	strls	r3, [r0], #4
++	bls	1b
+ 
+ 	/*
+ 	 * Then map first 1MB of ram in case it contains our boot params.

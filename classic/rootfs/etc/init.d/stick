@@ -1,0 +1,51 @@
+#!/bin/sh
+# A neochumby stick, run as the stock boot runs one: a USB disk's first
+# partition (or the whole disk) mounted read-write at /mnt/usb, and its
+# userhook2 run. Its output goes to the console.
+#
+# Kernel arguments:
+#   neochumby.hook=0     don't look for a stick
+#   neochumby.run=PATH   run PATH (on the stick, say) instead of userhook2
+PATH=/bin:/sbin:/usr/bin:/usr/sbin
+export PATH
+
+arg() { tr ' ' '\n' </proc/cmdline | sed -n "s/^$1=//p" | tail -n 1; }
+[ "$(arg neochumby.hook)" = 0 ] && exit 0
+run=$(arg neochumby.run)
+
+# usb-storage waits 5 s (its delay_use) before it scans a new disk.
+dev=
+n=0
+while [ "$n" -lt 20 ]; do
+    for d in sda1 sda; do
+        grep -q " $d\$" /proc/partitions && {
+            dev=/dev/$d
+            break 2
+        }
+    done
+    n=$((n + 1))
+    sleep 1
+done
+[ -n "$dev" ] || {
+    echo "stick: no USB disk"
+    exit 0
+}
+# The whole disk shows before its partitions do.
+[ "$dev" = /dev/sda ] && sleep 1 && grep -q ' sda1$' /proc/partitions && dev=/dev/sda1
+mount -t vfat -o rw,noatime "$dev" /mnt/usb || {
+    echo "stick: can't mount $dev"
+    exit 0
+}
+echo "stick: $dev on /mnt/usb"
+
+if [ -n "$run" ]; then
+    echo "stick: running $run"
+    "$run"
+    echo "stick: $run exited: $?"
+elif [ -f /mnt/usb/userhook2 ]; then
+    echo "stick: running userhook2"
+    sh /mnt/usb/userhook2
+    echo "stick: userhook2 exited: $?"
+else
+    echo "stick: no userhook2"
+fi

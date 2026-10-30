@@ -1,0 +1,31 @@
+Description: dmaengine: imx-dma: bring back i.MX21 support
+ Commit 39dc2a4929f7 ("dmaengine: imx-dma: Remove i.MX21 support")
+ removed the i.MX21 match. Restore it: the i.MX21 DMA is the i.MX27's
+ without hardware chaining, which is all IMX21_DMA changes. The binding
+ still lists fsl,imx21-dma.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+diff --git a/drivers/dma/imx-dma.c b/drivers/dma/imx-dma.c
+index 81c627643..45b758500 100644
+--- a/drivers/dma/imx-dma.c
++++ b/drivers/dma/imx-dma.c
+@@ -168,6 +168,7 @@ struct imxdma_channel {
+ 
+ enum imx_dma_type {
+ 	IMX1_DMA,
++	IMX21_DMA,
+ 	IMX27_DMA,
+ };
+ 
+@@ -194,6 +195,8 @@ struct imxdma_filter_data {
+ static const struct of_device_id imx_dma_of_dev_id[] = {
+ 	{
+ 		.compatible = "fsl,imx1-dma", .data = (const void *)IMX1_DMA,
++	}, {
++		.compatible = "fsl,imx21-dma", .data = (const void *)IMX21_DMA,
+ 	}, {
+ 		.compatible = "fsl,imx27-dma", .data = (const void *)IMX27_DMA,
+ 	}, {

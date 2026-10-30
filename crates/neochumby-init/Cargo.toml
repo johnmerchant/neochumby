@@ -1,0 +1,32 @@
+[package]
+name = "neochumby-init"
+description = "ncinit: the dist image's /init, which loads each device's kernel module as the device appears"
+license = "MIT"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[[bin]]
+name = "ncinit"
+path = "src/main.rs"
+
+[dependencies]
+neochumby-sys = { path = "../neochumby-sys", features = ["boot"] }
+
+# A workspace of its own (the main one excludes it): Buildroot builds it
+# for the dist image without the apps, whose third-party crates are
+# submodules. The same rules as the main workspace's.
+[workspace]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+
+# Process 1, in the initramfs: small. Buildroot strips it there.
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1

@@ -1,8 +1,8 @@
 //! TLS 1.3 (rustls, ring): one suite, TLS_CHACHA20_POLY1305_SHA256 with
 //! X25519, and both sides authenticated by Ed25519 raw public keys (RFC
 //! 7250). The handshake proves each side holds the private half of the key
-//! it presents; whether that key is one we are paired with is the caller's
-//! question ([`Session::peer`]). Resumption is off: a resumed session would
+//! it presents; whether that key is one we are paired with is checked
+//! before the connection carries anything else ([`crate::Unverified`]). Resumption is off: a resumed session would
 //! not present the client's key again. Messages are a u32 big-endian length
 //! and a [`Msg`].
 
@@ -27,7 +27,7 @@ use rustls::{
     SignatureScheme, StreamOwned,
 };
 
-use crate::{MAX_MSG, Msg, PublicKey, hex, invalid, six_digits, unhex};
+use crate::{MAX_MSG, Msg, PublicKey, hex, invalid, pairing_code, unhex};
 
 const PAIRING_LABEL: &[u8] = b"EXPORTER-neochumby-pairing";
 
@@ -208,8 +208,8 @@ pub struct Session {
 }
 
 impl Session {
-    /// The Chumby's side.
-    pub fn connect(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
+    /// The Chumby's side, its peer's key not yet checked.
+    pub(crate) fn client(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
         let mut config = ClientConfig::builder_with_provider(provider())
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(invalid)?
@@ -223,12 +223,12 @@ impl Session {
         while s.conn.is_handshaking() {
             s.conn.complete_io(&mut s.sock)?;
         }
-        let (peer, code) = finish(&s.conn)?;
+        let (peer, code) = finish(&s.conn, me.public, true)?;
         Ok(Session { stream: Stream::Client(s), peer, code, rbuf: Vec::new(), version: 0 })
     }
 
-    /// neochumbyd's side.
-    pub fn accept(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
+    /// neochumbyd's side, its peer's key not yet checked.
+    pub(crate) fn server(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
         let mut config = ServerConfig::builder_with_provider(provider())
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(invalid)?
@@ -240,7 +240,7 @@ impl Session {
         while s.conn.is_handshaking() {
             s.conn.complete_io(&mut s.sock)?;
         }
-        let (peer, code) = finish(&s.conn)?;
+        let (peer, code) = finish(&s.conn, me.public, false)?;
         Ok(Session { stream: Stream::Server(s), peer, code, rbuf: Vec::new(), version: 0 })
     }
 
@@ -249,9 +249,9 @@ impl Session {
         &self.peer
     }
 
-    /// Six digits both sides derive from this handshake: equal on both
-    /// screens only if no one sits between them.
-    pub fn code(&self) -> String {
+    /// The pairing code both sides derive from this handshake
+    /// ([`crate::Unverified::code`]).
+    pub(crate) fn code(&self) -> String {
         self.code.clone()
     }
 
@@ -349,9 +349,12 @@ impl Session {
     }
 }
 
-fn finish<D>(conn: &rustls::ConnectionCommon<D>) -> io::Result<(PublicKey, String)> {
+/// The peer's key, and the pairing code: keying material exported from
+/// this handshake, bound to both keys (the Chumby's, then neochumbyd's).
+fn finish<D>(conn: &rustls::ConnectionCommon<D>, me: PublicKey, client: bool) -> io::Result<(PublicKey, String)> {
     let spki = conn.peer_certificates().and_then(|c| c.first()).ok_or_else(|| invalid("no peer key"))?;
     let peer = ed25519_key(spki.as_ref()).map_err(invalid)?;
-    let code = conn.export_keying_material([0u8; 4], PAIRING_LABEL, None).map_err(invalid)?;
-    Ok((peer, six_digits(code)))
+    let keys = if client { [me, peer] } else { [peer, me] }.concat();
+    let code = conn.export_keying_material([0u8; 16], PAIRING_LABEL, Some(&keys)).map_err(invalid)?;
+    Ok((peer, pairing_code(code)))
 }

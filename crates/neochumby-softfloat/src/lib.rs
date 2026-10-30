@@ -3,6 +3,10 @@
 //! ARM926 has no FPU, so every float operation, in Rust or C, is a call to
 //! one of these; they are about twice as fast as the generic ones.
 //!
+//! **Experimental and unstable**: any release may break anything. Built
+//! for [neochumby](https://github.com/johnmerchant/neochumby), and
+//! published to start an SDK for it.
+//!
 //! Linking the crate is all it takes: its archive comes ahead of
 //! compiler-builtins on the link line, so the calls resolve here. neochumby
 //! links it for every app (its default `softfloat` feature).

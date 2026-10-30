@@ -1,0 +1,150 @@
+#!/bin/sh
+# fetch: puts qemu-chumby's prebuilt qemu-system-arm, the one its CI built
+# from the commit this repository pins for the submodule beside this
+# script, in emu/qemu/out/obj/qemu-system-arm, where emu/qemu/build would
+# have put it.
+#
+# qemu-chumby publishes a build for each commit on its main branch, for
+# Linux x86_64 and aarch64 and macOS on Apple silicon, on its `prebuilt`
+# release (its README, "Prebuilt binaries"). That release can be changed by
+# whoever can write to qemu-chumby, so its own .sha256 files are not
+# trusted: the tarball's SHA-256 must match the one committed here, in
+# qemu-chumby.sha256 beside this script, which is checked before anything
+# is extracted or run. Then the binary is run once to see that it has the
+# machine and finds its libraries.
+#
+# Exits 0 with the binary in place; 1, leaving out/obj as it was, when
+# qemu-chumby.sha256 has no digest for this commit and host (a pull request
+# that moved the submodule without re-pinning), there is no build to
+# download, it doesn't match, or it doesn't run here: then build it with
+# emu/qemu/build, as CI does.
+#
+# fetch --pin: for whoever moves the submodule. Downloads the tarballs of
+# every platform for the commit HEAD pins, computes their SHA-256 here and
+# rewrites qemu-chumby.sha256 with them, for review in the pull request's
+# diff (with the submodule's own change). Run it after committing the
+# submodule's new commit, once qemu-chumby's CI has published it.
+#
+# The commit is the one HEAD pins, not whatever the submodule has checked
+# out; QEMU_CHUMBY_COMMIT overrides it, but a commit with no digest in
+# qemu-chumby.sha256 still has no prebuilt binary. QEMU_CHUMBY_PREBUILT
+# overrides where the tarballs are downloaded from (a mirror): safe,
+# since what's downloaded is checked against qemu-chumby.sha256 alone.
+#
+# Needs git, curl, tar and xz (or a tar that reads .tar.xz, as on macOS),
+# and sha256sum or shasum.
+set -eu
+
+here=$(cd "$(dirname "$0")" && pwd)
+pins=$here/qemu-chumby.sha256
+base=${QEMU_CHUMBY_PREBUILT:-https://github.com/johnmerchant/qemu-chumby/releases/download/prebuilt}
+platforms="linux-x86_64 linux-aarch64 macos-arm64"
+
+commit=${QEMU_CHUMBY_COMMIT:-$(cd "$here" && git rev-parse HEAD:./qemu-chumby)}
+case $commit in
+    *[!0-9a-f]* | "") echo "fetch: $commit isn't a commit ID" >&2; exit 1 ;;
+esac
+
+sha256() {
+    if command -v sha256sum >/dev/null 2>&1; then
+        sha256sum "$1" | cut -d' ' -f1
+    else
+        shasum -a 256 "$1" | cut -d' ' -f1
+    fi
+}
+
+download() {
+    curl -fsSL --retry 3 -o "$2" "$1"
+}
+
+work=$here/out/prebuilt
+rm -rf "$work"
+mkdir -p "$work"
+trap 'rm -rf "$work"' EXIT
+cd "$work"
+
+if [ "${1:-}" = --pin ]; then
+    {
+        echo "# The SHA-256 of qemu-chumby's prebuilt QEMU for the commit the submodule"
+        echo "# pins, which emu/qemu/fetch checks; emu/qemu/fetch --pin writes it."
+        echo "# qemu-chumby $commit"
+    } > pins.new
+    n=0
+    for p in $platforms; do
+        name=qemu-chumby-$commit-$p.tar.xz
+        echo "fetching $base/$name"
+        if ! download "$base/$name" "$name"; then
+            echo "fetch: no $name: not pinned" >&2
+            continue
+        fi
+        got=$(sha256 "$name")
+        # The release's own digest, as a check on the download only.
+        if download "$base/$name.sha256" "$name.sha256" &&
+            [ "$(cut -d' ' -f1 "$name.sha256")" != "$got" ]; then
+            echo "fetch: $name: SHA-256 is $got, but the release says $(cut -d' ' -f1 "$name.sha256")" >&2
+            exit 1
+        fi
+        echo "$got  $name" >> pins.new
+        rm -f "$name" "$name.sha256"
+        n=$((n + 1))
+    done
+    if [ "$n" = 0 ]; then
+        echo "fetch: qemu-chumby $commit has no prebuilt QEMU (not on its main, or not built yet)" >&2
+        exit 1
+    fi
+    mv pins.new "$pins"
+    echo "pinned $n platforms in $pins"
+    exit 0
+fi
+
+case $(uname -s)-$(uname -m) in
+    Linux-x86_64) platform=linux-x86_64 ;;
+    Linux-aarch64 | Linux-arm64) platform=linux-aarch64 ;;
+    Darwin-arm64) platform=macos-arm64 ;;
+    *) echo "fetch: no prebuilt QEMU for $(uname -s) $(uname -m)" >&2; exit 1 ;;
+esac
+name=qemu-chumby-$commit-$platform
+
+want=$(awk -v n="$name.tar.xz" '$2 == n && $1 ~ /^[0-9a-f]+$/ && length($1) == 64 { print $1; exit }' "$pins" 2>/dev/null || true)
+if [ -z "$want" ]; then
+    echo "fetch: emu/qemu/qemu-chumby.sha256 has no digest for qemu-chumby $commit on $platform;" >&2
+    echo "  once qemu-chumby's CI has published it, pin it with emu/qemu/fetch --pin" >&2
+    exit 1
+fi
+
+echo "fetching $base/$name.tar.xz"
+if ! download "$base/$name.tar.xz" "$name.tar.xz"; then
+    echo "fetch: no prebuilt QEMU for qemu-chumby $commit on $platform" >&2
+    exit 1
+fi
+got=$(sha256 "$name.tar.xz")
+if [ "$got" != "$want" ]; then
+    echo "fetch: $name.tar.xz: SHA-256 is $got, but qemu-chumby.sha256 pins $want" >&2
+    exit 1
+fi
+
+if command -v xz >/dev/null 2>&1; then
+    xz -dc "$name.tar.xz" | tar xf -
+else
+    tar xJf "$name.tar.xz"
+fi
+q=$work/$name/qemu-system-arm
+if ! "$q" -machine help 2>&1 | grep -q '^chumby-classic '; then
+    echo "fetch: the prebuilt QEMU doesn't run here:" >&2
+    "$q" -machine help >&2 || true
+    sed -n '/^Needs/,/^$/p' "$work/$name/RUNTIME" >&2
+    exit 1
+fi
+
+mkdir -p "$here/out/obj"
+# qemu-bundle/ beside the binary, as in QEMU's own build directory: its
+# keymaps, which VNC loads (and the desktop apps read the screen over VNC).
+if [ -d "$work/$name/qemu-bundle" ]; then
+    rm -rf "$here/out/obj/qemu-bundle.part"
+    cp -R "$work/$name/qemu-bundle" "$here/out/obj/qemu-bundle.part"
+    rm -rf "$here/out/obj/qemu-bundle"
+    mv "$here/out/obj/qemu-bundle.part" "$here/out/obj/qemu-bundle"
+fi
+cp "$q" "$here/out/obj/qemu-system-arm.part"
+mv "$here/out/obj/qemu-system-arm.part" "$here/out/obj/qemu-system-arm"
+echo "fetched $here/out/obj/qemu-system-arm (qemu-chumby $commit, $platform)"
