@@ -9,5 +9,9 @@ publish.workspace = true
 [dependencies]
 libc.workspace = true
 
+[features]
+# What ncinit, the dist image's /init, needs (the boot module).
+boot = []
+
 [lints]
 workspace = true
