@@ -62,11 +62,7 @@ pub unsafe extern "C" fn top_fstatat(dirfd: c_int, path: *const c_char, buf: *mu
     let Some(p) = (unsafe { at(dirfd, path) }) else { return -1 };
     // SAFETY: p is a C string, and buf a stat to fill, as fstatat's.
     unsafe {
-        if flag & libc::AT_SYMLINK_NOFOLLOW != 0 {
-            libc::lstat(p.as_ptr(), buf)
-        } else {
-            libc::stat(p.as_ptr(), buf)
-        }
+        if flag & libc::AT_SYMLINK_NOFOLLOW != 0 { libc::lstat(p.as_ptr(), buf) } else { libc::stat(p.as_ptr(), buf) }
     }
 }
 
