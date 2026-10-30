@@ -100,6 +100,13 @@ dependency must pass `cargo deny`: a licence not yet allowed, or a source
 other than crates.io, is added to `deny.toml` in the same pull request,
 saying why.
 
+neochumbyd's tests include one end to end on loopback
+(`crates/neochumbyd/tests/server.rs`): a Chumby pairs, and a server
+program approves it through the admin socket, sandboxed where the system
+can, and checks that it can't read neochumbyd's key or the owner's token.
+`neochumby-sys`'s tests check the sandbox itself; on Linux they need
+Landlock, and in CI they fail without it.
+
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its
 tests run whole sync rounds over a real session on loopback, with a
@@ -376,6 +383,8 @@ exec = "neochumby-weather"           # runs in front when the app is opened
 color = "4a90d9"                    # optional; `colour` works too
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
+server = "neochumby-weather-web"     # optional: once on the server
+listen = [8080]                      # optional: the ports `server` may bind
 neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
@@ -396,7 +405,8 @@ for a `git+` app (in `~/.cache/neochumby/app-sources`), and a crate
 published to crates.io carries their files in its package.
 
 Binaries named by `exec` and `service` are built for the Chumby
-(`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
+(`armv5te-unknown-linux-musleabi`), and a `companion` and a `server` for
+the server. An app may be only a server program. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
 crash reports (`debug`) and the request pipe (`session`). A program
@@ -763,11 +773,41 @@ the app:
   stdin and leave on stdout, a u32 big-endian length then the bytes
   (`neochumby_proto::frame`); a typed message is one such frame.
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
-  and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
-  stdin closes.
+  and `NEOCHUMBY_STATE` (a directory of its own, also its HOME, with its
+  TMPDIR in it). It should exit when its stdin closes.
+- **The sandbox:** it may write only its own directory, and read the tree
+  and the system ([SECURITY](SECURITY.md) has the details). Its stderr goes
+  to neochumbyd's log. It gets only a short list of neochumbyd's
+  environment: what it needs from the host comes in a `NEOCHUMBY_`
+  variable, such as AirPlay's `NEOCHUMBY_AIRPLAY_PORT`.
 
 `apps/airplay` is a worked example of both halves, and `apps/logs` one
 whose companion is optional.
+
+**Server programs.** A server half that runs once on the server for all
+its Chumbys, not once per Chumby (a household web page), is named by
+`server`:
+- **Starting:** neochumbyd starts it when it starts, sandboxed as a
+  companion is. If it exits, it is started again after 1 s, then 2, 4 and
+  so on up to a minute.
+- **Stopping:** when neochumbyd stops, it gets SIGTERM, and SIGKILL five
+  seconds later.
+- **Environment:** `NEOCHUMBY_STATE` (the app's own directory, shared with
+  its companions; its working directory and HOME, with its TMPDIR in it)
+  and `NEOCHUMBY_TREE` (the app tree, to read the apps' manifests). Its
+  stdout and stderr go to neochumbyd's log.
+- **Ports:** it may bind only the TCP ports `listen` names, on kernels
+  whose Landlock can say (Linux 6.7 on).
+- **The admin socket,** if its owner allows it (`neochumbyd allow <app>
+  pairing`): descriptor 3, with `NEOCHUMBY_ADMIN=3`. Mark it close-on-exec
+  as the program starts (in Python, `os.set_inheritable(3, False)`). It's
+  lines of text: send `paired`, `pending`, `approve CODE TOKEN`,
+  `refuse CODE TOKEN`, `forget NAME TOKEN`, `set NAME KEY=VALUE TOKEN` or
+  `check TOKEN`; the answer is lines of data, then `ok` or
+  `error MESSAGE`. `crates/neochumbyd/src/admin.rs` has the details.
+- **Every change needs the owner.** Changes take the owner's token
+  (`neochumbyd token`). A web page asks the person for it, and should
+  check it (`check TOKEN`) before it lets them change anything.
 
 ## Files in the tree
 

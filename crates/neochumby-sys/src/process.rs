@@ -1,6 +1,6 @@
 //! Signals to other processes, by pid or by process group, whether a
-//! process is alive, the descriptors a child is given, and this process's
-//! priority.
+//! process is alive, the descriptors a child is given, what else a child
+//! is started with, and this process's priority.
 
 use std::io;
 use std::os::fd::RawFd;
@@ -104,6 +104,90 @@ pub fn exited(pid: u32) -> io::Result<bool> {
     Ok(unsafe { info.si_pid() } != 0)
 }
 
+/// Has the kernel send the child `cmd` starts SIGTERM when the thread that
+/// started it exits, which for a thread that waits on it is when its parent
+/// dies, however that happens (prctl PR_SET_PDEATHSIG, Linux 2.1.57 on).
+/// Elsewhere it does nothing.
+#[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
+pub fn term_with_parent(cmd: &mut Command) {
+    #[cfg(target_os = "linux")]
+    {
+        // SAFETY: the closure runs in the child between fork and exec,
+        // where only async-signal-safe calls are allowed. prctl(2) is a
+        // plain system call; the closure allocates nothing, takes no lock
+        // and touches only an error built from errno.
+        unsafe {
+            cmd.pre_exec(|| {
+                // prctl's arguments are unsigned longs, passed as such.
+                if libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM as libc::c_ulong) != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+}
+
+/// Starts the program `cmd` runs on its own: in a session of its own
+/// (setsid(2): no controlling terminal, so it can't type into one, and a
+/// process group of its own whose id is its pid), with `keep`, if given, as
+/// its descriptor 3, and every other descriptor from 3 up closed as it
+/// starts. Its stdin, stdout and stderr are what `cmd` says. Don't also
+/// call `process_group`: setsid fails in a group's leader.
+pub fn isolate(cmd: &mut Command, keep: Option<RawFd>) {
+    // SAFETY: the closure runs in the forked child, where only
+    // async-signal-safe calls are allowed: setsid, dup2, fcntl, getrlimit
+    // and close_range are plain system calls, and it allocates nothing.
+    // dup2 replaces whatever the child had as 3; only descriptors std
+    // opened close-on-exec can be there, and they're closed at exec anyway.
+    unsafe {
+        cmd.pre_exec(move || {
+            if libc::setsid() < 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let first = match keep {
+                Some(3) => {
+                    if libc::fcntl(3, libc::F_SETFD, 0) != 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    4
+                }
+                Some(fd) => {
+                    if libc::dup2(fd, 3) != 3 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    4
+                }
+                None => 3,
+            };
+            close_on_exec_from(first);
+            Ok(())
+        });
+    }
+}
+
+/// Marks every descriptor from `first` up close-on-exec: close_range(2)
+/// where the kernel has it (Linux 5.11), else one at a time up to the
+/// limit. Async-signal-safe.
+fn close_on_exec_from(first: libc::c_int) {
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    {
+        let (first, last): (libc::c_uint, libc::c_uint) = (first as libc::c_uint, libc::c_uint::MAX);
+        // SAFETY: close_range takes integers and touches no memory.
+        if unsafe { libc::syscall(libc::SYS_close_range, first, last, libc::CLOSE_RANGE_CLOEXEC) } == 0 {
+            return;
+        }
+    }
+    let mut lim = libc::rlimit { rlim_cur: 0, rlim_max: 0 };
+    // SAFETY: getrlimit writes one rlimit into `lim`, a live local.
+    let max = if unsafe { libc::getrlimit(libc::RLIMIT_NOFILE, &mut lim) } == 0 { lim.rlim_cur } else { 1024 };
+    for fd in first..max.min(65536) as libc::c_int {
+        // SAFETY: F_SETFD takes integers; a number that isn't open fails
+        // with EBADF, which is ignored.
+        unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) };
+    }
+}
+
 fn positive(id: u32) -> io::Result<libc::pid_t> {
     match libc::pid_t::try_from(id) {
         Ok(p) if p > 0 => Ok(p),
@@ -189,5 +273,47 @@ mod tests {
         assert!(alive(child.id()));
         assert_eq!(child.wait().unwrap().code(), Some(3));
         assert!(exited(0).is_err());
+    }
+
+    /// The child leads a process group of its own, has no terminal, has
+    /// the kept descriptor as 3, and not the one it would have inherited.
+    #[test]
+    fn isolated() {
+        use std::os::fd::AsRawFd;
+        let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
+        // Not 3, which isolate gives `b`: another test may have just closed
+        // it. Those opened on the way are kept open until the end.
+        let mut held = Vec::new();
+        let other = loop {
+            let f = std::fs::File::open("/dev/null").unwrap();
+            if f.as_raw_fd() != 3 {
+                break f;
+            }
+            held.push(f);
+        };
+        crate::fd::set_cloexec(std::os::fd::AsFd::as_fd(&other), false).unwrap();
+        let mut cmd = Command::new("/bin/sh");
+        cmd.args(["-c", "[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = $$ ] || exit 2; case $(ps -o tty= -p $$) in *[!?\\ ]*) exit 5;; esac; echo hi >&3 || exit 3; [ -e /dev/fd/$N ] && exit 4; exit 0"]);
+        cmd.env("N", other.as_raw_fd().to_string());
+        isolate(&mut cmd, Some(b.as_raw_fd()));
+        let status = cmd.status().unwrap();
+        drop(b);
+        drop(other);
+        assert_eq!(status.code(), Some(0));
+        let mut got = String::new();
+        std::io::Read::read_to_string(&mut &a, &mut got).unwrap();
+        assert_eq!(got, "hi\n");
+    }
+
+    #[test]
+    fn term_with_parent_still_runs() {
+        let mut cmd = Command::new("sleep");
+        cmd.arg("30");
+        term_with_parent(&mut cmd);
+        let mut child = cmd.spawn().unwrap();
+        assert!(alive(child.id()));
+        kill(child.id(), Signal::Term).unwrap();
+        child.wait().unwrap();
+        assert!(!alive(child.id()));
     }
 }
