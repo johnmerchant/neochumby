@@ -32,9 +32,9 @@ use wamr_sys::{
     wasm_runtime_destroy_exec_env, wasm_runtime_get_custom_data, wasm_runtime_get_default_memory,
     wasm_runtime_get_exception, wasm_runtime_get_function_attachment, wasm_runtime_get_import_count,
     wasm_runtime_get_import_type, wasm_runtime_get_module_inst, wasm_runtime_get_module_package_type,
-    wasm_runtime_init, wasm_runtime_instantiate_ex, wasm_runtime_load, wasm_runtime_lookup_function,
-    wasm_runtime_register_natives_raw, wasm_runtime_set_custom_data, wasm_runtime_set_exception,
-    wasm_runtime_get_version, wasm_runtime_set_log_level, wasm_runtime_unload, wasm_runtime_validate_app_addr,
+    wasm_runtime_get_version, wasm_runtime_init, wasm_runtime_instantiate_ex, wasm_runtime_load,
+    wasm_runtime_lookup_function, wasm_runtime_register_natives_raw, wasm_runtime_set_custom_data,
+    wasm_runtime_set_exception, wasm_runtime_set_log_level, wasm_runtime_unload, wasm_runtime_validate_app_addr,
 };
 
 type InstT = wamr_sys::wasm_module_inst_t;
