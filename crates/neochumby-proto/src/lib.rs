@@ -41,7 +41,7 @@
 //! is the app's own business; [`channel`] carries it as typed messages.
 
 use std::fmt::Write as _;
-use std::io;
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Instant;
 
@@ -116,7 +116,15 @@ impl Unverified {
     /// neochumbyd's side: any key may connect, and [`Unverified::verify`]
     /// says whether it is one paired.
     pub fn accept(tcp: TcpStream, me: &Identity) -> io::Result<Unverified> {
-        Session::server(tcp, me).map(Unverified)
+        Session::server(tcp, me, None).map(Unverified)
+    }
+
+    /// As [`Unverified::accept`], with the whole handshake done by
+    /// `deadline` ([`io::ErrorKind::TimedOut`] if not), however the peer
+    /// spaces out what it sends: a socket's read timeout bounds one read,
+    /// and a handshake sent a byte at a time takes many.
+    pub fn accept_by(tcp: TcpStream, me: &Identity, deadline: Instant) -> io::Result<Unverified> {
+        Session::server(tcp, me, Some(deadline)).map(Unverified)
     }
 
     /// A Chumby's side, to pair: it knows no server key yet.
@@ -165,6 +173,36 @@ impl Unverified {
         } else {
             Err(io::Error::new(io::ErrorKind::PermissionDenied, "not a key paired with"))
         }
+    }
+}
+
+/// A handshake's socket: each read waits only for what is left until the
+/// deadline, if there is one, and fails at it.
+pub(crate) struct ByDeadline<'a> {
+    pub tcp: &'a TcpStream,
+    pub deadline: Option<Instant>,
+}
+
+impl Read for ByDeadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(d) = self.deadline {
+            let left = d.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "the handshake took too long"));
+            }
+            self.tcp.set_read_timeout(Some(left))?;
+        }
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for ByDeadline<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
     }
 }
 
