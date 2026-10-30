@@ -289,16 +289,18 @@ jobs:
           version: ${{ env.ZIG_VERSION }}
           use-cache: false
       # Every app, not just the default tree's.
+      # --no-deps: our crates, not the third-party ones built from source
+      # (ttfx), whose lints are their own.
       - name: The Chumby's binaries
         run: |
-          cargo clippy --release --target armv5te-unknown-linux-musleabi \
+          cargo clippy --no-deps --release --target armv5te-unknown-linux-musleabi \
             -p neochumby -p neochumby-home -p neochumby-airplay -p neochumby-doom -p neochumby-quake \
             -p neochumby-fetch -p neochumby-htop -p neochumby-top -p neochumby-cmatrix -p neochumby-clock \
-            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-classic -p neochumby-logs -- -D warnings
+            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-ttfx -p neochumby-classic -p neochumby-logs -- -D warnings
           cargo build --release --target armv5te-unknown-linux-musleabi \
             -p neochumby -p neochumby-home -p neochumby-airplay -p neochumby-doom -p neochumby-quake \
             -p neochumby-fetch -p neochumby-htop -p neochumby-top -p neochumby-cmatrix -p neochumby-clock \
-            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-classic -p neochumby-logs
+            -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-ttfx -p neochumby-classic -p neochumby-logs
       - name: The server's binaries
         run: |
           cargo build --release --target x86_64-unknown-linux-musl -p neochumbyd

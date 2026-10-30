@@ -29,6 +29,7 @@ members = [
     "apps/pipes",
     "apps/quake",
     "apps/top",
+    "apps/ttfx",
 ]
 
 # The bundle's releases are dated (vYYYY.MM.N); this version is only for

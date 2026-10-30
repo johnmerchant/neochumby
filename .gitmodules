@@ -42,3 +42,6 @@
 [submodule "dev/wasmbench/third_party/coremark"]
 	path = dev/wasmbench/third_party/coremark
 	url = https://github.com/eembc/coremark
+[submodule "apps/ttfx/third_party/ttfx"]
+	path = apps/ttfx/third_party/ttfx
+	url = https://github.com/omacom/ttfx
