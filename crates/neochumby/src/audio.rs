@@ -1,6 +1,8 @@
 //! The Chumby Classic's speaker: /dev/dsp (OSS), the amplifier's mute
-//! (/proc/sys/sense1/spkmute; the boot leaves it on) and the stock
-//! firmware's master volume (0-100, through /usr/bin/chumby_set_volume).
+//! (/proc/sys/sense1/spkmute on the stock kernel, where the boot leaves it
+//! on; on a newer kernel without that node, as the dist image's, the
+//! sound card's `Speaker Switch`) and the stock firmware's master volume
+//! (0-100, through /usr/bin/chumby_set_volume).
 //!
 //! [`Unmuted`] is the volume and the mute alone, for a process that has
 //! another program play (the stock btplay, which opens /dev/dsp itself);
@@ -52,6 +54,7 @@ use std::io::{self, Write};
 use std::process::Command;
 use std::time::{Duration, Instant};
 
+use neochumby_sys::alsa;
 use neochumby_sys::oss::{self, AFMT_S16_LE, Setting};
 use neochumby_sys::speaker::{Handover, Take};
 
@@ -60,14 +63,23 @@ use crate::session::{Pipe, Request};
 
 const DSP: &str = "/dev/dsp";
 const SPEAKER_MUTE: &str = "/proc/sys/sense1/spkmute";
+/// The amplifier as a newer kernel's sound card has it: an ALSA switch,
+/// on while the speaker may play (the machine driver's DAPM pin, which
+/// drives the same keypad line as spkmute).
+const SPEAKER_SWITCH: &str = "Speaker Switch";
 /// With no argument it prints the master volume; with --master_volume N it
 /// sets it.
 const SET_VOLUME: &str = "/usr/bin/chumby_set_volume";
 
 /// Mutes or unmutes the speaker amplifier. Whatever plays unmutes it while
-/// it does, and mutes it again after.
+/// it does, and mutes it again after. The stock kernel's node if it has
+/// one, else the sound card's switch.
 pub fn mute(mute: bool) -> io::Result<()> {
-    std::fs::write(SPEAKER_MUTE, if mute { "1" } else { "0" })
+    match OpenOptions::new().write(true).open(SPEAKER_MUTE) {
+        Ok(mut f) => f.write_all(if mute { b"1" } else { b"0" }),
+        Err(e) if e.kind() == io::ErrorKind::NotFound => alsa::set(SPEAKER_SWITCH, i64::from(!mute)),
+        Err(e) => Err(e),
+    }
 }
 
 /// The master volume (0-100), or None if it can't be read.
@@ -476,7 +488,7 @@ impl Volume {
         }
         let before = self::volume();
         report(SET_VOLUME, set_volume(volume));
-        report(SPEAKER_MUTE, mute(false));
+        report("the speaker's mute", mute(false));
         Volume::Set { before }
     }
 }
@@ -485,7 +497,7 @@ impl Drop for Volume {
     fn drop(&mut self) {
         match self {
             Volume::Set { before } => {
-                report(SPEAKER_MUTE, mute(true));
+                report("the speaker's mute", mute(true));
                 if let Some(v) = *before {
                     report(SET_VOLUME, set_volume(v));
                 }

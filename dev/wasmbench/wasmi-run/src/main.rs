@@ -1,7 +1,7 @@
 //! wasmi-run: runs a WASI preview 1 command under wasmi, with only the WASI
-//! calls the benchmark's workloads import (args, clock_time_get, fd_write to
-//! stdout and stderr, fd_fdstat_get, fd_seek, fd_close, proc_exit): no
-//! files, no preopens, no environment.
+//! calls the benchmark's workloads import (args, an empty environment,
+//! clock_time_get, fd_write to stdout and stderr, fd_fdstat_get, fd_seek,
+//! fd_close, proc_exit): no files and no preopens.
 //!
 //!   wasmi-run [-t] [-e] MODULE.wasm [ARG ...]
 //!
@@ -67,6 +67,15 @@ fn wasi(linker: &mut Linker<Ctx>) -> Result<(), wasmi::Error> {
         }
         ESUCCESS
     })?;
+    // An empty environment (Rust's std asks for it as it starts).
+    linker.func_wrap(WASI, "environ_sizes_get", |mut c: Caller<'_, Ctx>, count: i32, size: i32| -> i32 {
+        if put(&mut c, count, &0u32.to_le_bytes()) && put(&mut c, size, &0u32.to_le_bytes()) {
+            ESUCCESS
+        } else {
+            EFAULT
+        }
+    })?;
+    linker.func_wrap(WASI, "environ_get", |_: Caller<'_, Ctx>, _environ: i32, _buf: i32| -> i32 { ESUCCESS })?;
     linker.func_wrap(WASI, "clock_time_get", |mut c: Caller<'_, Ctx>, id: i32, _prec: i64, out: i32| -> i32 {
         let clock = match id {
             0 => libc::CLOCK_REALTIME,
