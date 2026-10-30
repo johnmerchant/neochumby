@@ -164,14 +164,6 @@ fi
 
 out=${1:?usage: classic/build OUT}
 root=$(git rev-parse --show-toplevel)
-# The kernel's source, the submodule (`update = none` in .gitmodules, so a
-# plain `git submodule update` leaves it out): fetched at the pinned commit
-# only, if it isn't here yet.
-rev=$(git -C "$root" ls-files -s classic/linux | awk '{print $2}')
-git -C "$root/classic/linux" cat-file -e "$rev^{commit}" 2>/dev/null ||
-  git -C "$root" submodule update --init --checkout --depth 1 classic/linux
-mkdir -p "$out"
-out=$(cd "$out" && pwd)
 runtime=${NEOCHUMBY_CLASSIC_RUNTIME:-}
 if [ -z "$runtime" ]; then
   for r in container docker podman; do
@@ -185,6 +177,14 @@ fi
   echo "classic/build: needs Apple's container, docker or podman" >&2
   exit 2
 }
+# The kernel's source, the submodule (`update = none` in .gitmodules, so a
+# plain `git submodule update` leaves it out): fetched at the pinned commit
+# only, if it isn't here yet.
+rev=$(git -C "$root" ls-files -s classic/linux | awk '{print $2}')
+git -C "$root/classic/linux" cat-file -e "$rev^{commit}" 2>/dev/null ||
+  git -C "$root" submodule update --init --checkout --depth 1 classic/linux
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
 # A nameserver for the downloads, if the runtime's own doesn't answer (seen
 # with Apple's container): NEOCHUMBY_CLASSIC_DNS=<ip>.
 dns=

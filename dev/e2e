@@ -4,9 +4,9 @@
 # Chumby, or an emulated one, and show it"). Every emulated Chumby is
 # qemu-chumby's machine, through dev/emulate:
 #
-#   dev/e2e TREE NEOCHUMBYD OUT
-#       the dist profile, as CI runs it: neochumby's Linux 5.9.16
-#       (dist/build build/sideload-dist), no proprietary firmware
+#   dev/e2e [--build | --no-fetch] TREE NEOCHUMBYD OUT
+#       the dist profile, as CI runs it: neochumby's Linux 5.9.16, no
+#       proprietary firmware
 #   NEOCHUMBY_EMU_PROFILE=stock dev/e2e TREE NEOCHUMBYD OUT
 #       the emulated Chumby on its stock firmware: your own, by
 #       NEOCHUMBY_EMU_KERNEL, _NAND and _PSP; local only, never in CI
@@ -27,7 +27,22 @@
 # OUT/<scenario>/, its output in OUT/<scenario>.txt, and the results in
 # OUT/summary.txt. A scenario a backend can't run exits 77: skipped, not
 # failed. The exit status is 1 if any failed.
+#
+# First, `dev/emulate prepare` makes QEMU and the profile's images ready,
+# once: fetched prebuilt and verified, else built from source (dev/emulate,
+# "QEMU ... and the dist and classic images"); --build builds them, never
+# fetching (NEOCHUMBY_BUILD=1), and --no-fetch builds what must be made
+# (NEOCHUMBY_NO_FETCH=1). Without them the scenarios skip; if a build
+# fails, so does dev/e2e.
 set -u
+while [ $# -gt 0 ]; do
+  case $1 in
+  --build) export NEOCHUMBY_BUILD=1 ;;
+  --no-fetch) export NEOCHUMBY_NO_FETCH=1 ;;
+  *) break ;;
+  esac
+  shift
+done
 tree=${1:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 out=${3:?usage: dev/e2e TREE NEOCHUMBYD OUT}
@@ -49,6 +64,18 @@ fi
 mkdir -p "$out"
 summary=$out/summary.txt
 failed=0
+
+# Once, here, not in the first scenario; the scenarios then use what's
+# there, or skip.
+"$dev/emulate" prepare
+case $? in
+0 | 77) ;;
+*)
+  echo "dev/e2e: dev/emulate prepare failed"
+  exit 1
+  ;;
+esac
+export NEOCHUMBY_EMU_PREPARED=1
 
 {
   echo "neochumby $(git -C "$dev" rev-parse --short HEAD 2>/dev/null || echo '(no git)')," \

@@ -393,7 +393,6 @@ would boot it from a stick, in one of three profiles:
 | `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook | Anywhere, once its image is built (to come) |
 
 ```sh
-emu/qemu/build                                  # QEMU with the machine (deps: qemu-chumby's README)
 dev/emulate --profile dist start TREE           # TREE from tools/tree
 dev/emulate --profile dist log -f               # the console, with the session's log
 dev/emulate --profile dist tap 160 120          # touch at a pixel
@@ -401,6 +400,17 @@ dev/emulate --profile dist shot screen.png      # screenshot
 dev/emulate --profile dist stop
 dev/e2e TREE NEOCHUMBYD OUT                     # the scenarios, on NEOCHUMBY_EMU_PROFILE (dist)
 ```
+
+`dev/emulate` gets QEMU and the dist and classic images itself, the
+first time and whenever what they're built from changes: CI's prebuilt
+QEMU and images, verified (`emu/qemu/fetch`, `dist/fetch`,
+`classic/fetch`), or, when there's none for this checkout (it has local
+changes, say) or it can't be verified or run here, built from source
+(`emu/qemu/build`, `dist/build`, `classic/build`), with a line saying why.
+`--build` (or `NEOCHUMBY_BUILD=1`) always builds them from source, and
+`--no-fetch` (`NEOCHUMBY_NO_FETCH=1`) builds without trying to fetch;
+`dev/emulate prepare` does it without booting anything. Without either,
+it says so and the scenarios skip.
 
 For `stock`, make your NAND image and kernel with qemu-chumby's
 `chumby-image` (its README, "Images") and give them to `dev/emulate` as
@@ -437,7 +447,8 @@ dist/fetch build/sideload-dist   # the same files; --kernel 7.2.13 for 7.2.13
 ```
 
 It refuses when the inputs have local changes or have no published build
-(dist/README.md, "Prebuilt"); build it then.
+(dist/README.md, "Prebuilt"); build it then. `dev/emulate` runs one or
+the other itself, into `build/sideload-dist`, when it needs the image.
 
 If the downloads fail with `unable to resolve host address`, the
 container's nameserver isn't answering (seen with Apple's `container`):
@@ -455,7 +466,8 @@ does: it waits a few seconds for one, mounts its first partition on
 how `dev/emulate`'s dist profile boots a tree (above).
 
 The sideloader's end-to-end tests are in `tools/neochumby-kernel-sideloader`
-and run on the emulator (`emu/qemu/build`, above) through qemu-chumby's
+and run on the emulator (`dev/emulate prepare` fetches or builds QEMU
+and the image, above) through qemu-chumby's
 `chumby-machine`. Each boots the image, waits for the busybox prompt and
 checks `uname -a` for `5.9.16-mx21-sideload`:
 

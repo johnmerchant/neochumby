@@ -7,6 +7,8 @@
 #   dist/fetch --classic OUT                  OUT/classic-zImage, OUT/classic-rootfs.cpio.gz,
 #                                             OUT/classic-config (what classic/fetch runs)
 #   dist/fetch --inputs [--classic]           prints the inputs commit, and nothing else
+#   dist/fetch --pathspecs [--classic]        prints the inputs' git pathspecs, one a line
+#                                             (how dev/emulate sees local changes to them)
 #
 # CI (.github/workflows/ci.yml) builds each image on every push to main and
 # publishes it on the rolling `dist-prebuilt` prerelease, with its source
@@ -51,17 +53,20 @@ usage() {
     echo "usage: dist/fetch [--kernel 5.9.16|7.2.13] OUT"
     echo "       dist/fetch --classic OUT"
     echo "       dist/fetch --inputs [--classic | --kernel K]"
+    echo "       dist/fetch --pathspecs [--classic]"
 }
 
 image=dist
 kernel=
 inputs_only=
+pathspecs=
 while [ $# -gt 0 ]; do
     case $1 in
         --kernel) [ $# -ge 2 ] || { usage >&2; exit 2; }; kernel=$2; shift 2 ;;
         --kernel=*) kernel=${1#*=}; shift ;;
         --classic) image=classic; shift ;;
         --inputs) inputs_only=1; shift ;;
+        --pathspecs) inputs_only=1; pathspecs=1; shift ;;
         -h | --help) usage; exit 0 ;;
         --) shift; break ;;
         -*) usage >&2; exit 2 ;;
@@ -97,6 +102,11 @@ else
         ':(exclude)classic/fetch'
     files="classic-zImage classic-rootfs.cpio.gz classic-config"
     build="classic/build"
+fi
+
+if [ -n "$pathspecs" ]; then
+    printf '%s\n' "$@"
+    exit 0
 fi
 
 root=$(cd "$(dirname "$0")" && git rev-parse --show-toplevel)
