@@ -35,7 +35,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
-| `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
+| `apps/home` | neochumby-home, the app list, in text mode: the installed apps, pairing, the time, and CHUMBY MODE on the stock 2.6 kernel (the dist's Linux has no stock software to go back to) | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
@@ -156,8 +156,9 @@ An app can use any of these keys:
   (a small directory of its own in `/psp`, kept across boots). The session
   does for it what only root may: the mute and volume, the stock stream
   player (`play`), and, for the start app, the backlight (`brightness`). It
-  never sees the Chumby's key. `root`, listed alone, runs
-  it unjailed, as root: only `home` does, as it pairs the Chumby.
+  never sees the Chumby's key. `root`, listed alone or with `fb`, runs it
+  unjailed, as root: `home` does, as it pairs the Chumby (in text mode), and
+  neochumby-classic (with `fb`).
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
 - **Text mode, or `fb`:** an app's `exec` runs in text mode unless its
   `access` lists `fb`. In text mode it has no framebuffer: its stdin and

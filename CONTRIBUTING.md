@@ -260,7 +260,9 @@ evdev, IIO, the backlight class and ALSA: the scenarios that need devices
 pass there once the session (or dist) bridges the two.
 
 **boot** (`dev/emulate-boot TREE OUT`): the boot runs the stick's hook,
-the hook runs the session from the stick, and home opens and draws.
+the hook runs the session from the stick, and home opens and draws (with
+its CHUMBY MODE bar on the stock 2.6 kernel; on dist, where home has
+none, until its screen settles).
 
 **smoke** (`dev/emulate-smoke TREE OUT`, a tree with doom): home draws, a
 tap on DOOM opens Doom (without game data it says so and exits, and home
@@ -541,7 +543,7 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
 | `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service` (below) |
 | `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
-| `root` | no jail: it runs as root, as the session does. Listed alone |
+| `root` | no jail: it runs as root, as the session does. Listed alone, or with `fb` for an app that draws the screen itself: without `fb`, a root app runs in text mode too |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
 can't signal or trace each other, or root, and can't read the Chumby's
