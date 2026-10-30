@@ -9,11 +9,26 @@
 #   OUT/classic-rootfs.cpio.gz   the same initramfs, for -initrd
 #   OUT/classic-config           the kernel's .config
 #
-# Compiled with the compiler the stock kernel was built with, CodeSourcery's
-# 2008q3 (gcc 4.3.2), from Chumby's own download server, pinned by its hash.
-# Its programs are 32-bit x86 Linux binaries: they run natively on x86_64
-# (CI) and under qemu-i386 elsewhere (an arm64 Mac), which needs a container
-# allowed to register a binfmt handler.
+# The kernel is compiled with the compiler the stock kernel was built with,
+# CodeSourcery's 2008q3 (gcc 4.3.2), from Chumby's own download server,
+# pinned by its hash. Its programs are 32-bit x86 Linux binaries: they run
+# natively on x86_64 (CI) and under qemu-i386 elsewhere (an arm64 Mac),
+# which needs a container allowed to register a binfmt handler. That
+# compiler builds nothing that goes into the image but the kernel and its
+# modules.
+#
+# BusyBox is compiled with zig cc (zig-cc), static against zig's musl, as
+# neochumby's own binaries are (tools/zigcc): the ARM926EJ-S, soft float.
+# It used to be the same CodeSourcery compiler, linked statically with its
+# glibc 2.8, but that glibc's source, which a copy of the image would owe,
+# is lost: CodeSourcery (Mentor) published it as
+# arm-2008q3-72-arm-none-linux-gnueabi.src.tar.bz2, under
+# https://sourcery.mentor.com/public/gnu_toolchain/arm-none-linux-gnueabi/
+# and the portal paths in README.md ("The toolchain"), all offline now, and
+# the Wayback Machine has only their 301 redirects (captured 2023-07-10).
+# The binary toolchain is still mirrored at
+# github.com/johnmerchant/chumby-toolchain: should a copy of the source turn
+# up, mirror it there.
 #
 # Runs in a container (classic/Containerfile) with Apple's container, docker
 # or podman (NEOCHUMBY_CLASSIC_RUNTIME picks). The work (downloads, the
@@ -31,6 +46,12 @@ TOOLCHAIN_URL=https://github.com/johnmerchant/chumby-toolchain/raw/main/arm-2008
 TOOLCHAIN_SHA256=d09f1580a9179a3c8346bde44d6c7d828937d7afcab0ec41207f24e65aa71dca
 BUSYBOX_VERSION=1.36.1
 BUSYBOX_SHA256=b8cc24c9574d809e7279c3be349795c5d5ceb6fdf19ca709f80cde50e47de314
+# zig, for BusyBox: the version CI builds neochumby's binaries with
+# (ZIG_VERSION in .github/workflows/ci.yml, which checks the two agree), for
+# the machine the container runs on.
+ZIG_VERSION=0.17.0
+ZIG_SHA256_X86_64=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026
+ZIG_SHA256_AARCH64=9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8
 
 if [ "${1:-}" = --inside ]; then
   root=$2
@@ -105,9 +126,33 @@ if [ "${1:-}" = --inside ]; then
     echo "$stamp" >"$k/.neochumby-source"
   fi
 
-  # BusyBox, static, with the same compiler and its glibc.
+  # zig, for BusyBox. Its cache (the musl it builds) stays in the work.
+  case $(uname -m) in
+  x86_64) zarch=x86_64 zsha=$ZIG_SHA256_X86_64 ;;
+  aarch64 | arm64) zarch=aarch64 zsha=$ZIG_SHA256_AARCH64 ;;
+  *) echo "classic/build: no zig for $(uname -m)" >&2 && exit 1 ;;
+  esac
+  zdir=/work/zig-$zarch-linux-$ZIG_VERSION
+  if [ ! -x "$zdir/zig" ]; then
+    fetch "https://ziglang.org/download/$ZIG_VERSION/zig-$zarch-linux-$ZIG_VERSION.tar.xz" "$zsha" \
+      "/work/dl/zig-$zarch-linux-$ZIG_VERSION.tar.xz"
+    tar xJf "/work/dl/zig-$zarch-linux-$ZIG_VERSION.tar.xz" -C /work
+  fi
+  export ZIG="$zdir/zig" ZIG_GLOBAL_CACHE_DIR=/work/zig-cache ZIG_LOCAL_CACHE_DIR=/work/zig-cache
+  echo "zig $("$ZIG" version)"
+
+  # The __sync_* functions zig's libc needs on ARMv5 (kuser-atomics.c), as
+  # a library BusyBox's link takes.
+  ka=/work/kuser-atomics
+  mkdir -p "$ka"
+  "$here/zig-cc" -Oz -Wall -Wextra -Werror -c -o "$ka/kuser-atomics.o" "$here/kuser-atomics.c"
+  rm -f "$ka/libkuser-atomics.a"
+  "$ZIG" ar rcs "$ka/libkuser-atomics.a" "$ka/kuser-atomics.o"
+
+  # BusyBox, static, with zig cc and its musl (the comment at the top).
   bb=/work/busybox-$BUSYBOX_VERSION
-  stamp=$BUSYBOX_SHA256-$(cat "$here"/patches/busybox/*.patch | sha256sum | cut -c1-16)
+  stamp=$BUSYBOX_SHA256-$ZIG_VERSION-$(cat "$here"/patches/busybox/*.patch "$here/zig-cc" "$here/kuser-atomics.c" |
+    sha256sum | cut -c1-16)
   if [ "$(cat "$bb/.neochumby-source" 2>/dev/null)" != "$stamp" ]; then
     fetch "https://busybox.net/downloads/busybox-$BUSYBOX_VERSION.tar.bz2" "$BUSYBOX_SHA256" \
       /work/dl/busybox-$BUSYBOX_VERSION.tar.bz2
@@ -118,7 +163,15 @@ if [ "${1:-}" = --inside ]; then
     done
     echo "$stamp" >"$bb/.neochumby-source"
   fi
-  make_bb() { make -C "$bb" -j"$jobs" CROSS_COMPILE=$cross "$@"; }
+  # CC, AR and LD are zig's (LD for the partial links of each directory's
+  # objects); EXTRA_LDLIBS adds kuser-atomics, which BusyBox's link keeps
+  # whatever it finds it needs. zig's link writes no symbols (there's no
+  # -g), so there's nothing to strip: SKIP_STRIP, as BusyBox's strip would
+  # be the host's, which doesn't know ARM.
+  make_bb() {
+    make -C "$bb" -j"$jobs" CC="$here/zig-cc" AR="$ZIG ar" LD="$ZIG ld.lld" \
+      CONFIG_EXTRA_LDLIBS="-L$ka kuser-atomics" SKIP_STRIP=y "$@"
+  }
   if [ ! -f "$bb/.config.base" ]; then
     make_bb defconfig >/dev/null
     cp "$bb/.config" "$bb/.config.base"
@@ -131,8 +184,7 @@ if [ "${1:-}" = --inside ]; then
   # kernel's list format; linux.fragment points the kernel at both.
   r=/work/rootfs
   rm -rf "$r"
-  make -C "$bb" CROSS_COMPILE=$cross CONFIG_PREFIX="$r" install >/dev/null
-  "${cross}strip" "$r/bin/busybox"
+  make_bb CONFIG_PREFIX="$r" install >/dev/null
   cp -R "$here/rootfs/." "$r/"
   mkdir -p "$r/drivers"
   cp "$here/initramfs.list" /work/initramfs.list
