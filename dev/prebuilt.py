@@ -291,8 +291,12 @@ class Image(Output):
         new = git(self.repo, "ls-files", "-z", "--others", "--exclude-standard", "--", *specs) or b""
         for name in sorted(n for n in new.split(b"\0") if n):
             h.update(b"\0" + name + b"\0")
-            with open(os.path.join(self.repo, name.decode()), "rb") as f:
-                h.update(f.read())
+            path = os.path.join(self.repo, os.fsdecode(name))
+            if os.path.islink(path):
+                h.update(os.fsencode(os.readlink(path)))
+            else:
+                with open(path, "rb") as f:
+                    h.update(f.read())
         return f"{commit}+{h.hexdigest()[:16]}", "its inputs have local changes"
 
 
