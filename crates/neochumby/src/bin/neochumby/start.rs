@@ -25,8 +25,8 @@ pub fn eligible<'a>(apps: &'a [App], name: &str) -> Result<&'a App, &'static str
         Err("it says button = true, so the button couldn't bring it back")
     } else if app.exec.is_none() {
         Err("it has no exec")
-    } else if let Some(why) = app.why_not() {
-        Err(why)
+    } else if !app.runnable() {
+        Err("it needs a paired neochumbyd")
     } else {
         Ok(app)
     }

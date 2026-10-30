@@ -92,7 +92,7 @@ access = ["fb", "touch", "speaker", "network"]   # what it reaches beyond its ja
 player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
 font = "spleen-8x16"                 # text mode: its terminal's font
 tap = "q"                            # text mode: what a tap types until it asks for the mouse
-linux = "5.9"                        # the oldest Linux it runs on; absent: any, the stock 2.6.16 too
+linux = "5.9"                        # the oldest Linux it runs on (tools/tree --linux); absent: any, the stock 2.6 too
 ```
 
 An app can use any of these keys:
