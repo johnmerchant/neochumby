@@ -79,7 +79,9 @@ const SPELLINGS: &[(&str, &str)] = &[("colour", "color")];
 /// - `storage`: a directory of its own that lasts across boots
 ///   (/psp/apps/<name>, NEOCHUMBY_STORAGE), shared by its exec and service,
 ///   capped at 64 KiB;
-/// - `root`: no jail: it runs as root, as the session does. Listed alone.
+/// - `root`: no jail: it runs as root, as the session does. Listed alone,
+///   or with `fb` for an app that draws the screen itself (without it, a
+///   root app runs in text mode too).
 const ACCESS: &[&str] =
     &["fb", "touch", "speaker", "accel", "system", "network", "terminal", "logs", "storage", "root"];
 
@@ -120,8 +122,8 @@ fn access(list: &[Value]) -> Result<String, String> {
             _ => return Err(format!("access: {v} is not one of {}", ACCESS.join(", "))),
         }
     }
-    if words.contains(&"root") && words.len() > 1 {
-        return Err("access: root is everything already; list it alone".into());
+    if words.contains(&"root") && words.iter().any(|w| !matches!(*w, "root" | "fb")) {
+        return Err("access: root is everything already; list it alone, or with fb".into());
     }
     if words.is_empty() {
         return Err("access: an empty list; leave it out".into());
@@ -180,16 +182,13 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
             return Err(r#"player: a player plays, so its access lists "speaker""#.into());
         }
     }
-    let fb = meta
-        .get("access")
-        .and_then(Value::as_array)
-        .is_some_and(|a| a.iter().any(|v| matches!(v.as_str(), Some("fb" | "root"))));
+    let fb = meta.get("access").and_then(Value::as_array).is_some_and(|a| a.iter().any(|v| v.as_str() == Some("fb")));
     for key in ["font", "tap"] {
         if !meta.contains_key(key) {
             continue;
         }
         if fb {
-            return Err(format!("{key}: an app with fb (or root) draws the screen itself, and has no terminal"));
+            return Err(format!("{key}: an app with fb draws the screen itself, and has no terminal"));
         }
         if !meta.contains_key("exec") {
             return Err(format!("{key}: only an exec has a terminal"));
@@ -294,7 +293,8 @@ mod tests {
         for bad in [r#"access = "screen""#, r#"access = ["disk"]"#, r#"access = ["fb", "fb"]"#, "access = []"] {
             assert!(manifest(&wrap(bad)).unwrap_err().starts_with("access:"), "{bad}");
         }
-        assert!(manifest(&wrap(r#"access = ["root", "fb"]"#)).unwrap_err().contains("alone"));
+        assert_eq!(manifest(&wrap(r#"access = ["root", "fb"]"#)).unwrap(), "access=root,fb\n");
+        assert!(manifest(&wrap(r#"access = ["root", "touch"]"#)).unwrap_err().contains("alone"));
         // The old word for fb, refused with what replaced it.
         let e = manifest(&wrap(r#"access = ["screen", "touch"]"#)).unwrap_err();
         assert!(e.contains(r#""fb""#) && e.contains("text mode"), "{e}");
