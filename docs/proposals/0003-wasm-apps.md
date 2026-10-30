@@ -110,7 +110,7 @@ The runner then:
 2. Reads the module, and its `.aot` if there is one and it was compiled for
    this runner (below).
 3. **Checks the module's imports against the grant.** A module that imports
-   `neochumby.fb_blit` without `screen` in its `access` is refused before it
+   `neochumby.fb_blit` without `fb` in its `access` is refused before it
    runs a single instruction, with a line in the log naming the missing
    word. Nothing is left unlinked to trap later.
 4. Instantiates it with its linear memory capped (`max_memory_pages`, by
@@ -126,7 +126,7 @@ native code in the runner, not as bounds-checked wasm.
 
 | Import (module `neochumby`) | Needs |
 | --- | --- |
-| `fb_fill(x, y, w, h, rgb565)`, `fb_blit(x, y, w, h, ptr, stride)`, `fb_text(x, y, ptr, len, scale, rgb565)`, `fb_size()` | `screen` |
+| `fb_fill(x, y, w, h, rgb565)`, `fb_blit(x, y, w, h, ptr, stride)`, `fb_text(x, y, ptr, len, scale, rgb565)`, `fb_size()` | `fb` |
 | `touch_poll(ptr) -> n`: the next touch, mapped through the Chumby's calibration | `touch` |
 | `accel(ptr) -> ok` | `accel` |
 | `companion_send(ptr, len)`, `companion_recv(ptr, cap, timeout_ms) -> n`: neochumby-proto's typed channel to the app's own companion | a `companion` in the manifest |
@@ -141,8 +141,8 @@ environment, and no preopened directories, so no file system at all. A
 WASI call outside that list isn't linked, and the module is refused at
 load as in step 3.
 
-**Text-mode apps** (the manifest's terminal mode, now the default for apps
-without the screen) need nothing more: the session gives the runner the
+**Text-mode apps** (the default since text mode: an app whose access
+doesn't list `fb`) need nothing more: the session gives the runner the
 VT (5+) or the library's terminal (2.6) as stdin and stdout, as it would a
 native text-mode app, and `fd_write`/`fd_read` reach exactly those, with
 touch arriving on stdin as the terminal encodes it. **Framebuffer apps** use
@@ -285,7 +285,7 @@ keywords = ["neochumby-app"]
 
 [package.metadata.neochumby]
 title = "WEATHER"
-access = ["screen", "touch"]
+access = ["fb", "touch"]
 neochumbyd = "required"
 network = ["api.open-meteo.com"]    # the companion's hosts
 
