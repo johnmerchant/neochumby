@@ -61,9 +61,10 @@ The rest is built in, as in the stock kernel: the i.MX21's serial port,
 framebuffer (`/dev/fb0`), NAND (nothing mounts it) and USB host, with
 usb-storage and FAT.
 
-**The initramfs**: a static BusyBox 1.36.1 (`busybox.fragment` over its
-defconfig: the applets that need more than the toolchain's glibc 2.8 are
-left out), the device nodes of `initramfs.list` (2.6.16 has no devtmpfs;
+**The initramfs**: a static BusyBox 1.36.1 on musl (`busybox.fragment`
+over its defconfig: the applets that need more than 2.6.16 has are left
+out, and `tc`, which doesn't compile against current kernel headers), the
+device nodes of `initramfs.list` (2.6.16 has no devtmpfs;
 the Chumby drivers' dynamic ones are made by rcS from `/proc/devices`), and
 `rootfs/`. `/psp` and `/tmp` are tmpfs. Our static ARM binaries (musl,
 armv5) need nothing more from it.
@@ -86,13 +87,42 @@ with `sh`. Attach a FAT image laid out as `tools/stick` lays out a stick:
 The stock kernel was compiled with CodeSourcery's Sourcery G++ Lite 2008q3
 (gcc 4.3.2, its banner says), and so is this one: a 2.6.16 tree builds
 with it unpatched, and the drivers are built as the stock ones were. The
-build fetches it from Chumby's own download server, checking its SHA-256.
-Its programs are 32-bit x86 Linux binaries. On an x86_64 host (CI) they
-run natively with the i386 libc; elsewhere (an arm64 Mac, under Apple's
-`container`) under `qemu-i386` with an i386 libc as its sysroot, which
-needs the container to register a binfmt handler, so it runs with
-`--cap-add ALL` (docker and podman: `--privileged`). The same compiler
-builds BusyBox.
+build fetches it from Chumby's own download server (our mirror of it),
+checking its SHA-256. Its programs are 32-bit x86 Linux binaries. On an
+x86_64 host (CI) they run natively with the i386 libc; elsewhere (an arm64
+Mac, under Apple's `container`) under `qemu-i386` with an i386 libc as its
+sysroot, which needs the container to register a binfmt handler, so it
+runs with `--cap-add ALL` (docker and podman: `--privileged`). It builds
+the kernel and its modules and nothing else, and none of the toolchain
+itself (its libraries included) is in the image.
+
+BusyBox is built with zig cc (`zig-cc`), statically against zig's musl,
+for the ARM926EJ-S with soft float, as neochumby's own binaries are
+(`tools/zigcc`), with the zig CI uses (`ZIG_VERSION`, pinned in
+`classic/build` by its SHA-256). Three things fit it to zig, the ARM926
+and 2.6.16: zig's libc calls `__sync_*` functions that ARMv5, without
+`ldrex`/`strex`, can't inline and zig's compiler-rt doesn't have, so
+`kuser-atomics.c` supplies them from the kernel's kuser compare-and-swap
+helper, as musl's own atomics do; ash's patch keeps it off
+`O_CLOEXEC` and `F_DUPFD_CLOEXEC`, which 2.6.16 predates; and
+`busybox.fragment` turns off BusyBox's const pointer to an applet's
+globals, which clang reads before the applet sets it. musl copes with
+the rest of what 2.6.16 lacks (`statx`, the 64-bit time calls, `pipe2`,
+`dup3`) by falling back to the older calls.
+
+**BusyBox used to link CodeSourcery 2008q3's glibc** (2.8), statically,
+built with the same compiler as the kernel. A copy of that image owes
+that glibc's source, and it can no longer be found. CodeSourcery (later
+Mentor) published it as `arm-2008q3-72-arm-none-linux-gnueabi.src.tar.bz2`,
+under `https://sourcery.mentor.com/public/gnu_toolchain/arm-none-linux-gnueabi/`
+and at the portal paths
+`http://www.codesourcery.com/sgpp/lite/arm/portal/package3695/public/arm-none-linux-gnueabi/arm-2008q3-72-arm-none-linux-gnueabi.src.tar.bz2`
+and
+`https://sourcery.mentor.com/sgpp/lite/arm/portal/package3695/public/arm-none-linux-gnueabi/arm-2008q3-72-arm-none-linux-gnueabi.src.tar.bz2`.
+All are offline, and the Wayback Machine has only 301 redirects for them
+(captured 2023-07-10). The binary toolchain is still mirrored at
+[github.com/johnmerchant/chumby-toolchain](https://github.com/johnmerchant/chumby-toolchain):
+should a copy of the source turn up, mirror it there.
 
 `classic/build` runs in a container (`Containerfile`): Apple's container,
 docker or podman (`NEOCHUMBY_CLASSIC_RUNTIME`). Its work (the downloads,
@@ -109,11 +139,11 @@ image for this checkout's inputs (`classic/` but this README, `boot-test`
 and `fetch`, with the kernel commit it pins), from the `dist-prebuilt`
 release (`neochumby-classic-INPUTS-2.6.16.tar.xz`), verified as
 `dist/README.md` describes. Its source, `-source.tar` beside it, is the
-kernel at the pinned commit, BusyBox's tarball, `classic/` and the
-toolchain's source: BusyBox links the toolchain's glibc statically. CI
-publishes the classic image only once that source is mirrored
-(`CLASSIC_TOOLCHAIN_SRC_URL` in `ci.yml`); until then it packs it and holds
-it back, and `classic/fetch` finds nothing. `dev/emulate`'s classic
+kernel at the pinned commit, BusyBox's tarball, `classic/` (the patches
+and the build), and the notices of what zig links into BusyBox: musl's
+(MIT), zig's own libc and runtime (MIT) and compiler-rt's (Apache-2.0 WITH
+LLVM-exception), from the zig release it names. The kernel's compiler,
+which isn't in the image, owes nothing. `dev/emulate`'s classic
 profile runs `classic/fetch`, else `classic/build`, into `build/classic`
 by itself.
 
