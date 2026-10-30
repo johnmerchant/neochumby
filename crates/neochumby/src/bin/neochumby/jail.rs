@@ -20,7 +20,9 @@
 //!             lists it (a nosuid, nodev, noexec tmpfs); the mute and the
 //!             volume are the session's
 //!   accel     /dev/accel
-//!   system    /proc, /sys and /etc
+//!   system    /proc, /sys and /etc; where /etc is on the initramfs's
+//!             rootfs, which 2.6.16 won't bind from, copies of the /etc
+//!             files anyone may read instead (copy_etc)
 //!   network   copies of /etc/resolv.conf and /etc/hosts (with `system`,
 //!             /etc has them); and the session lets it keep internet
 //!             sockets (network.rs)
@@ -74,6 +76,12 @@ const FILES: u32 = 256;
 /// The jail's root and the app's /tmp, in KiB.
 const ROOT_KIB: u32 = 256;
 const TMP_KIB: u32 = 4096;
+/// How much of /etc a jail's root holds when /etc is copied, in KiB, and
+/// how many levels of its directories.
+const ETC_KIB: usize = 128;
+const ETC_DEPTH: u32 = 4;
+/// Whether /etc is on rootfs, so copied rather than bound (on_rootfs).
+static ETC_ON_ROOTFS: OnceLock<bool> = OnceLock::new();
 
 /// What an app is started as: its exec, in front, or its service.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -170,6 +178,53 @@ fn logs() -> Vec<std::path::PathBuf> {
     v
 }
 
+/// Whether `path` is on rootfs, the initramfs's own filesystem: 2.6.16
+/// refuses to bind anything from it (its superblock is MS_NOUSER, and
+/// graft_tree says EINVAL), as on the classic image, where the initramfs is
+/// the root. The last mount listed with the longest prefix of `path` is
+/// the one it is on.
+fn on_rootfs(path: &str) -> bool {
+    let Ok(mounts) = std::fs::read_to_string("/proc/mounts") else { return false };
+    let mut on: Option<(usize, bool)> = None;
+    for line in mounts.lines() {
+        let mut f = line.split(' ');
+        let (Some(_), Some(at), Some(fstype)) = (f.next(), f.next(), f.next()) else { continue };
+        let covers = at == "/" || path == at || path.strip_prefix(at).is_some_and(|r| r.starts_with('/'));
+        if covers && on.is_none_or(|(len, _)| at.len() >= len) {
+            on = Some((at.len(), fstype == "rootfs"));
+        }
+    }
+    on.is_some_and(|(_, rootfs)| rootfs)
+}
+
+/// Copies into the jail, at the same paths, what a bind of `dir` would let
+/// the app's uid read: the plain files anyone may read, in directories
+/// anyone may search, `depth` levels down at most. Each is root's and
+/// read-only, keeping only its read and execute bits. Links are left out,
+/// as are files past `left` bytes, which the jail's root must hold.
+fn copy_etc(j: &mut Jail, dir: &Path, depth: u32, left: &mut usize) -> io::Result<()> {
+    let Ok(rd) = std::fs::read_dir(dir) else { return Ok(()) };
+    let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+    entries.sort();
+    for p in entries {
+        let (Ok(m), Some(at)) = (std::fs::symlink_metadata(&p), p.to_str()) else { continue };
+        if m.is_dir() && m.mode() & 0o005 == 0o005 && depth < ETC_DEPTH {
+            j.dirs(at)?;
+            copy_etc(j, &p, depth + 1, left)?;
+        } else if m.is_file() && m.mode() & 0o004 != 0 {
+            let Ok(c) = std::fs::read(&p) else { continue };
+            if c.len() > *left {
+                eprintln!("neochumby: /etc is larger than a jail holds: {at} and others left out");
+                *left = 0;
+                continue;
+            }
+            *left -= c.len();
+            j.file(at, c, m.mode() & 0o555, 0, 0)?;
+        }
+    }
+    Ok(())
+}
+
 /// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
 /// `env` (and HOME, NEOCHUMBY_ROOT, PATH) in its environment and the
 /// descriptors in `keep`.
@@ -227,7 +282,13 @@ pub fn start(
     if a.system {
         j.kernel_fs("proc", "/proc")?;
         j.kernel_fs("sysfs", "/sys")?;
-        j.bind(Path::new("/etc"), "/etc")?;
+        if *ETC_ON_ROOTFS.get_or_init(|| on_rootfs("/etc")) {
+            let mut left = ETC_KIB * 1024;
+            j.dirs("/etc")?;
+            copy_etc(&mut j, Path::new("/etc"), 0, &mut left)?;
+        } else {
+            j.bind(Path::new("/etc"), "/etc")?;
+        }
     }
     if a.terminal {
         // The Chumby's own devpts (the only one this kernel has): another
