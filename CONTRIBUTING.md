@@ -92,7 +92,13 @@ dist/README.md, "Mainline, weekly"). To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
 crates), and `cargo test -p neochumby-proto -p neochumby-sync -p
-neochumbyd`.
+neochumbyd`. CI also checks what the build takes in: `cargo deny check
+bans licenses sources` (as `deny.toml` sets them) and `gitleaks git` over
+every commit, on every run, and RustSec's advisories (`cargo deny check
+advisories`) daily and whenever `Cargo.lock` or `deny.toml` changes. A new
+dependency must pass `cargo deny`: a licence not yet allowed, or a source
+other than crates.io, is added to `deny.toml` in the same pull request,
+saying why.
 
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its
@@ -348,8 +354,11 @@ What the emulator can't catch is what real devices are for:
 An app is a crate named `neochumby-<name>`. It lives in this repository
 under `apps/<name>/`, or in its own repository with the crate at the root,
 where it is added to a tree from its git URL or from crates.io
-(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`). Its
-`Cargo.toml` says what it is:
+(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`).
+cargo-deny sees only this repository's `Cargo.lock`, so an app
+`tools/tree` fetches from git or crates.io, and what it depends on, isn't
+checked for licences or advisories: pin it (a full commit id, a version),
+and read what you pin. Its `Cargo.toml` says what it is:
 
 ```toml
 [package]
