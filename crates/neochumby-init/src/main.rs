@@ -306,6 +306,16 @@ fn mount_kernel_fs() {
             }
         }
     }
+    // Pseudo-terminals, on devtmpfs' /dev/ptmx: the session runs each
+    // text-mode app on one (neochumby::term).
+    let _ = fs::create_dir_all("/dev/pts");
+    let pts = MountFlags { nosuid: true, noexec: true, ..MountFlags::default() };
+    if let Err(e) = boot::mount("devpts", Path::new("/dev/pts"), "devpts", pts)
+        && e.kind() != io::ErrorKind::ResourceBusy
+    {
+        kmsg(&format!("/dev/pts: {e}"));
+        ok = false;
+    }
     // Only now: the screen's console is in /dev, devtmpfs.
     screen_step("Mounting /proc, /sys and /dev", if ok { Status::Ok } else { Status::Failed });
     for dir in ["/tmp", "/mnt"] {
