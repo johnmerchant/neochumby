@@ -16,14 +16,20 @@
 //!   speaker <v>    unmute the speaker at master volume v (0-100), for a
 //!                  jailed app with `access = ["speaker"]`, which can't
 //!   speaker off    mute it again and put the boot's volume back
+//!   play <url>     play an http:// stream through the Chumby's own player
+//!                  (btplay, run by the session as root), for an app with
+//!                  `access = ["speaker"]`
+//!   play off       stop it
+//!   brightness <n> set the backlight, 0 (off) to 65535 (full): for the
+//!                  start app, and its service, only
 //!   player pause   pause, resume or toggle the default player, from the
 //!   player resume  start app or its service only: the session passes
 //!   player toggle  `pause` or `resume` on to that app's service
 //!
 //! An app asks for the speaker while it plays (neochumby::audio), and
 //! carries on: only `open` and `chumby-mode` are followed by its exit.
-//! The same goes for `player`. For `toggle`, the session keeps whether the
-//! player is playing, starting as playing.
+//! The same goes for `play`, `brightness` and `player`. For `toggle`, the
+//! session keeps whether the player is playing, starting as playing.
 //!
 //! An app writes its request and then exits. The last request it made
 //! counts. If it hasn't exited a few seconds later, the session ends it.
@@ -55,9 +61,16 @@
 //! NEOCHUMBY_REASON, when set, says why the session opened the app:
 //! `button` when the top button did. An app ignores values it doesn't know.
 //!
-//! NEOCHUMBY_PLAYER, when set, names this Chumby's default player (an
-//! app with `player = true`): a start app's MUSIC button opens it. It's
-//! unset when there's none. The session sets it for everything it runs.
+//! The session also tells what it runs, as it starts it:
+//!
+//!   NEOCHUMBY_NAME            the Chumby's name, as its neochumbyd knows it
+//!   NEOCHUMBY_STICK_FREE_KIB  the free space on the stick, in KiB (unset
+//!                             without a stick)
+//!   NEOCHUMBY_STORAGE         the app's own directory that lasts across
+//!                             boots, for an app with `access = ["storage"]`
+//!   NEOCHUMBY_PLAYER          this Chumby's default player (an app with
+//!                             `player = true`), which a start app's MUSIC
+//!                             button opens; unset when there's none
 
 use std::fs::File;
 use std::io::{self, Write};
@@ -72,10 +85,20 @@ use neochumby_sys::fd;
 pub const ENV: &str = "NEOCHUMBY_SESSION";
 /// The variable saying why the app was opened.
 pub const REASON_ENV: &str = "NEOCHUMBY_REASON";
+/// The variable holding the Chumby's name.
+pub const NAME_ENV: &str = "NEOCHUMBY_NAME";
+/// The variable holding the stick's free space, in KiB.
+pub const STICK_FREE_ENV: &str = "NEOCHUMBY_STICK_FREE_KIB";
+/// The variable holding the app's lasting directory.
+pub const STORAGE_ENV: &str = "NEOCHUMBY_STORAGE";
 /// The variable naming the default player.
 pub const PLAYER_ENV: &str = "NEOCHUMBY_PLAYER";
 /// The longest line either end reads. Longer ones are dropped.
 pub const MAX_LINE: usize = 256;
+/// The longest URL `play` takes.
+pub const MAX_URL: usize = 200;
+/// The brightest the backlight goes.
+pub const MAX_BRIGHTNESS: u32 = 65535;
 
 /// What an app may ask of the session.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -88,6 +111,11 @@ pub enum Request {
     /// mute it and put back the volume it booted with: for a jailed app,
     /// which can't (neochumby::audio asks).
     Speaker(Option<u32>),
+    /// Play this stream (an http:// URL, [`valid_url`]) through the
+    /// Chumby's own player, or, with None, stop it.
+    Play(Option<String>),
+    /// Set the backlight, 0 to [`MAX_BRIGHTNESS`].
+    Brightness(u32),
     /// Pause, resume or toggle the default player (the start app, and
     /// its service, only).
     Player(Player),
@@ -102,6 +130,18 @@ pub enum Player {
     Toggle,
 }
 
+/// Whether `url` is one `play` takes: http:// (the stock player has no
+/// TLS), a host, at most [`MAX_URL`] bytes, and only the characters a URL
+/// may hold unescaped. The session passes it to the player as one argument,
+/// never through a shell; this keeps out anything else besides.
+pub fn valid_url(url: &str) -> bool {
+    let Some(rest) = url.strip_prefix("http://") else { return false };
+    url.len() <= MAX_URL
+        && !rest.is_empty()
+        && !rest.starts_with(['/', '?', '#'])
+        && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b"-._~:/?#[]@!$&'()*+,;=%".contains(&b))
+}
+
 impl Request {
     /// The request a line holds, or None for a line this end doesn't know.
     pub fn parse(line: &str) -> Option<Request> {
@@ -111,6 +151,9 @@ impl Request {
             ("chumby-mode", None, None) => Some(Request::ChumbyMode),
             ("speaker", Some("off"), None) => Some(Request::Speaker(None)),
             ("speaker", Some(v), None) => v.parse().ok().filter(|v| *v <= 100).map(|v| Request::Speaker(Some(v))),
+            ("play", Some("off"), None) => Some(Request::Play(None)),
+            ("play", Some(url), None) if valid_url(url) => Some(Request::Play(Some(url.to_string()))),
+            ("brightness", Some(n), None) => n.parse().ok().filter(|n| *n <= MAX_BRIGHTNESS).map(Request::Brightness),
             ("player", Some("pause"), None) => Some(Request::Player(Player::Pause)),
             ("player", Some("resume"), None) => Some(Request::Player(Player::Resume)),
             ("player", Some("toggle"), None) => Some(Request::Player(Player::Toggle)),
@@ -125,6 +168,9 @@ impl Request {
             Request::ChumbyMode => "chumby-mode\n".into(),
             Request::Speaker(Some(v)) => format!("speaker {v}\n"),
             Request::Speaker(None) => "speaker off\n".into(),
+            Request::Play(Some(url)) => format!("play {url}\n"),
+            Request::Play(None) => "play off\n".into(),
+            Request::Brightness(n) => format!("brightness {n}\n"),
             Request::Player(Player::Pause) => "player pause\n".into(),
             Request::Player(Player::Resume) => "player resume\n".into(),
             Request::Player(Player::Toggle) => "player toggle\n".into(),
@@ -171,6 +217,23 @@ impl Notice {
 /// Why the session opened this app: NEOCHUMBY_REASON, if set.
 pub fn reason() -> Option<String> {
     std::env::var(REASON_ENV).ok().filter(|r| !r.is_empty())
+}
+
+/// The Chumby's name (NEOCHUMBY_NAME), if the session gave it.
+pub fn name() -> Option<String> {
+    std::env::var(NAME_ENV).ok().filter(|n| !n.is_empty())
+}
+
+/// The free space on the stick, in KiB, as the app started
+/// (NEOCHUMBY_STICK_FREE_KIB); None without a stick.
+pub fn stick_free_kib() -> Option<u64> {
+    std::env::var(STICK_FREE_ENV).ok()?.parse().ok()
+}
+
+/// The app's own directory that lasts across boots (NEOCHUMBY_STORAGE),
+/// for an app with `access = ["storage"]`.
+pub fn storage() -> Option<std::path::PathBuf> {
+    std::env::var_os(STORAGE_ENV).filter(|s| !s.is_empty()).map(Into::into)
 }
 
 /// This Chumby's default player, to `open`: NEOCHUMBY_PLAYER, if set to
@@ -273,6 +336,24 @@ impl Pipe {
         self.send(&Request::ChumbyMode.line())
     }
 
+    /// Asks the session to play `url` (an http:// stream), or with None to
+    /// stop. Take the speaker first (neochumby::audio): the session stops
+    /// the stream when another process takes it. Carry on after this.
+    pub fn play(&mut self, url: Option<&str>) -> io::Result<()> {
+        if let Some(u) = url
+            && !valid_url(u)
+        {
+            return Err(io::Error::new(io::ErrorKind::InvalidInput, format!("{u:?}: not a URL play takes")));
+        }
+        self.send(&Request::Play(url.map(str::to_string)).line())
+    }
+
+    /// Asks the session to set the backlight (0 to [`MAX_BRIGHTNESS`]): for
+    /// the start app and its service. Carry on after this.
+    pub fn brightness(&mut self, level: u32) -> io::Result<()> {
+        self.send(&Request::Brightness(level.min(MAX_BRIGHTNESS)).line())
+    }
+
     /// Asks the session to pause, resume or toggle the default player:
     /// for a start app, or its service. Unlike `open`, carry on after it.
     pub fn player(&mut self, what: Player) -> io::Result<()> {
@@ -366,9 +447,48 @@ mod tests {
             assert_eq!(Request::parse(unknown), None, "{unknown:?}");
         }
         let player = [Player::Pause, Player::Resume, Player::Toggle].map(Request::Player);
-        for r in [Request::Open("wx".into()), Request::ChumbyMode].into_iter().chain(player) {
+        for r in [
+            Request::Open("wx".into()),
+            Request::ChumbyMode,
+            Request::Play(Some("http://ice1.somafm.com/groovesalad-128-mp3".into())),
+            Request::Play(None),
+            Request::Brightness(9000),
+        ]
+        .into_iter()
+        .chain(player)
+        {
             let line = r.line();
             assert_eq!(Request::parse(line.strip_suffix('\n').unwrap()), Some(r));
+        }
+        assert_eq!(Request::parse("brightness 0"), Some(Request::Brightness(0)));
+        for unknown in ["brightness", "brightness 65536", "brightness -1", "brightness full", "play", "play  off"] {
+            assert_eq!(Request::parse(unknown), None, "{unknown:?}");
+        }
+    }
+
+    #[test]
+    fn urls_play_takes() {
+        for ok in ["http://a", "http://ice1.somafm.com:80/dronezone-128-mp3", "http://h/p?a=1&b=%20#x"] {
+            assert!(valid_url(ok), "{ok}");
+        }
+        let long = format!("http://h/{}", "x".repeat(MAX_URL));
+        for bad in [
+            "https://h/s",
+            "ftp://h",
+            "http://",
+            "http:///etc/passwd",
+            "file:///etc/passwd",
+            "-http://h",
+            "http://h/a b",
+            "http://h/`reboot`",
+            "http://h/\"x\"",
+            "http://h/a\\b",
+            "http://h/<x>",
+            "http://h/é",
+            &long,
+        ] {
+            assert!(!valid_url(bad), "{bad}");
+            assert_eq!(Request::parse(&format!("play {bad}")), None, "{bad}");
         }
     }
 
