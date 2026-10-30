@@ -411,9 +411,18 @@ extern "C" fn trampoline(env: ExecEnvT, args: *mut u64) {
     let f: &'static Func = unsafe { &*(wasm_runtime_get_function_attachment(env) as *const Func) };
     // SAFETY: `env` is the live execution environment of this call.
     let inst = unsafe { wasm_runtime_get_module_inst(env) };
-    // SAFETY: every instance gets its state in instantiate before it can
-    // run; it is freed only after the instance is.
-    let state = unsafe { &mut *(wasm_runtime_get_custom_data(inst) as *mut Box<dyn Any>) };
+    // SAFETY: `inst` is live.
+    let data = unsafe { wasm_runtime_get_custom_data(inst) } as *mut Box<dyn Any>;
+    if data.is_null() {
+        // A module's start function runs inside instantiation, before the
+        // instance has its state: the host isn't there for it yet.
+        // SAFETY: `inst` is live; the message is a static C string.
+        unsafe { wasm_runtime_set_exception(inst, c"the host isn't ready during instantiation".as_ptr()) };
+        return;
+    }
+    // SAFETY: the state is set in instantiate, right after WAMR's own, and
+    // freed only after the instance is; it was checked non-null above.
+    let state = unsafe { &mut *data };
     // SAFETY: in raw mode, WAMR passes one u64 slot per parameter, in a
     // buffer of at least 16 slots, and reads the result from slot 0.
     let slots = unsafe { std::slice::from_raw_parts_mut(args, f.params.len().max(1)) };

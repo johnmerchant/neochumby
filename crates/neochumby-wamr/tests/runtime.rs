@@ -147,6 +147,24 @@ fn runs_modules_inside_their_bounds() {
     drop(i);
     drop(m);
 
+    // A start function runs inside instantiation, before the instance has
+    // its state: a host call from it traps, and the instance isn't made.
+    let m = rt
+        .load(wasm(
+            r#"(module
+                (import "host" "log" (func $log (param i32 i32)))
+                (memory 1)
+                (func $s (call $log (i32.const 0) (i32.const 1)))
+                (start $s))"#,
+        ))
+        .unwrap();
+    match m.instantiate(64 << 10, 16, Box::new(Seen::default())) {
+        Err(Error::Instantiate(why)) => assert!(why.contains("isn't ready"), "{why}"),
+        Err(e) => panic!("{e}"),
+        Ok(_) => panic!("instantiated"),
+    }
+    drop(m);
+
     // Not wasm at all.
     assert!(matches!(rt.load(b"\0asm garbage".to_vec()), Err(Error::Load(_))));
     assert!(matches!(rt.load(b"\x7fELF".to_vec()), Err(Error::Load(_))));
