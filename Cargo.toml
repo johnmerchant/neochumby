@@ -42,7 +42,8 @@ repository = "https://github.com/johnmerchant/neochumby"
 
 [workspace.dependencies]
 libc = "0.2"
-# Published crates: a path for the workspace, a version for crates.io.
+# Published crates: a path for the workspace, a version for crates.io. The
+# versions are floors: CI publishes at its own (see CONTRIBUTING.md).
 neochumby = { path = "crates/neochumby", version = "0.0.1" }
 neochumby-macros = { path = "crates/neochumby-macros", version = "0.0.1" }
 neochumby-ncurses = { path = "crates/neochumby-ncurses", version = "0.0.1" }
