@@ -89,6 +89,7 @@ interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
 access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
 player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
+linux = "5.9"                        # the oldest Linux it runs on; absent: any, the stock 2.6.16 too
 ```
 
 An app can use any of these keys:
