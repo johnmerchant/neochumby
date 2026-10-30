@@ -1,0 +1,43 @@
+Description: ASoC: soc-pcm: apply symmetry only against another stream
+ A link with symmetric rates or sample bits rejects a stream's
+ hw_params that differ from its CPU DAI's, but once the stream has had
+ hw_params those are its own, and they stay until hw_free: a second
+ hw_params with other values was rejected against itself. OSS
+ emulation makes one as each setting changes, the first with its
+ defaults (8 kHz), so on the Chumby Classic's TSC2100, whose codec asks
+ for both symmetries, /dev/dsp refused any rate or format but those.
+ (5.9 checked the CPU DAIs' own symmetry alone, which the i.MX SSI
+ doesn't ask for.) A DAI that another stream has active is still held
+ to its parameters.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Fc77Z6fVVe4rWJxPT
+---
+diff --git a/sound/soc/soc-pcm.c b/sound/soc/soc-pcm.c
+index 3137c09..eec6cbb 100644
+--- a/sound/soc/soc-pcm.c
++++ b/sound/soc/soc-pcm.c
+@@ -599,6 +599,7 @@ static int soc_pcm_params_symmetry(struct snd_pcm_substream *substream,
+ 	if (symmetry)							\
+ 		for_each_rtd_cpu_dais(rtd, i, cpu_dai)			\
+ 			if (!snd_soc_dai_is_dummy(cpu_dai) &&		\
++			    snd_soc_dai_active(cpu_dai) > 1 &&		\
+ 			    cpu_dai->symmetric_##xxx &&			\
+ 			    cpu_dai->symmetric_##xxx != d.symmetric_##xxx) \
+ 				return snd_soc_ret(rtd->dev, -EINVAL,	\
+@@ -606,7 +607,13 @@ static int soc_pcm_params_symmetry(struct snd_pcm_substream *substream,
+ 						   #xxx, cpu_dai->name, cpu_dai->symmetric_##xxx, \
+ 						   d.name, d.symmetric_##xxx);
+
+-	/* reject unmatched parameters when applying symmetry */
++	/*
++	 * Reject unmatched parameters when applying symmetry, against a DAI
++	 * that another stream has active too. One this stream alone has
++	 * active holds only this stream's earlier parameters, which a
++	 * second hw_params may change (OSS emulation makes one as each
++	 * setting changes).
++	 */
+ 	__soc_pcm_params_symmetry(rate);
+ 	__soc_pcm_params_symmetry(channels);
+ 	__soc_pcm_params_symmetry(sample_bits);

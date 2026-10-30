@@ -69,6 +69,9 @@ or seen on a real device; where something wasn't investigated, it says so.
   **opened exclusively** ("Resource busy").
 - **Backlight:** `/proc/sys/sense1/brightness`, 0-65535. 9000 makes a
   pleasant night level. The `dimlevel` file next to it does nothing visible.
+  On the dist kernels it's a backlight class device, 0-100:
+  `/sys/class/backlight/pwm-backlight` on 5.9.16, `.../backlight` on the
+  device-tree kernels.
 
 ## Storage
 
@@ -117,7 +120,9 @@ or seen on a real device; where something wasn't investigated, it says so.
   `/proc/sys/sense1/spkmute` at 1; the stock players unmute while they play,
   so an app that plays sound must too. The master volume restored at boot
   comes from `/psp/volume` (`chumby_set_volume`), which can be 0. Set both
-  while playing and restore them afterwards, as the AirPlay app does.
+  while playing and restore them afterwards, as the AirPlay app does. On
+  the dist kernels the mute is the sound card's `Speaker Switch` instead,
+  which the session sets the same way.
 
 ## BusyBox 1.6 and the userland
 

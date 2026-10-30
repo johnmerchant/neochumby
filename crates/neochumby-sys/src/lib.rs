@@ -51,6 +51,8 @@ pub mod signal;
 pub mod speaker;
 pub mod time;
 
+#[cfg(target_os = "linux")]
+pub mod alsa;
 #[cfg(all(target_os = "linux", feature = "boot"))]
 pub mod boot;
 #[cfg(target_os = "linux")]

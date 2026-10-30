@@ -1,28 +1,36 @@
 #!/bin/sh
-# Builds the workloads, each twice from the same C: natively for the Chumby
-# (static musl, ARM926EJ-S, soft float) and to wasm32-wasip1 (zig's
-# wasi-libc; no threads, no SIMD), then the .wasm files to WAMR AOT with
-# wamrc ($WAMRC_FLAGS). Into build/out/{native,wasm,aot}.
-#   coremark   CoreMark (build/src/coremark), ITERATIONS=0: it calibrates
-#              itself to run for at least 10 s
-#   float      bench/float.c, the soft-float kernel
-#   fb         bench/fb.c, the framebuffer kernel
-#   startup    bench/genstart.py's ~200 KB module, whose main does nothing
-#   empty      an empty main, for the runtime's own start-up cost
+# Builds the workloads, each twice from the same source: natively for the
+# Chumby (static musl, ARM926EJ-S, soft float) and to wasm32-wasip1 (no
+# threads, no SIMD), then the .wasm files to WAMR AOT with wamrc
+# ($WAMRC_FLAGS). Into build/out/{native,wasm,aot}.
+#   coremark   CoreMark, in C (the submodule third_party/coremark),
+#              ITERATIONS=0: it calibrates itself to run for at least 10 s
+#   float      workloads/ (Rust), the soft-float kernel
+#   fb         workloads/ (Rust), the framebuffer kernel
+#   startup    workloads/ (Rust), a ~200 KB module whose main does nothing
+#   empty      workloads/ (Rust), an empty main, for the runtime's own
+#              start-up cost
 set -eu
 . "$(dirname "$0")/env.sh"
 o=$B/out
 mkdir -p "$o/native" "$o/wasm" "$o/aot" "$B/gen"
 # Wasm features: the MVP plus what wasi-libc's build expects and every
-# runtime here implements (no SIMD, no threads, no multivalue).
+# runtime here implements (no SIMD, no threads, no multivalue, no reference
+# types), in zig's names and in rustc's.
 WASM_CPU=${WASM_CPU:-mvp+bulk_memory+sign_ext+mutable_globals+nontrapping_fptoint}
+WASM_RUST_FEATURES=${WASM_RUST_FEATURES:-+bulk-memory,+sign-ext,+mutable-globals,+nontrapping-fptoint}
 native() { "$WB/tools/cc" -O2 -s "$@"; }
 # A 1 MiB stack, not zig's 16 MiB: initial memory is what some runtimes commit.
 wasm() { zig cc -target wasm32-wasi -mcpu="$WASM_CPU" -O2 -s -Wl,-z,stack-size=1048576 "$@"; }
 
 # CoreMark's `simple` port, with clock() (CPU time; and an emulated process
 # clock under WASI) swapped for CLOCK_MONOTONIC in microseconds.
-cm=$B/src/coremark
+cm=$WB/third_party/coremark
+if [ ! -f "$cm/core_main.c" ]; then
+  echo "$0: CoreMark is a submodule and isn't checked out:" >&2
+  echo "  git submodule update --init dev/wasmbench/third_party/coremark" >&2
+  exit 1
+fi
 port=$B/gen/coremark
 mkdir -p "$port"
 cp "$cm/simple/core_portme.h" "$port/"
@@ -38,12 +46,21 @@ native $cmdef -DFLAGS_STR='"-O2 native"' $cmsrc -o "$o/native/coremark"
 # shellcheck disable=SC2086
 wasm $cmdef -DFLAGS_STR='"-O2 wasm32-wasip1"' $cmsrc -o "$o/wasm/coremark.wasm"
 
-python3 -I "$WB/bench/genstart.py" "$B/gen/startup.c" "${STARTUP_FUNCS:-340}"
-echo 'int main(void) { return 0; }' > "$B/gen/empty.c"
-for w in "$WB/bench/float.c" "$WB/bench/fb.c" "$B/gen/startup.c" "$B/gen/empty.c"; do
-  n=$(basename "$w" .c)
-  native "$w" -o "$o/native/$n" -lm
-  wasm "$w" -o "$o/wasm/$n.wasm" -lm
+# The Rust workloads: natively with the toolchain tools/tree uses, and to
+# wasm32-wasip1 with the features above and a 1 MiB stack. Rust's std for
+# wasm32-wasip1 comes built with reference types, whose call_indirect names
+# its table in a 5-byte LEB that an MVP decoder refuses;
+# --compress-relocations writes it as the MVP's one zero byte.
+# STARTUP_FUNCS sets startup's size (289, the default: about 200 KB).
+wl=$WB/workloads/Cargo.toml
+CARGO_TARGET_ARMV5TE_UNKNOWN_LINUX_MUSLEABI_LINKER=$ROOT/tools/zigcc \
+  CARGO_TARGET_ARMV5TE_UNKNOWN_LINUX_MUSLEABI_RUSTFLAGS="-C link-self-contained=no -C target-cpu=arm926ej-s" \
+  cargo build --release --manifest-path "$wl" --target armv5te-unknown-linux-musleabi --target-dir "$B/cargo"
+CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C target-cpu=mvp -C target-feature=$WASM_RUST_FEATURES -C link-arg=-zstack-size=1048576 -C link-arg=--compress-relocations" \
+  cargo build --release --manifest-path "$wl" --target wasm32-wasip1 --target-dir "$B/cargo"
+for n in float fb startup empty; do
+  cp "$B/cargo/armv5te-unknown-linux-musleabi/release/$n" "$o/native/$n"
+  cp "$B/cargo/wasm32-wasip1/release/$n.wasm" "$o/wasm/$n.wasm"
 done
 
 # Soft float, ARMv5TE, the ARM926EJ-S: the runtime is built for the same.
