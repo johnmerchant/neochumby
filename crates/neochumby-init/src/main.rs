@@ -198,6 +198,7 @@ impl Init {
             return;
         }
         step("Mounting the stick on /mnt/usb", Status::Ok, "stick mounted on /mnt/usb");
+        seed_rng();
         if !is_executable("/mnt/usb/userhook2") {
             return;
         }
@@ -394,6 +395,31 @@ fn terminal(path: &str) -> Option<File> {
             kmsg(&format!("{path}: {e}"));
             None
         }
+    }
+}
+
+/// The random seed kept across boots, as Buildroot's urandom-scripts keeps
+/// it (BusyBox's seedrng, which its S01seedrng runs; the image has no init
+/// scripts to run it): on the stick, the one place a sideloaded boot may
+/// write that outlives it. seedrng credits a seed only if a boot of this
+/// device wrote it, and writes a fresh one at once, so none is used twice.
+/// Without it, Linux 5.18 and later wait for the jitter entropy source
+/// (seconds on the ARM926) before /dev/urandom answers.
+const SEED_DIR: &str = "/mnt/usb/.neochumby/seedrng";
+
+fn seed_rng() {
+    let _ = fs::create_dir_all(SEED_DIR);
+    let status = Command::new("seedrng")
+        .arg(format!("--seed-dir={SEED_DIR}"))
+        .env("PATH", PATH)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match status {
+        Ok(s) if s.success() => step("Seeding the random number generator", Status::Ok, "random seed from the stick"),
+        Ok(s) => step("Seeding the random number generator", Status::Failed, &format!("seedrng: {s}")),
+        Err(e) => step("Seeding the random number generator", Status::Failed, &format!("seedrng: {e}")),
     }
 }
 
