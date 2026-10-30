@@ -123,7 +123,8 @@ impl<'a> Launch<'a> {
         }
         let terminal = self.terminal.as_ref().map(|t| t.as_raw_fd());
         let process = if jail::jailed(self.app) {
-            jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep, self.storage.as_deref(), terminal)?
+            let given = jail::Given { storage: self.storage.as_deref(), terminal };
+            jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep, given)?
         } else {
             let mut cmd = Command::new(self.exe);
             cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", self.root).env("HOME", "/tmp");
