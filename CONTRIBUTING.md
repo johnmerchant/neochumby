@@ -139,7 +139,8 @@ neochumby's side of it: it puts a tree on a USB stick image, laid out as
 `tools/stick` lays one out, boots one of three profiles with the stick in
 the machine's USB port, and drives the result with the commands the
 scenarios use. It needs Python 3.9+ and QEMU with the machine
-(`emu/qemu/build`; qemu-chumby's README lists its build dependencies). No
+(`emu/qemu/build`; qemu-chumby's README lists its build dependencies; or
+`emu/qemu/fetch`, its prebuilt binary, headless on Linux). No
 root, no VM: it runs natively on Linux and macOS.
 
 | Profile | What boots | Needs |
