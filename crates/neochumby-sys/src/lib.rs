@@ -56,6 +56,8 @@ pub mod user;
 #[cfg(all(target_os = "linux", feature = "boot"))]
 pub mod boot;
 #[cfg(target_os = "linux")]
+pub mod evdev;
+#[cfg(target_os = "linux")]
 pub mod jail;
 #[cfg(target_os = "linux")]
 pub mod klog;

@@ -76,6 +76,14 @@ impl Identity {
         self.public
     }
 
+    /// `msg`'s Ed25519 signature by this key, which anyone holding
+    /// [`Identity::public`] can check. None in a build whose keys can't
+    /// sign (Noise's).
+    pub fn sign(&self, msg: &[u8]) -> Option<[u8; 64]> {
+        let pair = Ed25519KeyPair::from_pkcs8(&self.pkcs8).ok()?;
+        pair.sign(msg).as_ref().try_into().ok()
+    }
+
     fn from_pkcs8(pkcs8: Vec<u8>) -> io::Result<Identity> {
         let der = PrivateKeyDer::Pkcs8(PrivatePkcs8KeyDer::from(pkcs8.clone()));
         let signer = provider().key_provider.load_private_key(der).map_err(invalid)?;

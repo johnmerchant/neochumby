@@ -37,7 +37,7 @@ color = "7890a8"
 companion = "neochumby-logs-companion"
 neochumbyd = "optional"
 # The Chumby's logs, read-only, in its jail.
-access = ["screen", "touch", "logs"]
+access = ["fb", "touch", "logs"]
 
 [lints]
 workspace = true
