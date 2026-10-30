@@ -39,7 +39,11 @@ neochumbyd=${2:?usage: dev/emulate-powercut TREE NEOCHUMBYD OUT}
 out=${3:?usage: dev/emulate-powercut TREE NEOCHUMBYD OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$out"
-state=$out/state
+# The emulator's directory (the stick image, the console's log), in a
+# temporary directory removed on exit, as the other scenarios keep it,
+# rather than left in OUT.
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-powercut.XXXXXX")
+trap 'rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
 step() { echo "== $*"; }
 fail() {
@@ -102,7 +106,7 @@ mkdir -p "$out/psp0"
 api=127.0.0.1:17340
 "$neochumbyd" serve --state "$ndstate" --tree "$work" --api "$api" --nfs 127.0.0.1:12049 > "$out/neochumbyd.log" 2>&1 &
 server=$!
-trap 'kill $server 2>/dev/null || true' EXIT
+trap 'kill $server 2>/dev/null || true; rm -rf "$state"' EXIT
 nd() { "$neochumbyd" "$@" --state "$ndstate"; }
 # A clean stop: the stick is unmounted and flushed, a moment after.
 stopped() {
