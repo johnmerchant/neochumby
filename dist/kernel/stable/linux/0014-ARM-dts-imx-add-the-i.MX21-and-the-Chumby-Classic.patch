@@ -7,7 +7,9 @@ Description: ARM: dts: imx: add the i.MX21 and the Chumby Classic
  panel, the keypad port as GPIO (button, LCD power, speaker shutdown,
  Wi-Fi power), the TSC2100 on CSPI3, the accelerometer on CSPI1, the PWM
  backlight and three USB host ports. Its boot loader passes ATAGs, so
- the DTB is appended to the zImage.
+ the DTB is appended to the zImage. UART2 is enabled though nothing on
+ the board is wired to it, without pins: an emulated Chumby, which has no
+ network, reaches neochumbyd over it (ttymxc1).
 Author: John Merchant <john@johnmerchant.dev>
 Upstream-Status: Inappropriate [AI generated code]
 Signed-off-by: John Merchant <john@johnmerchant.dev>
@@ -48,7 +50,7 @@ new file mode 100644
 index 000000000..3e59f3afc
 --- /dev/null
 +++ b/arch/arm/boot/dts/nxp/imx/imx21-chumby-classic.dts
-@@ -0,0 +1,371 @@
+@@ -0,0 +1,377 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Chumby Classic (hardware 3.8): a Freescale i.MX21 with 64 MiB of SDRAM,
@@ -404,6 +406,12 @@ index 000000000..3e59f3afc
 +	pinctrl-names = "default";
 +	pinctrl-0 = <&pinctrl_uart1>;
 +	uart-has-rtscts;
++	status = "okay";
++};
++
++/* UART2 (ttymxc1): wired to nothing on the board, its pins left alone.
++ * An emulated Chumby talks to neochumbyd over it. */
++&uart2 {
 +	status = "okay";
 +};
 +

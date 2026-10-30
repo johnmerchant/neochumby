@@ -7,7 +7,6 @@
 //! and a [`Msg`].
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -27,7 +26,7 @@ use rustls::{
     SignatureScheme, StreamOwned,
 };
 
-use crate::{MAX_MSG, Msg, PublicKey, hex, invalid, pairing_code, unhex};
+use crate::{MAX_MSG, Msg, PublicKey, Stream as Transport, hex, invalid, pairing_code, unhex};
 
 const PAIRING_LABEL: &[u8] = b"EXPORTER-neochumby-pairing";
 
@@ -200,8 +199,8 @@ impl ClientCertVerifier for AnyEd25519Key {
 }
 
 enum Stream {
-    Client(StreamOwned<ClientConnection, TcpStream>),
-    Server(StreamOwned<ServerConnection, TcpStream>),
+    Client(StreamOwned<ClientConnection, Box<dyn Transport>>),
+    Server(StreamOwned<ServerConnection, Box<dyn Transport>>),
 }
 
 /// An open, authenticated connection.
@@ -217,7 +216,7 @@ pub struct Session {
 
 impl Session {
     /// The Chumby's side, its peer's key not yet checked.
-    pub(crate) fn client(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
+    pub(crate) fn client(tcp: Box<dyn Transport>, me: &Identity) -> io::Result<Session> {
         let mut config = ClientConfig::builder_with_provider(provider())
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(invalid)?
@@ -228,14 +227,14 @@ impl Session {
         let name = ServerName::try_from("neochumbyd").expect("a valid name");
         let conn = ClientConnection::new(Arc::new(config), name).map_err(invalid)?;
         let mut s = StreamOwned::new(conn, tcp);
-        handshake(&mut s.conn, &s.sock, None)?;
+        handshake(&mut s.conn, s.sock.as_mut(), None)?;
         let (peer, code) = finish(&s.conn, me.public, true)?;
         Ok(Session { stream: Stream::Client(s), peer, code, rbuf: Vec::new(), version: 0 })
     }
 
     /// neochumbyd's side, its peer's key not yet checked; the handshake by
     /// `deadline`, if one is given.
-    pub(crate) fn server(tcp: TcpStream, me: &Identity, deadline: Option<Instant>) -> io::Result<Session> {
+    pub(crate) fn server(tcp: Box<dyn Transport>, me: &Identity, deadline: Option<Instant>) -> io::Result<Session> {
         let mut config = ServerConfig::builder_with_provider(provider())
             .with_protocol_versions(&[&rustls::version::TLS13])
             .map_err(invalid)?
@@ -244,7 +243,7 @@ impl Session {
         config.send_tls13_tickets = 0;
         let conn = ServerConnection::new(Arc::new(config)).map_err(invalid)?;
         let mut s = StreamOwned::new(conn, tcp);
-        handshake(&mut s.conn, &s.sock, deadline)?;
+        handshake(&mut s.conn, s.sock.as_mut(), deadline)?;
         let (peer, code) = finish(&s.conn, me.public, false)?;
         Ok(Session { stream: Stream::Server(s), peer, code, rbuf: Vec::new(), version: 0 })
     }
@@ -260,10 +259,11 @@ impl Session {
         self.code.clone()
     }
 
-    pub fn tcp(&self) -> &TcpStream {
+    /// What the session runs over.
+    pub fn stream(&self) -> &dyn Transport {
         match &self.stream {
-            Stream::Client(s) => &s.sock,
-            Stream::Server(s) => &s.sock,
+            Stream::Client(s) => s.sock.as_ref(),
+            Stream::Server(s) => s.sock.as_ref(),
         }
     }
 
@@ -299,7 +299,7 @@ impl Session {
     }
 
     pub fn recv(&mut self) -> io::Result<Msg> {
-        self.tcp().set_read_timeout(None)?;
+        self.stream().set_read_timeout(None)?;
         loop {
             if let Some(m) = self.take()? {
                 return Ok(m);
@@ -314,7 +314,7 @@ impl Session {
         if let Some(m) = self.take()? {
             return Ok(Some(m));
         }
-        self.tcp().set_read_timeout(Some(t))?;
+        self.stream().set_read_timeout(Some(t))?;
         match self.fill() {
             Ok(()) => self.take(),
             Err(e) if matches!(e.kind(), io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut) => Ok(None),
@@ -356,9 +356,13 @@ impl Session {
 
 /// Runs the handshake to its end, by `deadline` if there is one. The
 /// socket's read timeout is put back as it was.
-fn handshake<D>(conn: &mut rustls::ConnectionCommon<D>, tcp: &TcpStream, deadline: Option<Instant>) -> io::Result<()> {
+fn handshake<D>(
+    conn: &mut rustls::ConnectionCommon<D>,
+    tcp: &mut dyn Transport,
+    deadline: Option<Instant>,
+) -> io::Result<()> {
     let was = tcp.read_timeout()?;
-    let mut io = crate::ByDeadline { tcp, deadline };
+    let mut io = crate::ByDeadline { tcp: &mut *tcp, deadline };
     let mut r = Ok(());
     while r.is_ok() && conn.is_handshaking() {
         r = conn.complete_io(&mut io).map(|_| ());

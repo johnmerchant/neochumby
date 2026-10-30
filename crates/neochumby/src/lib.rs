@@ -13,6 +13,7 @@ pub mod conf;
 pub mod debug;
 pub mod fb;
 pub mod input;
+pub mod line;
 pub mod session;
 pub mod settings;
 pub mod term;

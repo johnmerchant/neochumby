@@ -35,7 +35,6 @@
 //! functions.
 
 use std::io::{self, Read};
-use std::net::SocketAddr;
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -262,8 +261,13 @@ impl State {
     /// Keeps a request to pair, showing `code`: its id, for
     /// [`State::decision`] and [`State::withdraw`]. Refused while
     /// [`MAX_PENDING`] others wait.
-    pub fn request(&self, code: &str, name: &str, key: &PublicKey, addr: SocketAddr) -> io::Result<String> {
-        if parse_code(code).as_deref() != Some(code) || !valid_name(name) {
+    /// `from` is where it came from, one word (api::Origin).
+    pub fn request(&self, code: &str, name: &str, key: &PublicKey, from: &str) -> io::Result<String> {
+        if parse_code(code).as_deref() != Some(code)
+            || !valid_name(name)
+            || from.is_empty()
+            || from.contains(char::is_whitespace)
+        {
             return Err(bad("bad pairing request"));
         }
         if self.pending()?.len() >= MAX_PENDING {
@@ -272,7 +276,7 @@ impl State {
         let id = random_id()?;
         let mut f =
             std::fs::OpenOptions::new().write(true).create_new(true).open(self.dir.join("pending").join(&id))?;
-        io::Write::write_all(&mut f, format!("{code} {name} {} {}\n", hex(key), addr.ip()).as_bytes())?;
+        io::Write::write_all(&mut f, format!("{code} {name} {} {from}\n", hex(key)).as_bytes())?;
         Ok(id)
     }
 
@@ -544,7 +548,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("neochumbyd-pairing-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let st = State::open(dir.clone()).unwrap();
-        let addr: SocketAddr = "192.0.2.7:4000".parse().unwrap();
+        let addr = "192.0.2.7";
         let code = |n: u8| format!("{n:02x}00-0000-0000-0000-0000-0000-0000-0000");
         let (k1, k2) = (Identity::generate().unwrap().public(), Identity::generate().unwrap().public());
 

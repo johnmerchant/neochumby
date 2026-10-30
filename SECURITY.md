@@ -81,6 +81,12 @@ neochumbyd delivered.
   neochumbyd holds it to a 30-second deadline and caps how many it takes
   (overall, and from one address), and at most eight pairing requests wait
   at once.
+- **An emulated Chumby's serial line carries the same sessions.** It has
+  no network; `neochumbyd serve --listen-unix PATH` takes its line on a
+  Unix socket, and each connection on the line is handled as one over TCP:
+  the same handshake, keys and pairing. The line only carries bytes, so
+  anyone who can connect to that socket can ask to pair, as anyone on the
+  network can: keep it in a directory only you can reach.
 - **A Chumby pairing trusts whoever answers.** It can't tell neochumbyd's
   approval from an impostor's, so someone in the middle while it pairs
   can have it pin their key, even though neochumbyd never approves them.

@@ -1,0 +1,130 @@
+#!/bin/sh
+# Pairing and delivery=sync over the serial line, end to end: the emulated
+# Chumby has no network, and reaches a neochumbyd on this machine over its
+# second UART, which qemu-chumby joins to neochumbyd's --listen-unix
+# socket (dev/emulate start --server). The Chumby pairs through
+# neochumby-home's PAIR (the code it shows is the one neochumbyd lists),
+# keeps the pairing, and at its next start is neochumbyd's paired Chumby:
+# its log arrives over the developer link, `neochumbyd shot` gets its
+# screen, and with delivery=sync a first round fills set a of its stick,
+# which the boot after runs.
+#
+#   dev/emulate-link TREE NEOCHUMBYD OUT
+#
+# TREE from tools/tree, with neochumby-sync; NEOCHUMBYD the neochumbyd
+# built with it, for this machine. Only the session, its receiver and
+# home are synced, so that a round over the line (about 100 KB/s) takes a
+# minute or so, not the tree's apps. A real Chumby is skipped: pairing one
+# is its owner's to do.
+set -eu
+tree=${1:?usage: dev/emulate-link TREE NEOCHUMBYD OUT}
+neochumbyd=${2:?usage: dev/emulate-link TREE NEOCHUMBYD OUT}
+out=${3:?usage: dev/emulate-link TREE NEOCHUMBYD OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$out"
+state=$out/state
+emu() { "$dev/emulate" --state "$state" "$@"; }
+nd() { "$neochumbyd" "$@" --state "$out/nd"; }
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the log:"
+  emu log || true
+  echo "-- neochumbyd's log:"
+  cat "$out/neochumbyd.log" || true
+  emu stop || true
+  exit 1
+}
+backend=$(emu backend)
+slow=$(emu scale)
+if [ "$backend" = device ]; then
+  echo "dev/emulate-link: skipped: pairing a real Chumby is its owner's to do"
+  exit 77
+fi
+[ -x "$tree/neochumby-sync" ] || fail "$tree has no neochumby-sync (a tree with delivery=sync)"
+
+# The session, its receiver and hook, and the home screen.
+work=$out/tree
+rm -rf "$work" "$out/nd" "$out/psp0"
+mkdir -p "$work/apps" "$out/psp0"
+for f in "$tree"/*; do
+  [ -f "$f" ] && cp -p "$f" "$work/"
+done
+cp -Rp "$tree/apps/home" "$work/apps/"
+
+# The line's socket: a short path, as a Unix socket's must be.
+sockdir=$(mktemp -d /tmp/ncline.XXXXXX)
+sock=$sockdir/line.sock
+"$neochumbyd" serve --state "$out/nd" --tree "$work" --api 127.0.0.1:0 --nfs 127.0.0.1:0 \
+  --listen-unix "$sock" > "$out/neochumbyd.log" 2>&1 &
+server=$!
+trap 'kill $server 2>/dev/null || true; rm -rf "$sockdir"' EXIT
+
+# Until COMMAND succeeds, within SECS.
+until_ok() {
+  secs=$1
+  shift
+  i=0
+  until "$@"; do
+    i=$((i + 1))
+    [ "$i" -lt $((secs * 10 * slow)) ] || return 1
+    sleep 0.1
+  done
+}
+listening() { [ -S "$sock" ]; }
+# The Chumby's name is its own (the stock firmware's host name, else
+# chumby), and its request says it.
+asking() { nd pairing | sed -n 's/^asking *[a-z0-9_-]* *code \([0-9a-f-]*\).*/\1/p'; }
+asking_name() { nd pairing | sed -n 's/^asking *\([a-z0-9_-]*\) .*/\1/p'; }
+has_asking() { [ -n "$(asking)" ]; }
+shown() { emu log | sed -n 's/.*neochumby-home: pairing with .*, showing \([0-9a-f-]*\).*/\1/p' | tail -n 1; }
+shows_code() { [ "$(shown)" = "$code" ]; }
+kept() { emu kept >/dev/null 2>&1; }
+logged() { nd log "$name" 2>/dev/null | grep -q "$1"; }
+until_ok 10 listening || fail "neochumbyd didn't start"
+
+step "the line comes up, and PAIR pairs over it"
+size=$(du -sm "$work" | cut -f1)
+emu start --psp "$out/psp0" --size $((size * 3 + 32)) --server "$sock" "$work"
+emu wait log 'neochumby: neochumbyd over the serial line' $((60 * slow)) || fail "the session didn't open the line"
+emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
+until_ok 30 grep -q 'serial line .* connected' "$out/neochumbyd.log" || fail "the emulator didn't connect to neochumbyd"
+if [ "$backend" = dist ]; then
+  # dist's session reads touches from /dev/input/event0, which there is the
+  # top button (CONTRIBUTING, the smoke scenario), so PAIR can't be tapped.
+  emu stop
+  echo "dev/emulate-link: skipped: the line came up, but on dist no tap reaches the session to pair"
+  exit 77
+fi
+emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
+emu tap 80 220 # PAIR
+until_ok 60 has_asking || fail "the Chumby didn't ask to pair"
+code=$(asking)
+name=$(asking_name)
+until_ok 10 shows_code || fail "the Chumby shows $(shown), neochumbyd lists $code"
+grep -q "$name at serial-line-.* asks to pair" "$out/neochumbyd.log" || fail "the request didn't come over the line"
+nd approve "$code"
+emu wait log 'neochumby-home: paired with serial' $((30 * slow)) || fail "the Chumby didn't hear it was approved"
+until_ok 30 kept || fail "the Chumby didn't keep the pairing"
+nd set "$name" delivery=sync
+
+step "paired, the next start is neochumbyd's Chumby, and syncs"
+emu stop
+emu start --server "$sock" "$work"
+until_ok 120 logged 'neochumby: opening home' || fail "neochumbyd has no log from the paired Chumby"
+nd shot "$name" "$out/screen.png" || fail "neochumbyd got no screenshot over the line"
+emu wait log 'neochumby-sync: set a is live from the next boot' $((600 * slow)) || fail "the first round didn't finish"
+# The marker and `current` are written last, and may still be in the
+# Chumby's cache: flushed from its console where it has one, else by the
+# kernel within half a minute.
+emu exec sync >/dev/null 2>&1 || sleep $((35 * slow))
+emu stop
+cp "$state/stick.img" "$out/synced.img"
+
+step "the boot after runs the synced set"
+emu start --boot --stick "$out/synced.img" --server "$sock"
+emu wait log "apps from the stick's set a" $((60 * slow)) || fail "the boot hook didn't run set a"
+until_ok 120 logged 'neochumby-sync: up to date' || fail "the next round didn't find the set up to date"
+emu stop
+
+echo "dev/emulate-link: all passed"

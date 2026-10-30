@@ -66,6 +66,9 @@
 //!   --unsandboxed      run apps' server programs and companions without
 //!                      a sandbox, where there is none (neither this
 //!                      system's nor --app-uids; confine.rs); never as root
+//!   --listen-unix PATH also takes Chumbys on serial lines at this Unix
+//!                      socket: an emulated Chumby's, which has no
+//!                      network (line.rs)
 
 mod admin;
 mod api;
@@ -73,6 +76,7 @@ mod companion;
 mod confine;
 mod dev;
 mod isolate;
+mod line;
 mod mcp;
 mod nfs;
 mod png;
@@ -118,11 +122,12 @@ struct Args {
     api: String,
     app_uids: Option<String>,
     unsandboxed: bool,
+    listen_unix: Option<PathBuf>,
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed]"
+        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed] [--listen-unix PATH]"
     );
     std::process::exit(2)
 }
@@ -142,6 +147,7 @@ fn args() -> Args {
         api: format!("0.0.0.0:{}", neochumby_proto::API_PORT),
         app_uids: None,
         unsandboxed: false,
+        listen_unix: None,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -151,6 +157,7 @@ fn args() -> Args {
             "--tree" => a.tree = Some(value().into()),
             "--nfs" => a.nfs = value(),
             "--api" => a.api = value(),
+            "--listen-unix" => a.listen_unix = Some(value().into()),
             "-f" | "--follow" => a.follow = true,
             "--replace" => a.replace = true,
             "--hold" => a.hold = Some(value()),
@@ -389,6 +396,11 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
     let server_state = state.clone();
 
     let listener = TcpListener::bind(&a.api).unwrap_or_else(|e| fail(format!("{}: {e}", a.api)));
+    let lines = a.listen_unix.as_ref().map(|p| {
+        let l = line::listen(p).unwrap_or_else(|e| fail(format!("{}: {e}", p.display())));
+        eprintln!("neochumbyd: serial lines on {}", p.display());
+        l
+    });
     let api = Arc::new(api::Api {
         state,
         identity,
@@ -399,7 +411,12 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
         links: Default::default(),
         confine: confine.clone(),
     });
-    std::thread::spawn(move || api::serve(listener, api));
+    let limits = Arc::new(api::Limits::default());
+    if let Some(l) = lines {
+        let (api, limits) = (api.clone(), limits.clone());
+        std::thread::spawn(move || line::serve(l, api, limits));
+    }
+    std::thread::spawn(move || api::serve_with(listener, api, limits));
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));
     let (servers, failed) = rt.block_on(async {

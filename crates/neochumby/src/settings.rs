@@ -7,11 +7,10 @@
 //!   /psp/neochumby.settings   key=value lines, as neochumbyd last sent them
 
 use std::io;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::time::Duration;
 
-use neochumby_proto::{Identity, Session, Settings, unhex_key, version};
+use neochumby_proto::{Identity, Session, Settings, Stream as _, unhex_key, version};
 
 use crate::conf::{self, Paired};
 
@@ -51,14 +50,10 @@ fn fetch(p: &Paired) -> io::Result<Settings> {
 pub fn connect(p: &Paired) -> io::Result<(Session, Settings)> {
     let me = Identity::from_secret(&p.secret)?;
     let server_key = unhex_key(&p.server_key)?;
-    let addr = (p.server.as_str(), p.api_port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address"))?;
-    let tcp = TcpStream::connect_timeout(&addr, CONNECT)?;
-    tcp.set_read_timeout(Some(ANSWER))?;
-    tcp.set_write_timeout(Some(ANSWER))?;
-    let mut s = Session::connect(tcp, &me, &server_key)?;
+    let stream = crate::line::connect(&p.server, p.api_port, CONNECT)?;
+    stream.set_read_timeout(Some(ANSWER))?;
+    stream.set_write_timeout(Some(ANSWER))?;
+    let mut s = Session::connect(stream, &me, &server_key)?;
     // A neochumbyd from before Msg::Config sends nothing after Welcome:
     // that times out, and the kept settings are used.
     let settings = version::hello(&mut s, conf::name(), ANSWER)?;
