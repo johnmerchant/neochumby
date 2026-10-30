@@ -299,6 +299,22 @@ impl Jail {
         Ok(self)
     }
 
+    /// The host's file `from`, bound over the file already at `to`: one in
+    /// a directory bound before it, which may be read-only (nothing is made
+    /// there; the mount covers what is).
+    pub fn bind_over(&mut self, from: &Path, to: &str) -> io::Result<&mut Jail> {
+        let target = self.host(to)?;
+        self.steps.push(Step::Mount {
+            what: "a bind mount over a file",
+            source: cstring(from.as_os_str().as_bytes())?,
+            target,
+            fstype: None,
+            flags: libc::MS_BIND as libc::c_ulong,
+            data: None,
+        });
+        Ok(self)
+    }
+
     /// A file holding `contents`, owned by `uid`:`gid`.
     pub fn file(&mut self, path: &str, contents: Vec<u8>, mode: u32, uid: u32, gid: u32) -> io::Result<&mut Jail> {
         if let Some((p, _)) = path.rsplit_once('/').filter(|(p, _)| !p.is_empty()) {
