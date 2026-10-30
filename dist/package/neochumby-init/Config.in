@@ -1,0 +1,9 @@
+config BR2_PACKAGE_NEOCHUMBY_INIT
+	bool "neochumby-init"
+	depends on BR2_PACKAGE_HOST_RUSTC_TARGET_ARCH_SUPPORTS
+	select BR2_PACKAGE_HOST_RUSTC
+	help
+	  ncinit, the image's /init (crates/neochumby-init): mounts the
+	  kernel's file systems, loads each device's module as the
+	  device appears, runs a neochumby stick's boot hook and keeps a
+	  shell on the console and on the screen.

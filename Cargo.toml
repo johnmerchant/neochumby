@@ -1,5 +1,8 @@
 [workspace]
 resolver = "3"
+# Its own workspace: Buildroot builds it for the dist image without the
+# apps, whose third-party crates are submodules.
+exclude = ["crates/neochumby-init"]
 members = [
     "crates/neochumby",
     "crates/neochumby-macros",

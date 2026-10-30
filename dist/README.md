@@ -83,12 +83,12 @@ firmware, so it stays local (`run-demo.py`).
 | --- | --- |
 | `configs/chumby_classic_defconfig` | The Buildroot configuration |
 | `board/chumby-classic/linux.fragment` | Our sideload kernel options on top of `imx_v4_v5_defconfig`. `dist/build` fails if any of them didn't make it into the kernel |
-| `board/chumby-classic/rootfs/init` | The sideload init: checks the sideload marker, loads the NAND modules only when it is absent, runs a neochumby stick, and runs a shell on the serial console and, when no stick's hook has the screen, one on the screen (tty1) |
+| `package/neochumby-init/` | `/init`: ncinit, from `crates/neochumby-init`, built by Buildroot's own Rust and linked statically. It checks the sideload marker and loads the NAND modules only when it is absent (and never otherwise, whatever device asks), loads every other module as its device appears (its modalias against depmod's `modules.alias`, for the devices there at boot too), runs a neochumby stick, keeps a shell on the serial console and, when no stick's hook has the screen, one on the screen (tty1), and reaps every orphan |
 | `patches/` | The kernel tarball's hash, which Buildroot checks, and our patches, per kernel version. Every kernel has Spleen 5x8 (`lib/fonts: add Spleen 5x8`), the screen console's only font: 64x30 characters on the 320x240 screen |
 | `Containerfile` | The build's Linux |
 
-What's in it so far: the kernel with the NAND recovery modules, BusyBox,
-`kmod`, `wpa_supplicant` and the rt73's firmware. Still to come: our own init
-(`neochumby-init`), the Chumby's own devices (the squeeze switch, the
+What's in it so far: the kernel with the NAND recovery modules, ncinit,
+BusyBox, `wpa_supplicant` and the rt73's firmware. Still to come: the
+Chumby's own devices (the squeeze switch, the
 accelerometer, the backlight and the speaker mute, which were out-of-tree
 drivers on 2.6.16), and the hook that kexecs.

@@ -54,6 +54,12 @@ jobs:
       - run: cargo clippy --all-targets -p neochumby-logs -- -D warnings
       - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
+      # ncinit, a workspace of its own (Buildroot builds it for the dist
+      # image), and the system calls only it uses.
+      - run: cargo fmt --check --manifest-path crates/neochumby-init/Cargo.toml
+      - run: cargo clippy --all-targets --manifest-path crates/neochumby-init/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path crates/neochumby-init/Cargo.toml
+      - run: cargo test -p neochumby-sys --features boot
       - run: cargo test -p neochumby-logs
       # dev/emulate, without firmware or QEMU: the images it makes (through
       # qemu-chumby's chumby_machine) against chumby-image's, and its
@@ -171,7 +177,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: build/sideload-dist
-          key: neochumby-dist-image-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+          key: neochumby-dist-image-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/Config.in', 'dist/configs/**', 'dist/board/**', 'dist/package/**', 'dist/patches/**', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
 
       # Buildroot's work, in two: the downloads and ccache, restored from
       # the nearest earlier build whatever changed, and the output, only for
@@ -187,7 +193,7 @@ jobs:
           path: |
             ${{ runner.temp }}/neochumby-dist/dl
             ${{ runner.temp }}/neochumby-dist/ccache
-          key: neochumby-dist-ccache-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+          key: neochumby-dist-ccache-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/Config.in', 'dist/configs/**', 'dist/board/**', 'dist/package/**', 'dist/patches/**', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
           restore-keys: neochumby-dist-ccache-
 
       - name: Restore Buildroot's output
@@ -198,7 +204,7 @@ jobs:
           path: |
             ${{ runner.temp }}/neochumby-dist/buildroot-*
             ${{ runner.temp }}/neochumby-dist/output
-          key: neochumby-dist-output-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/configs/**', 'dist/board/**', 'dist/patches/**') }}
+          key: neochumby-dist-output-${{ hashFiles('dist/build', 'dist/Containerfile', 'dist/Config.in', 'dist/configs/**', 'dist/board/**', 'dist/package/**', 'dist/patches/**', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
 
       - name: Build the sideload image
         if: steps.image.outputs.cache-hit != 'true'
