@@ -20,7 +20,7 @@ title = "BENCH"
 exec = "neochumby-wasmbench"
 colour = "ffaa00"
 # system: /proc, for each run's peak RSS (VmHWM).
-access = ["screen", "touch", "system"]
+access = ["fb", "touch", "system"]
 
 [profile.release]
 opt-level = 2
