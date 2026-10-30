@@ -5,12 +5,15 @@
 #   wamr       WebAssembly Micro Runtime (2.4.3 and a little after), iwasm
 #              and wamrc
 #   wasm3      wasm3's interpreter and CLI
-#   coremark   EEMBC's CoreMark
+#
+# CoreMark, the one C workload, is a submodule (third_party/coremark),
+# pinned to the commit the numbers came from.
 #
 # Then, in order: tools/wamr.sh, tools/wamrc.sh, tools/wasm3.sh,
-# tools/wasmi.sh, tools/wasmtime.sh, tools/workloads.sh, tools/stage.sh and
-# tools/tree.sh; tools/emu.sh runs it on the emulator, and on a Chumby
-# apps/wasmbench of build/tree is opened from home.
+# tools/wasmi.sh, tools/workloads.sh, tools/wasmtime.sh (which compiles the
+# workloads), tools/stage.sh and tools/tree.sh; tools/emu.sh runs it on the
+# emulator, and on a Chumby apps/wasmbench of build/tree is opened from
+# home.
 set -eu
 here=$(cd "$(dirname "$0")/.." && pwd)
 src=$here/build/src
@@ -28,4 +31,3 @@ get() {
 }
 get wamr https://github.com/bytecodealliance/wasm-micro-runtime f8ed1f442969c806ced7b127d4e4d397bf051737
 get wasm3 https://github.com/wasm3/wasm3 28ecb9af6d2040e474a70f7cb7f43666740141fb
-get coremark https://github.com/eembc/coremark 1f483d5b8316753a742cbf5590caf5bd0a4e4777

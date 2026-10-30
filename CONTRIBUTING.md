@@ -76,7 +76,7 @@ later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
 verify CI's images' attestations with it). `dev/setup --check` says which
 are missing and how to get them on this system. `git submodule update
 --init` checks out the third-party C (Doom, Quake, fastfetch, htop, procps,
-ncurses) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
+ncurses, and dev/wasmbench's CoreMark) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
 only `classic/build` needs.
 
 The server half (neochumbyd and companions) is built for x86_64 Linux by
