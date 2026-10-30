@@ -18,7 +18,7 @@ cc = "1"
 [package.metadata.neochumby]
 title = "CLOCK"
 exec = "neochumby-clock"
-access = ["screen", "touch", "terminal"]
+tap = "q"
 color = "3c8cd0"
 
 [lints]

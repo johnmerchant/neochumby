@@ -46,8 +46,8 @@ fn main() {
     // seconds. UTF-8, for the pot and the message border (musl's C locale
     // is ASCII).
     cmd.args(["cbonsai", "-l", "-i", "-w", "20"]).env("LANG", "C.UTF-8");
-    // A tap types q, which quits it.
-    match neochumby::term::run_tapping(cmd, b"q") {
+    // A tap types q (its manifest's tap), which quits it.
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-bonsai: cbonsai: {s}"),
         Ok(_) => {}
         Err(e) => {
