@@ -55,10 +55,10 @@ MMU off — but it can keep the unsafe surface small and reviewable.
   `flashcp` or `nandwrite` strings;
   `run-demo.py` checks the binary before boot and fails if one appears.
 - **5.9.16 is sideload by default.**  The kernel has no NAND driver built in;
-  the NAND drivers are modules in the initramfs.  `/init` loads them only
-  when the sideload marker is absent (the flashed case).  In the normal
-  sideloaded path there is no `/proc/mtd`, no `/dev/mtd*`, no
-  `/sys/class/mtd`, and no NAND in dmesg.
+  the NAND drivers are modules in the initramfs, which only root loads
+  (`modprobe mxc_nand`); `/init` never does.  So there is no `/proc/mtd`,
+  no `/dev/mtd*`, no `/sys/class/mtd`, and no NAND in dmesg until root
+  asks.
 - **The demo has one host-side NAND-image preparation step.**  `mk_psp_nand.py`
   copies the sanitized original into a separate `nand-scratch.img` and writes
   the PSP partition in that copy, so the stock boot can find the sideloader in
@@ -82,7 +82,7 @@ Audit of the tree:
 | `kernel/sideload-only.config`, `kernel/*.patch` | sideload-only build: `CONFIG_MTD=n`; no NAND platform device on MX21ADS |
 | `kernel/build.sh` | downloads/builds the sideload-only zImage; no NAND access |
 | `dist/board/chumby-classic/linux.fragment` | sideload recovery build: MTD/NAND as modules |
-| `dist/board/chumby-classic/rootfs/init` | loads the NAND modules only when the sideload marker is absent |
+| `crates/neochumby-init` (ncinit, the image's `/init`) | never loads the NAND modules; only root does |
 
 ## Result
 
@@ -235,8 +235,8 @@ container and writes the **sideload recovery** image: the zImage has the
 initramfs built in, so it is self-contained when flashed and when handed off
 by the sideloader.  The same initramfs is also written beside it for
 userhook2 or another kexec path.  The kernel has no NAND driver built in; the
-NAND modules are in the initramfs, and `/init` loads them only when the
-sideload marker is absent (the flashed case).
+NAND modules are in the initramfs, and only root loads them (`modprobe
+mxc_nand`); `/init` never does.
 
 ```sh
 ../../dist/build build      # -> build/sideload-zImage, build/sideload-rootfs.cpio.gz
@@ -302,8 +302,9 @@ ATAGS command line from the sideloader:
 `console=ttymxc0,115200 rdinit=/init neochumby.sideloaded=1`.
 
 To exercise the recovery path, boot `sideload-zImage` directly with no
-external initramfs and no marker.  Its built-in initramfs sees no marker,
-loads the NAND modules, and prints `/proc/mtd`:
+external initramfs and no marker.  Its built-in initramfs sees no marker
+and leaves the NAND modules to root; as root, `modprobe cmdlinepart;
+modprobe mxc_nand && modprobe mtdblock` then gives `/proc/mtd`:
 
 ```sh
 qemu-system-arm -M chumby-classic \
@@ -323,9 +324,10 @@ KERNEL=build/sideload-zImage \
 python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
 ```
 
-It fails unless the log shows the no-marker path, the NAND modules loading,
-`mtd0:`, `/dev/mtdblock0`, `mxc_nand` in `/proc/modules`, and the recovery
-shell.  The sideloaded path is `run-demo.py`, which needs the user's own
+It fails unless the log shows the no-marker path, the NAND modules left
+unloaded, and the recovery shell; then, after root's modprobe on the
+console, `mtd0` in `/proc/mtd`, `/dev/mtdblock0` and `mxc_nand` in
+`/proc/modules`.  The sideloaded path is `run-demo.py`, which needs the user's own
 stock zImage and NAND image.
 
 CI's `sideload` job (`.github/workflows/ci.yml`) runs this recovery test,

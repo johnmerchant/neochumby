@@ -7,16 +7,11 @@ Chumby changes: a reboot goes back to the stock firmware, which kexecs
 again.
 
 **sideload.**  The kernel has no NAND driver built in.  The NAND drivers are
-modules in the initramfs, and `/init` loads them only when the kernel was
-booted without the sideloader's `neochumby.sideloaded=1` marker — that is,
-when the image was flashed instead of handed off.  A normal sideload never
-loads them, so `/proc/mtd` and `/dev/mtd*` stay absent.  If someone does
-flash the image, the built-in initramfs still boots and can load NAND for
-recovery instead of leaving the Chumby unusable.
-
-This is a deliberate trade-off: the image carries the NAND modules so a
-mistaken flash is recoverable.  Root can still load them deliberately; the
-normal init policy does not.
+modules in the initramfs, and nothing loads them but root (`modprobe
+mxc_nand`): `/init` never does, flashed or sideloaded, whatever device asks.
+So `/proc/mtd` and `/dev/mtd*` stay absent until root asks for them.  If
+someone does flash the image, it still boots, and root can load NAND for
+recovery.
 
 ```
 dist/build OUT        # OUT/sideload-zImage and OUT/sideload-rootfs.cpio.gz
@@ -185,13 +180,13 @@ firmware, so it stays local (`run-demo.py`).
 | --- | --- |
 | `configs/chumby_classic_defconfig` | The Buildroot configuration (5.9.16); `chumby_classic_stable_defconfig` and `_mainline_defconfig` the tracks', each with its pinned version |
 | `board/chumby-classic/linux.fragment` | Our sideload kernel options on top of `imx_v4_v5_defconfig` (5.9.16; a track's is `kernel/TRACK/linux.fragment`). `dist/build` fails if any of them didn't make it into the kernel |
-| `package/neochumby-init/` | `/init`: ncinit, from `crates/neochumby-init`, built by Buildroot's own Rust and linked statically. It checks the sideload marker and loads the NAND modules only when it is absent (and never otherwise, whatever device asks), loads every other module as its device appears (its modalias against depmod's `modules.alias`, for the devices there at boot too), runs a neochumby stick, keeps a shell on the serial console and, when no stick's hook has the screen, one on the screen (tty1), and reaps every orphan |
+| `package/neochumby-init/` | `/init`: ncinit, from `crates/neochumby-init`, built by Buildroot's own Rust and linked statically. It never loads the NAND's drivers (only root does, with modprobe), loads every other module as its device appears (its modalias against depmod's `modules.alias`, for the devices there at boot too), runs a neochumby stick, keeps a shell on the serial console and, when no stick's hook has the screen, one on the screen (tty1), and reaps every orphan |
 | `patches/` | 5.9.16's tarball hash, which Buildroot checks, and its patches (`linux/5.9.16/`), and the headers' hash |
 | `kernel/stable/`, `kernel/mainline/` | Each track's patches and its pin's hash (`linux/`), and its kernel options (`linux.fragment`): above. Every kernel's series has Spleen 5x8 (`lib/fonts: add Spleen 5x8`), the screen console's only font: 64x30 characters on the 320x240 screen |
 | `kernel-sync` | Moves the tracks' pins to kernel.org's, verified (CI's kernel-sync job) |
 | `Containerfile` | The build's Linux |
 
-What's in it so far: the kernel with the NAND recovery modules, ncinit,
+What's in it so far: the kernel with the NAND recovery modules (for root), ncinit,
 BusyBox, `wpa_supplicant` and the rt73's firmware. Still to come: the
 Chumby's own devices (the squeeze switch, the
 accelerometer, the backlight and the speaker mute, which were out-of-tree
