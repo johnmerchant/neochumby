@@ -257,10 +257,12 @@ passes where, so far:
 | `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
 | `pairing`, `powercut` | skipped | skipped | they need a neochumbyd the Chumby can reach, and it has no network |
 
-The session on dist still uses the stock kernel's device nodes
-(`/dev/switch`, `/dev/accel`, `/proc/sys/sense1`), where 5.9.16 offers
-evdev, IIO, the backlight class and ALSA: the scenarios that need devices
-pass there once the session (or dist) bridges the two.
+The session on dist still uses the stock kernel's `/dev/switch` and
+`/dev/accel`, where 5.9.16 offers evdev and IIO: the scenarios that need
+devices pass there once the session (or dist) bridges the two. The
+backlight and the speaker's mute it already finds as each kernel has them:
+`/proc/sys/sense1` on 2.6.16, else the backlight class and the sound
+card's `Speaker Switch`.
 
 **boot** (`dev/emulate-boot TREE OUT`): the boot runs the stick's hook,
 the hook runs the session from the stick, and home opens and draws (with
@@ -590,9 +592,10 @@ yours. The session also stops your stream:
 
 **The backlight.** Only root may set it. The start app and its service
 may write `brightness <n>` (0, off, to 65535, full), and carry on. The
-session writes `/proc/sys/sense1/brightness`, and puts back the level the
-Chumby booted with at CHUMBY MODE. From any other app it's refused and
-logged.
+session writes `/proc/sys/sense1/brightness` (on a newer kernel without
+it, the first `/sys/class/backlight` device, scaled to its
+`max_brightness`), and puts back the level the Chumby booted with at
+CHUMBY MODE. From any other app it's refused and logged.
 
 In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
 `Pipe::brightness(n)`.

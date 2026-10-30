@@ -204,7 +204,10 @@ firmware, so it stays local (`run-demo.py`).
 | `Containerfile` | The build's Linux |
 
 What's in it so far: the kernel with the NAND recovery modules (for root), ncinit,
-BusyBox, `wpa_supplicant` and the rt73's firmware. Still to come: the
-Chumby's own devices (the squeeze switch, the
-accelerometer, the backlight and the speaker mute, which were out-of-tree
-drivers on 2.6.16), and the hook that kexecs.
+BusyBox, `wpa_supplicant` and the rt73's firmware. The backlight is a
+backlight class device (`pwm-backlight`, levels 0-100) and the speaker's
+mute the sound card's `Speaker Switch` (the machine driver's DAPM pin on
+keypad column 4), which the session uses where 2.6.16 has
+`/proc/sys/sense1`. Still to come: the Chumby's own devices as the session
+opens them (the squeeze switch and the accelerometer, which were
+out-of-tree drivers on 2.6.16), and the hook that kexecs.
