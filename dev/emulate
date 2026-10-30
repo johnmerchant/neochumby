@@ -69,8 +69,9 @@ a command line, and where the settings go:
            (docs/legal.md)
   dist     neochumby's Linux 5.9.16: --kernel, or NEOCHUMBY_EMU_DIST_KERNEL,
            else build/sideload-dist/sideload-zImage, fetched or built
-           (below). NEOCHUMBY_DIST_KERNEL=7.2.13 (as dist/build takes it)
-           boots 7.2.13 instead, from build/sideload-dist-7.2.13. Its /init
+           (below). NEOCHUMBY_DIST_KERNEL=stable or mainline (as
+           dist/build takes it) boots that kernel track instead, from
+           build/sideload-dist-stable or -mainline. Its /init
            mounts the stick and runs its userhook2. No proprietary
            firmware: CI runs it
   classic  Linux 2.6.16 from Chumby's GPL source with a busybox initramfs

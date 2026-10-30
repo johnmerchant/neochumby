@@ -443,7 +443,7 @@ Or take CI's build of it, for exactly this checkout's inputs, from the
 needs `gh`, logged in) before anything is unpacked:
 
 ```sh
-dist/fetch build/sideload-dist   # the same files; --kernel 7.2.13 for 7.2.13
+dist/fetch build/sideload-dist   # the same files; --kernel stable or mainline for those kernels
 ```
 
 It refuses when the inputs have local changes or have no published build
