@@ -259,7 +259,16 @@ mod tests {
     fn isolated() {
         use std::os::fd::AsRawFd;
         let (a, b) = std::os::unix::net::UnixStream::pair().unwrap();
-        let other = std::fs::File::open("/dev/null").unwrap();
+        // Not 3, which isolate gives `b`: another test may have just closed
+        // it. Those opened on the way are kept open until the end.
+        let mut held = Vec::new();
+        let other = loop {
+            let f = std::fs::File::open("/dev/null").unwrap();
+            if f.as_raw_fd() != 3 {
+                break f;
+            }
+            held.push(f);
+        };
         crate::fd::set_cloexec(std::os::fd::AsFd::as_fd(&other), false).unwrap();
         let mut cmd = Command::new("/bin/sh");
         cmd.args(["-c", "[ \"$(ps -o pgid= -p $$ | tr -d ' ')\" = $$ ] || exit 2; case $(ps -o tty= -p $$) in *[!?\\ ]*) exit 5;; esac; echo hi >&3 || exit 3; [ -e /dev/fd/$N ] && exit 4; exit 0"]);
