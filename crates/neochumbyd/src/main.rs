@@ -368,6 +368,8 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
     neochumby_sys::privilege::add_to_umask(0o007);
     state.secure().unwrap_or_else(|e| fail(format!("closing the state directory to other users: {e}")));
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
+    // The same key again, to sign the tree's manifest for NFS (nfs.rs).
+    let signer = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
     // Requests a daemon before this one kept: no one waits on them now.
     state.clear_pending().unwrap_or_else(|e| fail(format!("pending: {e}")));
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
@@ -402,9 +404,8 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));
     let (servers, failed) = rt.block_on(async {
         let mut term = signal(SignalKind::terminate()).unwrap_or_else(|e| fail(e));
-        let listener = NFSTcpListener::bind(&a.nfs, nfs::TreeFs::new(tree.clone()))
-            .await
-            .unwrap_or_else(|e| fail(format!("{}: {e}", a.nfs)));
+        let fs = nfs::TreeFs::new(tree.clone(), Box::new(move |m| signer.sign(m)));
+        let listener = NFSTcpListener::bind(&a.nfs, fs).await.unwrap_or_else(|e| fail(format!("{}: {e}", a.nfs)));
         // Last, so nothing above can fail with server programs running.
         let servers = server::start(&tree, &a.state, &server_state, &confine);
         let failed = tokio::select! {

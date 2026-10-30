@@ -6,6 +6,8 @@
 #   OUT/neochumby-sync   the receiver for delivery=sync (not on a stick made
 #                        by tools/stick)
 #   OUT/userhook2        the boot hook, which pairing installs
+#   OUT/neochumby-boot   what checks a tree over NFS before it runs, which
+#                        pairing and the session install in /psp
 #   OUT/apps/home/       neochumby-home, the app list, always
 #   OUT/apps/<name>/     each APP asked for
 #
@@ -148,7 +150,8 @@ fetch() {
 cargo chumby
 cargo build -q --release -p neochumby-manifest
 mkdir -p "$out"
-cp "target/$chumby_t/release/neochumby" "target/$chumby_t/release/neochumby-sync" boot/userhook2 "$out/"
+cp "target/$chumby_t/release/neochumby" "target/$chumby_t/release/neochumby-sync" \
+  "target/$chumby_t/release/neochumby-boot" boot/userhook2 "$out/"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 

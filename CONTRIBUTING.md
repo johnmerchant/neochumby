@@ -112,7 +112,11 @@ sudo "$bin" --ignored --exact isolate::tests::as_root
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its
 tests run whole sync rounds over a real session on loopback, with a
-temporary directory standing in for the stick.
+temporary directory standing in for the stick. Its crash test
+(`crash.rs`) cuts the power after every operation sync makes on the stick,
+over a model of FAT on the Chumby's kernel, boots, and syncs again. Any
+new operation on the stick goes through its `Disk` interface, so the
+crash test sees it.
 
 ### On a Chumby
 
@@ -380,8 +384,10 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
-access = ["screen", "touch"]         # optional: what it reaches beyond its jail
+access = ["system"]                  # optional: what it reaches beyond its jail
 player = true                        # optional: a player (below)
+font = "spleen-8x16"                 # optional, text mode: its terminal's font
+tap = "q"                            # optional, text mode: what a tap types
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -398,14 +404,59 @@ Binaries named by `exec` and `service` are built for the Chumby
 the server. An app may be only a server program. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
-crash reports (`debug`), the request pipe (`session`) and a terminal for a
-program written for one (`term::run`, which `apps/fetch` uses; the
-touchscreen is its mouse, and `term::run_tapping` makes a tap type a key,
-as `apps/top` quits). A C program that uses curses depends on
+crash reports (`debug`) and the request pipe (`session`). A program
+written for a terminal needs none of that: it runs in text mode (below),
+as `apps/htop` and `apps/top` do. A C program that uses curses depends on
 `neochumby-ncurses` and builds against `DEP_NCURSESW_INCLUDE`
 (`apps/htop/build.rs`). The screen
 is 320x240 RGB565, so prerender what you can, and keep in mind that the CPU
 is a 266 MHz ARM926 with no FPU.
+
+### Text mode
+
+An app's `exec` runs in **text mode** unless its `access` lists `fb`.
+Text mode is the default, and what a program written for a terminal wants:
+
+- **Its stdin and stdout are a terminal** of its own, a pseudo-terminal
+  with `TERM=linux`, as many characters as its font fits on the screen
+  (64x30 in Spleen 5x8). Its stderr is the session's log, as every app's
+  is. It has no framebuffer and no touchscreen device of its own.
+- **The session shows it.** On the stock 2.6.16 kernel, which has no
+  console on the screen, the session draws it (`neochumby::term`: the
+  Linux console's escape sequences, and xterm's 256 colours, alternate
+  screen and line drawing besides). On the dist kernels (Linux 5.9 and
+  7.2), the session passes its output to the kernel's console, tty1, for
+  the kernel to draw: the font is loaded there (BusyBox's `loadfont`) and
+  the colours go in its palette (`ESC ] P`). Either way the app never holds
+  the screen, so it behaves the same on both. Fonts taller or wider than
+  32 pixels (Spleen 32x64), which the console can't take, are drawn by the
+  session there too. The console has only 16 colours, so a scheme's
+  background and foreground take colours 0 and 7 there.
+- **Touches arrive on its stdin** as xterm's mouse reports, the left
+  button, once the program asks for them (curses' `mousemask` does) with
+  DECSET 9, 1000, 1002 or 1003, in the encoding it asked for. With 1006,
+  SGR's: `ESC [ < 0 ; COL ; ROW M` as the finger goes down, `ESC [ < 32 ;
+  COL ; ROW M` as it moves to another character (1002 and 1003 only), and
+  `ESC [ < 0 ; COL ; ROW m` as it lifts, COL and ROW counted from 1.
+  Without 1006, X10's: `ESC [ M` then three bytes, 32 plus the button (0
+  down, 32 moved, 3 up), 32 plus COL and 32 plus ROW. curses' `linux`
+  entry asks for X10's; a program of your own should ask for SGR's. Before
+  the program asks for the mouse, a tap types the manifest's **`tap`**
+  instead (`"q"` quits top; `"\n"` ends a read in line mode, as fetch
+  waits), or nothing without one. A USB keyboard on a dist image types
+  into it as well.
+- **Its font** is the manifest's **`font`**: `spleen-5x8` (the default),
+  `spleen-6x12`, `spleen-8x16`, `spleen-12x24`, `spleen-16x32` or
+  `spleen-32x64` (Spleen 2.2.0, `crates/neochumby/fonts`, BSD-2-Clause), or
+  a PSF file (`.psf`, `.psfu`) in the app's directory, from `files/`. The
+  owner's `font=` setting overrides it for every app.
+- **Its colours** are the owner's (`colors=` in the settings): GitHub Dark
+  unless they choose otherwise (README, "Apps").
+
+It ends as any app does, and the terminal closes with it and with
+whatever it started. An app with `fb` can still show a program on a
+terminal of its own with `neochumby::term::run` (it then needs `touch` and
+`terminal` too).
 
 ### The app contract
 
@@ -421,12 +472,20 @@ Every app is opened the same way, whoever asked for it.
 - with `NEOCHUMBY_COMPANION=<fd>` if it has a companion (below);
 - with `NEOCHUMBY_REASON` when the session has a reason to give: `button`
   when the top button opened it. Ignore values you don't know;
+- with `NEOCHUMBY_NAME`, the Chumby's name as its neochumbyd knows it
+  (`neochumby::session::name()`);
+- with `NEOCHUMBY_STICK_FREE_KIB`, the free space on the stick in KiB as
+  your app started, when there's a stick (`session::stick_free_kib()`);
+- with `NEOCHUMBY_STORAGE`, your app's lasting directory, when its
+  `access` lists `storage` (below);
 - with `NEOCHUMBY_PLAYER` naming this Chumby's default player, when it
   has one (below);
-- owning the screen until it exits. What's on the screen when it starts is
+- in text mode, with a terminal as its stdin and stdout (above); with `fb`,
+  owning the screen until it exits. What's on the screen when it starts is
   whatever was there: draw all of it;
-- sharing the touchscreen: every reader gets every touch. The session
-  watches the top-left corner for the escape hatch;
+- with `touch`, sharing the touchscreen: every reader gets every touch.
+  The session watches the top-left corner for the escape hatch, whatever
+  the mode;
 - **the top button** only with `button = true`. Only one process at a time
   can have `/dev/switch` open, and the session keeps it. An app with
   `button = true` is handed the open file as `NEOCHUMBY_BUTTON=<fd>`, and
@@ -485,19 +544,65 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 
 | `access` | what your app gets |
 |---|---|
-| `screen` | `/dev/fb0`, for its `exec` only, never its `service` |
-| `touch` | the touchscreen and its calibration (`/psp/ts_settings`, read-only), likewise |
+| `fb` | `/dev/fb0`, for its `exec` only, never its `service`, in place of a terminal: it draws the screen itself |
+| `touch` | the touchscreen and its calibration (`/psp/ts_settings`, read-only), likewise. A text-mode app gets touches on its stdin without it |
 | `speaker` | `/dev/dsp`, and the speaker's handover (`neochumby::audio`). The mute and the volume are the session's: `audio` asks for them over the request pipe |
 | `accel` | the accelerometer |
 | `system` | `/proc`, `/sys` and `/etc` |
 | `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
+| `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service` (below) |
 | `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
 | `root` | no jail: it runs as root, as the session does. Listed alone |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
 can't signal or trace each other, or root, and can't read the Chumby's
-key or write to `/psp`.
+key or write to `/psp`, except its own `storage`.
+
+**Storage.** With `storage`, your app has `/psp/apps/<name>/` in the
+Chumby's settings flash, named by `NEOCHUMBY_STORAGE` (the same path in
+the jail and out). Its `exec` and its `service` share it: they run as the
+same uid. Keep settings there, such as a station or a volume; anything
+else belongs in `/tmp`.
+- The session makes it as either starts, mode 0700, and gives it and
+  everything in it to your app's uid. Uids follow the apps' order in the
+  tree, so they can change between boots.
+- It may hold **64 KiB**: each file, directory or link counts its size
+  rounded up to 512 bytes, and at least 512. `/psp` is 2 MB in all.
+- The kernel has no quotas, so the session measures every 2 seconds. An
+  app over its limit is ended, `exec` or `service`, as for the network.
+  One already over as the session started may stay that size, to tidy up,
+  but not grow. Write small files, and replace them whole (write a new
+  one, then rename it over the old).
+
+**Playing a stream.** The stock player (`btplay` and its daemon) can't
+run in a jail. An app with `speaker` may ask the session to run it, and
+carry on:
+- `play <url>` plays an `http://` stream (no TLS) of at most 200 bytes.
+  It may hold only the characters a URL may hold unescaped
+  (`neochumby::session::valid_url`). The session runs `/usr/bin/btplay
+  --start-daemon <url>` as root, with the URL as one argument and no
+  shell. A line that isn't such a URL is ignored, like any unknown line.
+- `play off` stops your app's stream (`btplay --passthru=stop`).
+
+The player plays one stream, so a newer `play` from any app replaces
+yours. The session also stops your stream:
+- when the `exec` or `service` that asked ends;
+- when another process takes the speaker (the handover in
+  `neochumby::audio`: the newest player wins). So take the speaker with
+  `audio::Unmuted` first, then `play`, and `play off` when asked to yield.
+  A stream played without the speaker plays muted, and the session leaves
+  it;
+- at CHUMBY MODE.
+
+**The backlight.** Only root may set it. The start app and its service
+may write `brightness <n>` (0, off, to 65535, full), and carry on. The
+session writes `/proc/sys/sense1/brightness`, and puts back the level the
+Chumby booted with at CHUMBY MODE. From any other app it's refused and
+logged.
+
+In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
+`Pipe::brightness(n)`.
 
 **Your binaries.** Each `exec` and `service` must be a static ARM ELF.
 Before it starts one, the session refuses a file with a `PT_LOAD` below

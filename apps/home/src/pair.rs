@@ -65,6 +65,11 @@ fn ask(
     w(conf::KEY, identity.secret().as_bytes(), 0o600)?;
     w(conf::CONF, c.as_bytes(), 0o644)?;
     w("/psp/rfs1/userhook2", &hook, 0o755)?;
+    // What checks the tree over NFS from the next boot on, from the tree
+    // pairing runs from, as the hook is (neochumby::verified).
+    if let Err(e) = neochumby::verified::install_boot(root) {
+        eprintln!("neochumby-home: {}: {e}", neochumby::verified::BOOT);
+    }
     Ok(())
 }
 

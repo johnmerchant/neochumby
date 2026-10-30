@@ -46,7 +46,7 @@ fn main() {
     // UTF-8, for htop's tree and meters in line drawing (musl's C locale is
     // ASCII).
     cmd.arg("htop").env("LANG", "C.UTF-8");
-    match neochumby::term::run(cmd) {
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-htop: htop: {s}"),
         Ok(_) => {}
         Err(e) => {

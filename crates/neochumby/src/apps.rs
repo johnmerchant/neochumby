@@ -16,14 +16,24 @@
 //!   start=true                 may be the start app (see the session)
 //!   interrupt=false            no service may replace it in front (games)
 //!   button=true                gets the top button while in front (games)
-//!   access=screen,touch        what it reaches beyond its jail (absent:
+//!   access=fb,touch            what it reaches beyond its jail (absent:
 //!                              nothing; neochumby-manifest lists the words)
 //!   player=true                a player: may be the default one, opened
 //!                              by MUSIC buttons; its service takes `pause`
 //!                              and `resume` (see the session)
+//!   font=spleen-8x16           its terminal's font, in text mode (below)
+//!   tap=q                      what a tap types, in text mode, while the
+//!                              program hasn't asked for the mouse: \n, \r,
+//!                              \t, \e, \\ and \xHH for what a line can't
+//!                              hold
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
+//!
+//! An app's exec runs in **text mode** unless its access lists `fb` (or
+//! `root`): its stdin and stdout are a terminal of its own, which the
+//! session shows on the screen (neochumby::term), with touches arriving on
+//! stdin. With `fb`, it has the framebuffer and draws on it itself.
 
 use std::path::{Path, PathBuf};
 
@@ -68,14 +78,21 @@ pub struct App {
     pub player: bool,
     /// What it reaches beyond its jail.
     pub access: Access,
+    /// Its terminal's font in text mode, as its manifest names it: a
+    /// built-in font, or a PSF file in its directory (term::font).
+    pub font: Option<String>,
+    /// What a tap types in text mode while the program hasn't asked for
+    /// the mouse.
+    pub tap: Vec<u8>,
 }
 
 /// An app's `access`: what the session gives it beyond its own directory
 /// and a /tmp of its own. Each is false unless the manifest lists it.
 #[derive(Clone, Copy, Default, PartialEq, Eq, Debug)]
 pub struct Access {
-    /// /dev/fb0, for its exec only.
-    pub screen: bool,
+    /// /dev/fb0, for its exec only, in place of a terminal: it draws the
+    /// screen itself.
+    pub fb: bool,
     /// The touchscreen and its calibration, for its exec only.
     pub touch: bool,
     /// /dev/dsp and the speaker's handover.
@@ -88,6 +105,9 @@ pub struct Access {
     pub network: bool,
     /// /dev/ptmx and /dev/pts.
     pub terminal: bool,
+    /// A directory of its own in /psp, lasting across boots, shared by its
+    /// exec and its service (NEOCHUMBY_STORAGE).
+    pub storage: bool,
     /// The Chumby's logs, read-only.
     pub logs: bool,
     /// No jail: root, as the session.
@@ -101,13 +121,14 @@ impl Access {
         let mut a = Access::default();
         for w in s.split(',').map(str::trim) {
             match w {
-                "screen" => a.screen = true,
+                "fb" => a.fb = true,
                 "touch" => a.touch = true,
                 "speaker" => a.speaker = true,
                 "accel" => a.accel = true,
                 "system" => a.system = true,
                 "network" => a.network = true,
                 "terminal" => a.terminal = true,
+                "storage" => a.storage = true,
                 "logs" => a.logs = true,
                 "root" => a.root = true,
                 _ => {}
@@ -122,6 +143,35 @@ impl App {
     pub fn runnable(&self) -> bool {
         self.needs != Needs::Required || conf::paired().is_some()
     }
+
+    /// Whether its exec runs in text mode, on a terminal the session
+    /// shows: unless it draws the screen itself (`fb`, or `root`).
+    pub fn text(&self) -> bool {
+        !self.access.fb && !self.access.root
+    }
+}
+
+/// A manifest's `tap`, its escapes undone: \n, \r, \t, \e, \\ and \xHH.
+/// An escape it doesn't know stays as it is.
+pub fn unescape(s: &str) -> Vec<u8> {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        let hex = || std::str::from_utf8(b.get(i + 2..i + 4)?).ok().and_then(|h| u8::from_str_radix(h, 16).ok());
+        let (byte, len) = match (b[i], b.get(i + 1)) {
+            (b'\\', Some(b'n')) => (b'\n', 2),
+            (b'\\', Some(b'r')) => (b'\r', 2),
+            (b'\\', Some(b't')) => (b'\t', 2),
+            (b'\\', Some(b'e')) => (0x1b, 2),
+            (b'\\', Some(b'\\')) => (b'\\', 2),
+            (b'\\', Some(b'x')) if hex().is_some() => (hex().unwrap_or_default(), 4),
+            (c, _) => (c, 1),
+        };
+        out.push(byte);
+        i += len;
+    }
+    out
 }
 
 fn parse_color(s: &str) -> Option<u16> {
@@ -129,8 +179,10 @@ fn parse_color(s: &str) -> Option<u16> {
     Some(rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
 
+/// The app in `dir`, from its manifest: checked against the tree's signed
+/// manifest where the tree is checked (crate::verified).
 pub fn load(dir: &Path) -> Option<App> {
-    let manifest = std::fs::read_to_string(dir.join("manifest")).ok()?;
+    let manifest = String::from_utf8(crate::verified::read(&dir.join("manifest")).ok()?).ok()?;
     let field = |k: &str| {
         manifest
             .lines()
@@ -157,6 +209,8 @@ pub fn load(dir: &Path) -> Option<App> {
         button: field("button").as_deref() == Some("true"),
         player: field("player").as_deref() == Some("true"),
         access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
+        font: field("font").filter(|f| !f.is_empty()),
+        tap: field("tap").map(|t| unescape(&t)).unwrap_or_default(),
     })
 }
 
@@ -185,4 +239,37 @@ pub fn all(root: &Path) -> Vec<App> {
         std::fs::read_dir(root.join("apps")).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
     dirs.sort();
     dirs.iter().filter_map(|d| load(d)).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn taps_unescaped() {
+        assert_eq!(unescape("q"), b"q");
+        assert_eq!(unescape(r"\n"), b"\n");
+        assert_eq!(unescape(r"\e[A\x03\\\t\r"), b"\x1b[A\x03\\\t\r");
+        // Not escapes: left as they are.
+        assert_eq!(unescape(r"\q\x0g\"), br"\q\x0g\");
+    }
+
+    #[test]
+    fn text_mode_unless_it_draws() {
+        let dir = std::env::temp_dir().join(format!("neochumby-apps-{}", std::process::id()));
+        for (name, manifest, text) in [
+            ("htop", "exec=x\nfont=spleen-6x12\ntap=\\n\n", true),
+            ("doom", "exec=x\naccess=fb,touch\n", false),
+            ("home", "exec=x\naccess=root\n", false),
+        ] {
+            std::fs::create_dir_all(dir.join(name)).unwrap();
+            std::fs::write(dir.join(name).join("manifest"), manifest).unwrap();
+            let app = load(&dir.join(name)).unwrap();
+            assert_eq!(app.text(), text, "{name}");
+            if text {
+                assert_eq!((app.font.as_deref(), app.tap.as_slice()), (Some("spleen-6x12"), &b"\n"[..]));
+            }
+        }
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }

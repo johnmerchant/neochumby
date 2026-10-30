@@ -29,19 +29,20 @@ binaries are static (musl), so they don't depend on its userland.
 | Path | What | Licence |
 | --- | --- | --- |
 | `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, a terminal for programs written for one, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
+| `crates/neochumby/fonts` | The terminal's fonts: [Spleen](https://github.com/fcambus/spleen) 2.2.0, every size, as PSF (its README has the source) | BSD-2-Clause (`LICENSE.spleen`) |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
-| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's xterm-256color compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
+| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
-| `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) on the library's terminal, beside a Chumby | MIT |
-| `apps/htop` | neochumby-htop: [htop](https://github.com/htop-dev/htop) (3.5.3, a submodule) on the library's terminal, the touchscreen its mouse (F10, Quit, is past the 64th column: the corner hold leaves it) | GPL-2.0-or-later |
-| `apps/top` | neochumby-top: [procps-ng](https://gitlab.com/procps-ng/procps)' top (4.0.7, a submodule) on the library's terminal, until tapped | GPL-2.0-or-later |
-| `apps/cmatrix` | MATRIX: [cmatrix](https://github.com/abishekvashok/cmatrix) (v2.0, a submodule) on the library's terminal, until tapped | GPL-3.0-or-later |
+| `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) in text mode, beside a Chumby | MIT |
+| `apps/htop` | neochumby-htop: [htop](https://github.com/htop-dev/htop) (3.5.3, a submodule) in text mode, in Spleen 6x12, the touchscreen its mouse (F10, Quit, is past the 53rd column: the corner hold leaves it) | GPL-2.0-or-later |
+| `apps/top` | neochumby-top: [procps-ng](https://gitlab.com/procps-ng/procps)' top (4.0.7, a submodule) in text mode, until tapped | GPL-2.0-or-later |
+| `apps/cmatrix` | MATRIX: [cmatrix](https://github.com/abishekvashok/cmatrix) (v2.0, a submodule) in text mode, until tapped | GPL-3.0-or-later |
 | `apps/clock` | CLOCK: [tty-clock](https://github.com/xorg62/tty-clock) (8868f3e, a submodule), until tapped | BSD-3-Clause |
 | `apps/bonsai` | BONSAI: [cbonsai](https://gitlab.com/jallbrit/cbonsai) (v1.4.2, a submodule) growing a tree, a new one every 20 seconds, until tapped | GPL-3.0-only |
 | `apps/pipes` | PIPES: [pipes-rs](https://github.com/dnorhoj/pipes-rs) (v0.1.1, a submodule), pipes.sh in Rust, until tapped | GPL-3.0-only |
@@ -89,8 +90,10 @@ neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
 button = true                        # it gets the top button while in front
-access = ["screen", "touch", "speaker", "network"]   # what it reaches beyond its jail
+access = ["fb", "touch", "speaker", "network"]   # what it reaches beyond its jail
 player = true                        # a player: MUSIC buttons may open it (needs exec and speaker)
+font = "spleen-8x16"                 # text mode: its terminal's font
+tap = "q"                            # text mode: what a tap types until it asks for the mouse
 ```
 
 An app can use any of these keys:
@@ -148,10 +151,34 @@ An app can use any of these keys:
   press is a `button` line on its pipe.
 - **`access`:** each app runs as a user of its own, jailed in a directory
   holding only its own files, a `/tmp` of its own and what `access` lists:
-  `screen`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
-  `network` and `terminal`. It never sees the Chumby's key. `root`, listed alone, runs
+  `fb`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
+  `network`, `terminal`, `logs` (the Chumby's logs, read-only) and `storage`
+  (a small directory of its own in `/psp`, kept across boots). The session
+  does for it what only root may: the mute and volume, the stock stream
+  player (`play`), and, for the start app, the backlight (`brightness`). It
+  never sees the Chumby's key. `root`, listed alone, runs
   it unjailed, as root: only `home` does, as it pairs the Chumby.
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
+- **Text mode, or `fb`:** an app's `exec` runs in text mode unless its
+  `access` lists `fb`. In text mode it has no framebuffer: its stdin and
+  stdout are a terminal (`TERM=linux`), which the session shows on the
+  screen, and a touch arrives on its stdin as a mouse click
+  ([CONTRIBUTING](CONTRIBUTING.md#text-mode) has the encoding). On the
+  stock 2.6.16 kernel the session draws the terminal itself; on the dist
+  kernels (5.9, 7.2) the kernel's console does. Games and anything that
+  draws its own screen (Doom, Quake, LOGS) list `fb`. **`font`** picks the
+  terminal's font, one of Spleen's six sizes (`spleen-5x8`, the default,
+  64x30 characters; `spleen-6x12`, `-8x16`, `-12x24`, `-16x32`, `-32x64`)
+  or a PSF file in the app's directory; **`tap`** what a tap types while
+  the program hasn't asked for the mouse (`q` quits top).
+- **The owner's font and colours:** `neochumbyd set NAME font=spleen-8x16`
+  sets every text-mode app's font, over its own, and `colors=` its colours:
+  `github-dark` (the default) or `xterm`, built in; a theme in the tree's
+  `themes/` directory, in Ghostty's format (`background = #rrggbb`,
+  `foreground = ...`, `palette = N=#rrggbb`), which most theme sites
+  offer; or 18 hex colours joined by `:` (background, foreground, then
+  colours 0 to 15). Without a neochumbyd, the same lines go in
+  `/psp/neochumby.conf`.
 - **`player`:** a Chumby's default player is the one a start app's MUSIC
   button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
   (the start app asks the session, which tells the player's service).
@@ -363,6 +390,16 @@ neochumbyd set kitchen delivery=sync   # or nfs, the default
 ```
 
 - **`nfs`:** the boot hook mounts the tree from neochumbyd on every boot.
+  NFS is unauthenticated, so the Chumby checks what it mounted:
+  neochumbyd serves the tree's manifest signed with its key, and
+  `neochumby-boot` (installed in `/psp` by pairing, or by the session)
+  checks it against the key the Chumby pinned, then copies each program it
+  runs out of the tree into RAM, checked against the manifest. The tree is
+  mounted `noexec`, so nothing else on it runs. A file that doesn't match
+  isn't run: the app doesn't start, and if the session itself doesn't
+  match, the Chumby boots its own software. A Chumby that has checked a
+  tree once boots only checked trees after that: to go back to a
+  neochumbyd from before this, remove `/psp/neochumby-boot`.
 - **`sync`:** the Chumby keeps a whole copy of its tree on its USB stick,
   in step with neochumbyd, and boots from it. A Chumby on sync boots
   without the server, and loads from the stick rather than the network.

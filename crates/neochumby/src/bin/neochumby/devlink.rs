@@ -274,17 +274,17 @@ impl Input<'_> {
         }
         let (rx, ry) = Calibration::load().raw(x, y);
         let open = || -> io::Result<File> {
-            let f = OpenOptions::new().write(true).open(input::TOUCHSCREEN)?;
+            let f = OpenOptions::new().write(true).open(input::touchscreen())?;
             // The kernel ignores O_CLOEXEC; nothing the session runs while
             // the finger is down gets this.
             fd::set_cloexec(f.as_fd(), true)?;
             Ok(f)
         };
-        let mut file = open().map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
+        let mut file = open().map_err(|e| format!("{}: {e}", input::touchscreen()))?;
         // Up first: a finger a session left down (one that ended or crashed
         // mid-tap) would make the kernel drop this press as no change.
-        file.write_all(&input::touch_up()).map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
-        file.write_all(&input::touch_down(rx, ry)).map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
+        file.write_all(&input::touch_up()).map_err(|e| format!("{}: {e}", input::touchscreen()))?;
+        file.write_all(&input::touch_down(rx, ry)).map_err(|e| format!("{}: {e}", input::touchscreen()))?;
         eprintln!("neochumby: neochumbyd taps ({x}, {y}) for {hold_ms} ms");
         Ok(Held { file, until: Instant::now() + Duration::from_millis(hold_ms.into()) })
     }
@@ -312,7 +312,7 @@ struct Held {
 impl Drop for Held {
     fn drop(&mut self) {
         if let Err(e) = self.file.write_all(&input::touch_up()) {
-            eprintln!("neochumby: letting go of a tap: {}: {e}", input::TOUCHSCREEN);
+            eprintln!("neochumby: letting go of a tap: {}: {e}", input::touchscreen());
         }
     }
 }
