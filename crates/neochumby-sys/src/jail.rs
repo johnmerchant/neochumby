@@ -174,6 +174,8 @@ pub struct Jail {
     root: Vec<u8>,
     steps: Vec<Step>,
     limits: Vec<Limit>,
+    /// The program's stdin and stdout, in place of this process's.
+    stdio: Option<(RawFd, RawFd)>,
 }
 
 fn cstring(b: &[u8]) -> io::Result<CString> {
@@ -214,7 +216,7 @@ impl Jail {
     /// every jail may share: each mounts its own tmpfs there.
     pub fn new(mount_point: &Path, size_kib: u32) -> io::Result<Jail> {
         let root = mount_point.as_os_str().as_bytes().to_vec();
-        let mut j = Jail { root: root.clone(), steps: Vec::new(), limits: Vec::new() };
+        let mut j = Jail { root: root.clone(), steps: Vec::new(), limits: Vec::new(), stdio: None };
         j.steps.push(Step::Mount {
             what: "the jail's root",
             source: cstring(b"none")?,
@@ -357,6 +359,14 @@ impl Jail {
     /// Limits the program in `limit`.
     pub fn limit(&mut self, limit: Limit) -> &mut Jail {
         self.limits.push(limit);
+        self
+    }
+
+    /// Gives the program `input` as its stdin and `output` as its stdout
+    /// (a terminal, say), in place of this process's own; its stderr stays
+    /// this process's. Both must stay open until [`Jail::spawn`] returns.
+    pub fn stdio(&mut self, input: RawFd, output: RawFd) -> &mut Jail {
+        self.stdio = Some((input, output));
         self
     }
 
@@ -576,6 +586,12 @@ impl<'a> Plan<'a> {
             }
             if libc::chdir(self.dir.as_ptr()) != 0 {
                 fail(n + 2);
+            }
+            // dup2 leaves the copies open across exec.
+            if let Some((input, output)) = self.jail.and_then(|j| j.stdio)
+                && (libc::dup2(input, 0) < 0 || libc::dup2(output, 1) < 0)
+            {
+                fail(n + 3);
             }
             for &fd in self.keep {
                 if libc::fcntl(fd, libc::F_SETFD, 0) != 0 {
