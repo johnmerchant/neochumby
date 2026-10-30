@@ -1,0 +1,31 @@
+Description: dmaengine: imx-dma: keep a cyclic transfer going past its last period
+ A cyclic transfer's scatterlist is its periods and one more entry, the
+ link back to the first. The table was initialised for the periods
+ alone, which marks the last period as the table's end, so sg_next()
+ returned NULL there and the transfer stopped after one pass of the
+ buffer: on the Chumby Classic, sound played for one ALSA buffer and
+ then stopped for good. The link now ends the table, and sg_chain()
+ clears that mark.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Fc77Z6fVVe4rWJxPT
+---
+diff --git a/drivers/dma/imx-dma.c b/drivers/dma/imx-dma.c
+index 45b7585..6c58ca5 100644
+--- a/drivers/dma/imx-dma.c
++++ b/drivers/dma/imx-dma.c
+@@ -873,7 +873,12 @@ static struct dma_async_tx_descriptor *imxdma_prep_dma_cyclic(
+ 	if (!imxdmac->sg_list)
+ 		return NULL;
+
+-	sg_init_table(imxdmac->sg_list, periods);
++	/*
++	 * The table is the periods and the link back to the first: only the
++	 * link may end it, or sg_next() stops after the last period and the
++	 * transfer with it.
++	 */
++	sg_init_table(imxdmac->sg_list, periods + 1);
+
+ 	for (i = 0; i < periods; i++) {
+ 		sg_assign_page(&imxdmac->sg_list[i], NULL);
