@@ -44,7 +44,7 @@ fn main() {
     let mut cmd = Command::new(exe);
     // -b: bold characters, brighter on the small screen.
     cmd.args(["cmatrix", "-b"]).env("LANG", "C.UTF-8");
-    match neochumby::term::run_tapping(cmd, b"q") {
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-cmatrix: cmatrix: {s}"),
         Ok(_) => {}
         Err(e) => {
