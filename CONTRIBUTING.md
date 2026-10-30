@@ -365,8 +365,10 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
-access = ["screen", "touch"]         # optional: what it reaches beyond its jail
+access = ["system"]                  # optional: what it reaches beyond its jail
 player = true                        # optional: a player (below)
+font = "spleen-8x16"                 # optional, text mode: its terminal's font
+tap = "q"                            # optional, text mode: what a tap types
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -382,14 +384,59 @@ Binaries named by `exec` and `service` are built for the Chumby
 (`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
-crash reports (`debug`), the request pipe (`session`) and a terminal for a
-program written for one (`term::run`, which `apps/fetch` uses; the
-touchscreen is its mouse, and `term::run_tapping` makes a tap type a key,
-as `apps/top` quits). A C program that uses curses depends on
+crash reports (`debug`) and the request pipe (`session`). A program
+written for a terminal needs none of that: it runs in text mode (below),
+as `apps/htop` and `apps/top` do. A C program that uses curses depends on
 `neochumby-ncurses` and builds against `DEP_NCURSESW_INCLUDE`
 (`apps/htop/build.rs`). The screen
 is 320x240 RGB565, so prerender what you can, and keep in mind that the CPU
 is a 266 MHz ARM926 with no FPU.
+
+### Text mode
+
+An app's `exec` runs in **text mode** unless its `access` lists `fb`.
+Text mode is the default, and what a program written for a terminal wants:
+
+- **Its stdin and stdout are a terminal** of its own, a pseudo-terminal
+  with `TERM=linux`, as many characters as its font fits on the screen
+  (64x30 in Spleen 5x8). Its stderr is the session's log, as every app's
+  is. It has no framebuffer and no touchscreen device of its own.
+- **The session shows it.** On the stock 2.6.16 kernel, which has no
+  console on the screen, the session draws it (`neochumby::term`: the
+  Linux console's escape sequences, and xterm's 256 colours, alternate
+  screen and line drawing besides). On the dist kernels (Linux 5.9 and
+  7.2), the session passes its output to the kernel's console, tty1, for
+  the kernel to draw: the font is loaded there (BusyBox's `loadfont`) and
+  the colours go in its palette (`ESC ] P`). Either way the app never holds
+  the screen, so it behaves the same on both. Fonts taller or wider than
+  32 pixels (Spleen 32x64), which the console can't take, are drawn by the
+  session there too. The console has only 16 colours, so a scheme's
+  background and foreground take colours 0 and 7 there.
+- **Touches arrive on its stdin** as xterm's mouse reports, the left
+  button, once the program asks for them (curses' `mousemask` does) with
+  DECSET 9, 1000, 1002 or 1003, in the encoding it asked for. With 1006,
+  SGR's: `ESC [ < 0 ; COL ; ROW M` as the finger goes down, `ESC [ < 32 ;
+  COL ; ROW M` as it moves to another character (1002 and 1003 only), and
+  `ESC [ < 0 ; COL ; ROW m` as it lifts, COL and ROW counted from 1.
+  Without 1006, X10's: `ESC [ M` then three bytes, 32 plus the button (0
+  down, 32 moved, 3 up), 32 plus COL and 32 plus ROW. curses' `linux`
+  entry asks for X10's; a program of your own should ask for SGR's. Before
+  the program asks for the mouse, a tap types the manifest's **`tap`**
+  instead (`"q"` quits top; `"\n"` ends a read in line mode, as fetch
+  waits), or nothing without one. A USB keyboard on a dist image types
+  into it as well.
+- **Its font** is the manifest's **`font`**: `spleen-5x8` (the default),
+  `spleen-6x12`, `spleen-8x16`, `spleen-12x24`, `spleen-16x32` or
+  `spleen-32x64` (Spleen 2.2.0, `crates/neochumby/fonts`, BSD-2-Clause), or
+  a PSF file (`.psf`, `.psfu`) in the app's directory, from `files/`. The
+  owner's `font=` setting overrides it for every app.
+- **Its colours** are the owner's (`colors=` in the settings): GitHub Dark
+  unless they choose otherwise (README, "Apps").
+
+It ends as any app does, and the terminal closes with it and with
+whatever it started. An app with `fb` can still show a program on a
+terminal of its own with `neochumby::term::run` (it then needs `touch` and
+`terminal` too).
 
 ### The app contract
 
@@ -407,10 +454,12 @@ Every app is opened the same way, whoever asked for it.
   when the top button opened it. Ignore values you don't know;
 - with `NEOCHUMBY_PLAYER` naming this Chumby's default player, when it
   has one (below);
-- owning the screen until it exits. What's on the screen when it starts is
+- in text mode, with a terminal as its stdin and stdout (above); with `fb`,
+  owning the screen until it exits. What's on the screen when it starts is
   whatever was there: draw all of it;
-- sharing the touchscreen: every reader gets every touch. The session
-  watches the top-left corner for the escape hatch;
+- with `touch`, sharing the touchscreen: every reader gets every touch.
+  The session watches the top-left corner for the escape hatch, whatever
+  the mode;
 - **the top button** only with `button = true`. Only one process at a time
   can have `/dev/switch` open, and the session keeps it. An app with
   `button = true` is handed the open file as `NEOCHUMBY_BUTTON=<fd>`, and
@@ -469,8 +518,8 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 
 | `access` | what your app gets |
 |---|---|
-| `screen` | `/dev/fb0`, for its `exec` only, never its `service` |
-| `touch` | the touchscreen and its calibration (`/psp/ts_settings`, read-only), likewise |
+| `fb` | `/dev/fb0`, for its `exec` only, never its `service`, in place of a terminal: it draws the screen itself |
+| `touch` | the touchscreen and its calibration (`/psp/ts_settings`, read-only), likewise. A text-mode app gets touches on its stdin without it |
 | `speaker` | `/dev/dsp`, and the speaker's handover (`neochumby::audio`). The mute and the volume are the session's: `audio` asks for them over the request pipe |
 | `accel` | the accelerometer |
 | `system` | `/proc`, `/sys` and `/etc` |
