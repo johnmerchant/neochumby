@@ -19,6 +19,18 @@ or seen on a real device; where something wasn't investigated, it says so.
   screen at 50%. Clear it, or disable the overlay, at startup if that ever
   shows up. Untested idea: draw popups into `fb1` and let the LCD controller
   composite them for nothing.
+- From the stock kernel's source (`drivers/video/imxfb.c`): writes take a
+  number in any base (`0x` hex, decimal, leading-0 octal) and ignore what
+  follows it. `key` is 0xRRGGBB but keeps only six bits per channel (it
+  reads back `0x%02x%02x%02x` of those, so 0xffffff reads 0x3f3f3f), and it
+  matches the top six bits of each channel of the `fb1` pixel. No write
+  touches `fb1`'s pixels or position, and none waits for vsync. **Trap:**
+  setting `fb0`'s mode (`FBIOPUT_VSCREENINFO`) writes the overlay's control
+  register to 0: off, alpha 0, no key.
+- The sideload kernel (Linux 5.9.16, `dist/`) has the same `fb1` and
+  `/proc/driver/imxfb/` files, which read and write the same way, with the
+  same boot defaults (`CONFIG_FB_IMX_GRAPHIC_WINDOW`). Setting `fb0`'s mode
+  there leaves the overlay alone.
 - **The LCD controller's registers can't be reached from user space.** Mapping
   them through `/dev/mem` (0x10021000) succeeds, but the first read is a bus
   error: the i.MX21's peripheral bridge restricts them to supervisor mode.

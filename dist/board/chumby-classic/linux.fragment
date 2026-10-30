@@ -44,6 +44,8 @@ CONFIG_FW_LOADER=y
 # The screen and touch, as the session opens them.
 CONFIG_FB_IMX=y
 CONFIG_INPUT_EVDEV=y
+# The graphic window as fb1, with the stock /proc/driver/imxfb controls.
+CONFIG_FB_IMX_GRAPHIC_WINDOW=y
 
 # Sound: ALSA with OSS emulation, so /dev/dsp stays as it is.
 CONFIG_SOUND=y
