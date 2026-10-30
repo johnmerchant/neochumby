@@ -17,7 +17,7 @@ cc = "1"
 [package.metadata.neochumby]
 title = "MATRIX"
 exec = "neochumby-cmatrix"
-access = ["screen", "touch", "terminal"]
+tap = "q"
 color = "20c040"
 
 [lints]

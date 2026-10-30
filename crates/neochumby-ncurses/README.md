@@ -10,8 +10,9 @@ images ship ncurses themselves.
 ncurses, built from source (its own configure and make, in build.rs) as
 a static libncursesw and libpanelw, for neochumby apps whose C programs
 use curses. A crate that depends on it links them, and its build script
-finds the headers in `DEP_NCURSESW_INCLUDE`. It knows one terminal,
-xterm-256color, compiled in: there is no terminfo database on the Chumby.
+finds the headers in `DEP_NCURSESW_INCLUDE`. It knows two terminals,
+`linux` (what neochumby's terminal is) and xterm-256color, compiled in:
+there is no terminfo database on the Chumby.
 
 ## Building
 
