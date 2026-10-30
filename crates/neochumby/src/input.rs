@@ -1,11 +1,13 @@
 //! The Chumby Classic's inputs: the resistive touchscreen (TSC2100, evdev on
-//! /dev/input/event0), the squeeze switch (/dev/switch, one byte) and the
-//! accelerometer (/dev/accel, 56-byte records). Neither Chumby driver
-//! supports poll(), so everything is read non-blocking, each tick.
+//! /dev/input/event0, or event1 on the dist kernels: [`touchscreen`]), the
+//! squeeze switch (/dev/switch, one byte) and the accelerometer
+//! (/dev/accel, 56-byte records). Neither Chumby driver supports poll(), so
+//! everything is read non-blocking, each tick.
 //!
 //! A touch can also be made up: evdev takes input_event records written to
-//! /dev/input/event0 and hands them to every reader as if the touchscreen
-//! had sent them ([`touch_down`], [`touch_up`], at [`Calibration::raw`]).
+//! the touchscreen's device and hands them to every reader as if the
+//! touchscreen had sent them ([`touch_down`], [`touch_up`], at
+//! [`Calibration::raw`]).
 //! The developer link does this for `neochumbyd tap`.
 
 use std::fs::{File, OpenOptions};
@@ -17,8 +19,38 @@ use neochumby_sys::fd;
 
 use crate::fb;
 
-/// The touchscreen's input device.
+/// The touchscreen's input device on the stock kernel, and where none is
+/// found ([`touchscreen`]).
 pub const TOUCHSCREEN: &str = "/dev/input/event0";
+/// The variable naming the touchscreen's device, which the session sets
+/// for an app it gives the touchscreen to: its jail has no /proc to look.
+pub const TOUCHSCREEN_ENV: &str = "NEOCHUMBY_TOUCHSCREEN";
+
+/// The touchscreen's input device: [`TOUCHSCREEN_ENV`]'s, else the first
+/// in /proc/bus/input/devices that reports an absolute X and Y, else
+/// [`TOUCHSCREEN`]. The stock kernel has it as event0; the dist kernels
+/// list the top button first, and have it as event1.
+pub fn touchscreen() -> String {
+    if let Ok(p) = std::env::var(TOUCHSCREEN_ENV)
+        && p.starts_with("/dev/input/event")
+    {
+        return p;
+    }
+    let list = std::fs::read_to_string("/proc/bus/input/devices").unwrap_or_default();
+    find_touchscreen(&list).unwrap_or_else(|| TOUCHSCREEN.into())
+}
+
+/// In /proc/bus/input/devices' blocks, the event device of the first that
+/// has ABS_X and ABS_Y: its `B: ABS=` mask, hex words with the lowest last.
+fn find_touchscreen(list: &str) -> Option<String> {
+    list.split("\n\n").find_map(|block| {
+        let line = |prefix: &str| block.lines().find_map(|l| l.strip_prefix(prefix));
+        let abs = line("B: ABS=")?.split_whitespace().last()?;
+        let xy = u64::from_str_radix(abs, 16).ok()? & 3 == 3;
+        let event = line("H: Handlers=")?.split_whitespace().find(|h| h.starts_with("event"))?;
+        xy.then(|| format!("/dev/input/{event}"))
+    })
+}
 /// The stock firmware's touchscreen calibration ([`Calibration`]).
 pub const CALIBRATION: &str = "/psp/ts_settings";
 
@@ -100,7 +132,7 @@ fn elsewhere(v: i32) -> i32 {
 }
 
 /// What a finger going down at raw (rx, ry) reports, to write to
-/// [`TOUCHSCREEN`]. The input core passes on a coordinate only when it
+/// [`touchscreen`]. The input core passes on a coordinate only when it
 /// changes (beyond the driver's fuzz), so a reader opened since the last
 /// touch there would never learn where this one is: each coordinate is
 /// first sent somewhere else, and readers take the last before EV_SYN.
@@ -119,7 +151,7 @@ pub fn touch_down(rx: i32, ry: i32) -> Vec<u8> {
     .concat()
 }
 
-/// What the finger coming up reports, to write to [`TOUCHSCREEN`].
+/// What the finger coming up reports, to write to [`touchscreen`].
 pub fn touch_up() -> Vec<u8> {
     [event(EV_ABS, ABS_PRESSURE, 0), event(EV_KEY, BTN_TOUCH, 0), event(EV_SYN, 0, 0)].concat()
 }
@@ -149,7 +181,7 @@ pub struct Touchscreen {
 
 impl Touchscreen {
     pub fn open() -> Touchscreen {
-        Touchscreen::with(open_nonblock(TOUCHSCREEN), Calibration::load())
+        Touchscreen::with(open_nonblock(&touchscreen()), Calibration::load())
     }
 
     fn with(file: Option<File>, cal: Calibration) -> Touchscreen {
@@ -295,6 +327,20 @@ mod tests {
             assert!(touch_down(rx, ry).len().is_multiple_of(16) && touch_up().len() == 48);
         }
         assert!(Touchscreen::with(None, calibrations()[0]).poll().is_empty());
+    }
+
+    #[test]
+    fn the_touchscreen_is_the_device_with_x_and_y() {
+        // As the dist kernels list them: the top button, then the TSC2100.
+        let dist = "I: Bus=0019 Vendor=0001 Product=0001 Version=0100\nN: Name=\"gpio-keys\"\n\
+                    H: Handlers=kbd event0 \nB: EV=3\nB: KEY=100000 0 0 0\n\n\
+                    I: Bus=0000 Vendor=0000 Product=0000 Version=0000\nN: Name=\"tsc2100_ts\"\n\
+                    H: Handlers=event1 \nB: EV=b\nB: KEY=400 0 0 0 0 0 0 0 0 0 0\nB: ABS=1000003\n";
+        assert_eq!(find_touchscreen(dist).as_deref(), Some("/dev/input/event1"));
+        let stock = "N: Name=\"tsc2100\"\nH: Handlers=event0 \nB: ABS=1000003\n";
+        assert_eq!(find_touchscreen(stock).as_deref(), Some("/dev/input/event0"));
+        assert_eq!(find_touchscreen("N: Name=\"x\"\nH: Handlers=event2\nB: ABS=4\n"), None);
+        assert_eq!(find_touchscreen(""), None);
     }
 
     #[test]
