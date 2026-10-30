@@ -84,6 +84,9 @@ pub struct Access {
     pub network: bool,
     /// /dev/ptmx and /dev/pts.
     pub terminal: bool,
+    /// A directory of its own in /psp, lasting across boots, shared by its
+    /// exec and its service (NEOCHUMBY_STORAGE).
+    pub storage: bool,
     /// The Chumby's logs, read-only.
     pub logs: bool,
     /// No jail: root, as the session.
@@ -104,6 +107,7 @@ impl Access {
                 "system" => a.system = true,
                 "network" => a.network = true,
                 "terminal" => a.terminal = true,
+                "storage" => a.storage = true,
                 "logs" => a.logs = true,
                 "root" => a.root = true,
                 _ => {}
