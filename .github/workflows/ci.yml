@@ -69,13 +69,6 @@ env:
   # image (dist 5.9.16, dist 7.2.13, classic) it keeps, with their sources.
   PREBUILT_TAG: dist-prebuilt
   PREBUILT_KEEP: 10
-  # The classic image's BusyBox is linked statically with the toolchain's
-  # glibc (CodeSourcery 2008q3's), so its source must go with the image:
-  # the toolchain's source tarball (arm-2008q3-72-arm-none-linux-gnueabi.src.tar.bz2),
-  # once it is mirrored. Until these are set the classic image is packed
-  # but never published.
-  CLASSIC_TOOLCHAIN_SRC_URL: ''
-  CLASSIC_TOOLCHAIN_SRC_SHA256: ''
 
 jobs:
   host:
@@ -637,13 +630,20 @@ jobs:
         id: inputs
         run: echo "linux=$(git ls-files -s classic/linux | awk '{print $2}')" >> "$GITHUB_OUTPUT"
 
+      # classic/build pins the zig it builds BusyBox with: the same as ours.
+      - name: The same zig
+        run: |
+          zig=$(sed -n 's/^ZIG_VERSION=//p' classic/build)
+          [ "$zig" = "$ZIG_VERSION" ] ||
+            { echo "::error::classic/build's ZIG_VERSION is $zig, ci.yml's $ZIG_VERSION"; exit 1; }
+
       # The image alone (a few MB), for exactly these inputs.
       - name: Restore the image
         id: image-cache
         uses: actions/cache/restore@v4
         with:
           path: build/classic
-          key: neochumby-classic-image-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init') }}
+          key: neochumby-classic-image-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init', 'classic/zig-cc', 'classic/*.c') }}
 
       # classic/build's work (the toolchain, the downloads and the build
       # trees), restored from the nearest earlier build whatever changed:
@@ -654,7 +654,7 @@ jobs:
         uses: actions/cache/restore@v4
         with:
           path: ${{ runner.temp }}/neochumby-classic
-          key: neochumby-classic-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init') }}
+          key: neochumby-classic-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init', 'classic/zig-cc', 'classic/*.c') }}
           restore-keys: neochumby-classic-
 
       - name: Build the image
@@ -779,8 +779,6 @@ jobs:
   # neochumby-IMAGE-INPUTS-KERNEL.tar.xz, and its corresponding source as
   # neochumby-IMAGE-INPUTS-KERNEL-source.tar, where INPUTS is the last
   # commit that changed what the image is built from (dist/fetch --inputs).
-  # The classic image is held back (packed, not published) until its
-  # toolchain's source is mirrored (CLASSIC_TOOLCHAIN_SRC_URL, above).
   package:
     name: Pack the prebuilt images
     needs: [dist, classic]
@@ -843,8 +841,10 @@ jobs:
       # The classic image's corresponding source: the kernel at the commit
       # classic/linux pins (Chumby's GPL source, as the build reads it,
       # from git), classic/ (our patches, configuration fragments, rootfs
-      # and the build), BusyBox's release tarball, and the toolchain's
-      # source, whose glibc BusyBox links statically, once it is mirrored.
+      # and the build), BusyBox's release tarball, and the notices of what
+      # zig links into BusyBox (musl, zig's own libc, compiler-rt), from the
+      # zig release classic/build pins. The kernel's compiler (CodeSourcery
+      # 2008q3) builds nothing else, and none of it is in the image.
       - name: Pack the classic image
         run: |
           set -euo pipefail
@@ -860,6 +860,8 @@ jobs:
           rev=$(git rev-parse HEAD:classic/linux)
           bb=$(sed -n 's/^BUSYBOX_VERSION=//p' classic/build)
           bbsha=$(sed -n 's/^BUSYBOX_SHA256=//p' classic/build)
+          zig=$(sed -n 's/^ZIG_VERSION=//p' classic/build)
+          zigsha=$(sed -n 's/^ZIG_SHA256_X86_64=//p' classic/build)
           tc=$(sed -n 's/^TOOLCHAIN_URL=//p' classic/build)
           git submodule update --init --checkout --depth 1 classic/linux
           git -C classic/linux archive --format=tar --prefix="linux-2.6.16-chumby-$rev/" "$rev" |
@@ -868,12 +870,19 @@ jobs:
           git archive --format=tar HEAD classic | tar -x -C "$src/neochumby"
           curl -fsSL --retry 3 -o "$src/busybox-$bb.tar.bz2" "https://busybox.net/downloads/busybox-$bb.tar.bz2"
           echo "$bbsha  $src/busybox-$bb.tar.bz2" | sha256sum -c -
-          publish=false
-          if [ -n "$CLASSIC_TOOLCHAIN_SRC_URL" ]; then
-            curl -fsSL --retry 3 -o "$src/${CLASSIC_TOOLCHAIN_SRC_URL##*/}" "$CLASSIC_TOOLCHAIN_SRC_URL"
-            echo "$CLASSIC_TOOLCHAIN_SRC_SHA256  $src/${CLASSIC_TOOLCHAIN_SRC_URL##*/}" | sha256sum -c -
-            publish=true
-          fi
+          # The notices, from the zig release that built it (LLVM's licence
+          # is compiler-rt's, the same text as libunwind's beside it).
+          z=zig-x86_64-linux-$zig
+          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$z.tar.xz" "https://ziglang.org/download/$zig/$z.tar.xz"
+          echo "$zigsha  $RUNNER_TEMP/$z.tar.xz" | sha256sum -c -
+          tar -xJf "$RUNNER_TEMP/$z.tar.xz" -C "$RUNNER_TEMP" "$z/LICENSE" "$z/lib/libc/musl/COPYRIGHT" \
+            "$z/lib/libunwind/LICENSE.TXT"
+          mkdir "$src/licenses"
+          cp "$RUNNER_TEMP/$z/LICENSE" "$src/licenses/zig-LICENSE"
+          cp "$RUNNER_TEMP/$z/lib/libc/musl/COPYRIGHT" "$src/licenses/musl-COPYRIGHT"
+          cp "$RUNNER_TEMP/$z/lib/libunwind/LICENSE.TXT" "$src/licenses/compiler-rt-LICENSE.TXT"
+          grep -q 'Apache License' "$src/licenses/compiler-rt-LICENSE.TXT"
+          grep -q 'LLVM Exceptions' "$src/licenses/compiler-rt-LICENSE.TXT"
           {
             echo "The corresponding source of neochumby's classic image (Linux 2.6.16)"
             echo
@@ -884,13 +893,15 @@ jobs:
             echo "neochumby/classic/: how they're built: classic/build, the patches"
             echo "  (patches/linux, patches/busybox), the configuration fragments over the"
             echo "  kernel's own .config and BusyBox's defconfig, the initramfs's files and"
-            echo "  device list, and the build's container"
-            if [ "$publish" = true ]; then
-              echo "${CLASSIC_TOOLCHAIN_SRC_URL##*/}: the toolchain's source (CodeSourcery 2008q3,"
-              echo "  gcc 4.3.2, glibc 2.8), whose glibc and libgcc BusyBox links statically"
-            fi
+            echo "  device list, BusyBox's compiler (zig-cc) and atomics (kuser-atomics.c),"
+            echo "  and the build's container"
+            echo "licenses/: what BusyBox is linked with statically, by zig $zig"
+            echo "  (https://ziglang.org/download/$zig/, whose lib/ is their source):"
+            echo "  musl-COPYRIGHT           musl (MIT)"
+            echo "  zig-LICENSE              zig's own libc and runtime (MIT)"
+            echo "  compiler-rt-LICENSE.TXT  compiler-rt, as zig has it (Apache-2.0 WITH LLVM-exception)"
             echo
-            echo "The toolchain itself: $tc"
+            echo "The kernel's compiler, which builds nothing else: $tc"
           } > "$src/README"
           {
             echo "neochumby's classic image for the Chumby Classic, prebuilt by CI"
@@ -900,20 +911,16 @@ jobs:
             echo "built-from: $GITHUB_SHA"
             echo "linux: chumby-linux-2.6.16 $rev"
             echo "busybox: $bb"
+            echo "zig: $zig"
             echo "source: $stem-source.tar"
             (cd "$stage/$stem" && sha256sum classic-zImage classic-rootfs.cpio.gz classic-config)
           } > "$stage/$stem/MANIFEST"
           cat "$stage/$stem/MANIFEST"
-          # Held back from publishing until the toolchain's source is here.
-          [ "$publish" = true ] || {
-            out=$RUNNER_TEMP/held
-            mkdir -p "$out"
-            echo "::warning::the classic image is packed but not published: its BusyBox links the toolchain's glibc statically, and the toolchain's source isn't mirrored yet (CLASSIC_TOOLCHAIN_SRC_URL)"
-          }
           tar -C "$stage" --sort=name --mtime="@$t" --owner=0 --group=0 --numeric-owner \
             -cf - "$stem" | xz -T0 -6 > "$out/$stem.tar.xz"
           tar -C "$stage" --sort=name --mtime="@$t" --owner=0 --group=0 --numeric-owner \
             -cf "$out/$stem-source.tar" "$stem-source"
+          tar -tvf "$out/$stem-source.tar"
           ls -l "$out"
 
       # What a publish from here would add to the release.
@@ -1014,13 +1021,13 @@ jobs:
           Prebuilt images of neochumby's Linux for the Chumby Classic, built by CI on main (.github/workflows/ci.yml) and named after their inputs commit, the last commit that changed what the image is built from:
 
           - \`neochumby-dist-INPUTS-KERNEL.tar.xz\`: the dist image (dist/build: \`sideload-zImage\`, \`sideload-rootfs.cpio.gz\`), KERNEL 5.9.16 or 7.2.13
-          - \`neochumby-classic-INPUTS-2.6.16.tar.xz\`: the classic image (classic/build: \`classic-zImage\`, \`classic-rootfs.cpio.gz\`, \`classic-config\`), when published
+          - \`neochumby-classic-INPUTS-2.6.16.tar.xz\`: the classic image (classic/build: \`classic-zImage\`, \`classic-rootfs.cpio.gz\`, \`classic-config\`)
 
           Each has a MANIFEST (its kernel, inputs commit and what it was built with), and \`dist/fetch OUT\` (or \`classic/fetch OUT\`) in a checkout downloads the one for its inputs and verifies it. Every asset carries a GitHub artifact attestation; check one with
 
               gh attestation verify FILE --repo $GH_REPO --cert-identity https://github.com/$GH_REPO/.github/workflows/ci.yml@refs/heads/main
 
-          **Source.** The images contain GPL software (Linux, BusyBox and more). Each image's complete corresponding source is the \`-source.tar\` of the same name beside it: for dist, Buildroot's legal-info (every package's source and patches, licenses, manifest and configuration); for classic, the kernel at its pinned commit, BusyBox, the toolchain's source and our build. neochumby's own source is this repository at the inputs commit. The newest $PREBUILT_KEEP builds of each image are kept, each with its source. No stock Chumby firmware or other proprietary software is in any of them.
+          **Source.** The images contain GPL software (Linux, BusyBox and more). Each image's complete corresponding source is the \`-source.tar\` of the same name beside it: for dist, Buildroot's legal-info (every package's source and patches, licenses, manifest and configuration); for classic, the kernel at its pinned commit, BusyBox, our build, and the licences of what zig links into BusyBox (musl, zig's libc, compiler-rt). neochumby's own source is this repository at the inputs commit. The newest $PREBUILT_KEEP builds of each image are kept, each with its source. No stock Chumby firmware or other proprietary software is in any of them.
           EOF
           if ! gh release view "$PREBUILT_TAG" >/dev/null 2>&1; then
             gh release create "$PREBUILT_TAG" --prerelease --latest=false --target main \
@@ -1115,8 +1122,7 @@ jobs:
           DIST: ${{ steps.version.outputs.dist }}
           CLASSIC: ${{ steps.version.outputs.classic }}
         run: |
-          want="neochumby-dist-$DIST-5.9.16 neochumby-dist-$DIST-7.2.13"
-          [ -z "$CLASSIC_TOOLCHAIN_SRC_URL" ] || want="$want neochumby-classic-$CLASSIC-2.6.16"
+          want="neochumby-dist-$DIST-5.9.16 neochumby-dist-$DIST-7.2.13 neochumby-classic-$CLASSIC-2.6.16"
           deadline=$(($(date +%s) + 180 * 60))
           while :; do
             # Runs of CI on the commit still going, but this one: checked
@@ -1191,8 +1197,6 @@ jobs:
             for s in $WANT; do
               echo "- \`$s.tar.xz\`, with its source, \`$s-source.tar\`"
             done
-            [ -n "$CLASSIC_TOOLCHAIN_SRC_URL" ] ||
-              echo "- The classic image (2.6.16) isn't in this release yet: its toolchain's source isn't mirrored."
             echo
             echo "Check one with \`gh attestation verify FILE --repo $GH_REPO --cert-identity https://github.com/$GH_REPO/.github/workflows/ci.yml@refs/heads/main\`."
             echo

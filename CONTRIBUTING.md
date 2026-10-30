@@ -43,15 +43,33 @@ neochumby-sys's documentation).
 
 ## Building and checking
 
+From a clean clone, on macOS or Linux, nothing is built but our own code:
+QEMU (qemu-chumby's) and the Chumby's Linux images (dist and classic) are
+CI's, fetched and verified.
+
 ```sh
-git submodule update --init   # the third-party C: Doom, Quake, fastfetch, htop, procps, ncurses
-rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
-# zig 0.17 on PATH (the C compiler, linker and musl): https://ziglang.org
-# CMake 3.21 or later, for fetch
+nix develop             # the tools (flake.nix); or install what dev/setup lists
+dev/setup               # checks the tools, checks out the submodules, fetches QEMU and the images
 cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
 tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
+dev/emulate start /tmp/tree   # the tree on an emulated Chumby (Testing without a Chumby, below)
+# the end-to-end scenarios as CI runs them: boot on dist; boot and smoke on classic
+cargo build --release -p neochumbyd
+E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e
+NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic
 ```
+
+Without Nix, the tools are: Rust with the
+`armv5te-unknown-linux-musleabi` and `x86_64-unknown-linux-musl` targets
+(`rustup target add ...`), zig 0.17 on PATH (the C compiler, linker and
+musl: https://ziglang.org), CMake 3.21 or later (for fetch), Python 3.9 or
+later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
+verify CI's images' attestations with it). `dev/setup --check` says which
+are missing and how to get them on this system. `git submodule update
+--init` checks out the third-party C (Doom, Quake, fastfetch, htop, procps,
+ncurses) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
+only `classic/build` needs.
 
 The server half (neochumbyd and companions) is built for x86_64 Linux by
 default. `tools/tree --server-target aarch64-unknown-linux-musl` (64-bit
@@ -138,24 +156,40 @@ Chumby, run and driven by its `chumby-machine` runner. `dev/emulate` is
 neochumby's side of it: it puts a tree on a USB stick image, laid out as
 `tools/stick` lays one out, boots one of three profiles with the stick in
 the machine's USB port, and drives the result with the commands the
-scenarios use. It needs Python 3.9+ and QEMU with the machine
-(`emu/qemu/build`; qemu-chumby's README lists its build dependencies; or
-`emu/qemu/fetch`, its prebuilt binary, headless on Linux). No
-root, no VM: it runs natively on Linux and macOS.
+scenarios use. It needs Python 3.9+ and QEMU with the machine. No root,
+no VM: it runs natively on Linux and macOS.
+
+QEMU and the dist and classic images come by themselves. When `start`
+(or `dev/e2e`, once, before its scenarios) needs one that's missing, or
+was made from other inputs than the checkout's now, it fetches CI's
+prebuilt build and verifies it: QEMU by the qemu-chumby commit pinned here
+(`emu/qemu/fetch`), each image by its inputs commit and kernel
+(`dist/fetch`, `classic/fetch`). If there's none, or it can't be verified
+or doesn't run here (the inputs have local changes, `gh` isn't logged in,
+CI hasn't published it, no network), it says why in one line and builds
+from source instead (`emu/qemu/build`, which needs qemu-chumby's README's
+build dependencies; `dist/build` and `classic/build`, which need a
+container runtime). What it made, and from what, is recorded beside it, so
+the next `start` uses it as it is. One you made yourself, or give
+(`--kernel`, `$QEMU`, `--qemu`), is used as it is. `--build`
+(`NEOCHUMBY_BUILD=1`) builds from source, never fetching; `--no-fetch`
+(`NEOCHUMBY_NO_FETCH=1`) builds without trying to fetch; `dev/emulate
+prepare` does just this part.
 
 | Profile | What boots | Needs |
 | --- | --- | --- |
-| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `dist/fetch build/sideload-dist` (CI's build, verified) or `dist/build build/sideload-dist` (or `NEOCHUMBY_EMU_DIST_KERNEL`) |
+| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=7.2.13` for 7.2.13 |
 | `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
-| `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic/classic-zImage`); to come |
+| `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
 
 `--profile NAME` or `NEOCHUMBY_EMU_PROFILE` picks one. Your own settings,
 such as where your firmware is, can go in `.env.local` at the top of the
 checkout (git ignores it). Without a profile's images or QEMU, `start` and
-the scenarios exit 77, skipped.
+the scenarios exit 77, skipped (the stock profile's images are yours and
+never fetched; for the others, when neither fetching nor building works
+here).
 
 ```sh
-emu/qemu/build                       # once: QEMU with the machine
 tools/tree /tmp/tree doom
 dev/emulate start /tmp/tree          # the dist profile, the tree on a stick
 dev/emulate log -f                   # the console, with the session's log
