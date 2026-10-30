@@ -36,8 +36,8 @@
   (every 2 seconds), not by the kernel, so an app can overshoot its 64 KiB
   briefly before it's ended. **`storage` is not `noexec`:** it's a bind
   mount from `/psp`, and 2.6.16 can't change a bind mount's flags, so an
-  app could put a page-zero ELF there and run it. That's an open question
-  on the pull request that adds it.
+  app could put a page-zero ELF there and run it. Until that's closed, an
+  app with `storage` is trusted code, as any app is (above).
 - **The app tree is served over NFSv3,** read-only and without
   authentication. Every file is served as root's, without setuid or
   setgid bits, and the Chumby mounts it `nosuid,nodev`. Anyone who can reach a neochumbyd's NFS port can read the
