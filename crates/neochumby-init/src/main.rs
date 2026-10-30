@@ -309,7 +309,8 @@ fn mount_kernel_fs() {
     // Pseudo-terminals, on devtmpfs' /dev/ptmx: the session runs each
     // text-mode app on one (neochumby::term).
     let _ = fs::create_dir_all("/dev/pts");
-    if let Err(e) = boot::mount("devpts", Path::new("/dev/pts"), "devpts", MountFlags { nosuid: true, noexec: true, ..MountFlags::default() })
+    let pts = MountFlags { nosuid: true, noexec: true, ..MountFlags::default() };
+    if let Err(e) = boot::mount("devpts", Path::new("/dev/pts"), "devpts", pts)
         && e.kind() != io::ErrorKind::ResourceBusy
     {
         kmsg(&format!("/dev/pts: {e}"));
