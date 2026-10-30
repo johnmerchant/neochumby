@@ -175,6 +175,17 @@ pub fn reap() -> Option<u32> {
     u32::try_from(pid).ok().filter(|&p| p > 0)
 }
 
+/// How many columns the terminal `tty` has (TIOCGWINSZ), or None if it
+/// isn't a terminal or doesn't say.
+pub fn columns(tty: &File) -> Option<u16> {
+    // SAFETY: winsize is plain data, for which all zeroes is valid.
+    let mut ws: libc::winsize = unsafe { mem::zeroed() };
+    // SAFETY: TIOCGWINSZ writes one winsize into `ws`, a live one of ours;
+    // the descriptor is open, owned by `tty`.
+    let r = unsafe { libc::ioctl(tty.as_raw_fd(), libc::TIOCGWINSZ as _, &mut ws) };
+    (r == 0 && ws.ws_col > 0).then_some(ws.ws_col)
+}
+
 fn cstring(b: &[u8]) -> io::Result<CString> {
     CString::new(b).map_err(|_| io::Error::new(io::ErrorKind::InvalidInput, "a string with a NUL in it"))
 }
