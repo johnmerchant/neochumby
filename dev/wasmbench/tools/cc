@@ -20,7 +20,7 @@ done
 if [ -z "$link" ]; then
   exec "$root/tools/zigcc" "$@"
 fi
-cb=$(ls "$HOME"/.rustup/toolchains/stable-*/lib/rustlib/armv5te-unknown-linux-musleabi/lib/libcompiler_builtins-*.rlib | head -n 1)
+cb=$(ls "$(rustc --print sysroot)"/lib/rustlib/armv5te-unknown-linux-musleabi/lib/libcompiler_builtins-*.rlib | head -n 1)
 shim=$here/../build/eh-shim.o
 if [ ! -f "$shim" ]; then
   mkdir -p "$(dirname "$shim")"

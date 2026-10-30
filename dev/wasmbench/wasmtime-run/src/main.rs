@@ -77,6 +77,11 @@ fn wasi(l: &mut Linker<Ctx>) -> wasmtime::Result<()> {
         }
         0
     })?;
+    // An empty environment (Rust's std asks for it as it starts).
+    l.func_wrap(WASI, "environ_sizes_get", |mut c: Caller<'_, Ctx>, count: i32, size: i32| -> i32 {
+        if put(&mut c, count, &0u32.to_le_bytes()) && put(&mut c, size, &0u32.to_le_bytes()) { 0 } else { 21 }
+    })?;
+    l.func_wrap(WASI, "environ_get", |_: Caller<'_, Ctx>, _environ: i32, _buf: i32| -> i32 { 0 })?;
     l.func_wrap(WASI, "clock_time_get", |mut c: Caller<'_, Ctx>, id: i32, _p: i64, out: i32| -> i32 {
         let clock = if id == 0 { libc::CLOCK_REALTIME } else { libc::CLOCK_MONOTONIC };
         let mut t = libc::timespec { tv_sec: 0, tv_nsec: 0 };

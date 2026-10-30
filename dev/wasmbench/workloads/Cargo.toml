@@ -1,0 +1,25 @@
+[package]
+name = "neochumby-wasmbench-workloads"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "The wasm benchmark's workloads, each built natively for the Chumby and to wasm32-wasip1 from the same Rust"
+
+# Built by dev/wasmbench/tools/workloads.sh, apart from the device workspace.
+[workspace]
+
+[lib]
+name = "workloads"
+
+[profile.release]
+# The C these replace was built with -O2.
+opt-level = 2
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true
+
+# The checksum tests run the full-size workloads.
+[profile.test]
+opt-level = 2

@@ -1,13 +1,15 @@
 #!/bin/sh
-# Runs BENCH on the emulated Chumby (the stock 2.6.16 kernel and firmware,
-# QEMU's chumby-classic machine): boots build/tree, opens BENCH from home and
-# waits for it to finish. Timings there mean nothing; it shows what runs.
+# Runs BENCH on the emulated Chumby (Linux 2.6.16, dev/emulate's classic
+# profile unless NEOCHUMBY_EMU_PROFILE says otherwise, with no network):
+# boots build/tree, opens BENCH from home and waits for it to finish.
+# Timings there mean nothing; it shows what runs.
 #   tools/emu.sh [WAIT_SECS]     the log in build/emu.log, the screen in
 #                                build/emu.png
 set -eu
 . "$(dirname "$0")/env.sh"
-export NEOCHUMBY_EMU_MACHINE=chumby-classic
-state=/var/tmp/nc-bench
+export NEOCHUMBY_EMU_PROFILE=${NEOCHUMBY_EMU_PROFILE:-classic}
+# This checkout's own, so that two checkouts' runs don't share a machine.
+state=$B/emu
 emu() { "$ROOT/dev/emulate" --state "$state" "$@"; }
 emu stop >/dev/null 2>&1 || true
 # A stopped machine can leave its control socket behind.
