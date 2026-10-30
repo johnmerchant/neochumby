@@ -46,6 +46,9 @@
 //! it boots as before. A power cut at any point leaves one complete set.
 //! The live set is never written, nor the set the Chumby is running from.
 
+#[cfg(test)]
+mod crash;
+pub mod disk;
 pub mod manifest;
 pub mod receive;
 pub mod serve;
@@ -68,6 +71,25 @@ pub struct Limits {
 }
 
 pub const LIMITS: Limits = Limits { max_files: 8192, max_file: 64 << 20, max_total: 512 << 20 };
+
+/// What a round talks over: a paired session, or in tests a pair of
+/// channels.
+pub trait Link {
+    /// Sends `m`.
+    fn send(&mut self, m: &neochumby_proto::Msg) -> std::io::Result<()>;
+    /// The next message if one comes within `t`.
+    fn recv_timeout(&mut self, t: std::time::Duration) -> std::io::Result<Option<neochumby_proto::Msg>>;
+}
+
+impl Link for neochumby_proto::Session {
+    fn send(&mut self, m: &neochumby_proto::Msg) -> std::io::Result<()> {
+        neochumby_proto::Session::send(self, m)
+    }
+
+    fn recv_timeout(&mut self, t: std::time::Duration) -> std::io::Result<Option<neochumby_proto::Msg>> {
+        neochumby_proto::Session::recv_timeout(self, t)
+    }
+}
 
 /// How long a round may wait: for each message, and in all. A round that
 /// takes longer is given up, so a server cannot hold one open by sending
@@ -100,7 +122,7 @@ fn invalid(what: impl ToString) -> std::io::Error {
 /// The next message, within the step's time and the round's. `recv_timeout`
 /// gives up after the first read that brings part of a message, so it is
 /// asked again until the time is up.
-fn next(s: &mut neochumby_proto::Session, c: &Clock) -> std::io::Result<neochumby_proto::Msg> {
+fn next(s: &mut dyn Link, c: &Clock) -> std::io::Result<neochumby_proto::Msg> {
     let deadline = (std::time::Instant::now() + c.step).min(c.end);
     loop {
         let left = deadline.saturating_duration_since(std::time::Instant::now());
@@ -125,7 +147,7 @@ fn unexpected(m: &neochumby_proto::Msg) -> std::io::Error {
 }
 
 /// A manifest the other side sends, as many `SyncManifest`s as it takes.
-fn recv_manifest(s: &mut neochumby_proto::Session, c: &Clock, limits: &Limits) -> std::io::Result<Vec<Entry>> {
+fn recv_manifest(s: &mut dyn Link, c: &Clock, limits: &Limits) -> std::io::Result<Vec<Entry>> {
     let mut out = Vec::new();
     loop {
         match next(s, c)? {
