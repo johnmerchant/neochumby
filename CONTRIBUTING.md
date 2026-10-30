@@ -95,7 +95,11 @@ neochumbyd`.
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its
 tests run whole sync rounds over a real session on loopback, with a
-temporary directory standing in for the stick.
+temporary directory standing in for the stick. Its crash test
+(`crash.rs`) cuts the power after every operation sync makes on the stick,
+over a model of FAT on the Chumby's kernel, boots, and syncs again. Any
+new operation on the stick goes through its `Disk` interface, so the
+crash test sees it.
 
 ### On a Chumby
 
