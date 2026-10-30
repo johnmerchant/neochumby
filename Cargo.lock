@@ -3257,7 +3257,7 @@ dependencies = [
 [[package]]
 name = "wamr-sys"
 version = "1.0.0"
-source = "git+https://github.com/johnmerchant/wamr-rust-sdk?rev=1c829ab70eab55267f1b58ba61c7cec6137008eb#1c829ab70eab55267f1b58ba61c7cec6137008eb"
+source = "git+https://github.com/johnmerchant/wamr-rust-sdk?rev=e62c8f89eafc7d3ab1b46b5605a9c9135bc11b1a#e62c8f89eafc7d3ab1b46b5605a9c9135bc11b1a"
 dependencies = [
  "bindgen",
  "cc",

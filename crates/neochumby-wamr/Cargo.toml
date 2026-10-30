@@ -13,7 +13,7 @@ repository.workspace = true
 # why only its sys crate).
 [dependencies.wamr-sys]
 git = "https://github.com/johnmerchant/wamr-rust-sdk"
-rev = "1c829ab70eab55267f1b58ba61c7cec6137008eb"
+rev = "e62c8f89eafc7d3ab1b46b5605a9c9135bc11b1a"
 default-features = false
 features = ["aot", "fast-interp"]
 
