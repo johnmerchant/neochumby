@@ -428,6 +428,17 @@ differ only by case.
 dist/build build/sideload-dist   # -> sideload-zImage, sideload-rootfs.cpio.gz
 ```
 
+Or take CI's build of it, for exactly this checkout's inputs, from the
+`dist-prebuilt` release, verified with `gh attestation verify` (so it
+needs `gh`, logged in) before anything is unpacked:
+
+```sh
+dist/fetch build/sideload-dist   # the same files; --kernel 7.2.13 for 7.2.13
+```
+
+It refuses when the inputs have local changes or have no published build
+(dist/README.md, "Prebuilt"); build it then.
+
 If the downloads fail with `unable to resolve host address`, the
 container's nameserver isn't answering (seen with Apple's `container`):
 give it one with `NEOCHUMBY_DIST_DNS=1.1.1.1 dist/build ...`.

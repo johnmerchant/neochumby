@@ -20,6 +20,7 @@ normal init policy does not.
 
 ```
 dist/build OUT        # OUT/sideload-zImage and OUT/sideload-rootfs.cpio.gz
+dist/fetch OUT        # the same files, CI's build of them (below)
 ```
 
 `sideload-zImage` has the initramfs built in, so it boots when flashed and is
@@ -53,6 +54,36 @@ rebuilds the kernel and its modules, so the initramfs never mixes them.
 `uname -r` reports `7.2.13-mx21-sideload`. The default stays 5.9.16 until
 7.2.13 has run on real hardware.
 
+## Prebuilt: dist/fetch
+
+```
+dist/fetch [--kernel 5.9.16|7.2.13] OUT
+```
+
+puts in `OUT` the image CI built from this checkout's inputs, in the layout
+`dist/build OUT` writes, in seconds. CI publishes each kernel's build on
+main to the rolling
+[`dist-prebuilt`](https://github.com/johnmerchant/neochumby/releases/tag/dist-prebuilt)
+prerelease as `neochumby-dist-INPUTS-KERNEL.tar.xz`, where `INPUTS` is the
+last commit that changed what it's built from (`dist/` but this README and
+`dist/fetch`, `crates/neochumby-init` and `crates/neochumby-sys`;
+`dist/fetch --inputs` prints it), so any later commit that leaves those
+alone finds the same build. Beside each is its corresponding source,
+`-source.tar` (Buildroot's `make legal-info`: every package's source and
+patches, the licenses, the manifest and the configuration).
+
+Nothing on the release is trusted as such. Each tarball carries a GitHub
+artifact attestation, which `dist/fetch` checks with `gh attestation
+verify` before extracting anything: it must be signed by this repository's
+`.github/workflows/ci.yml` running on `main`, on GitHub's runners. Then its
+`MANIFEST` must name these inputs and this kernel. So it needs
+[gh](https://cli.github.com), logged in (`gh auth login`), and the full
+history (not a shallow clone). It exits 1 and leaves `OUT` as it was when
+there's no build for these inputs (they have local changes, or changed on
+a branch, or main's CI hasn't published yet) or the download doesn't
+verify: build it with `dist/build` then. `classic/fetch OUT` does the same
+for the classic image.
+
 ## A neochumby stick
 
 Before its shell, `/init` runs a neochumby stick as the stock boot does: it
@@ -70,9 +101,11 @@ All emulation happens through qemu-chumby (`emu/qemu/qemu-chumby`), whose
 the end-to-end scenarios that pass there so far that way
 (CONTRIBUTING.md, "Scenarios", says which, and why the others don't yet).
 
-CI's `dist` job (`.github/workflows/ci.yml`) builds this image, or restores
-it whole when nothing it's built from changed, and passes it on to the
-`e2e` and `sideload` jobs. Buildroot's work is cached; the first run is
+CI's `dist` job (`.github/workflows/ci.yml`) builds this image for each
+kernel, or restores it whole when nothing it's built from changed, and
+passes it on to the `e2e` (5.9.16) and `sideload` (both) jobs, and with
+its legal-info to the `package` and `prebuilt` jobs, which publish it on
+main (above). Buildroot's work is cached; the first run is
 slow, and later runs rebuild only what changed. The `sideload` job runs
 `run-recovery-demo.py` with a zeroed NAND image, on changes under `dist/`,
 `tools/neochumby-kernel-sideloader/` or `emu/qemu/` and on
