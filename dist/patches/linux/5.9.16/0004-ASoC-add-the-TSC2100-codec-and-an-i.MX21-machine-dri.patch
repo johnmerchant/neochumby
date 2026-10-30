@@ -1,25 +1,13 @@
-From a6ffd5c82942494f7414d84545842ec0388d66bc Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Fri, 30 Oct 2026 02:23:31 +1030
-Subject: [PATCH 4/7] ASoC: add the TSC2100 codec and an i.MX21 machine driver
-
-The codec is the TSC2100 MFD's audio half: I2S master, its PLL run from
-MCLK. The machine driver puts it on SSI1 through the AUDMUX, as the
-Chumby Classic's 2.6.16 driver did, and switches the speaker with an
-optional GPIO.
-
+Description: ASoC: add the TSC2100 codec and an i.MX21 machine driver
+ The codec is the TSC2100 MFD's audio half: I2S master, its PLL run from
+ MCLK. The machine driver puts it on SSI1 through the AUDMUX, as the
+ Chumby Classic's 2.6.16 driver did, and switches the speaker with an
+ optional GPIO.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- sound/soc/codecs/Kconfig    |   9 +
- sound/soc/codecs/Makefile   |   2 +
- sound/soc/codecs/tsc2100.c  | 387 ++++++++++++++++++++++++++++++++++++
- sound/soc/fsl/Kconfig       |  12 ++
- sound/soc/fsl/Makefile      |   2 +
- sound/soc/fsl/imx-tsc2100.c | 194 ++++++++++++++++++
- 6 files changed, 606 insertions(+)
- create mode 100644 sound/soc/codecs/tsc2100.c
- create mode 100644 sound/soc/fsl/imx-tsc2100.c
-
 diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
 index 601ea45d3..72dab64cc 100644
 --- a/sound/soc/codecs/Kconfig

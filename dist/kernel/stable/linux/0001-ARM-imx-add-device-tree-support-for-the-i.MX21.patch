@@ -1,25 +1,16 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Fri, 30 Oct 2026 05:13:27 +1030
-Subject: [PATCH 01/13] ARM: imx: add device-tree support for the i.MX21
-
-Commit 4b563a066611 ("ARM: imx: Remove imx21 support") removed the
-i.MX21 because it had only board-file support. Bring it back as a
-DT-only SoC, like the i.MX1 and i.MX27: the machine only sets the CPU
-type; the AVIC, timer and peripherals come from the device tree.
-
-The prototype of the old imx21_init_early() is dropped from common.h;
-it has had no definition since that removal.
-
+Description: ARM: imx: add device-tree support for the i.MX21
+ Commit 4b563a066611 ("ARM: imx: Remove imx21 support") removed the
+ i.MX21 because it had only board-file support. Bring it back as a
+ DT-only SoC, like the i.MX1 and i.MX27: the machine only sets the CPU
+ type; the AVIC, timer and peripherals come from the device tree.
+ .
+ The prototype of the old imx21_init_early() is dropped from common.h;
+ it has had no definition since that removal.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- arch/arm/mach-imx/Kconfig      |  7 +++++++
- arch/arm/mach-imx/Makefile     |  2 ++
- arch/arm/mach-imx/common.h     |  1 -
- arch/arm/mach-imx/mach-imx21.c | 24 ++++++++++++++++++++++++
- 4 files changed, 33 insertions(+), 1 deletion(-)
- create mode 100644 arch/arm/mach-imx/mach-imx21.c
-
 diff --git a/arch/arm/mach-imx/Kconfig b/arch/arm/mach-imx/Kconfig
 index a361840d7..47f1b2f74 100644
 --- a/arch/arm/mach-imx/Kconfig

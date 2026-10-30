@@ -1,21 +1,13 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Thu, 29 Oct 2026 18:43:36 +0000
-Subject: [PATCH 09/14] Input: add the TSC2100 touchscreen
-
-Pen-down interrupt (PINTDAV), then host-controlled X, Y and Z1/Z2
-conversions every 10 ms while the pen is down, as tsc2007 does.
-Pressure is Z1 * 4096 / Z2. Raw 12-bit coordinates, with the usual
-touchscreen properties for inversion and swapping.
-
+Description: Input: add the TSC2100 touchscreen
+ Pen-down interrupt (PINTDAV), then host-controlled X, Y and Z1/Z2
+ conversions every 10 ms while the pen is down, as tsc2007 does.
+ Pressure is Z1 * 4096 / Z2. Raw 12-bit coordinates, with the usual
+ touchscreen properties for inversion and swapping.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- drivers/input/touchscreen/Kconfig      |  12 ++
- drivers/input/touchscreen/Makefile     |   1 +
- drivers/input/touchscreen/tsc2100_ts.c | 285 +++++++++++++++++++++++++
- 3 files changed, 298 insertions(+)
- create mode 100644 drivers/input/touchscreen/tsc2100_ts.c
-
 diff --git a/drivers/input/touchscreen/Kconfig b/drivers/input/touchscreen/Kconfig
 index 9b9ae8ac3..d26c98ed2 100644
 --- a/drivers/input/touchscreen/Kconfig

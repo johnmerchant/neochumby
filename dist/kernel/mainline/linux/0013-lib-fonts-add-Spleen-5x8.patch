@@ -1,18 +1,21 @@
-From: John Merchant <john@johnmerchant.dev>
-Subject: [PATCH] lib/fonts: add Spleen 5x8
-
-Spleen 5x8 2.1.0 (BSD-2-Clause, Frederic Cambus), converted from its BDF
-to code page 437's order, the console's default map. Positions Spleen has
-no glyph for (double-line box drawing, shades, most of the Greek) are
-blank. On the Chumby's 320x240 screen it gives the console 64x30
-characters, against 40x30 with the VGA 8x8.
-
-Source: https://github.com/fcambus/spleen/tree/2.1.0 (spleen-5x8.bdf)
-
+Description: lib/fonts: add Spleen 5x8
+ Spleen 5x8 2.1.0 (BSD-2-Clause, Frederic Cambus), converted from its BDF
+ to code page 437's order, the console's default map. Positions Spleen has
+ no glyph for (double-line box drawing, shades, most of the Greek) are
+ blank. On the Chumby's 320x240 screen it gives the console 64x30
+ characters, against 40x30 with the VGA 8x8.
+ .
+ Source: https://github.com/fcambus/spleen/tree/2.1.0 (spleen-5x8.bdf)
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Fc77Z6fVVe4rWJxPT
 ---
+diff --git a/include/linux/font.h b/include/linux/font.h
+index 5e1cf9830..b95d72710 100644
 --- a/include/linux/font.h
 +++ b/include/linux/font.h
-@@ -154,6 +154,7 @@
+@@ -157,6 +157,7 @@ extern const struct font_desc font_7x14;
  extern const struct font_desc font_acorn_8x8;
  extern const struct font_desc font_mini_4x6;
  extern const struct font_desc font_pearl_8x8;
@@ -20,9 +23,11 @@ Source: https://github.com/fcambus/spleen/tree/2.1.0 (spleen-5x8.bdf)
  extern const struct font_desc font_sun_12x22;
  extern const struct font_desc font_sun_8x16;
  extern const struct font_desc font_ter_10x18;
+diff --git a/lib/fonts/Kconfig b/lib/fonts/Kconfig
+index 7d03823e4..69069a301 100644
 --- a/lib/fonts/Kconfig
 +++ b/lib/fonts/Kconfig
-@@ -139,6 +139,13 @@
+@@ -139,6 +139,13 @@ config FONT_6x8
  	help
  	  This font is useful for small displays (OLED).
  
@@ -36,7 +41,7 @@ Source: https://github.com/fcambus/spleen/tree/2.1.0 (spleen-5x8.bdf)
  config FONT_AUTOSELECT
  	def_bool y
  	depends on !FONT_8x8
-@@ -154,6 +161,7 @@
+@@ -154,6 +161,7 @@ config FONT_AUTOSELECT
  	depends on !FONT_TER10x18
  	depends on !FONT_TER16x32
  	depends on !FONT_6x8
@@ -44,9 +49,11 @@ Source: https://github.com/fcambus/spleen/tree/2.1.0 (spleen-5x8.bdf)
  	select FONT_8x16
  
  endif # FONT_SUPPORT
+diff --git a/lib/fonts/Makefile b/lib/fonts/Makefile
+index 7202a70a5..44596be9a 100644
 --- a/lib/fonts/Makefile
 +++ b/lib/fonts/Makefile
-@@ -17,6 +17,7 @@
+@@ -17,6 +17,7 @@ font-$(CONFIG_FONT_MINI_4x6)  += font_mini_4x6.o
  font-$(CONFIG_FONT_PEARL_8x8) += font_pearl_8x8.o
  font-$(CONFIG_FONT_SUN8x16)   += font_sun8x16.o
  font-$(CONFIG_FONT_SUN12x22)  += font_sun12x22.o
@@ -54,15 +61,20 @@ Source: https://github.com/fcambus/spleen/tree/2.1.0 (spleen-5x8.bdf)
  font-$(CONFIG_FONT_TER10x18)  += font_ter10x18.o
  font-$(CONFIG_FONT_TER16x32)  += font_ter16x32.o
  
+diff --git a/lib/fonts/font.h b/lib/fonts/font.h
+index 4f1adf0b6..a897361b7 100644
 --- a/lib/fonts/font.h
 +++ b/lib/fonts/font.h
-@@ -34,5 +34,6 @@
+@@ -34,5 +34,6 @@ struct font_data {
  #define TER16x32_IDX	11
  #define FONT6x8_IDX	12
  #define TER10x18_IDX	13
 +#define SPLEEN5x8_IDX	14
  
  #endif
+diff --git a/lib/fonts/font_spleen_5x8.c b/lib/fonts/font_spleen_5x8.c
+new file mode 100644
+index 000000000..475286338
 --- /dev/null
 +++ b/lib/fonts/font_spleen_5x8.c
 @@ -0,0 +1,2582 @@
@@ -2648,9 +2660,11 @@ Source: https://github.com/fcambus/spleen/tree/2.1.0 (spleen-5x8.bdf)
 +	.data	= fontdata_spleen_5x8.data,
 +	.pref	= 0,
 +};
+diff --git a/lib/fonts/fonts.c b/lib/fonts/fonts.c
+index 4fc66722d..111f9d0c9 100644
 --- a/lib/fonts/fonts.c
 +++ b/lib/fonts/fonts.c
-@@ -291,6 +291,9 @@
+@@ -322,6 +322,9 @@ static const struct font_desc *fonts[] = {
  #ifdef CONFIG_FONT_6x8
  	&font_6x8,
  #endif

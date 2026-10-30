@@ -1,23 +1,15 @@
-From 1da0118059f16962a25ad08658a8d13c4a744c1c Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Fri, 30 Oct 2026 02:23:31 +1030
-Subject: [PATCH 6/7] ARM: imx21: add the Chumby Classic
-
-Its boot loader enters the kernel as an MX21ADS, so the board takes that
-machine number and excludes MACH_MX21ADS. Values are from Chumby's 2.6.16
-board file and drivers: the 320x240 panel, three USB host ports, the
-TSC2100 on CSPI3, the accelerometer on CSPI1, the PWM backlight, SSI1
-sound, and the keypad port as GPIO for the top button and the power and
-speaker switches.
-
+Description: ARM: imx21: add the Chumby Classic
+ Its boot loader enters the kernel as an MX21ADS, so the board takes that
+ machine number and excludes MACH_MX21ADS. Values are from Chumby's 2.6.16
+ board file and drivers: the 320x240 panel, three USB host ports, the
+ TSC2100 on CSPI3, the accelerometer on CSPI1, the PWM backlight, SSI1
+ sound, and the keypad port as GPIO for the top button and the power and
+ speaker switches.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- arch/arm/mach-imx/Kconfig               |  16 +
- arch/arm/mach-imx/Makefile              |   1 +
- arch/arm/mach-imx/mach-chumby-classic.c | 529 ++++++++++++++++++++++++
- 3 files changed, 546 insertions(+)
- create mode 100644 arch/arm/mach-imx/mach-chumby-classic.c
-
 diff --git a/arch/arm/mach-imx/Kconfig b/arch/arm/mach-imx/Kconfig
 index e7d7b90e2..73de094a4 100644
 --- a/arch/arm/mach-imx/Kconfig
