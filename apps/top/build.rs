@@ -3,7 +3,8 @@
 // binary, without its configure: csrc/config.h is what configure would
 // write, and TOP and LIBRARY are the sources its Makefile.am builds them
 // from. main() is top_main, which src/main.rs calls. curses is
-// neochumby-ncurses'.
+// neochumby-ncurses'. csrc/compat.c stands in for the calls Linux 2.6.16
+// lacks.
 const TOP: &[&str] = &["src/top/top", "src/top/top_nls", "local/fileutils", "local/signals", "local/strutils"];
 
 const LIBRARY: &[&str] = &[
@@ -49,6 +50,8 @@ fn main() {
     for f in LIBRARY {
         build.file(format!("{dir}/library/{f}.c"));
     }
+    // The calls 2.6.16 lacks on ARM (csrc/compat.h).
+    build.file("csrc/compat.c");
     build
         .include("csrc")
         .include(format!("{dir}/local"))
@@ -57,14 +60,11 @@ fn main() {
         // As Makefile.am has it: not every file includes it.
         .flag("-include")
         .flag("config.h")
+        .flag("-include")
+        .flag("compat.h")
         .define("PROCPS_VERSION", format!("\"{version}\"").as_str())
         .define("_GNU_SOURCE", None)
         .define("main", "top_main")
-        // The calls 2.6.16 lacks on ARM, as src/compat.rs makes them.
-        .define("openat", "top_openat")
-        .define("fstatat", "top_fstatat")
-        .define("readlinkat", "top_readlinkat")
-        .define("pselect", "top_pselect")
         .opt_level(2)
         // Upstream's warnings, not ours to fix.
         .warnings(false)

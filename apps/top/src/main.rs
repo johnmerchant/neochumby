@@ -12,8 +12,6 @@
 use std::ffi::{CString, c_char, c_int};
 use std::process::Command;
 
-mod compat;
-
 // For its ncurses, which top's objects need.
 use neochumby_ncurses as _;
 
