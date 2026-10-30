@@ -17,9 +17,9 @@ readme = "README.md"
 keywords = ["chumby", "ncurses", "curses", "embedded"]
 categories = ["external-ffi-bindings", "embedded"]
 # What the published crate carries: what it builds from, and ncurses'
-# sources less what build.rs configures out (Ada95, c++, test, man pages
-# but the three files configure writes from), its documentation and its
-# packaging.
+# sources less what build.rs configures out (Ada95, c++, test, the man
+# pages themselves but not the scripts configure runs from man/), its
+# documentation and its packaging.
 include = [
     "src/**",
     "build.rs",
@@ -33,10 +33,7 @@ include = [
     "!third_party/ncurses/test/**",
     "!third_party/ncurses/package/**",
     "!third_party/ncurses/NEWS",
-    "!third_party/ncurses/man/**",
-    "third_party/ncurses/man/MKterminfo.sh",
-    "third_party/ncurses/man/MKncu_config.in",
-    "third_party/ncurses/man/man_db.renames.in",
+    "!third_party/ncurses/man/*.[1-8]*",
 ]
 # DEP_NCURSESW_INCLUDE, its headers, for the crates that build C against it.
 links = "ncursesw"
