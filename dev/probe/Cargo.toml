@@ -17,7 +17,7 @@ neochumby = { path = "../../crates/neochumby" }
 title = "PROBE"
 exec = "neochumby-probe"
 color = "ff00ff"
-access = ["screen", "touch"]
+access = ["fb", "touch"]
 
 [profile.release]
 opt-level = 2
