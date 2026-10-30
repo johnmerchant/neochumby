@@ -89,13 +89,6 @@ emu start --psp "$out/psp0" --size $((size * 3 + 32)) --server "$sock" "$work"
 emu wait log 'neochumby: neochumbyd over the serial line' $((60 * slow)) || fail "the session didn't open the line"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 until_ok 30 grep -q 'serial line .* connected' "$out/neochumbyd.log" || fail "the emulator didn't connect to neochumbyd"
-if [ "$backend" = dist ]; then
-  # dist's session reads touches from /dev/input/event0, which there is the
-  # top button (CONTRIBUTING, the smoke scenario), so PAIR can't be tapped.
-  emu stop
-  echo "dev/emulate-link: skipped: the line came up, but on dist no tap reaches the session to pair"
-  exit 77
-fi
 emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
 emu tap 80 220 # PAIR
 until_ok 60 has_asking || fail "the Chumby didn't ask to pair"

@@ -281,7 +281,7 @@ passes where, so far:
 | `smoke` | passes | fails | on 5.9.16 the kernel's framebuffer console blinks its cursor over the session's screen (`vt.global_cursor_default=0` stops it), so the screen seldom settles; and the session reads touches from `/dev/input/event0`, which there is the top button (the touchscreen is `event1`), so no tap reaches it; there is no `/dev/switch` either |
 | `stock` | passes | skipped | the stock firmware's own boot |
 | `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
-| `link`, `pairing`, `powercut` | not run in CI | not run in CI | they run a neochumbyd here, at the other end of the serial line; a round over the line takes minutes |
+| `link` | passes | passes (5.9.16) | not in CI: it runs a neochumbyd here, at the other end of the serial line, and a round over the line takes minutes; `pairing` and `powercut` likewise (both pass on classic) |
 
 The session on dist still uses the stock kernel's `/dev/switch` and
 `/dev/accel`, where 5.9.16 offers evdev and IIO: the scenarios that need
