@@ -1795,6 +1795,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-ttfx"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "neochumby",
+ "neochumby-sys",
+ "ttfx",
+]
+
+[[package]]
 name = "neochumbyd"
 version = "0.1.0"
 dependencies = [
@@ -3024,6 +3035,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "ttfx"
+version = "0.5.1"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "terminal_size",
+ "unicode-width",
+]
+
+[[package]]
 name = "typenum"
 version = "1.20.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3066,6 +3087,12 @@ name = "unicode-segmentation"
 version = "1.13.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c6f5d3c3b1bf09027a88a6bc961fc00497d651009560b5463668dc81b0fa87a8"
+
+[[package]]
+name = "unicode-width"
+version = "0.2.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca718471876992059f251e33aafc334346ada08042b7661dd1fe313a9bced557"
 
 [[package]]
 name = "universal-hash"

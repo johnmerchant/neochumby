@@ -39,3 +39,6 @@
 	url = https://github.com/johnmerchant/chumby-linux-2.6.16
 	update = none
 	shallow = true
+[submodule "apps/ttfx/third_party/ttfx"]
+	path = apps/ttfx/third_party/ttfx
+	url = https://github.com/omacom/ttfx

@@ -48,6 +48,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `apps/pipes` | PIPES: [pipes-rs](https://github.com/dnorhoj/pipes-rs) (v0.1.1, a submodule), pipes.sh in Rust, until tapped | GPL-3.0-only |
 | `apps/aquarium` | AQUARIUM: [asciiquarium-rs](https://github.com/cablehead/asciiquarium-rs) (beef5b7, a submodule), asciiquarium in Rust, until tapped | GPL-2.0-or-later |
 | `apps/genact` | GENACT: [genact](https://github.com/svenstaro/genact) (1.6.0, from crates.io), looking busy, until tapped | MIT |
+| `apps/ttfx` | TTFX: [ttfx](https://github.com/omacom/ttfx) (v0.5.1, a submodule), [TerminalTextEffects](https://github.com/ChrisBuilds/terminaltexteffects) by ChrisBuilds in Rust: "neochumby" and the time and date, through one effect after another, in Spleen 6x12, until tapped; Linux 5.9 and later | MIT (TerminalTextEffects' copyright kept in its LICENSE and NOTICE) |
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
