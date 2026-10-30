@@ -98,7 +98,9 @@ taken on trust:
   --archive`'s archive of it.
 
 The pull request's CI then shows whether the patches still apply and the
-image builds and boots; when they don't, port them on that branch. One
+image builds and boots (CI builds mainline only weekly, but always for
+`kernel-sync/mainline` and for any change to `kernel/mainline/` or its
+defconfig); when they don't, port them on that branch. One
 pull request per track: a later bump updates the open one (replacing the
 job's own commit, or adding to what someone has pushed there), and none is
 ever merged but by hand. `dist/kernel-sync check` shows the pins against
@@ -118,7 +120,7 @@ dist/fetch [--kernel 5.9.16|stable|mainline] OUT
 
 puts in `OUT` the image CI built from this checkout's inputs, in the layout
 `dist/build OUT` writes, in seconds. CI publishes each kernel's build on
-main to the rolling
+main (mainline's from a weekly run, below) to the rolling
 [`dist-prebuilt`](https://github.com/johnmerchant/neochumby/releases/tag/dist-prebuilt)
 prerelease as `neochumby-dist-INPUTS-KERNEL.tar.xz`, where `INPUTS` is the
 last commit that changed what it's built from (`dist/` but this README,
@@ -140,6 +142,20 @@ there's no build for these inputs (they have local changes, or changed on
 a branch, or main's CI hasn't published yet) or the download doesn't
 verify: build it with `dist/build` then. `classic/fetch OUT` does the same
 for the classic image.
+
+**Mainline, weekly.** Pushes and pull requests build only 5.9.16 and
+stable; mainline is built at main's head every Sunday (and by hand, a
+`workflow_dispatch` with `mainline`), booted and published like the
+others, and with them for a change to mainline alone. So most inputs
+commits have no mainline build, and `dist/fetch --kernel mainline` then
+takes the newest one on the release of a commit in the checkout's
+history instead, checked the same way (its `MANIFEST` naming the inputs it
+was built from), with a line saying which commit that is and how far
+behind. It must have the track's current pin and be at most 14 days
+behind `HEAD`, so an old signed build can't stand in once newer ones are
+gone; else it refuses (build it, or wait for the weekly build). With
+local changes to the inputs it refuses, as for the others. Dated releases carry
+5.9.16, stable and classic, not mainline.
 
 `dev/emulate` and `dev/e2e` do this themselves, into `build/sideload-dist`
 (`build/sideload-dist-stable` or `-mainline` with
@@ -166,8 +182,9 @@ the end-to-end scenarios that pass there so far that way
 (CONTRIBUTING.md, "Scenarios", says which, and why the others don't yet).
 
 CI's `dist` job (`.github/workflows/ci.yml`) builds this image for each
-kernel, or restores it whole when nothing it's built from changed, and
-passes it on to the `e2e` (5.9.16) and `sideload` (all three) jobs, and with
+kernel (mainline weekly, above), or restores it whole when nothing it's
+built from changed, and passes it on to the `e2e` (5.9.16, and mainline
+where it's built) and `sideload` (each kernel built) jobs, and with
 its legal-info to the `package` and `prebuilt` jobs, which publish it on
 main (above). Buildroot's work is cached; the first run is
 slow, and later runs rebuild only what changed. The `sideload` job runs

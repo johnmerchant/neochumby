@@ -73,6 +73,8 @@ pub mod tests {
             companion: false,
             access: Default::default(),
             player: false,
+            font: None,
+            tap: Vec::new(),
         }
     }
 

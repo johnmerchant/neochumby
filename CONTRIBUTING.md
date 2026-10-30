@@ -86,11 +86,19 @@ builds companions for another, and `tools/deploy` picks the one its server
 runs. A companion must build for all three: keep anything
 platform-specific behind `cfg`, as neochumbyd does.
 
-CI runs the same checks on every pull request. To run them yourself:
+CI runs the same checks on every pull request (and builds the dist image
+for 5.9.16 and stable; mainline weekly, or when a change is to it alone:
+dist/README.md, "Mainline, weekly"). To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
 crates), and `cargo test -p neochumby-proto -p neochumby-sync -p
-neochumbyd`.
+neochumbyd`. CI also checks what the build takes in: `cargo deny check
+bans licenses sources` (as `deny.toml` sets them) and `gitleaks git` over
+every commit, on every run, and RustSec's advisories (`cargo deny check
+advisories`) daily and whenever `Cargo.lock` or `deny.toml` changes. A new
+dependency must pass `cargo deny`: a licence not yet allowed, or a source
+other than crates.io, is added to `deny.toml` in the same pull request,
+saying why.
 
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its
@@ -190,7 +198,7 @@ prepare` does just this part.
 
 | Profile | What boots | Needs |
 | --- | --- | --- |
-| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`) |
+| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`; CI builds mainline weekly, so that may be its newest build, not this checkout's) |
 | `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
 | `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
 
@@ -256,7 +264,9 @@ evdev, IIO, the backlight class and ALSA: the scenarios that need devices
 pass there once the session (or dist) bridges the two.
 
 **boot** (`dev/emulate-boot TREE OUT`): the boot runs the stick's hook,
-the hook runs the session from the stick, and home opens and draws.
+the hook runs the session from the stick, and home opens and draws (with
+its CHUMBY MODE bar on the stock 2.6 kernel; on dist, where home has
+none, until its screen settles).
 
 **smoke** (`dev/emulate-smoke TREE OUT`, a tree with doom): home draws, a
 tap on DOOM opens Doom (without game data it says so and exits, and home
@@ -345,8 +355,11 @@ What the emulator can't catch is what real devices are for:
 An app is a crate named `neochumby-<name>`. It lives in this repository
 under `apps/<name>/`, or in its own repository with the crate at the root,
 where it is added to a tree from its git URL or from crates.io
-(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`). Its
-`Cargo.toml` says what it is:
+(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`).
+cargo-deny sees only this repository's `Cargo.lock`, so an app
+`tools/tree` fetches from git or crates.io, and what it depends on, isn't
+checked for licences or advisories: pin it (a full commit id, a version),
+and read what you pin. Its `Cargo.toml` says what it is:
 
 ```toml
 [package]
@@ -366,8 +379,10 @@ neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
-access = ["screen", "touch"]         # optional: what it reaches beyond its jail
+access = ["system"]                  # optional: what it reaches beyond its jail
 player = true                        # optional: a player (below)
+font = "spleen-8x16"                 # optional, text mode: its terminal's font
+tap = "q"                            # optional, text mode: what a tap types
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -383,14 +398,59 @@ Binaries named by `exec` and `service` are built for the Chumby
 (`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
-crash reports (`debug`), the request pipe (`session`) and a terminal for a
-program written for one (`term::run`, which `apps/fetch` uses; the
-touchscreen is its mouse, and `term::run_tapping` makes a tap type a key,
-as `apps/top` quits). A C program that uses curses depends on
+crash reports (`debug`) and the request pipe (`session`). A program
+written for a terminal needs none of that: it runs in text mode (below),
+as `apps/htop` and `apps/top` do. A C program that uses curses depends on
 `neochumby-ncurses` and builds against `DEP_NCURSESW_INCLUDE`
 (`apps/htop/build.rs`). The screen
 is 320x240 RGB565, so prerender what you can, and keep in mind that the CPU
 is a 266 MHz ARM926 with no FPU.
+
+### Text mode
+
+An app's `exec` runs in **text mode** unless its `access` lists `fb`.
+Text mode is the default, and what a program written for a terminal wants:
+
+- **Its stdin and stdout are a terminal** of its own, a pseudo-terminal
+  with `TERM=linux`, as many characters as its font fits on the screen
+  (64x30 in Spleen 5x8). Its stderr is the session's log, as every app's
+  is. It has no framebuffer and no touchscreen device of its own.
+- **The session shows it.** On the stock 2.6.16 kernel, which has no
+  console on the screen, the session draws it (`neochumby::term`: the
+  Linux console's escape sequences, and xterm's 256 colours, alternate
+  screen and line drawing besides). On the dist kernels (Linux 5.9 and
+  7.2), the session passes its output to the kernel's console, tty1, for
+  the kernel to draw: the font is loaded there (BusyBox's `loadfont`) and
+  the colours go in its palette (`ESC ] P`). Either way the app never holds
+  the screen, so it behaves the same on both. Fonts taller or wider than
+  32 pixels (Spleen 32x64), which the console can't take, are drawn by the
+  session there too. The console has only 16 colours, so a scheme's
+  background and foreground take colours 0 and 7 there.
+- **Touches arrive on its stdin** as xterm's mouse reports, the left
+  button, once the program asks for them (curses' `mousemask` does) with
+  DECSET 9, 1000, 1002 or 1003, in the encoding it asked for. With 1006,
+  SGR's: `ESC [ < 0 ; COL ; ROW M` as the finger goes down, `ESC [ < 32 ;
+  COL ; ROW M` as it moves to another character (1002 and 1003 only), and
+  `ESC [ < 0 ; COL ; ROW m` as it lifts, COL and ROW counted from 1.
+  Without 1006, X10's: `ESC [ M` then three bytes, 32 plus the button (0
+  down, 32 moved, 3 up), 32 plus COL and 32 plus ROW. curses' `linux`
+  entry asks for X10's; a program of your own should ask for SGR's. Before
+  the program asks for the mouse, a tap types the manifest's **`tap`**
+  instead (`"q"` quits top; `"\n"` ends a read in line mode, as fetch
+  waits), or nothing without one. A USB keyboard on a dist image types
+  into it as well.
+- **Its font** is the manifest's **`font`**: `spleen-5x8` (the default),
+  `spleen-6x12`, `spleen-8x16`, `spleen-12x24`, `spleen-16x32` or
+  `spleen-32x64` (Spleen 2.2.0, `crates/neochumby/fonts`, BSD-2-Clause), or
+  a PSF file (`.psf`, `.psfu`) in the app's directory, from `files/`. The
+  owner's `font=` setting overrides it for every app.
+- **Its colours** are the owner's (`colors=` in the settings): GitHub Dark
+  unless they choose otherwise (README, "Apps").
+
+It ends as any app does, and the terminal closes with it and with
+whatever it started. An app with `fb` can still show a program on a
+terminal of its own with `neochumby::term::run` (it then needs `touch` and
+`terminal` too).
 
 ### The app contract
 
@@ -414,10 +474,12 @@ Every app is opened the same way, whoever asked for it.
   `access` lists `storage` (below);
 - with `NEOCHUMBY_PLAYER` naming this Chumby's default player, when it
   has one (below);
-- owning the screen until it exits. What's on the screen when it starts is
+- in text mode, with a terminal as its stdin and stdout (above); with `fb`,
+  owning the screen until it exits. What's on the screen when it starts is
   whatever was there: draw all of it;
-- sharing the touchscreen: every reader gets every touch. The session
-  watches the top-left corner for the escape hatch;
+- with `touch`, sharing the touchscreen: every reader gets every touch.
+  The session watches the top-left corner for the escape hatch, whatever
+  the mode;
 - **the top button** only with `button = true`. Only one process at a time
   can have `/dev/switch` open, and the session keeps it. An app with
   `button = true` is handed the open file as `NEOCHUMBY_BUTTON=<fd>`, and
@@ -476,8 +538,8 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 
 | `access` | what your app gets |
 |---|---|
-| `screen` | `/dev/fb0`, for its `exec` only, never its `service` |
-| `touch` | the touchscreen and its calibration (`/psp/ts_settings`, read-only), likewise |
+| `fb` | `/dev/fb0`, for its `exec` only, never its `service`, in place of a terminal: it draws the screen itself |
+| `touch` | the touchscreen and its calibration (`/psp/ts_settings`, read-only), likewise. A text-mode app gets touches on its stdin without it |
 | `speaker` | `/dev/dsp`, and the speaker's handover (`neochumby::audio`). The mute and the volume are the session's: `audio` asks for them over the request pipe |
 | `accel` | the accelerometer |
 | `system` | `/proc`, `/sys` and `/etc` |
@@ -485,7 +547,7 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
 | `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service` (below) |
 | `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
-| `root` | no jail: it runs as root, as the session does. Listed alone |
+| `root` | no jail: it runs as root, as the session does. Listed alone, or with `fb` for an app that draws the screen itself: without `fb`, a root app runs in text mode too |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
 can't signal or trace each other, or root, and can't read the Chumby's
@@ -721,6 +783,9 @@ month's releases from 0: `v2026.10.0`) cuts a dated release; CI's
 sources onto it from `dist-prebuilt`, and links qemu-chumby's build (a
 manual CI run on main with `release` set does the same, creating the
 release). It builds nothing, so cut one once main's CI has finished.
+The mainline kernel track's image isn't in a release: CI builds it only
+weekly (dist/README.md, "Mainline, weekly"), and the newest is on
+`dist-prebuilt`.
 
 ## Publishing the SDK crates
 

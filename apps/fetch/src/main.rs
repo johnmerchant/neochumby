@@ -13,9 +13,8 @@
 #![allow(unsafe_code)]
 
 use std::ffi::{CString, c_char, c_int};
+use std::io::Read;
 use std::process::Command;
-
-use neochumby::input::{Touch, Touchscreen};
 
 unsafe extern "C" {
     fn fastfetch_main(argc: c_int, argv: *const *const c_char) -> c_int;
@@ -51,7 +50,7 @@ fn main() {
         .arg("file")
         .arg("--logo")
         .arg(dir.join("chumby.txt"));
-    match neochumby::term::run(cmd) {
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-fetch: fastfetch: {s}"),
         Ok(_) => {}
         Err(e) => {
@@ -59,9 +58,7 @@ fn main() {
             std::process::exit(1);
         }
     }
-    // Its output stays until a touch ends.
-    let mut touch = Touchscreen::open();
-    while !touch.poll().contains(&Touch::Up) {
-        neochumby::sleep_ms(50);
-    }
+    // Its output stays until a tap, which types a newline (its manifest's
+    // tap) on the terminal, in line mode: a read returns with it.
+    let _ = std::io::stdin().read(&mut [0u8; 64]);
 }
