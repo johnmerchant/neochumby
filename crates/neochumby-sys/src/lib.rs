@@ -2,6 +2,10 @@
 //! functions. It is the only crate of ours with `unsafe` code; the GPL
 //! games, which are FFI to C engines, are the only others allowed it.
 //!
+//! **Experimental and unstable**: any release may break anything. Built
+//! for [neochumby](https://github.com/johnmerchant/neochumby), and
+//! published to start an SDK for it.
+//!
 //! The workspace denies `unsafe_code`, and this crate alone allows it. Each
 //! `unsafe` block here carries a `// SAFETY:` comment saying why it holds
 //! (clippy's `undocumented_unsafe_blocks`, denied workspace-wide), and each

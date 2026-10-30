@@ -6,7 +6,9 @@
 # changed, and the end-to-end scenarios run on it (5.9.16), on qemu-chumby's
 # emulated Chumby. And,
 # when the image, the sideloader or the emulator changes (or on demand), the
-# sideload image's recovery path tested.
+# sideload image's recovery path tested. The SDK crates packaged as
+# crates.io would take them, and, from main, those that changed published
+# (see CONTRIBUTING.md).
 #
 # The images, prebuilt: the dist image for each kernel (5.9.16, 7.2.13)
 # and the classic image (2.6.16), each with its corresponding source. The
@@ -176,6 +178,48 @@ jobs:
             ${{ runner.temp }}/tree
             ${{ runner.temp }}/tree.neochumbyd
           retention-days: 3
+
+  # The SDK crates, packaged as crates.io would take them and each built
+  # from its package alone, so that packaging can't break unnoticed. cargo
+  # packages them together, so each one's dependencies among them resolve to
+  # their packages, not to crates.io. neochumby builds only for the Chumby
+  # (and its softfloat and ncurses' C need zig there); the rest build on
+  # the host too.
+  crates:
+    name: Package the SDK crates
+    # Not for a release, which builds nothing.
+    if: github.event_name != 'release' && !inputs.release
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv5te-unknown-linux-musleabi
+      - uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: zig-${{ env.ZIG_VERSION }}-
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: On the host
+        run: |
+          cargo package -p neochumby-sys -p neochumby-proto -p neochumby-macros \
+            -p neochumby-softfloat -p neochumby-sync -p neochumby-ncurses
+      - name: For the Chumby, as cargo publish would
+        run: |
+          cargo publish --dry-run --target armv5te-unknown-linux-musleabi \
+            -p neochumby-sys -p neochumby-proto -p neochumby-macros -p neochumby-softfloat \
+            -p neochumby-sync -p neochumby -p neochumby-ncurses
+      - name: What each carries
+        run: |
+          for c in target/package/*.crate; do
+            printf '%s: %s files, %s bytes\n' "$c" "$(tar tzf "$c" | wc -l)" "$(stat -c %s "$c")"
+          done
 
   # Whether this run needs the sideload job's recovery test and the classic
   # job's boot tests: only when what they test or build changed, on demand,
@@ -1164,3 +1208,211 @@ jobs:
           } >> "$RUNNER_TEMP/notes"
           gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes"
           echo "released $TAG: https://github.com/$GH_REPO/releases/tag/$TAG"
+
+  # Publishes the SDK crates to crates.io on every push to main, once main
+  # builds, tests and packages: each crate whose package changed since its
+  # latest release, and each that depends on one (at 0.0.x every release is
+  # incompatible with the one before, so a dependent's requirement changes).
+  # Nobody bumps versions: a crate's next version is crates.io's latest plus
+  # one in its last component (0.0.N to 0.0.N+1), or its Cargo.toml's version
+  # if that's higher (the floor, and a crate's first release). CI writes the
+  # versions and requirements into its own checkout's manifests only, and
+  # tags each release <crate>-v<version>, as a record. "Changed" means this
+  # commit's package, packaged at the latest release's version, differs from
+  # the .crate on crates.io (but for .cargo_vcs_info.json and Cargo.lock), so
+  # a re-run publishes nothing and a failed run's re-run picks up where it
+  # stopped. Anywhere but main (pull requests, workflow_dispatch elsewhere)
+  # it only prints the plan and runs cargo publish --dry-run. Runs on main
+  # wait for each other: two can't race for one version.
+  crates-publish:
+    name: Publish to crates.io
+    needs: [host, cross, crates]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    concurrency:
+      group: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'crates-io' || format('crates-io-plan-{0}', github.run_id) }}
+      cancel-in-progress: false
+    env:
+      MODE: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && 'publish' || 'dry-run' }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: true
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: armv5te-unknown-linux-musleabi
+      - uses: actions/cache@v4
+        with:
+          path: .zig-cache
+          key: zig-${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
+          restore-keys: zig-${{ env.ZIG_VERSION }}-
+      - uses: mlugg/setup-zig@v2
+        with:
+          version: ${{ env.ZIG_VERSION }}
+          use-cache: false
+      - name: Plan, and publish
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && secrets.CARGO_REGISTRY_TOKEN || '' }}
+        shell: python3 {0}
+        run: |
+          import io, json, os, re, subprocess, sys, tarfile, time, urllib.error, urllib.request
+
+          # In dependency order; each depends only on those before it.
+          SDK = ["neochumby-sys", "neochumby-proto", "neochumby-macros", "neochumby-softfloat",
+                 "neochumby-sync", "neochumby", "neochumby-ncurses"]
+          TARGET = "armv5te-unknown-linux-musleabi"
+          MODE = os.environ["MODE"]
+          # crates.io's sparse index and downloads; a directory instead of
+          # either tests the plan against crates laid out as they would be.
+          INDEX = os.environ.get("CRATES_INDEX", "https://index.crates.io")
+          DL = os.environ.get("CRATES_DL", "https://static.crates.io/crates")
+          UA = {"User-Agent": "neochumby CI (https://github.com/johnmerchant/neochumby)"}
+
+          def fetch(base, path):
+              """The file at base/path, or None if there's none."""
+              if not base.startswith("https://"):
+                  p = os.path.join(base, path)
+                  return open(p, "rb").read() if os.path.exists(p) else None
+              req = urllib.request.Request(f"{base}/{path}", headers=UA)
+              for attempt in range(5):
+                  try:
+                      with urllib.request.urlopen(req, timeout=60) as r:
+                          return r.read()
+                  except urllib.error.HTTPError as e:
+                      if e.code in (403, 404):
+                          return None
+                      err = e
+                  except urllib.error.URLError as e:
+                      err = e
+                  time.sleep(5 * (attempt + 1))
+              raise err
+
+          def published(name):
+              """Every version of name on crates.io, yanked ones too."""
+              n = name.lower()
+              path = {1: f"1/{n}", 2: f"2/{n}", 3: f"3/{n[0]}/{n}"}.get(len(n), f"{n[:2]}/{n[2:4]}/{n}")
+              body = fetch(INDEX, path)
+              return [json.loads(l)["vers"] for l in body.decode().splitlines() if l.strip()] if body else []
+
+          def key(v):
+              return tuple(int(x) for x in v.split("-")[0].split("+")[0].split("."))
+
+          def bump(v):
+              parts = v.split("-")[0].split("+")[0].split(".")
+              parts[-1] = str(int(parts[-1]) + 1)
+              return ".".join(parts)
+
+          def run(*cmd, check=True):
+              print("+", " ".join(cmd), flush=True)
+              return subprocess.run(cmd, check=check)
+
+          meta = json.loads(subprocess.check_output(["cargo", "metadata", "--no-deps", "--format-version", "1"]))
+          pkgs = {p["name"]: p for p in meta["packages"] if p["name"] in SDK}
+          deps = {c: sorted({d["name"] for d in pkgs[c]["dependencies"] if d["name"] in SDK}, key=SDK.index) for c in SDK}
+          for c in SDK:
+              assert all(SDK.index(d) < SDK.index(c) for d in deps[c]), f"{c}'s dependencies must come before it in SDK"
+
+          def closure(c):
+              """c and every SDK crate it depends on, directly or not."""
+              out = {c}
+              for d in deps[c]:
+                  out.update(closure(d))
+              return out
+
+          # The manifests as checked out, and how to write versions into them:
+          # each crate's own version, and the requirement in
+          # [workspace.dependencies] that its dependents take it by.
+          root = os.path.join(meta["workspace_root"], "Cargo.toml")
+          texts = {p: open(p).read() for p in [root] + [pkgs[c]["manifest_path"] for c in SDK]}
+
+          def write(versions):
+              for p, t in texts.items():
+                  if p == root:
+                      for c, v in versions.items():
+                          t, n = re.subn(rf'(?m)^({re.escape(c)} = \{{ path = "[^"]*", version = )"[^"]*"', rf'\g<1>"{v}"', t)
+                          assert n == 1, f"{c} in [workspace.dependencies]"
+                  else:
+                      c = next(c for c in SDK if pkgs[c]["manifest_path"] == p)
+                      if c in versions:
+                          head, n = re.subn(r'(?m)^version = "[^"]*"', f'version = "{versions[c]}"', t.split("\n[", 1)[0], count=1)
+                          assert n == 1, f"{c}'s [package] version"
+                          t = head + t[len(t.split("\n[", 1)[0]):]
+                  open(p, "w").write(t)
+
+          def contents(crate):
+              """A .crate's files, less what differs between any two packagings."""
+              with tarfile.open(fileobj=io.BytesIO(crate), mode="r:gz") as tar:
+                  return {m.name.split("/", 1)[1]: tar.extractfile(m).read() for m in tar.getmembers()
+                          if m.isfile() and m.name.split("/", 1)[1] not in (".cargo_vcs_info.json", "Cargo.lock")}
+
+          # What to publish, in order: each crate at its latest release's
+          # version, and its dependencies at theirs as decided, packaged and
+          # compared with that release.
+          final, plan = {}, []
+          for c in SDK:
+              floor = pkgs[c]["version"]
+              have = published(c)
+              latest = max(have, key=key) if have else None
+              if latest is None:
+                  final[c], why = floor, "not on crates.io yet"
+              elif key(floor) > key(latest):
+                  final[c], why = floor, f"its Cargo.toml's version, above {latest}"
+              else:
+                  write({**final, c: latest})
+                  subprocess.run(["cargo", "package", "--no-verify", "--allow-dirty", "--quiet"]
+                                 + [a for d in sorted(closure(c), key=SDK.index) for a in ("-p", d)], check=True)
+                  mine = contents(open(os.path.join(meta["target_directory"], "package", f"{c}-{latest}.crate"), "rb").read())
+                  theirs = contents(fetch(DL, f"{c}/{c}-{latest}.crate"))
+                  diff = sorted(f for f in set(mine) | set(theirs) if mine.get(f) != theirs.get(f))
+                  if not diff:
+                      final[c] = latest
+                      print(f"{c} {latest}: unchanged")
+                      continue
+                  final[c] = bump(latest)
+                  if diff == ["Cargo.toml"] and any(d in plan for d in deps[c]):
+                      why = "its dependencies' new versions"
+                  else:
+                      why = f"changed since {latest}: " + ", ".join(diff[:8]) + (f" and {len(diff) - 8} more" if len(diff) > 8 else "")
+              plan.append(c)
+              print(f"{c} {final[c]}: {why}")
+          write(final)
+
+          print()
+          if not plan:
+              print("Nothing to publish.")
+              sys.exit(0)
+          print("To publish, in this order:")
+          for i, c in enumerate(plan, 1):
+              print(f"  {i}. {c} {final[c]}" + (f" (needs {', '.join(f'{d} {final[d]}' for d in deps[c])})" if deps[c] else ""))
+          print(flush=True)
+
+          if MODE != "publish":
+              # Together, so those not yet on crates.io resolve to their packages.
+              run("cargo", "publish", "--dry-run", "--allow-dirty", "--target", TARGET, *[a for c in plan for a in ("-p", c)])
+              sys.exit(0)
+
+          if not os.environ.get("CARGO_REGISTRY_TOKEN"):
+              sys.exit("::error::No CARGO_REGISTRY_TOKEN secret: nothing published")
+          for c in plan:
+              v = final[c]
+              p = subprocess.run(["cargo", "publish", "--allow-dirty", "--target", TARGET, "-p", c],
+                                 stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+              print(p.stdout, flush=True)
+              if p.returncode != 0:
+                  if not re.search(r"already (exists|uploaded)", p.stdout):
+                      sys.exit(f"::error::{c} {v} wasn't published")
+                  print(f"{c} {v} is already on crates.io")
+              # cargo waits for the index too, but only so long: its
+              # dependents resolve it from there.
+              for _ in range(60):
+                  if v in published(c):
+                      break
+                  time.sleep(10)
+              else:
+                  sys.exit(f"::error::{c} {v} isn't in crates.io's index")
+              tag = f"{c}-v{v}"
+              if not subprocess.run(["git", "ls-remote", "--exit-code", "--tags", "origin", f"refs/tags/{tag}"],
+                                    stdout=subprocess.DEVNULL).returncode == 0:
+                  run("git", "tag", tag)
+                  run("git", "push", "origin", f"refs/tags/{tag}")

@@ -2,6 +2,10 @@
 //! `noise` feature swaps in Noise_XX for both ends at build time; nothing
 //! is negotiated.)
 //!
+//! **Experimental and unstable**: any release may break anything. Built
+//! for [neochumby](https://github.com/johnmerchant/neochumby), and
+//! published to start an SDK for it.
+//!
 //! Each side has a static key, its [`Identity`], and presents its public
 //! half in the handshake: TLS with raw public keys (RFC 7250, Ed25519), no
 //! certificates. Each side then checks the other's key against the keys it

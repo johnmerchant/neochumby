@@ -5,5 +5,9 @@
 //! which is what neochumby's terminal (`neochumby::term`) says it is; there
 //! is no terminfo database on the Chumby.
 //!
+//! **Experimental and unstable**: any release may break anything. Built
+//! for [neochumby](https://github.com/johnmerchant/neochumby), and
+//! published to start an SDK for it.
+//!
 //! Nothing in Rust: what links C against it declares the functions it
 //! calls.

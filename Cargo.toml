@@ -30,20 +30,27 @@ members = [
     "apps/top",
 ]
 
+# The bundle's releases are dated (vYYYY.MM.N); this version is only for
+# the crates that aren't published. The SDK crates published on crates.io
+# (neochumby and the neochumby-* crates it needs, and neochumby-ncurses)
+# each have their own semver version: see CONTRIBUTING.md.
 [workspace.package]
 version = "0.1.0"
 edition = "2024"
 publish = false
+repository = "https://github.com/johnmerchant/neochumby"
 
 [workspace.dependencies]
 libc = "0.2"
-neochumby = { path = "crates/neochumby" }
-neochumby-macros = { path = "crates/neochumby-macros" }
-neochumby-ncurses = { path = "crates/neochumby-ncurses" }
-neochumby-softfloat = { path = "crates/neochumby-softfloat" }
-neochumby-proto = { path = "crates/neochumby-proto" }
-neochumby-sync = { path = "crates/neochumby-sync" }
-neochumby-sys = { path = "crates/neochumby-sys" }
+# Published crates: a path for the workspace, a version for crates.io. The
+# versions are floors: CI publishes at its own (see CONTRIBUTING.md).
+neochumby = { path = "crates/neochumby", version = "0.0.1" }
+neochumby-macros = { path = "crates/neochumby-macros", version = "0.0.1" }
+neochumby-ncurses = { path = "crates/neochumby-ncurses", version = "0.0.1" }
+neochumby-softfloat = { path = "crates/neochumby-softfloat", version = "0.0.1" }
+neochumby-proto = { path = "crates/neochumby-proto", version = "0.0.1" }
+neochumby-sync = { path = "crates/neochumby-sync", version = "0.0.1" }
+neochumby-sys = { path = "crates/neochumby-sys", version = "0.0.1" }
 # What an app and its companion send each other (neochumby_proto::channel).
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }

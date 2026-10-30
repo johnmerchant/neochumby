@@ -1,6 +1,10 @@
 //! neochumby's macros, re-exported by the `neochumby` crate: use them from
 //! there.
 //!
+//! **Experimental and unstable**: any release may break anything. Built
+//! for [neochumby](https://github.com/johnmerchant/neochumby), and
+//! published to start an SDK for it.
+//!
 //! [`companion!`] names the compiling app's companion (its server half,
 //! which neochumbyd runs), checked against the app's own Cargo.toml as it
 //! compiles. An app whose `[package.metadata.neochumby]` has no

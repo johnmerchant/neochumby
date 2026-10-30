@@ -4,9 +4,17 @@ description = "libgcc's hand-written ARM soft-float routines, for the Chumby Cla
 # libgcc's code: the GCC Runtime Library Exception lets it link into
 # programs under any licence.
 license = "GPL-3.0-or-later WITH GCC-exception-3.1"
-version.workspace = true
+# Its own semver, not the workspace's: published on crates.io (see
+# CONTRIBUTING.md).
+version = "0.0.1"
 edition.workspace = true
-publish.workspace = true
+publish = true
+repository.workspace = true
+readme = "README.md"
+keywords = ["chumby", "softfloat", "arm", "libgcc"]
+categories = ["embedded", "no-std", "mathematics"]
+# What the published crate carries: what it builds from.
+include = ["src/**", "build.rs", "fp/**", "libgcc/**", "README.md"]
 
 [build-dependencies]
 cc = "1"
