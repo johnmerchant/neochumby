@@ -1,0 +1,32 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: John Merchant <john@johnmerchant.dev>
+Date: Fri, 30 Oct 2026 05:42:37 +1030
+Subject: [PATCH 13/13] mtd: rawnand: mxc: accept a lone wait for ready
+
+nand_do_read_ops() calls nand_wait_readrdy() for chips with
+NAND_NEED_READRDY, which all small-page chips have. That is an
+operation of only a WAITRDY instruction, which none of mxc_nand's
+parser patterns matched, so every page read of a small-page chip (the
+i.MX21's 64 MiB Hynix on the Chumby Classic) warned in
+nand_wait_readrdy(). The NFC waits for ready itself, so accept it and
+do nothing.
+
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+ drivers/mtd/nand/raw/mxc_nand.c | 3 +++
+ 1 file changed, 3 insertions(+)
+
+diff --git a/drivers/mtd/nand/raw/mxc_nand.c b/drivers/mtd/nand/raw/mxc_nand.c
+index 4d8b92e7e..03da610a0 100644
+--- a/drivers/mtd/nand/raw/mxc_nand.c
++++ b/drivers/mtd/nand/raw/mxc_nand.c
+@@ -1671,6 +1671,9 @@ static const struct nand_op_parser mxcnd_op_parser = NAND_OP_PARSER(
+ 			       NAND_OP_PARSER_PAT_DATA_OUT_ELEM(false, MAX_DATA_SIZE),
+ 			       NAND_OP_PARSER_PAT_CMD_ELEM(true),
+ 			       NAND_OP_PARSER_PAT_WAITRDY_ELEM(true)),
++	/* nand_wait_readrdy() on small-page chips */
++	NAND_OP_PARSER_PATTERN(mxcnd_do_exec_op,
++			       NAND_OP_PARSER_PAT_WAITRDY_ELEM(false)),
+ 	);
+ 
+ static int mxcnd_exec_op(struct nand_chip *chip,

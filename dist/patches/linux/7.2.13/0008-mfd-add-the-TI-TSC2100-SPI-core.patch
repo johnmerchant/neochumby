@@ -1,0 +1,488 @@
+From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
+From: John Merchant <john@johnmerchant.dev>
+Date: Fri, 30 Oct 2026 05:13:35 +1030
+Subject: [PATCH 08/13] mfd: add the TI TSC2100 SPI core
+
+The TSC2100 is one SPI device holding a touchscreen controller and an
+audio codec. The core owns the SPI device and a regmap and registers
+both functions as cells; the codec cell gets the "codec" child node.
+
+A register access must be one SPI transfer with the command and data
+words in one chip-select frame: spi-imx releases chip select between
+transfers, so regmap's SPI bus (two transfers) reads 0. Hence the
+custom reg_read/reg_write.
+
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+ .../devicetree/bindings/mfd/ti,tsc2100.yaml   |  84 ++++++++
+ drivers/mfd/Kconfig                           |  13 ++
+ drivers/mfd/Makefile                          |   1 +
+ drivers/mfd/tsc2100.c                         | 144 ++++++++++++++
+ include/linux/mfd/tsc2100.h                   | 180 ++++++++++++++++++
+ 5 files changed, 422 insertions(+)
+ create mode 100644 Documentation/devicetree/bindings/mfd/ti,tsc2100.yaml
+ create mode 100644 drivers/mfd/tsc2100.c
+ create mode 100644 include/linux/mfd/tsc2100.h
+
+diff --git a/Documentation/devicetree/bindings/mfd/ti,tsc2100.yaml b/Documentation/devicetree/bindings/mfd/ti,tsc2100.yaml
+new file mode 100644
+index 000000000..25677d109
+--- /dev/null
++++ b/Documentation/devicetree/bindings/mfd/ti,tsc2100.yaml
+@@ -0,0 +1,84 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/mfd/ti,tsc2100.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Texas Instruments TSC2100 touchscreen controller and audio codec
++
++maintainers:
++  - John Merchant <john@johnmerchant.dev>
++
++description: |
++  The TSC2100 is a four-wire resistive touchscreen controller with a
++  stereo audio codec, on one SPI device. Each register access is a
++  single 16-bit-word transfer, a command word and then the data, with
++  the chip select held for both.
++
++  The interrupt is the chip's PINTDAV output, which the touchscreen uses
++  as its pen-down interrupt. The optional touchscreen properties go on
++  this node. The audio codec is described by the "codec" child node,
++  which a sound card refers to.
++
++allOf:
++  - $ref: /schemas/spi/spi-peripheral-props.yaml#
++  - $ref: /schemas/input/touchscreen/touchscreen.yaml#
++
++properties:
++  compatible:
++    const: ti,tsc2100
++
++  reg:
++    maxItems: 1
++
++  interrupts:
++    maxItems: 1
++    description: PINTDAV, low while the pen is down.
++
++  spi-cpha: true
++
++  codec:
++    type: object
++    additionalProperties: false
++    description: The audio codec.
++
++    properties:
++      compatible:
++        const: ti,tsc2100-codec
++
++      "#sound-dai-cells":
++        const: 0
++
++    required:
++      - compatible
++      - "#sound-dai-cells"
++
++required:
++  - compatible
++  - reg
++  - interrupts
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/interrupt-controller/irq.h>
++
++    spi {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        tsc2100@0 {
++            compatible = "ti,tsc2100";
++            reg = <0>;
++            spi-max-frequency = <8000000>;
++            spi-cpha;
++            interrupt-parent = <&gpio5>;
++            interrupts = <19 IRQ_TYPE_EDGE_FALLING>;
++
++            tsc2100_codec: codec {
++                compatible = "ti,tsc2100-codec";
++                #sound-dai-cells = <0>;
++            };
++        };
++    };
+diff --git a/drivers/mfd/Kconfig b/drivers/mfd/Kconfig
+index 763ce6a34..244be4b7c 100644
+--- a/drivers/mfd/Kconfig
++++ b/drivers/mfd/Kconfig
+@@ -1723,6 +1723,19 @@ config MFD_PALMAS
+ 	  If you say yes here you get support for the Palmas
+ 	  series of PMIC chips from Texas Instruments.
+ 
++config MFD_TSC2100
++	tristate "TI TSC2100 touchscreen controller and audio codec"
++	depends on SPI_MASTER
++	select MFD_CORE
++	select REGMAP
++	help
++	  Support for the TI TSC2100, a touchscreen controller and audio
++	  codec on SPI. This is the core: it provides the register access
++	  that the touchscreen and codec drivers share.
++
++	  To compile this driver as a module, choose M here: the module
++	  will be called tsc2100.
++
+ config TPS6105X
+ 	tristate "TI TPS61050/61052 Boost Converters"
+ 	depends on I2C
+diff --git a/drivers/mfd/Makefile b/drivers/mfd/Makefile
+index dd4bb7e77..b0264b78e 100644
+--- a/drivers/mfd/Makefile
++++ b/drivers/mfd/Makefile
+@@ -95,6 +95,7 @@ obj-$(CONFIG_MFD_CS40L50_CORE)	+= cs40l50-core.o
+ obj-$(CONFIG_MFD_CS40L50_I2C)	+= cs40l50-i2c.o
+ obj-$(CONFIG_MFD_CS40L50_SPI)	+= cs40l50-spi.o
+ 
++obj-$(CONFIG_MFD_TSC2100)	+= tsc2100.o
+ obj-$(CONFIG_TPS6105X)		+= tps6105x.o
+ obj-$(CONFIG_TPS65010)		+= tps65010.o
+ obj-$(CONFIG_TPS6507X)		+= tps6507x.o
+diff --git a/drivers/mfd/tsc2100.c b/drivers/mfd/tsc2100.c
+new file mode 100644
+index 000000000..a6e795597
+--- /dev/null
++++ b/drivers/mfd/tsc2100.c
+@@ -0,0 +1,144 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * TI TSC2100 touchscreen controller and audio codec: SPI core
++ *
++ * A transfer is one chip-select frame of 16-bit words: a command word
++ * (bit 15 read, bits 14:11 page, 10:5 register) and then the data. The
++ * core owns the SPI device and a regmap on it, and registers the
++ * touchscreen and the codec as children that share that regmap.
++ */
++
++#include <linux/delay.h>
++#include <linux/mfd/core.h>
++#include <linux/mfd/tsc2100.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/regmap.h>
++#include <linux/spi/spi.h>
++
++/*
++ * A register access is a single transfer, so that the command and data
++ * share one chip-select frame: regmap's SPI bus would send them as two
++ * transfers, which an i.MX CSPI frames separately.
++ */
++struct tsc2100 {
++	struct spi_device *spi;
++	/* 16-bit words, which go to the SPI device in the CPU's order */
++	u16 tx[2] ____cacheline_aligned;
++	u16 rx[2];
++};
++
++static int tsc2100_xfer(struct tsc2100 *tsc, u16 cmd, u16 val)
++{
++	struct spi_transfer t = {
++		.tx_buf = tsc->tx,
++		.rx_buf = tsc->rx,
++		.len = sizeof(tsc->tx),
++	};
++
++	tsc->tx[0] = cmd;
++	tsc->tx[1] = val;
++
++	return spi_sync_transfer(tsc->spi, &t, 1);
++}
++
++static int tsc2100_reg_read(void *context, unsigned int reg,
++			    unsigned int *val)
++{
++	struct tsc2100 *tsc = context;
++	int ret;
++
++	ret = tsc2100_xfer(tsc, TSC2100_READ | reg, 0);
++	if (ret)
++		return ret;
++
++	*val = tsc->rx[1];
++	return 0;
++}
++
++static int tsc2100_reg_write(void *context, unsigned int reg,
++			     unsigned int val)
++{
++	return tsc2100_xfer(context, reg, val);
++}
++
++/* The regmap's lock serializes the users of the buffers above. */
++static const struct regmap_config tsc2100_regmap_config = {
++	.reg_bits = 16,
++	.val_bits = 16,
++	.reg_stride = TSC2100_REG_STRIDE,
++	.max_register = TSC2100_REG_MAX,
++	.reg_read = tsc2100_reg_read,
++	.reg_write = tsc2100_reg_write,
++	.cache_type = REGCACHE_NONE,
++};
++
++/*
++ * The touchscreen takes the pen interrupt from the SPI device. The codec
++ * gets the "codec" child node, which the sound card names as its codec.
++ */
++static const struct mfd_cell tsc2100_cells[] = {
++	{ .name = "tsc2100-ts", },
++	{
++		.name = "tsc2100-codec",
++		.of_compatible = "ti,tsc2100-codec",
++	},
++};
++
++static int tsc2100_probe(struct spi_device *spi)
++{
++	struct regmap *regmap;
++	struct tsc2100 *tsc;
++	int ret;
++
++	tsc = devm_kzalloc(&spi->dev, sizeof(*tsc), GFP_KERNEL);
++	if (!tsc)
++		return -ENOMEM;
++	tsc->spi = spi;
++
++	spi->bits_per_word = 16;
++	ret = spi_setup(spi);
++	if (ret)
++		return ret;
++
++	regmap = devm_regmap_init(&spi->dev, NULL, tsc, &tsc2100_regmap_config);
++	if (IS_ERR(regmap))
++		return PTR_ERR(regmap);
++
++	ret = regmap_write(regmap, TSC2100_REG_RESET, TSC2100_RESET_MAGIC);
++	if (ret) {
++		dev_err(&spi->dev, "reset failed: %d\n", ret);
++		return ret;
++	}
++	usleep_range(1000, 2000);
++
++	/* One TSC2100 per board */
++	return devm_mfd_add_devices(&spi->dev, PLATFORM_DEVID_NONE,
++				    tsc2100_cells, ARRAY_SIZE(tsc2100_cells),
++				    NULL, 0, NULL);
++}
++
++static const struct spi_device_id tsc2100_id[] = {
++	{ "tsc2100", 0 },
++	{ }
++};
++MODULE_DEVICE_TABLE(spi, tsc2100_id);
++
++static const struct of_device_id tsc2100_of_match[] = {
++	{ .compatible = "ti,tsc2100" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, tsc2100_of_match);
++
++static struct spi_driver tsc2100_driver = {
++	.driver = {
++		.name = "tsc2100",
++		.of_match_table = tsc2100_of_match,
++	},
++	.id_table = tsc2100_id,
++	.probe = tsc2100_probe,
++};
++module_spi_driver(tsc2100_driver);
++
++MODULE_DESCRIPTION("TI TSC2100 SPI core");
++MODULE_LICENSE("GPL v2");
+diff --git a/include/linux/mfd/tsc2100.h b/include/linux/mfd/tsc2100.h
+new file mode 100644
+index 000000000..eacc61d90
+--- /dev/null
++++ b/include/linux/mfd/tsc2100.h
+@@ -0,0 +1,180 @@
++/* SPDX-License-Identifier: GPL-2.0-only */
++/*
++ * TI TSC2100 touchscreen controller and audio codec
++ *
++ * The core driver (drivers/mfd/tsc2100.c) owns the SPI device and a
++ * regmap that its children, the touchscreen and the codec, share:
++ * dev_get_regmap(dev->parent, NULL).  A regmap register is the chip's
++ * own address, TSC2100_REG(page, register), as it appears in the SPI
++ * command word.
++ */
++
++#ifndef __LINUX_MFD_TSC2100_H
++#define __LINUX_MFD_TSC2100_H
++
++#include <linux/bits.h>
++
++#define TSC2100_READ		BIT(15)		/* in the command word */
++#define TSC2100_REG(page, reg)	(((page) << 11) | ((reg) << 5))
++#define TSC2100_REG_STRIDE	TSC2100_REG(0, 1)
++#define TSC2100_REG_MAX		TSC2100_REG(3, 0x3f)
++
++/* Page 0: conversion results */
++#define TSC2100_REG_X		TSC2100_REG(0, 0x00)
++#define TSC2100_REG_Y		TSC2100_REG(0, 0x01)
++#define TSC2100_REG_Z1		TSC2100_REG(0, 0x02)
++#define TSC2100_REG_Z2		TSC2100_REG(0, 0x03)
++#define TSC2100_REG_BAT1	TSC2100_REG(0, 0x05)
++#define TSC2100_REG_BAT2	TSC2100_REG(0, 0x06)
++#define TSC2100_REG_AUX		TSC2100_REG(0, 0x07)
++#define TSC2100_REG_TEMP1	TSC2100_REG(0, 0x09)
++#define TSC2100_REG_TEMP2	TSC2100_REG(0, 0x0a)
++
++/* Page 1: touchscreen controls */
++#define TSC2100_REG_ADC		TSC2100_REG(1, 0x00)
++#define TSC2100_REG_STATUS	TSC2100_REG(1, 0x01)
++#define TSC2100_REG_REF		TSC2100_REG(1, 0x03)
++#define TSC2100_REG_RESET	TSC2100_REG(1, 0x04)
++#define TSC2100_REG_CONFIG	TSC2100_REG(1, 0x05)
++
++/* Page 2: audio controls */
++#define TSC2100_REG_AUDIO_CTRL1	TSC2100_REG(2, 0x00)
++#define TSC2100_REG_ADC_GAIN	TSC2100_REG(2, 0x01)
++#define TSC2100_REG_DAC_GAIN	TSC2100_REG(2, 0x02)
++#define TSC2100_REG_SIDETONE	TSC2100_REG(2, 0x03)
++#define TSC2100_REG_AUDIO_CTRL2	TSC2100_REG(2, 0x04)
++#define TSC2100_REG_POWER	TSC2100_REG(2, 0x05)
++#define TSC2100_REG_AUDIO_CTRL3	TSC2100_REG(2, 0x06)
++#define TSC2100_REG_EFFECTS(n)	TSC2100_REG(2, 0x07 + (n))	/* 0..19 */
++#define TSC2100_REG_PLL1	TSC2100_REG(2, 0x1b)
++#define TSC2100_REG_PLL2	TSC2100_REG(2, 0x1c)
++#define TSC2100_REG_AUDIO_CTRL4	TSC2100_REG(2, 0x1d)
++#define TSC2100_REG_AUDIO_CTRL5	TSC2100_REG(2, 0x1e)
++
++/* TSC2100_REG_ADC */
++#define TSC2100_ADC_PSTCM	BIT(15)		/* read: pen down */
++#define TSC2100_ADC_ADST	BIT(14)		/* write: stop, power down */
++#define TSC2100_ADC_ADSCM(m)	((m) << 10)	/* conversion/scan mode */
++#define TSC2100_ADSCM_NONE	0x0
++#define TSC2100_ADSCM_XY	0x1
++#define TSC2100_ADSCM_XYZ	0x2
++#define TSC2100_ADSCM_X		0x3
++#define TSC2100_ADSCM_Y		0x4
++#define TSC2100_ADSCM_Z		0x5
++#define TSC2100_ADSCM_BAT1	0x6
++#define TSC2100_ADSCM_BAT2	0x7
++#define TSC2100_ADSCM_AUX	0x8
++#define TSC2100_ADSCM_TEMP1	0xa
++#define TSC2100_ADSCM_PORT	0xb
++#define TSC2100_ADSCM_TEMP2	0xc
++#define TSC2100_ADC_RES_12BIT	(0 << 8)
++#define TSC2100_ADC_AVG_4	(1 << 6)
++#define TSC2100_ADC_CL_1MHZ	(3 << 4)
++#define TSC2100_ADC_PV_500US	(2 << 1)
++
++/* TSC2100_REG_STATUS */
++#define TSC2100_STATUS_PINTDAV(m)	((m) << 14)	/* PINTDAV function */
++#define TSC2100_PINTDAV_PEN_OR_DAV	0
++#define TSC2100_PINTDAV_DAV		1
++#define TSC2100_PINTDAV_PEN		2
++#define TSC2100_STATUS_DAVAIL	BIT(11)
++#define TSC2100_STATUS_XSTAT	BIT(10)
++#define TSC2100_STATUS_YSTAT	BIT(9)
++#define TSC2100_STATUS_Z1STAT	BIT(8)
++#define TSC2100_STATUS_Z2STAT	BIT(7)
++#define TSC2100_STATUS_B1STAT	BIT(6)
++#define TSC2100_STATUS_B2STAT	BIT(5)
++#define TSC2100_STATUS_AXSTAT	BIT(4)
++#define TSC2100_STATUS_T1STAT	BIT(2)
++#define TSC2100_STATUS_T2STAT	BIT(1)
++
++/* TSC2100_REG_RESET: writing this resets the chip */
++#define TSC2100_RESET_MAGIC	0xbb00
++
++/* TSC2100_REG_REF: internal reference, as the stock driver sets it */
++#define TSC2100_REF_DEFAULT	0x0011
++
++/*
++ * Audio (page 2).  Field layouts follow the stock Chumby driver
++ * (drivers/mfd/chumby-tsc2100.c in the 2.6.16 GPL tree), which shares
++ * them with the TLV320AIC26.
++ */
++
++/* TSC2100_REG_AUDIO_CTRL1 */
++#define TSC2100_CTRL1_ADCHPF_MASK	GENMASK(15, 14)	/* ADC high-pass filter */
++#define TSC2100_CTRL1_ADCIN_MASK	GENMASK(13, 12)	/* ADC input mux */
++#define TSC2100_CTRL1_ADCIN(x)		((x) << 12)
++#define TSC2100_CTRL1_WLEN_MASK		GENMASK(11, 10)	/* word length */
++#define TSC2100_CTRL1_WLEN_16		(0 << 10)
++#define TSC2100_CTRL1_WLEN_20		(1 << 10)
++#define TSC2100_CTRL1_WLEN_24		(2 << 10)
++#define TSC2100_CTRL1_WLEN_32		(3 << 10)
++#define TSC2100_CTRL1_DATFM_MASK	GENMASK(9, 8)	/* data format */
++#define TSC2100_CTRL1_DATFM_I2S		(0 << 8)
++#define TSC2100_CTRL1_DATFM_DSP		(1 << 8)
++#define TSC2100_CTRL1_DATFM_RIGHTJ	(2 << 8)
++#define TSC2100_CTRL1_DATFM_LEFTJ	(3 << 8)
++#define TSC2100_CTRL1_DACFS_MASK	GENMASK(5, 3)	/* DAC rate Fsref/n */
++#define TSC2100_CTRL1_DACFS(n)		((n) << 3)
++#define TSC2100_CTRL1_ADCFS_MASK	GENMASK(2, 0)	/* ADC rate Fsref/n */
++#define TSC2100_CTRL1_ADCFS(n)		((n) << 0)
++/* DACFS/ADCFS divider codes */
++#define TSC2100_FSDIV_1		0
++#define TSC2100_FSDIV_1_5	1
++#define TSC2100_FSDIV_2		2
++#define TSC2100_FSDIV_3		3
++#define TSC2100_FSDIV_4		4
++#define TSC2100_FSDIV_5		5
++#define TSC2100_FSDIV_5_5	6
++#define TSC2100_FSDIV_6		7
++
++/* TSC2100_REG_ADC_GAIN */
++#define TSC2100_ADCGAIN_ADMUT		BIT(15)		/* ADC mute */
++#define TSC2100_ADCGAIN_ADPGA_SHIFT	8		/* 0.5 dB steps */
++#define TSC2100_ADCGAIN_ADPGA_MAX	0x77		/* 59.5 dB */
++#define TSC2100_ADCGAIN_AGCTG_SHIFT	5		/* AGC target */
++#define TSC2100_ADCGAIN_AGCTC_SHIFT	1		/* AGC time constant */
++#define TSC2100_ADCGAIN_AGCEN		BIT(0)
++
++/* TSC2100_REG_DAC_GAIN: attenuation, 0 = 0 dB, 0x7f = -63.5 dB */
++#define TSC2100_DACGAIN_DALMU		BIT(15)		/* left mute */
++#define TSC2100_DACGAIN_DALVL_SHIFT	8
++#define TSC2100_DACGAIN_DARMU		BIT(7)		/* right mute */
++#define TSC2100_DACGAIN_DARVL_SHIFT	0
++#define TSC2100_DACGAIN_VOL_MAX		0x7f
++
++/* TSC2100_REG_SIDETONE */
++#define TSC2100_SIDETONE_ASTMU		BIT(15)		/* analog mute */
++#define TSC2100_SIDETONE_DSTMU		BIT(7)		/* digital mute */
++
++/* TSC2100_REG_POWER (1 = powered down) */
++#define TSC2100_POWER_PWDNC		BIT(15)		/* whole codec */
++#define TSC2100_POWER_ASTPWD		BIT(13)		/* analog sidetone */
++#define TSC2100_POWER_DAODRC		BIT(12)		/* output driver high power */
++#define TSC2100_POWER_ASTPWF		BIT(11)		/* read: sidetone is down */
++#define TSC2100_POWER_DAPWDN		BIT(10)		/* DAC */
++#define TSC2100_POWER_ADPWDN		BIT(9)		/* ADC */
++#define TSC2100_POWER_VGPWDN		BIT(8)		/* VGND amplifier */
++#define TSC2100_POWER_ADWSF		BIT(5)		/* ADWS pin is word select */
++#define TSC2100_POWER_VBIAS_2V		BIT(4)		/* else 2.5 V */
++
++/* TSC2100_REG_AUDIO_CTRL3 */
++#define TSC2100_CTRL3_REFFS_44K1	BIT(13)		/* Fsref 44.1 kHz, else 48 */
++#define TSC2100_CTRL3_DAXFM		BIT(12)		/* else continuous transfer */
++#define TSC2100_CTRL3_SLVMS		BIT(11)		/* codec is I2S master */
++#define TSC2100_CTRL3_DAPK2PK_MASK	GENMASK(10, 9)	/* DAC max output swing */
++#define TSC2100_CTRL3_DAPK2PK(x)	((x) << 9)
++
++/* TSC2100_REG_PLL1 */
++#define TSC2100_PLL1_PLLSEL		BIT(15)		/* PLL enable */
++#define TSC2100_PLL1_QVAL(q)		(((q) & 0xf) << 11)
++#define TSC2100_PLL1_PVAL(p)		(((p) & 0x7) << 8)	/* 0 means 8 */
++#define TSC2100_PLL1_JVAL(j)		(((j) & 0x3f) << 2)
++
++/* TSC2100_REG_PLL2 */
++#define TSC2100_PLL2_DVAL(d)		(((d) & 0x3fff) << 2)
++
++/* TSC2100_REG_AUDIO_CTRL5: the stock driver's value; bits not decoded */
++#define TSC2100_CTRL5_DEFAULT		0xfe00
++
++#endif /* __LINUX_MFD_TSC2100_H */

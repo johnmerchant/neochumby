@@ -74,8 +74,8 @@ def main():
         if marker not in text:
             print(f"ERROR: recovery check failed: {what}", file=sys.stderr)
             ok = False
-    if not re.search(r"^Linux \(none\) 5\.9\.16-mx21-sideload #\d+ .* armv5tejl GNU/Linux$", uname, re.M):
-        print("ERROR: recovery check failed: uname -a is not the sideload 5.9.16 kernel", file=sys.stderr)
+    if not re.search(r"^Linux \(none\) (5\.9\.16|7\.2\.13)-mx21-sideload #\d+ .* armv5tejl GNU/Linux$", uname, re.M):
+        print("ERROR: recovery check failed: uname -a is not a sideload kernel (5.9.16 or 7.2.13)", file=sys.stderr)
         ok = False
     print(f"sideload recovery demo: {'PASS' if ok else 'FAIL'}")
     print(f"log: {log_path}")

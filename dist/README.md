@@ -37,6 +37,22 @@ instead, which Bootlin builds only for x86_64.
 `output/`) in `DIR` instead of the `neochumby-dist` volume; CI uses it to
 cache the work.
 
+### Linux 7.2.13 (optional)
+
+```
+NEOCHUMBY_DIST_KERNEL=7.2.13 dist/build OUT
+```
+
+builds the same image on Linux 7.2.13 instead
+(`configs/chumby_classic_linux7_defconfig`, `board/chumby-classic/linux7.fragment`,
+`patches/linux/7.2.13`). Mainline removed the i.MX21 after 5.9, and the
+series brings it back as a device-tree platform; the zImage carries the
+Chumby's DTB appended, since its boot loader passes ATAGs only. The
+toolchain is the same (headers at 5.9.16); switching between the two
+rebuilds the kernel and its modules, so the initramfs never mixes them.
+`uname -r` reports `7.2.13-mx21-sideload`. The default stays 5.9.16 until
+7.2.13 has run on real hardware.
+
 ## A neochumby stick
 
 Before its shell, `/init` runs a neochumby stick as the stock boot does: it
