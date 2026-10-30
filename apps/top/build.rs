@@ -60,6 +60,11 @@ fn main() {
         .define("PROCPS_VERSION", format!("\"{version}\"").as_str())
         .define("_GNU_SOURCE", None)
         .define("main", "top_main")
+        // The calls 2.6.16 lacks on ARM, as src/compat.rs makes them.
+        .define("openat", "top_openat")
+        .define("fstatat", "top_fstatat")
+        .define("readlinkat", "top_readlinkat")
+        .define("pselect", "top_pselect")
         .opt_level(2)
         // Upstream's warnings, not ours to fix.
         .warnings(false)
