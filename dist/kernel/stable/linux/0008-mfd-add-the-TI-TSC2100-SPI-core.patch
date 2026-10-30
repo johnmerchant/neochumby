@@ -1,29 +1,17 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Fri, 30 Oct 2026 05:13:35 +1030
-Subject: [PATCH 08/13] mfd: add the TI TSC2100 SPI core
-
-The TSC2100 is one SPI device holding a touchscreen controller and an
-audio codec. The core owns the SPI device and a regmap and registers
-both functions as cells; the codec cell gets the "codec" child node.
-
-A register access must be one SPI transfer with the command and data
-words in one chip-select frame: spi-imx releases chip select between
-transfers, so regmap's SPI bus (two transfers) reads 0. Hence the
-custom reg_read/reg_write.
-
+Description: mfd: add the TI TSC2100 SPI core
+ The TSC2100 is one SPI device holding a touchscreen controller and an
+ audio codec. The core owns the SPI device and a regmap and registers
+ both functions as cells; the codec cell gets the "codec" child node.
+ .
+ A register access must be one SPI transfer with the command and data
+ words in one chip-select frame: spi-imx releases chip select between
+ transfers, so regmap's SPI bus (two transfers) reads 0. Hence the
+ custom reg_read/reg_write.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- .../devicetree/bindings/mfd/ti,tsc2100.yaml   |  84 ++++++++
- drivers/mfd/Kconfig                           |  13 ++
- drivers/mfd/Makefile                          |   1 +
- drivers/mfd/tsc2100.c                         | 144 ++++++++++++++
- include/linux/mfd/tsc2100.h                   | 180 ++++++++++++++++++
- 5 files changed, 422 insertions(+)
- create mode 100644 Documentation/devicetree/bindings/mfd/ti,tsc2100.yaml
- create mode 100644 drivers/mfd/tsc2100.c
- create mode 100644 include/linux/mfd/tsc2100.h
-
 diff --git a/Documentation/devicetree/bindings/mfd/ti,tsc2100.yaml b/Documentation/devicetree/bindings/mfd/ti,tsc2100.yaml
 new file mode 100644
 index 000000000..25677d109

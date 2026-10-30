@@ -1,10 +1,13 @@
-ARM: map the whole kernel image at boot, not just its first 4 MB
-
-2.6.16's head.S maps four 1 MB sections for the kernel, so a kernel whose
-image ends past 4 MB (ours, with its initramfs built in) faults before
-paging_init(), silently. Later mainline kernels map up to the end of the
-image with this same loop.
-
+Description: ARM: map the whole kernel image at boot, not just its first 4 MB
+ 2.6.16's head.S maps four 1 MB sections for the kernel, so a kernel whose
+ image ends past 4 MB (ours, with its initramfs built in) faults before
+ paging_init(), silently. Later mainline kernels map up to the end of the
+ image with this same loop.
+Author: Nicolas Pitre <nico@cam.org>
+Upstream-Status: Backport [e98ff7f6d8164c5636538998fb7d1e08b1fbbddd, [ARM] 4224/2: allow XIP kernel to boot again]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Fc77Z6fVVe4rWJxPT
+---
 --- a/arch/arm/kernel/head.S
 +++ b/arch/arm/kernel/head.S
 @@ -295,17 +295,18 @@

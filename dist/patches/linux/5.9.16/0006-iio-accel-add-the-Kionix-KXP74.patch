@@ -1,19 +1,11 @@
-From 903adef2ade98a147bfd1c7b1a62216d8a7c9b02 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Fri, 30 Oct 2026 02:23:31 +1030
-Subject: [PATCH 5/7] iio: accel: add the Kionix KXP74
-
-A three-axis analog accelerometer with an SPI ADC, on the Chumby
-Classic's sensor card. Raw X, Y and Z, with offset and scale.
-
+Description: iio: accel: add the Kionix KXP74
+ A three-axis analog accelerometer with an SPI ADC, on the Chumby
+ Classic's sensor card. Raw X, Y and Z, with offset and scale.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- drivers/iio/accel/Kconfig  |  11 ++
- drivers/iio/accel/Makefile |   1 +
- drivers/iio/accel/kxp74.c  | 200 +++++++++++++++++++++++++++++++++++++
- 3 files changed, 212 insertions(+)
- create mode 100644 drivers/iio/accel/kxp74.c
-
 diff --git a/drivers/iio/accel/Kconfig b/drivers/iio/accel/Kconfig
 index 2e0c62c39..5a161dbbb 100644
 --- a/drivers/iio/accel/Kconfig

@@ -1,22 +1,13 @@
-From 0000000000000000000000000000000000000000 Mon Sep 17 00:00:00 2001
-From: John Merchant <john@johnmerchant.dev>
-Date: Thu, 29 Oct 2026 18:43:30 +0000
-Subject: [PATCH 03/14] pinctrl: imx: bring back the i.MX21 driver
-
-Commit 8d1e4f90ce44 ("pinctrl: imx21: Remove the driver") removed it
-with the i.MX21. Restore it for the device-tree i.MX21, registered the
-way pinctrl-imx27 now is (arch_initcall, no unbinding), and add its
-compatible to the imx1/imx27 binding it shares.
-
+Description: pinctrl: imx: bring back the i.MX21 driver
+ Commit 8d1e4f90ce44 ("pinctrl: imx21: Remove the driver") removed it
+ with the i.MX21. Restore it for the device-tree i.MX21, registered the
+ way pinctrl-imx27 now is (arch_initcall, no unbinding), and add its
+ compatible to the imx1/imx27 binding it shares.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
- .../bindings/pinctrl/fsl,imx27-iomuxc.yaml    |   3 +-
- drivers/pinctrl/freescale/Kconfig             |   9 +
- drivers/pinctrl/freescale/Makefile            |   1 +
- drivers/pinctrl/freescale/pinctrl-imx21.c     | 337 ++++++++++++++++++
- 4 files changed, 349 insertions(+), 1 deletion(-)
- create mode 100644 drivers/pinctrl/freescale/pinctrl-imx21.c
-
 diff --git a/Documentation/devicetree/bindings/pinctrl/fsl,imx27-iomuxc.yaml b/Documentation/devicetree/bindings/pinctrl/fsl,imx27-iomuxc.yaml
 index 1254bfcaa..2918ba1ea 100644
 --- a/Documentation/devicetree/bindings/pinctrl/fsl,imx27-iomuxc.yaml
