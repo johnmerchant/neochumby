@@ -42,7 +42,7 @@ fn wasm(text: &str) -> Vec<u8> {
 
 #[test]
 fn runs_modules_inside_their_bounds() {
-    assert_eq!(neochumby_wamr::release(), neochumby_wamr::VERSION);
+    assert!(neochumby_wamr::VERSION.starts_with(&format!("{}-", neochumby_wamr::release())));
     let rt = Runtime::init().unwrap();
     assert!(Runtime::init().is_err(), "one runtime a process");
     rt.register("host", &HOST).unwrap();

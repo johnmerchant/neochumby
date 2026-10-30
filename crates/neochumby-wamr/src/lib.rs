@@ -37,9 +37,12 @@ mod runtime;
 
 pub use runtime::{Caller, Instance, Memory, Module, Runtime};
 
-/// WAMR's release, as wamr-sys pins it: part of what an `.aot` file is
-/// compiled for. A test checks it against the runtime's own.
-pub const VERSION: &str = "2.4.5";
+/// WAMR as wamr-sys pins it, its release and commit: part of what an
+/// `.aot` file is compiled for, as tools/wamrc and neochumbyd record it
+/// (`aot-key`). The commit, as an AOT file's format can change within a
+/// release; a test checks the release against the runtime's own. Moving
+/// the fork's pin to another WAMR means changing this.
+pub const VERSION: &str = "2.4.5-25bd7eb63e82";
 
 pub use runtime::release;
 
