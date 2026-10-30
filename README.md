@@ -315,6 +315,16 @@ neochumbyd set kitchen delivery=sync   # or nfs, the default
 ```
 
 - **`nfs`:** the boot hook mounts the tree from neochumbyd on every boot.
+  NFS is unauthenticated, so the Chumby checks what it mounted:
+  neochumbyd serves the tree's manifest signed with its key, and
+  `neochumby-boot` (installed in `/psp` by pairing, or by the session)
+  checks it against the key the Chumby pinned, then copies each program it
+  runs out of the tree into RAM, checked against the manifest. The tree is
+  mounted `noexec`, so nothing else on it runs. A file that doesn't match
+  isn't run: the app doesn't start, and if the session itself doesn't
+  match, the Chumby boots its own software. A Chumby that has checked a
+  tree once boots only checked trees after that: to go back to a
+  neochumbyd from before this, remove `/psp/neochumby-boot`.
 - **`sync`:** the Chumby keeps a whole copy of its tree on its USB stick,
   in step with neochumbyd, and boots from it. A Chumby on sync boots
   without the server, and loads from the stick rather than the network.
