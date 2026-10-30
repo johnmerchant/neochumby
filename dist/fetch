@@ -3,7 +3,7 @@
 # in the layout dist/build OUT (or classic/build OUT) writes, instead of
 # building it:
 #
-#   dist/fetch [--kernel 5.9.16|7.2.13] OUT   OUT/sideload-zImage, OUT/sideload-rootfs.cpio.gz
+#   dist/fetch [--kernel 5.9.16|stable|mainline] OUT   OUT/sideload-zImage, OUT/sideload-rootfs.cpio.gz
 #   dist/fetch --classic OUT                  OUT/classic-zImage, OUT/classic-rootfs.cpio.gz,
 #                                             OUT/classic-config (what classic/fetch runs)
 #   dist/fetch --inputs [--classic]           prints the inputs commit, and nothing else
@@ -16,7 +16,7 @@
 # what the image is built from (the pathspecs below). Any later commit that
 # leaves those alone has the same inputs commit, and so the same image:
 #
-#   neochumby-dist-<inputs>-<kernel>.tar.xz          (5.9.16, 7.2.13)
+#   neochumby-dist-<inputs>-<kernel>.tar.xz          (5.9.16, stable, mainline)
 #   neochumby-classic-<inputs>-2.6.16.tar.xz
 #   ... and each one's -source.tar, its corresponding source
 #
@@ -50,7 +50,7 @@ base=${NEOCHUMBY_PREBUILT:-https://github.com/$repo/releases/download/$tag}
 signer=https://github.com/$repo/.github/workflows/ci.yml@refs/heads/main
 
 usage() {
-    echo "usage: dist/fetch [--kernel 5.9.16|7.2.13] OUT"
+    echo "usage: dist/fetch [--kernel 5.9.16|stable|mainline] OUT"
     echo "       dist/fetch --classic OUT"
     echo "       dist/fetch --inputs [--classic | --kernel K]"
     echo "       dist/fetch --pathspecs [--classic]"
@@ -75,9 +75,9 @@ while [ $# -gt 0 ]; do
 done
 case $image-$kernel in
     dist-) kernel=5.9.16 ;;
-    dist-5.9.16 | dist-7.2.13 | classic-2.6.16) ;;
+    dist-5.9.16 | dist-stable | dist-mainline | classic-2.6.16) ;;
     classic-) kernel=2.6.16 ;;
-    *) echo "fetch: no $image image for kernel $kernel (dist: 5.9.16 or 7.2.13; --classic: 2.6.16)" >&2; exit 2 ;;
+    *) echo "fetch: no $image image for kernel $kernel (dist: 5.9.16, stable or mainline; --classic: 2.6.16)" >&2; exit 2 ;;
 esac
 if [ -n "$inputs_only" ]; then
     [ $# = 0 ] || { usage >&2; exit 2; }
@@ -92,7 +92,7 @@ fi
 # crates/neochumby-sys. classic/linux is the kernel's submodule: its pinned
 # commit is part of classic/.
 if [ "$image" = dist ]; then
-    set -- dist ':(exclude)dist/README.md' ':(exclude)dist/fetch' \
+    set -- dist ':(exclude)dist/README.md' ':(exclude)dist/fetch' ':(exclude)dist/kernel-sync' \
         crates/neochumby-init crates/neochumby-sys
     files="sideload-zImage sideload-rootfs.cpio.gz"
     build="dist/build"

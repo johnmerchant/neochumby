@@ -38,7 +38,7 @@ import subprocess
 import sys
 
 MARK = ".neochumby-inputs"
-DIST_KERNELS = ("5.9.16", "7.2.13")
+DIST_KERNELS = ("5.9.16", "stable", "mainline")
 DEFAULT_DIST_KERNEL = "5.9.16"
 
 # How each fetch says why it refused, as one short reason. The first match
@@ -255,7 +255,7 @@ class Image(Output):
         if image == "dist":
             kernel = kernel or DEFAULT_DIST_KERNEL
             if kernel not in DIST_KERNELS:
-                sys.exit(f"dev/emulate: NEOCHUMBY_DIST_KERNEL is {' or '.join(DIST_KERNELS)}, not {kernel}")
+                sys.exit(f"dev/emulate: NEOCHUMBY_DIST_KERNEL is {', '.join(DIST_KERNELS[:-1])} or {DIST_KERNELS[-1]}, not {kernel}")
             self.name = f"the dist image ({kernel})"
             self.where = dist_dir(repo, kernel)
             self.files = ("sideload-zImage", "sideload-rootfs.cpio.gz")
