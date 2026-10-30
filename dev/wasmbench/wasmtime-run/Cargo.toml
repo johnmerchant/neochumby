@@ -1,0 +1,24 @@
+[package]
+name = "wasmtime-run"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "Wasmtime with Pulley for the wasm benchmark: `compile` (on the host, with Cranelift) to pulley32, and `run` (on the Chumby, runtime only)"
+
+# Built by dev/wasmbench/tools/wasmtime.sh, apart from the device workspace.
+[workspace]
+
+[features]
+compile = ["wasmtime/cranelift"]
+
+[dependencies]
+wasmtime = { version = "=50.0.0", default-features = false, features = ["runtime", "std"] }
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true
