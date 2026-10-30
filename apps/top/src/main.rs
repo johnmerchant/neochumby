@@ -14,8 +14,6 @@ use std::process::Command;
 
 // For its ncurses, which top's objects need.
 use neochumby_ncurses as _;
-// The calls Linux 2.6.16 lacks, which build.rs has top's C reach.
-use neochumby_sys::compat26 as _;
 
 unsafe extern "C" {
     fn top_main(argc: c_int, argv: *const *const c_char) -> c_int;
