@@ -903,9 +903,8 @@ jobs:
 
       - name: Attest
         if: steps.new.outputs.any == 'true'
-        uses: actions/attest@v4
-        with:
-          subject-path: ${{ runner.temp }}/new/*
+        # TEMPORARY (validation while actions/attest isn't allowed): never publishes.
+        run: exit 1
 
       - name: Upload
         if: steps.new.outputs.any == 'true'
