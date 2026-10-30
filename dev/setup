@@ -147,6 +147,8 @@ if [ "$missing" = 0 ]; then
     echo "Ready. Next:"
     echo "  cargo chumby && cargo build --release -p neochumbyd"
     echo "  tools/tree /tmp/tree doom && dev/emulate start /tmp/tree"
-    echo "  dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e"
+    echo "  # the end-to-end scenarios as CI runs them:"
+    echo "  E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e"
+    echo "  NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic"
 fi
 exit "$missing"

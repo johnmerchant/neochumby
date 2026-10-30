@@ -54,6 +54,10 @@ cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server
 tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 dev/emulate start /tmp/tree   # the tree on an emulated Chumby (Testing without a Chumby, below)
+# the end-to-end scenarios as CI runs them: boot on dist; boot and smoke on classic
+cargo build --release -p neochumbyd
+E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e
+NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic
 ```
 
 Without Nix, the tools are: Rust with the
