@@ -538,8 +538,8 @@ impl<'a, D: Device> Session<'a, D> {
         let app = self.apps.iter().find(|a| a.name == name).ok_or("no such app here")?;
         if app.exec.is_none() {
             Err("it has nothing to open (no exec)")
-        } else if let Some(why) = app.why_not() {
-            Err(why)
+        } else if !app.runnable() {
+            Err("it needs a paired neochumbyd")
         } else {
             Ok(app)
         }

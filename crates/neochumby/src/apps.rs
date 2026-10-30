@@ -17,14 +17,13 @@
 //!   player=true                a player: may be the default one, opened
 //!                              by MUSIC buttons; its service takes `pause`
 //!                              and `resume` (see the session)
-//!   linux=5.9                  the oldest Linux it runs on (absent: any);
-//!                              on an older one it isn't listed or opened
+//!   linux=5.9                  the oldest Linux it runs on, which tools/tree
+//!                              reads: a tree for an older one leaves it out
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
 
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 
 use crate::conf;
 use crate::fb::rgb;
@@ -67,9 +66,6 @@ pub struct App {
     pub player: bool,
     /// What it reaches beyond its jail.
     pub access: Access,
-    /// The oldest Linux it runs on, as (major, minor): its manifest's
-    /// `linux`. None: any.
-    pub linux: Option<(u32, u32)>,
 }
 
 /// An app's `access`: what the session gives it beyond its own directory
@@ -120,42 +116,10 @@ impl Access {
 }
 
 impl App {
-    /// Whether it runs on this Chumby's Linux (its `linux`): an app that
-    /// needs a newer one isn't listed, opened or started. When the running
-    /// Linux can't be read (a jail without /proc), it is taken to.
-    pub fn supported(&self) -> bool {
-        self.linux.is_none_or(|need| running_linux().is_none_or(|have| have >= need))
-    }
-
-    /// Whether it can run here: on this Linux, and with what it needs of a
-    /// neochumbyd.
+    /// Whether it can run here: what it needs of a neochumbyd it has.
     pub fn runnable(&self) -> bool {
-        self.why_not().is_none()
+        self.needs != Needs::Required || conf::paired().is_some()
     }
-
-    /// Why it can't run here, or None if it can.
-    pub fn why_not(&self) -> Option<&'static str> {
-        if !self.supported() {
-            Some("it needs a newer Linux")
-        } else if self.needs == Needs::Required && conf::paired().is_none() {
-            Some("it needs a paired neochumbyd")
-        } else {
-            None
-        }
-    }
-}
-
-/// A Linux version's (major, minor), from its first two numbers: "5.9",
-/// "2.6.16-csb".
-fn parse_linux(s: &str) -> Option<(u32, u32)> {
-    let mut n = s.trim().split(|c: char| !c.is_ascii_digit());
-    Some((n.next()?.parse().ok()?, n.next()?.parse().ok()?))
-}
-
-/// The running Linux's (major, minor), from /proc; None without /proc.
-pub fn running_linux() -> Option<(u32, u32)> {
-    static LINUX: OnceLock<Option<(u32, u32)>> = OnceLock::new();
-    *LINUX.get_or_init(|| std::fs::read_to_string("/proc/sys/kernel/osrelease").ok().and_then(|r| parse_linux(&r)))
 }
 
 fn parse_color(s: &str) -> Option<u16> {
@@ -191,7 +155,6 @@ pub fn load(dir: &Path) -> Option<App> {
         button: field("button").as_deref() == Some("true"),
         player: field("player").as_deref() == Some("true"),
         access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
-        linux: field("linux").and_then(|l| parse_linux(&l)),
     })
 }
 
@@ -220,18 +183,4 @@ pub fn all(root: &Path) -> Vec<App> {
         std::fs::read_dir(root.join("apps")).map(|rd| rd.flatten().map(|e| e.path()).collect()).unwrap_or_default();
     dirs.sort();
     dirs.iter().filter_map(|d| load(d)).collect()
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn linux_versions() {
-        assert_eq!(parse_linux("5.9"), Some((5, 9)));
-        assert_eq!(parse_linux("2.6.16-csb"), Some((2, 6)));
-        assert_eq!(parse_linux("7.3.0-mx21-sideload\n"), Some((7, 3)));
-        assert_eq!(parse_linux("5"), None);
-        assert!((2, 6) < (5, 9) && (5, 9) <= (5, 9) && (7, 2) >= (5, 9));
-    }
 }

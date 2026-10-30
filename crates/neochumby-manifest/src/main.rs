@@ -11,7 +11,8 @@
 //! `player`, which are true or false, and `access`, a list of what the app
 //! reaches beyond its jail ([`ACCESS`]), written as one comma-separated
 //! value. `linux` is the oldest Linux the app runs on, MAJOR.MINOR (as
-//! "5.9"): a Chumby on an older one doesn't list or open it. `neochumbyd` is `required` or `optional`
+//! "5.9"): tools/tree leaves it out of a tree for an older one.
+//! `neochumbyd` is `required` or `optional`
 //! (absent: the app never needs one), and an app with a `companion` must
 //! set it: only a neochumbyd runs companions. It is stated, not inferred
 //! from `companion`.

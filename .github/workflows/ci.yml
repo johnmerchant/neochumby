@@ -180,9 +180,11 @@ jobs:
             -p neochumby-airplay --bin neochumby-airplay-companion
           cargo build --release --target aarch64-unknown-linux-musl \
             -p neochumby-logs --bin neochumby-logs-companion
+      # For the stock 2.6, so classic's scenarios run it too; the apps
+      # that need a newer Linux are left out (tools/tree --linux).
       - name: A tree, as tools/tree lays it out
         run: |
-          tools/tree "$RUNNER_TEMP/tree" doom quake airplay fetch htop top \
+          tools/tree "$RUNNER_TEMP/tree" --linux 2.6 doom quake airplay fetch htop top \
             cmatrix clock bonsai pipes aquarium genact classic logs
           find "$RUNNER_TEMP/tree" -type f | sort
           cp target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/tree.neochumbyd"

@@ -363,7 +363,7 @@ interrupt = false                    # optional: no service replaces it (games)
 button = true                        # optional: it gets the top button (games)
 access = ["screen", "touch"]         # optional: what it reaches beyond its jail
 player = true                        # optional: a player (below)
-linux = "5.9"                        # optional: the oldest Linux it runs on
+linux = "5.9"                        # optional: the oldest Linux it runs on (tools/tree --linux)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
