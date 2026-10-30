@@ -9,6 +9,27 @@ own flash backup) and `chumby-emu` (the Chumby as a desktop app). Its
 README documents them, the machine's control surface and how to build it.
 
     emu/qemu/build      # qemu-chumby's build, into emu/qemu/out/obj/qemu-system-arm
+    emu/qemu/fetch      # or its prebuilt binary, into the same place
+
+`emu/qemu/fetch` downloads the `qemu-system-arm` that qemu-chumby's CI
+built from the commit pinned here (qemu-chumby's README, "Prebuilt
+binaries"; Linux x86_64 and aarch64, macOS on Apple silicon), checks its
+SHA-256 against the one committed in `emu/qemu/qemu-chumby.sha256` (never
+the release's own, which whoever can write to qemu-chumby could replace)
+before extracting or running it, and checks that it runs. It exits 1 when
+that file has no digest for the pinned commit and this platform, the
+download doesn't match, or the binary can't run here; then use
+`emu/qemu/build`. CI does just that: the prebuilt binary, else a build from
+source, cached.
+
+To move the submodule to a new qemu-chumby commit: once it is on
+qemu-chumby's main and its CI has published it, commit the submodule's
+change, run `emu/qemu/fetch --pin` (which downloads that commit's tarballs,
+computes their SHA-256 here and rewrites `emu/qemu/qemu-chumby.sha256`),
+and commit the new pins with it, for review in the pull request's diff.
+Without new pins, CI builds QEMU from source. The prebuilt Linux binary has no window or sound (VNC and
+headless only), and needs glib, pixman, libpng and zlib, which a stock
+Ubuntu 24.04 runner has; build it yourself for the desktop.
 
 `dev/emulate` boots a neochumby tree on it in one of three profiles:
 `stock` (the Chumby's own firmware, from your own backup; local only),
