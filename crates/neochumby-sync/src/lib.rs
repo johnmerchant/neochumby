@@ -45,6 +45,10 @@
 //! ([`stick::check_set`], `neochumby check-set`), else the other set, else
 //! it boots as before. A power cut at any point leaves one complete set.
 //! The live set is never written, nor the set the Chumby is running from.
+//!
+//! `delivery=nfs` is checked too: neochumbyd signs the same manifest, and
+//! a Chumby runs nothing from the tree it mounted that the signed manifest
+//! doesn't vouch for ([`signed`]).
 
 #[cfg(test)]
 mod crash;
@@ -52,6 +56,7 @@ pub mod disk;
 pub mod manifest;
 pub mod receive;
 pub mod serve;
+pub mod signed;
 pub mod stick;
 #[cfg(test)]
 mod tests;

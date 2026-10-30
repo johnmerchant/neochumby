@@ -1,5 +1,5 @@
 #!/bin/sh
-# neochumby-hook-version=1
+# neochumby-hook-version=2
 # (Raise it with every change: the session replaces an installed hook only
 # with a higher version, so a rollback to an older set never downgrades it.)
 # neochumby's boot hook. The same script goes in two places, and the stock
@@ -12,7 +12,11 @@
 # The first to run starts neochumby; the other sees that and returns. Apps
 # come from a set synced to the stick (delivery=sync, below) if there is a
 # complete one, else from the stick's neochumby/ tree if it has one,
-# otherwise from the paired neochumbyd over NFS. The neochumbyd (the stick's neochumby.conf,
+# otherwise from the paired neochumbyd over NFS. NFS is unauthenticated,
+# so once pairing or the session has installed /psp/neochumby-boot, the
+# tree is mounted noexec and that runs it instead: it checks the tree
+# against the manifest neochumbyd signed, and runs only what checks. The
+# neochumbyd (the stick's neochumby.conf,
 # else /psp/neochumby.conf) is passed on to the apps either way, for its
 # services. CHUMBY MODE, or any failure, returns and the stock boot carries
 # on.
@@ -142,8 +146,10 @@ elif [ -n "$server" ]; then
   # No port mapper (ports given), no lock manager (nolock), TCP; soft with
   # short timeouts so a lost network fails reads instead of hanging;
   # nosuid,nodev: nothing in the tree hands out another uid, or a device.
-  deadline 15 mount -t nfs \
-    -o "ro,nosuid,nodev,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0" \
+  # With neochumby-boot, noexec too: nothing on it runs but checked copies.
+  opts="ro,nosuid,nodev,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0"
+  [ -x /psp/neochumby-boot ] && opts="$opts,noexec"
+  deadline 15 mount -t nfs -o "$opts" \
     "$server:${path:-/}" "$MNT" || {
     echo "mount failed"
     exit 0
@@ -157,7 +163,11 @@ fi
 
 touch "$RAN"
 # The launcher owns the screen and inputs until it exits.
-NEOCHUMBY_SERVER=$server NEOCHUMBY_API_PORT=$api_port "$root/neochumby"
+if [ "$root" = "$MNT" ] && [ -x /psp/neochumby-boot ]; then
+  NEOCHUMBY_SERVER=$server NEOCHUMBY_API_PORT=$api_port /psp/neochumby-boot "$MNT"
+else
+  NEOCHUMBY_SERVER=$server NEOCHUMBY_API_PORT=$api_port "$root/neochumby"
+fi
 echo "neochumby exited: $?"
 
 cd /
