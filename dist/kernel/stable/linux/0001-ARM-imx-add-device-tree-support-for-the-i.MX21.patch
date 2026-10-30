@@ -1,0 +1,86 @@
+Description: ARM: imx: add device-tree support for the i.MX21
+ Commit 4b563a066611 ("ARM: imx: Remove imx21 support") removed the
+ i.MX21 because it had only board-file support. Bring it back as a
+ DT-only SoC, like the i.MX1 and i.MX27: the machine only sets the CPU
+ type; the AVIC, timer and peripherals come from the device tree.
+ .
+ The prototype of the old imx21_init_early() is dropped from common.h;
+ it has had no definition since that removal.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+diff --git a/arch/arm/mach-imx/Kconfig b/arch/arm/mach-imx/Kconfig
+index a361840d7..47f1b2f74 100644
+--- a/arch/arm/mach-imx/Kconfig
++++ b/arch/arm/mach-imx/Kconfig
+@@ -67,6 +67,13 @@ endif
+ 
+ if ARCH_MULTI_V5
+ 
++config SOC_IMX21
++	bool "i.MX21 support"
++	select CPU_ARM926T
++	select MXC_AVIC
++	help
++	  This enables support for Freescale i.MX21 processor
++
+ config SOC_IMX25
+ 	bool "i.MX25 support"
+ 	select CPU_ARM926T
+diff --git a/arch/arm/mach-imx/Makefile b/arch/arm/mach-imx/Makefile
+index 5c650bf40..b8a56397c 100644
+--- a/arch/arm/mach-imx/Makefile
++++ b/arch/arm/mach-imx/Makefile
+@@ -1,6 +1,8 @@
+ # SPDX-License-Identifier: GPL-2.0
+ obj-y := cpu.o system.o irq-common.o
+ 
++obj-$(CONFIG_SOC_IMX21) += mach-imx21.o
++
+ obj-$(CONFIG_SOC_IMX25) += cpu-imx25.o mach-imx25.o pm-imx25.o
+ 
+ obj-$(CONFIG_SOC_IMX27) += cpu-imx27.o pm-imx27.o mach-imx27.o
+diff --git a/arch/arm/mach-imx/common.h b/arch/arm/mach-imx/common.h
+index 45c1a2a7b..25d345d5d 100644
+--- a/arch/arm/mach-imx/common.h
++++ b/arch/arm/mach-imx/common.h
+@@ -19,7 +19,6 @@ struct of_device_id;
+ 
+ void mx31_map_io(void);
+ void mx35_map_io(void);
+-void imx21_init_early(void);
+ void imx31_init_early(void);
+ void imx35_init_early(void);
+ void mx31_init_irq(void);
+diff --git a/arch/arm/mach-imx/mach-imx21.c b/arch/arm/mach-imx/mach-imx21.c
+new file mode 100644
+index 000000000..6fe6907e2
+--- /dev/null
++++ b/arch/arm/mach-imx/mach-imx21.c
+@@ -0,0 +1,24 @@
++// SPDX-License-Identifier: GPL-2.0-or-later
++/*
++ * Device tree support for the Freescale i.MX21
++ */
++
++#include <asm/mach/arch.h>
++
++#include "common.h"
++#include "hardware.h"
++
++static void __init imx21_init_early(void)
++{
++	mxc_set_cpu_type(MXC_CPU_MX21);
++}
++
++static const char * const imx21_dt_board_compat[] __initconst = {
++	"fsl,imx21",
++	NULL
++};
++
++DT_MACHINE_START(IMX21_DT, "Freescale i.MX21 (Device Tree Support)")
++	.init_early	= imx21_init_early,
++	.dt_compat	= imx21_dt_board_compat,
++MACHINE_END

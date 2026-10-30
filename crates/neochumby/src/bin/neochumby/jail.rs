@@ -43,9 +43,10 @@
 //! `access = ["root"]` (home) and the session's own services
 //! (neochumby-sync) run as before: root, unjailed.
 //!
-//! Jails need root and the mounts it can make. dev/emulate (user-mode
-//! QEMU) allows neither, so it sets NEOCHUMBY_JAIL=off, and the session
-//! then runs every app as root, saying so once.
+//! Jails need root and the mounts it can make. Where neither is allowed
+//! (a test harness that runs the session unprivileged), NEOCHUMBY_JAIL=off
+//! turns them off, and the session then runs every app as root, saying so
+//! once.
 
 use std::ffi::OsStr;
 use std::io;
@@ -64,7 +65,7 @@ const MOUNT_POINT: &str = "/tmp/neochumby-jail";
 const FIRST_UID: u32 = 20000;
 /// The group that may hand the speaker over.
 const SPEAKER_GID: u32 = 19999;
-/// The variable that turns jails off, for dev/emulate.
+/// The variable that turns jails off, for test harnesses.
 pub const OFF_ENV: &str = "NEOCHUMBY_JAIL";
 
 /// What looking hosts up needs, for `network`: copies, as the app starts.

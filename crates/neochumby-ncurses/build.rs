@@ -84,6 +84,12 @@ fn main() {
         // What configure's link tests need, as csrc/probe.S says.
         cc::Build::new().file("csrc/probe.S").cargo_metadata(false).compile("probe");
         cfg.env("LIBS", out.join("libprobe.a"));
+        // Optimised whatever cargo's profile: at -O0 zig's runtime keeps all
+        // of its atomics, and configure's link tests would need every
+        // __sync_ helper they call, not just probe.S's.
+        let mut cflags = cc.cflags_env();
+        cflags.push(" -O2");
+        cfg.env("CFLAGS", cflags);
     }
     run(&mut cfg);
     let lib = out.join("target");

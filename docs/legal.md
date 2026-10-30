@@ -33,13 +33,16 @@ flash, and CHUMBY MODE hands back to the stock software.
 
 ## The emulator
 
-The emulator (`emu/`) models the Chumby Classic's hardware so that
-unmodified software runs on it: interoperability, not a copy of anything
-Chumby wrote. To use it, you build images from **your own device's** flash
-backup, with a fresh, factory-like settings partition (see
-`emu/README.md`). Those images stay on your machine. Tests that need them
-read their paths from the environment and are skipped without them, so CI
-never needs or holds them.
+All emulation happens through qemu-chumby (`emu/qemu/qemu-chumby`), which
+models the Chumby Classic's hardware so that unmodified software runs on
+it: interoperability, not a copy of anything Chumby wrote. Its stock
+profile (`dev/emulate --profile stock`) boots the stock firmware from
+images you build from **your own device's** flash backup, with a fresh,
+factory-like settings partition (qemu-chumby's README, "Images"). Those
+images stay on your machine. Tests that need them read their paths from
+the environment and are skipped without them, so CI never needs or holds
+them: CI runs the scenarios on the dist profile, neochumby's own Linux
+and userspace, which holds nothing of Chumby's.
 
 The emulated crypto processor, which on a real Chumby holds its identity
 for the Chumby service, has a fixed, made-up identity, and it refuses key

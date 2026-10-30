@@ -9,8 +9,8 @@ crates/neochumby-sys, apps/, boot/): see CONTRIBUTING, "Test on a Chumby, or
 an emulated one, and show it". Delete what doesn't apply.
 -->
 
-- [ ] `dev/emulate` (user mode)
-- [ ] The emulator (`dev/emulate --machine chumby-classic`, from my own device's images)
+- [ ] The emulator, dist profile (`dev/e2e`, as CI runs it)
+- [ ] The emulator, stock profile (`NEOCHUMBY_EMU_PROFILE=stock`, from my own device's images)
 - [ ] A real Chumby
 - [ ] Not needed: nothing here runs on the Chumby
 - [ ] Couldn't test: (what, and why)

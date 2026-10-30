@@ -1,0 +1,206 @@
+Description: gpio: add the i.MX21 keypad port as GPIO
+ Boards such as the Chumby Classic don't wire a key matrix to the
+ i.MX21 keypad port: its columns switch power rails and its rows read
+ buttons. With KPCR cleared, KDDR and KPDR are a plain 16-bit GPIO port,
+ so drive it with gpio-generic: rows are lines 0-7, columns lines 8-15.
+ The port can't interrupt on a single row, so there are no interrupts.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
+---
+diff --git a/Documentation/devicetree/bindings/gpio/fsl,imx21-kpp-gpio.yaml b/Documentation/devicetree/bindings/gpio/fsl,imx21-kpp-gpio.yaml
+new file mode 100644
+index 000000000..477dc0514
+--- /dev/null
++++ b/Documentation/devicetree/bindings/gpio/fsl,imx21-kpp-gpio.yaml
+@@ -0,0 +1,65 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/gpio/fsl,imx21-kpp-gpio.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Freescale i.MX21 keypad port (KPP) as GPIO
++
++maintainers:
++  - John Merchant <john@johnmerchant.dev>
++
++description: |
++  On boards without a key matrix, the keypad port's eight rows and eight
++  columns can be used as 16 general-purpose lines: lines 0-7 are the
++  rows, lines 8-15 the columns. The port has no per-line interrupts.
++  Lines keep their boot state until claimed; use gpio-hogs to fix it.
++
++properties:
++  compatible:
++    oneOf:
++      - const: fsl,imx21-kpp-gpio
++      - items:
++          - const: fsl,imx27-kpp-gpio
++          - const: fsl,imx21-kpp-gpio
++
++  reg:
++    maxItems: 1
++
++  clocks:
++    maxItems: 1
++
++  gpio-controller: true
++
++  '#gpio-cells':
++    const: 2
++
++  gpio-line-names:
++    maxItems: 16
++
++patternProperties:
++  '^.+-hog(-[0-9]+)?$':
++    type: object
++    required:
++      - gpio-hog
++
++required:
++  - compatible
++  - reg
++  - clocks
++  - gpio-controller
++  - '#gpio-cells'
++
++additionalProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/clock/imx21-clock.h>
++
++    gpio@10008000 {
++        compatible = "fsl,imx21-kpp-gpio";
++        reg = <0x10008000 0x10>;
++        clocks = <&clks IMX21_CLK_KPP_GATE>;
++        gpio-controller;
++        #gpio-cells = <2>;
++    };
+diff --git a/drivers/gpio/Kconfig b/drivers/gpio/Kconfig
+index a48586bb8..ba67e258b 100644
+--- a/drivers/gpio/Kconfig
++++ b/drivers/gpio/Kconfig
+@@ -423,6 +423,15 @@ config GPIO_IMX_SCU
+        def_bool y
+        depends on IMX_SCU
+ 
++config GPIO_IMX21_KPP
++	tristate "i.MX21/i.MX27 keypad port as GPIO"
++	depends on ARCH_MXC || COMPILE_TEST
++	select GPIO_GENERIC
++	help
++	  Say yes here to use the keypad port (KPP) of the Freescale i.MX21
++	  or i.MX27 as 16 general-purpose lines instead of as a key matrix,
++	  as the Chumby Classic does.
++
+ config GPIO_IXP4XX
+ 	bool "Intel IXP4xx GPIO"
+ 	depends on (ARCH_IXP4XX && OF) || COMPILE_TEST
+diff --git a/drivers/gpio/Makefile b/drivers/gpio/Makefile
+index dc9e6d643..56edd5e96 100644
+--- a/drivers/gpio/Makefile
++++ b/drivers/gpio/Makefile
+@@ -84,6 +84,7 @@ obj-$(CONFIG_GPIO_I8255)		+= gpio-i8255.o
+ obj-$(CONFIG_GPIO_ICH)			+= gpio-ich.o
+ obj-$(CONFIG_GPIO_IDIO_16)		+= gpio-idio-16.o
+ obj-$(CONFIG_GPIO_IDT3243X)		+= gpio-idt3243x.o
++obj-$(CONFIG_GPIO_IMX21_KPP)		+= gpio-imx21-kpp.o
+ obj-$(CONFIG_GPIO_IMX_SCU)		+= gpio-imx-scu.o
+ obj-$(CONFIG_GPIO_IT87)			+= gpio-it87.o
+ obj-$(CONFIG_GPIO_IXP4XX)		+= gpio-ixp4xx.o
+diff --git a/drivers/gpio/gpio-imx21-kpp.c b/drivers/gpio/gpio-imx21-kpp.c
+new file mode 100644
+index 000000000..c46b11b6c
+--- /dev/null
++++ b/drivers/gpio/gpio-imx21-kpp.c
+@@ -0,0 +1,86 @@
++// SPDX-License-Identifier: GPL-2.0-only
++/*
++ * The i.MX21/i.MX27 keypad port (KPP) as 16 general-purpose lines
++ *
++ * Some boards, such as the Chumby Classic, don't wire a key matrix to
++ * the KPP: its columns switch power rails and its rows read buttons.
++ * With KPCR cleared every pin is a plain input or push-pull output, and
++ * KDDR and KPDR work as a GPIO port: lines 0-7 are the rows, lines 8-15
++ * the columns. The KPP can't interrupt on a single row, so there are no
++ * interrupts here; poll inputs instead (e.g. gpio-keys-polled).
++ *
++ * The lines keep the state the boot loader left them in until claimed;
++ * use gpio-hogs for lines that need a fixed state.
++ */
++
++#include <linux/clk.h>
++#include <linux/gpio/driver.h>
++#include <linux/gpio/generic.h>
++#include <linux/io.h>
++#include <linux/mod_devicetable.h>
++#include <linux/module.h>
++#include <linux/platform_device.h>
++
++#define KPP_KPCR	0x0	/* row enables and column open-drain */
++#define KPP_KDDR	0x4	/* data direction, 1 = output */
++#define KPP_KPDR	0x6	/* data */
++
++static int imx21_kpp_gpio_probe(struct platform_device *pdev)
++{
++	struct gpio_generic_chip_config config;
++	struct device *dev = &pdev->dev;
++	struct gpio_generic_chip *chip;
++	void __iomem *regs;
++	struct clk *clk;
++	int ret;
++
++	chip = devm_kzalloc(dev, sizeof(*chip), GFP_KERNEL);
++	if (!chip)
++		return -ENOMEM;
++
++	regs = devm_platform_ioremap_resource(pdev, 0);
++	if (IS_ERR(regs))
++		return PTR_ERR(regs);
++
++	clk = devm_clk_get_enabled(dev, NULL);
++	if (IS_ERR(clk))
++		return dev_err_probe(dev, PTR_ERR(clk), "no clock\n");
++
++	/* No scanning: rows not ANDed into the interrupt, columns push-pull */
++	writew(0, regs + KPP_KPCR);
++
++	config = (struct gpio_generic_chip_config) {
++		.dev = dev,
++		.sz = 2,
++		.dat = regs + KPP_KPDR,
++		.dirout = regs + KPP_KDDR,
++	};
++
++	ret = gpio_generic_chip_init(chip, &config);
++	if (ret)
++		return dev_err_probe(dev, ret,
++				     "failed to initialize the generic GPIO chip\n");
++
++	chip->gc.base = -1;
++	chip->gc.ngpio = 16;
++
++	return devm_gpiochip_add_data(dev, &chip->gc, NULL);
++}
++
++static const struct of_device_id imx21_kpp_gpio_of_match[] = {
++	{ .compatible = "fsl,imx21-kpp-gpio" },
++	{ }
++};
++MODULE_DEVICE_TABLE(of, imx21_kpp_gpio_of_match);
++
++static struct platform_driver imx21_kpp_gpio_driver = {
++	.driver = {
++		.name = "imx21-kpp-gpio",
++		.of_match_table = imx21_kpp_gpio_of_match,
++	},
++	.probe = imx21_kpp_gpio_probe,
++};
++module_platform_driver(imx21_kpp_gpio_driver);
++
++MODULE_DESCRIPTION("i.MX21 keypad port as GPIO");
++MODULE_LICENSE("GPL");

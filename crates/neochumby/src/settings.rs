@@ -58,10 +58,7 @@ pub fn connect(p: &Paired) -> io::Result<(Session, Settings)> {
     let tcp = TcpStream::connect_timeout(&addr, CONNECT)?;
     tcp.set_read_timeout(Some(ANSWER))?;
     tcp.set_write_timeout(Some(ANSWER))?;
-    let mut s = Session::connect(tcp, &me)?;
-    if s.peer() != &server_key {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"));
-    }
+    let mut s = Session::connect(tcp, &me, &server_key)?;
     // A neochumbyd from before Msg::Config sends nothing after Welcome:
     // that times out, and the kept settings are used.
     let settings = version::hello(&mut s, conf::name(), ANSWER)?;

@@ -29,7 +29,7 @@
 //! agreed, a session is at version 0.
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::settings::Settings;
 use crate::{Msg, Session, VERSION, invalid};
@@ -68,15 +68,17 @@ fn config_as(settings: &Settings, ours: u16) -> Msg {
 
 /// neochumbyd, after sending [`config`]: the Chumby's first message after
 /// it. A `Version` first sets the session's version and is read past, as
-/// is any [`Msg::Unknown`]; without one, the Chumby is version 0.
-pub fn after_config(s: &mut Session) -> io::Result<Msg> {
-    after_config_as(s, VERSION)
+/// is any [`Msg::Unknown`]; without one, the Chumby is version 0. All of
+/// it by `deadline` ([`io::ErrorKind::TimedOut`] if not), so that a Chumby
+/// saying nothing doesn't hold the connection.
+pub fn after_config(s: &mut Session, deadline: Instant) -> io::Result<Msg> {
+    after_config_as(s, VERSION, deadline)
 }
 
-fn after_config_as(s: &mut Session, ours: u16) -> io::Result<Msg> {
+fn after_config_as(s: &mut Session, ours: u16, deadline: Instant) -> io::Result<Msg> {
     let mut first = true;
     loop {
-        match s.recv()? {
+        match s.recv_by(deadline)? {
             Msg::Version(theirs) if first => s.set_version(agree(ours, theirs)),
             Msg::Version(_) => return Err(invalid("a second Version")),
             Msg::Unknown { .. } => {}
@@ -119,8 +121,8 @@ fn hello_as(s: &mut Session, name: String, wait: Duration, ours: u16) -> io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::Identity;
     use crate::settings::Delivery;
+    use crate::{Identity, Unverified};
     use std::net::{TcpListener, TcpStream};
     use std::thread::JoinHandle;
 
@@ -131,8 +133,11 @@ mod tests {
         let (server, chumby) = (Identity::generate().unwrap(), Identity::generate().unwrap());
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
-        let t = std::thread::spawn(move || f(Session::accept(l.accept().unwrap().0, &server).unwrap()));
-        (Session::connect(TcpStream::connect(addr).unwrap(), &chumby).unwrap(), t)
+        let server_key = server.public();
+        let t = std::thread::spawn(move || {
+            f(Unverified::accept(l.accept().unwrap().0, &server).unwrap().verify(|_| true).unwrap())
+        });
+        (Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &server_key).unwrap(), t)
     }
 
     fn settings() -> Settings {
@@ -151,7 +156,7 @@ mod tests {
                 (s.recv().unwrap(), s.version())
             } else {
                 s.send(&config_as(&settings(), ours)).unwrap();
-                (after_config_as(&mut s, ours).unwrap(), s.version())
+                (after_config_as(&mut s, ours, Instant::now() + WAIT).unwrap(), s.version())
             }
         }
     }
@@ -212,6 +217,19 @@ mod tests {
         c.send_body(&[200, 1, 2, 3]).unwrap();
         c.send(&Msg::Dev).unwrap();
         assert_eq!(t.join().unwrap(), (Msg::Dev, 1));
+    }
+
+    /// A Chumby that says nothing after Config is given up on.
+    #[test]
+    fn after_config_has_a_deadline() {
+        let (mut c, t) = pair(|mut s| {
+            s.recv().unwrap();
+            s.send(&Msg::Welcome).unwrap();
+            s.send(&config(&settings())).unwrap();
+            after_config(&mut s, Instant::now() + Duration::from_millis(200)).unwrap_err().kind()
+        });
+        hello(&mut c, "den".into(), WAIT).unwrap();
+        assert_eq!(t.join().unwrap(), io::ErrorKind::TimedOut);
     }
 
     #[test]

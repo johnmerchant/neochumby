@@ -15,18 +15,19 @@
 #
 #   dev/emulate-stock TREE OUT     (TREE from tools/tree, with ./dev/probe)
 #
-# Only on the full-system machine (NEOCHUMBY_EMU_MACHINE=chumby-classic, your
-# own firmware: emu/README.md), so never in CI; elsewhere it exits 77.
+# Only on dev/emulate's stock profile (NEOCHUMBY_EMU_PROFILE=stock, your own
+# firmware: emu/qemu/qemu-chumby's README, "Images"), so never in CI;
+# elsewhere it exits 77.
 set -eu
 tree=${1:?usage: dev/emulate-stock TREE OUT}
 out=${2:?usage: dev/emulate-stock TREE OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$out"
-state=$(mktemp -d /var/tmp/neochumby-stock.XXXXXX)
-trap 'rm -rf "$state"' EXIT
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-stock.XXXXXX")
+trap 'emu stop >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
-if [ "$(emu backend)" != chumby-classic ]; then
-  echo "dev/emulate-stock: skipped: the stock firmware runs only on --machine chumby-classic"
+if [ "$(emu backend)" != stock ]; then
+  echo "dev/emulate-stock: skipped: the stock firmware runs only on the stock profile"
   exit 77
 fi
 slow=$(emu scale)
@@ -40,17 +41,19 @@ fail() {
 }
 count() { emu log | grep -c "$1" || true; }
 # The share of the screen's pixels for which the Python expression is true
-# of r, g and b, from the RGB565 picture the last shot left.
+# of r, g and b, in the last shot ($state/stock.png).
 share() {
-  python3 - "$state/fb0" "$1" <<'EOF'
+  python3 - "${CHUMBY_MACHINE_PATH:-$dev/../emu/qemu/qemu-chumby}" "$state/stock.png" "$1" <<'EOF'
 import sys
-data = open(sys.argv[1], "rb").read()
+sys.dont_write_bytecode = True
+sys.path.insert(0, sys.argv[1])
+import chumby_machine
+rgb, _, _ = chumby_machine.png_rgb(open(sys.argv[2], "rb").read())
 n = 0
-for i in range(0, len(data), 2):
-    p = data[i] | data[i + 1] << 8
-    r, g, b = (p >> 11) << 3, (p >> 5 & 63) << 2, (p & 31) << 3
-    n += bool(eval(sys.argv[2]))
-print(round(100 * n / (len(data) // 2)))
+for i in range(0, len(rgb), 3):
+    r, g, b = rgb[i], rgb[i + 1], rgb[i + 2]
+    n += bool(eval(sys.argv[3]))
+print(round(100 * n / (len(rgb) // 3)))
 EOF
 }
 
