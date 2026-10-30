@@ -84,11 +84,7 @@ pub fn uevent_socket() -> io::Result<OwnedFd> {
     // SAFETY: bind(2) reads the sockaddr_nl we pass, of the size we give;
     // the descriptor is open, owned by `sock`.
     let r = unsafe {
-        libc::bind(
-            sock.as_raw_fd(),
-            (&raw const addr).cast(),
-            mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t,
-        )
+        libc::bind(sock.as_raw_fd(), (&raw const addr).cast(), mem::size_of::<libc::sockaddr_nl>() as libc::socklen_t)
     };
     if r != 0 {
         return Err(io::Error::last_os_error());
@@ -231,6 +227,9 @@ mod tests {
 
     #[test]
     fn refuses_a_nul() {
-        assert_eq!(mount("a\0b", Path::new("/x"), "tmpfs", MountFlags::default()).unwrap_err().kind(), io::ErrorKind::InvalidInput);
+        assert_eq!(
+            mount("a\0b", Path::new("/x"), "tmpfs", MountFlags::default()).unwrap_err().kind(),
+            io::ErrorKind::InvalidInput
+        );
     }
 }
