@@ -405,6 +405,12 @@ Every app is opened the same way, whoever asked for it.
 - with `NEOCHUMBY_COMPANION=<fd>` if it has a companion (below);
 - with `NEOCHUMBY_REASON` when the session has a reason to give: `button`
   when the top button opened it. Ignore values you don't know;
+- with `NEOCHUMBY_NAME`, the Chumby's name as its neochumbyd knows it
+  (`neochumby::session::name()`);
+- with `NEOCHUMBY_STICK_FREE_KIB`, the free space on the stick in KiB as
+  your app started, when there's a stick (`session::stick_free_kib()`);
+- with `NEOCHUMBY_STORAGE`, your app's lasting directory, when its
+  `access` lists `storage` (below);
 - with `NEOCHUMBY_PLAYER` naming this Chumby's default player, when it
   has one (below);
 - owning the screen until it exits. What's on the screen when it starts is
@@ -476,12 +482,58 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `system` | `/proc`, `/sys` and `/etc` |
 | `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
+| `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service` (below) |
 | `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
 | `root` | no jail: it runs as root, as the session does. Listed alone |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
 can't signal or trace each other, or root, and can't read the Chumby's
-key or write to `/psp`.
+key or write to `/psp`, except its own `storage`.
+
+**Storage.** With `storage`, your app has `/psp/apps/<name>/` in the
+Chumby's settings flash, named by `NEOCHUMBY_STORAGE` (the same path in
+the jail and out). Its `exec` and its `service` share it: they run as the
+same uid. Keep settings there, such as a station or a volume; anything
+else belongs in `/tmp`.
+- The session makes it as either starts, mode 0700, and gives it and
+  everything in it to your app's uid. Uids follow the apps' order in the
+  tree, so they can change between boots.
+- It may hold **64 KiB**: each file, directory or link counts its size
+  rounded up to 512 bytes, and at least 512. `/psp` is 2 MB in all.
+- The kernel has no quotas, so the session measures every 2 seconds. An
+  app over its limit is ended, `exec` or `service`, as for the network.
+  One already over as the session started may stay that size, to tidy up,
+  but not grow. Write small files, and replace them whole (write a new
+  one, then rename it over the old).
+
+**Playing a stream.** The stock player (`btplay` and its daemon) can't
+run in a jail. An app with `speaker` may ask the session to run it, and
+carry on:
+- `play <url>` plays an `http://` stream (no TLS) of at most 200 bytes.
+  It may hold only the characters a URL may hold unescaped
+  (`neochumby::session::valid_url`). The session runs `/usr/bin/btplay
+  --start-daemon <url>` as root, with the URL as one argument and no
+  shell. A line that isn't such a URL is ignored, like any unknown line.
+- `play off` stops your app's stream (`btplay --passthru=stop`).
+
+The player plays one stream, so a newer `play` from any app replaces
+yours. The session also stops your stream:
+- when the `exec` or `service` that asked ends;
+- when another process takes the speaker (the handover in
+  `neochumby::audio`: the newest player wins). So take the speaker with
+  `audio::Unmuted` first, then `play`, and `play off` when asked to yield.
+  A stream played without the speaker plays muted, and the session leaves
+  it;
+- at CHUMBY MODE.
+
+**The backlight.** Only root may set it. The start app and its service
+may write `brightness <n>` (0, off, to 65535, full), and carry on. The
+session writes `/proc/sys/sense1/brightness`, and puts back the level the
+Chumby booted with at CHUMBY MODE. From any other app it's refused and
+logged.
+
+In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
+`Pipe::brightness(n)`.
 
 **Your binaries.** Each `exec` and `service` must be a static ARM ELF.
 Before it starts one, the session refuses a file with a `PT_LOAD` below
