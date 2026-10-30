@@ -1,0 +1,19 @@
+[package]
+name = "neochumby-wamr"
+description = "WAMR, the WebAssembly Micro Runtime, built for the Chumby Classic, with a small safe interface"
+# Our Rust is MIT; WAMR (third_party/wamr), which this crate builds and
+# links, is Apache-2.0 WITH LLVM-exception.
+license = "MIT AND Apache-2.0 WITH LLVM-exception"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[build-dependencies]
+cc = "1"
+
+[dev-dependencies]
+wat = "1"
+
+[lints]
+workspace = true

@@ -32,6 +32,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
+| `crates/neochumby-wamr` | [WAMR](https://github.com/bytecodealliance/wasm-micro-runtime) (a submodule), the WebAssembly Micro Runtime, built for the Chumby (its AOT loader and fast interpreter), with a small safe interface, for apps as WebAssembly (proposal 0003) | MIT; WAMR is Apache-2.0 WITH LLVM-exception |
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's xterm-256color compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list: the installed apps, pairing, the time, CHUMBY MODE | MIT |
