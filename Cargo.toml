@@ -21,7 +21,6 @@ members = [
     "apps/classic",
     "apps/doom",
     "apps/fetch",
-    "apps/genact",
     "apps/htop",
     "apps/cmatrix",
     "apps/clock",
