@@ -45,6 +45,7 @@ pub mod elf;
 pub mod fd;
 pub mod fs;
 pub mod net;
+pub mod privilege;
 pub mod process;
 pub mod pty;
 pub mod sandbox;

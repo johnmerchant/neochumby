@@ -285,6 +285,58 @@ BusyBox's `mount` asks the port mapper on port 111 even when given the
 ports, so the server should refuse port 111 rather than drop it. Otherwise
 the mount hangs.
 
+**A sandbox for apps' programs.** neochumbyd runs no companion or server
+program without one, and it says at start which sandbox they get and
+what that leaves open. Either of two is enough, and both may apply at
+once; [SECURITY](SECURITY.md) weighs them:
+
+- **This system's own:** Landlock on Linux (5.13 and later, where the
+  kernel has it on), or Apple's sandbox on macOS, for neochumbyd running
+  as its own user. Nothing to set.
+- **A uid per app.** Started as root with `--app-uids FIRST-LAST`,
+  neochumbyd becomes the user that owns its state directory, and runs each
+  app's companions and server program under one uid of the app's own from
+  that range, with no other groups, in `<state>/apps/<app>` (the app's,
+  0750 in neochumbyd's group), and in Landlock too where the kernel has
+  it. They then can't read neochumbyd's key, pairings or settings, change
+  the tree, or reach another app's files. Pick a range no user or service
+  has: systemd's `DynamicUser=` takes 61184-65519, so for example:
+
+  ```sh
+  sudo chown neochumbyd: /var/lib/neochumbyd && sudo chmod 2771 /var/lib/neochumbyd
+  sudo neochumbyd serve --state /var/lib/neochumbyd --app-uids 61000-61099
+  ```
+
+  The state directory must be other-executable (programs pass through it
+  to their directories and binaries); neochumbyd makes its own files in it
+  unreadable to others. An existing `<state>/plugin-uids` (the flag's
+  earlier name) is taken over as `<state>/app-uids`.
+
+With neither, neochumbyd serves Chumbys but runs no companion or server
+program, and says why. `--unsandboxed` runs them as neochumbyd's own user
+instead, able to read its key and pairings and change the tree; it does
+nothing where there is a sandbox, and is refused as root, where they would
+run as root.
+
+Under systemd, a unit along these lines keeps a root neochumbyd to the
+four capabilities it keeps (not yet run by us on a systemd host):
+
+```ini
+[Service]
+ExecStart=/var/lib/neochumbyd/neochumbyd serve --state /var/lib/neochumbyd --app-uids 61000-61099
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_KILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/neochumbyd
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Restart=on-failure
+```
+
 **Pairing** makes a Chumby boot from neochumbyd with no stick:
 
 1. Put a `neochumby.conf` holding `server=<neochumbyd's address>` on a
@@ -316,10 +368,6 @@ it becomes a server program, needs this. Every change through it needs
 the **owner's token**, which `neochumbyd token` prints: give it to the web
 page when it asks. `neochumbyd token new` replaces it. The protocol is
 described in `crates/neochumbyd/src/admin.rs`.
-
-Where neochumbyd has no sandbox for apps' programs (see
-[SECURITY](SECURITY.md)), it runs no companion or server program unless
-started with `--unsandboxed`.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its
 companion on neochumbyd runs an AirPlay receiver named after it ("Kitchen

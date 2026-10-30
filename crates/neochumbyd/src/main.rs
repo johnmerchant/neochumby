@@ -57,14 +57,22 @@
 //!   --tree DIR         the app tree to serve, default <state>/tree
 //!   --nfs ADDR         default 0.0.0.0:2049
 //!   --api ADDR         default 0.0.0.0:7340
+//!   --app-uids FIRST-LAST
+//!                      started as root, neochumbyd becomes the user that
+//!                      owns DIR, and runs each app's companions and server
+//!                      program under a uid of the app's own from this
+//!                      range (isolate.rs), in this system's sandbox too
+//!                      where it has one
 //!   --unsandboxed      run apps' server programs and companions without
-//!                      a sandbox, where there is none (confine.rs)
+//!                      a sandbox, where there is none (neither this
+//!                      system's nor --app-uids; confine.rs); never as root
 
 mod admin;
 mod api;
 mod companion;
 mod confine;
 mod dev;
+mod isolate;
 mod mcp;
 mod nfs;
 mod png;
@@ -108,12 +116,13 @@ struct Args {
     tree: Option<PathBuf>,
     nfs: String,
     api: String,
+    app_uids: Option<String>,
     unsandboxed: bool,
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--unsandboxed]"
+        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed]"
     );
     std::process::exit(2)
 }
@@ -131,6 +140,7 @@ fn args() -> Args {
         tree: None,
         nfs: "0.0.0.0:2049".into(),
         api: format!("0.0.0.0:{}", neochumby_proto::API_PORT),
+        app_uids: None,
         unsandboxed: false,
     };
     let mut it = std::env::args().skip(1);
@@ -144,6 +154,7 @@ fn args() -> Args {
             "-f" | "--follow" => a.follow = true,
             "--replace" => a.replace = true,
             "--hold" => a.hold = Some(value()),
+            "--app-uids" => a.app_uids = Some(value()),
             "--unsandboxed" => a.unsandboxed = true,
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
@@ -165,11 +176,18 @@ fn fail(e: impl std::fmt::Display) -> ! {
 
 fn main() {
     let a = args();
+    // Before anything is written or any thread started: with --app-uids,
+    // neochumbyd started as root becomes its own user here.
+    let confine = (a.command == "serve")
+        .then(|| confine::Confine::choose(&a.state, a.app_uids.as_deref(), a.unsandboxed).unwrap_or_else(|e| fail(e)));
+    if (a.app_uids.is_some() || a.unsandboxed) && confine.is_none() {
+        usage();
+    }
     let state = State::open(a.state.clone()).unwrap_or_else(|e| fail(format!("{}: {e}", a.state.display())));
     let operand = || a.operand.clone().unwrap_or_else(|| usage());
     let tree_dir = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     match a.command.as_str() {
-        "serve" => serve(&a, state),
+        "serve" => serve(&a, state, confine.expect("chosen for serve")),
         "pairing" => {
             let (starts, players) = (tree::start_apps(&tree_dir), tree::players(&tree_dir));
             for (name, key) in state.pairs().unwrap_or_else(|e| fail(e)) {
@@ -344,7 +362,11 @@ fn paired(state: &State, name: &str) -> String {
     name.to_string()
 }
 
-fn serve(a: &Args, state: State) {
+fn serve(a: &Args, state: State, confine: confine::Confine) {
+    // Nothing it makes is for other users: apps' programs may be other
+    // users (--app-uids).
+    neochumby_sys::privilege::add_to_umask(0o007);
+    state.secure().unwrap_or_else(|e| fail(format!("closing the state directory to other users: {e}")));
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
     // The same key again, to sign the tree's manifest for NFS (nfs.rs).
     let signer = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
@@ -362,7 +384,6 @@ fn serve(a: &Args, state: State) {
 
     // Made now, so the owner can read it before the web page asks.
     state.owner_token().unwrap_or_else(|e| fail(format!("owner token: {e}")));
-    let confine = confine::Confine::choose(a.unsandboxed);
     // An admin socket left by an earlier neochumbyd (they had paths then).
     let _ = std::fs::remove_file(a.state.join("admin.sock"));
     let server_state = state.clone();

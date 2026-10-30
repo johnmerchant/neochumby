@@ -86,8 +86,9 @@ neochumbyd delivered.
   can have it pin their key, even though neochumbyd never approves them.
   Pair on a network you trust.
 - **Apps' programs on the server are sandboxed.** Companions (one per
-  Chumby) and server programs (one per server, `server=`) run as
-  neochumbyd's user, but confined. Under neochumbyd's state directory each
+  Chumby) and server programs (one per server, `server=`) run confined,
+  by this system's sandbox (below), by a uid of each app's own
+  (`--app-uids`, further below), or both. Under neochumbyd's state directory each
   may only read the tree and read and write its app's own directory
   (`apps/<app>`, which holds its HOME and TMPDIR). It can't read or change
   neochumbyd's key (`identity`), the pairings, the owner's token or other
@@ -100,15 +101,16 @@ neochumbyd delivered.
   | --- | --- |
   | Linux 5.13 or later, with Landlock on | Landlock: besides the above, it may read only the system (`/usr`, `/etc`, `/proc`, `/sys`, `/run`, `/var/log` and so on) and use the null and random devices. It can't ptrace or read the memory of processes outside its sandbox, neochumbyd's included |
   | macOS (for development) | Apple's sandbox (`sandbox-exec`): it may write only its own directory, read nothing in the home directory but the tree, and connect to no Unix socket in the state directory. It can read the rest of the system |
-  | anything else, or Linux without Landlock | none: neochumbyd starts no companion or server program |
+  | anything else, or Linux without Landlock | none: neochumbyd starts no companion or server program, unless it has `--app-uids` |
 
-  On a system with no sandbox, `neochumbyd serve --unsandboxed` runs them
-  anyway, with all of neochumbyd's access, and neochumbyd says so in its
-  log at every start. Where there's a sandbox, the flag does nothing. Run
-  as root with no sandbox, neochumbyd refuses even with the flag. Some
-  kernels leave Landlock out (some hypervisor distributions, such as
-  Proxmox's, do), and a container shares its host's kernel: if your
-  server runs in one, check neochumbyd's log as it starts.
+  With neither this system's sandbox nor `--app-uids`, `neochumbyd serve
+  --unsandboxed` runs them anyway, as neochumbyd's user with all of its
+  access, and neochumbyd says so in its log at every start. Where there's
+  a sandbox, the flag does nothing. Run as root with neither, neochumbyd
+  refuses even with the flag. Some kernels leave Landlock out (some
+  hypervisor distributions, such as Proxmox's, do), and a container
+  shares its host's kernel: if your server runs in one, check
+  neochumbyd's log as it starts, and use `--app-uids`.
 
   neochumbyd logs, as it starts, which sandbox each app's programs get and
   what the running kernel leaves open. Not confined, on any system:
@@ -124,8 +126,29 @@ neochumbyd delivered.
     **signalling** neochumbyd and other processes, and their abstract Unix
     sockets, before ABI 6 (Linux 6.12).
 
-  Separate users per app (`--app-uids`) would close those Landlock leaves
-  open, at the cost of neochumbyd keeping the right to change user.
+  A uid per app closes those last ones: a program can't truncate, chmod
+  or chown what isn't its own, or signal another user's processes.
+- **A uid per app** (`--app-uids FIRST-LAST`, neochumbyd started as root):
+  neochumbyd runs as the user owning its state directory, and each app's
+  companions and server program under one uid of the app's own, with no
+  other groups and no capabilities, in a directory only that uid can
+  write. They can't read neochumbyd's key (`identity`, 0600), its owner
+  token, pairings or settings (closed to other users), change the tree,
+  or reach another app's files. On a kernel with Landlock, Landlock
+  applies too. Under uids alone, they can still read world-readable files,
+  the tree included. The LOGS app's companion, with no other groups, reads
+  only the host's logs any user may (`/var/log/syslog` is often the `adm`
+  group's, the journal `systemd-journal`'s).
+- **Which sandbox: the trade-off.** To start programs as other uids and
+  stop them, neochumbyd keeps `CAP_SETUID` (with `CAP_SETGID`,
+  `CAP_CHOWN` and `CAP_KILL`). A neochumbyd that keeps `CAP_SETUID` can
+  make itself root on its host, so a flaw in neochumbyd itself is worse
+  under `--app-uids` than in an unprivileged neochumbyd. On a host whose
+  kernel has Landlock, run neochumbyd unprivileged, with Landlock. Per-app
+  uids are for hosts and containers without Landlock: kernels built
+  without it (for people who run a hypervisor like Proxmox, the host's
+  kernel may be one), and neochumbyd in LXC or Docker, where it's root in
+  the container anyway. Both together close what Landlock leaves open.
 - **The admin socket** pairs Chumbys and changes their settings. It has no
   path. Only an app whose owner allows it (`neochumbyd allow <app>
   pairing`; `disallow` takes it back, at once) gets one, as an inherited
@@ -157,7 +180,8 @@ neochumbyd delivered.
   whoever writes it. So an admin running `neochumbyd token` or
   `neochumbyd token new` as themselves leaves a token the daemon can
   still read. The daemon's key, `identity`, stays 0600, the daemon's
-  alone.
+  alone. With `--app-uids`, make the directory 2771 instead: apps' uids
+  pass through it to their own directories and the tree.
 - **neochumby never starts SSH.** The Chumby's stock SSH, with its
   well-known root password, stays off unless its owner turns it on.
 - **A neochumby stick runs code on any Chumby it's plugged into at boot,**

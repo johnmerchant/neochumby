@@ -20,8 +20,13 @@
 //!                     socket (`neochumbyd allow <app> pairing`)
 //!   apps/<app>        each app's own directory, for its companions and its
 //!                     server program: the only part of the state directory
-//!                     they can reach (confine.rs)
+//!                     they can reach (confine.rs); with --app-uids, the
+//!                     app's uid's, 0750 in neochumbyd's group (isolate.rs)
+//!   app-uids          each app's uid, with --app-uids (isolate.rs)
 //!   logs/, dev/       what the developer link keeps and is asked (dev.rs)
+//!
+//! None of it is readable by other users (`secure`), as apps' programs may
+//! run under uids of their own.
 //!
 //! The daemon writes pending/; `neochumbyd approve CODE` (whoever is in
 //! the daemon's group), or a server program through the admin socket,
@@ -85,6 +90,27 @@ impl State {
         std::fs::create_dir_all(dir.join("pending"))?;
         std::fs::create_dir_all(dir.join("config"))?;
         Ok(State { dir })
+    }
+
+    /// Makes what neochumbyd keeps unreadable to other users, apps'
+    /// programs with uids of their own among them: its key 0600, and its
+    /// directories with no permission for others (the owner's and group's
+    /// stay as they are, for the commands run by its group). Run by `serve`
+    /// as their owner, with a umask that keeps what it makes the same.
+    pub fn secure(&self) -> io::Result<()> {
+        let named = |path: &std::path::Path, e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", path.display()));
+        for d in ["paired", "pending", "config", "allow", "logs", "dev"] {
+            let path = self.dir.join(d);
+            std::fs::create_dir_all(&path).map_err(|e| named(&path, e))?;
+            let mode = std::fs::metadata(&path).map_err(|e| named(&path, e))?.permissions().mode();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o7770))
+                .map_err(|e| named(&path, e))?;
+        }
+        let key = self.dir.join("identity");
+        match std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)) {
+            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
+            r => r.map_err(|e| named(&key, e)),
+        }
     }
 
     /// Its own key: made on first start.
@@ -561,6 +587,24 @@ mod tests {
         st.request(&code(99), "attic", &k1, addr).unwrap();
         st.clear_pending().unwrap();
         assert!(st.pending().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn secured() {
+        let dir = std::env::temp_dir().join(format!("neochumbyd-secure-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = State::open(dir.clone()).unwrap();
+        std::fs::set_permissions(dir.join("paired"), std::fs::Permissions::from_mode(0o2775)).unwrap();
+        std::fs::write(dir.join("identity"), "x").unwrap();
+        std::fs::set_permissions(dir.join("identity"), std::fs::Permissions::from_mode(0o644)).unwrap();
+        st.secure().unwrap();
+        let mode = |p: &str| std::fs::metadata(dir.join(p)).unwrap().permissions().mode() & 0o7777;
+        assert_eq!(mode("paired"), 0o2770);
+        assert_eq!(mode("identity"), 0o600);
+        for d in ["pending", "config", "allow", "logs", "dev"] {
+            assert_eq!(mode(d) & 0o007, 0, "{d}");
+        }
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }
