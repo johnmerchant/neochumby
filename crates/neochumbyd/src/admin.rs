@@ -9,8 +9,10 @@
 //! end answered by [`serve`] until the program closes it, or the owner
 //! disallows it (`neochumbyd disallow <app> pairing`). The program should
 //! mark descriptor 3 close-on-exec as it starts, so that programs it runs
-//! don't get it. The command line doesn't use the socket: it works on the
-//! state directory itself.
+//! don't get it. The command line's pairing commands work on the state
+//! directory itself; its catalog commands (`install`, `uninstall`,
+//! `catalog auto-update`) speak this protocol with the owner's token, over
+//! a connected pair of its own ([`local`]).
 //!
 //! The protocol is lines of text. A request is a command and its words,
 //! separated by spaces, ending in a newline, at most 1024 bytes. The answer
@@ -34,9 +36,28 @@
 //!                                         KEY= removes it
 //!   check TOKEN               ok          whether TOKEN is the owner's,
 //!                                         for the page's own login
+//!   requests                  request CODE CHUMBY WHAT...
+//!                             ok          each Chumby's GET APPS asking
+//!                                         to install or remove an app
+//!   approve CODE TOKEN        summary ... a request's CODE (ABCD-EF23)
+//!   refuse CODE TOKEN         ok CHUMBY   approves or refuses it
+//!   install SPEC ASKS TOKEN   summary ... installs or updates the catalog
+//!                             ok APP      app SPEC (crate:NAME@VERSION),
+//!                                         checked as `neochumbyd install`
+//!                                         does, if it asks for exactly
+//!                                         ASKS: its access words and its
+//!                                         companion's hosts, joined by
+//!                                         commas (`none`); the summary's
+//!                                         lines, then its directory
+//!   uninstall APP TOKEN       ok          removes a catalog app
+//!   auto-update               ok on|off   whether a catalog app updates
+//!                                         by itself to a version asking
+//!                                         for nothing new
+//!   auto-update on|off TOKEN  ok
 //!
 //! TOKEN is the owner's (`neochumbyd token`). Every change needs it; only
-//! reading (`paired`, `pending`) and `check` don't. Typing the code from
+//! reading (`paired`, `pending`, `requests`, `auto-update`) and `check`
+//! don't. Typing the code from
 //! the Chumby's screen is what pairing's security rests on, so the person
 //! approving must be the owner, not just someone on the network who can
 //! reach the web page; and settings include remote input (`dev=on`) and
@@ -57,11 +78,61 @@ const MAX_LINE: usize = 1024;
 
 /// The commands that change something, and so need the owner's token
 /// (their last word), with how many words each takes.
-const CHANGES: &[(&str, usize)] = &[("approve", 3), ("replace", 3), ("refuse", 3), ("forget", 3), ("set", 4)];
+const CHANGES: &[(&str, usize)] = &[
+    ("approve", 3),
+    ("replace", 3),
+    ("refuse", 3),
+    ("forget", 3),
+    ("set", 4),
+    ("install", 4),
+    ("uninstall", 3),
+    ("auto-update", 3),
+];
 
 /// Answers `app`'s requests on `conn` until it closes it, or its owner no
 /// longer allows it `pairing`.
 pub fn serve(state: &State, conn: UnixStream, app: &str) -> io::Result<()> {
+    answer_on(
+        state,
+        conn,
+        || state.allowed(app).iter().any(|w| w == crate::state::PAIRING),
+        &format!("{app} isn't allowed pairing"),
+    )
+}
+
+/// Sends `line` as the command line, over a connected pair whose other end
+/// this process answers: the answer's data lines and the word after `ok`
+/// (if any), or the error. The owner's token, if the request needs it, is
+/// in `line`, as from anyone else.
+pub fn local(state: &State, line: &str) -> Result<Vec<String>, String> {
+    let (ours, theirs) = UnixStream::pair().map_err(|e| e.to_string())?;
+    let st = state.clone();
+    let server = std::thread::spawn(move || answer_on(&st, theirs, || true, ""));
+    let mut w = ours.try_clone().map_err(|e| e.to_string())?;
+    w.write_all(format!("{line}\n").as_bytes()).map_err(|e| e.to_string())?;
+    let mut out = Vec::new();
+    for l in BufReader::new(ours).lines() {
+        let l = l.map_err(|e| e.to_string())?;
+        if let Some(e) = l.strip_prefix("error ") {
+            return Err(e.to_string());
+        }
+        if l == "ok" || l.starts_with("ok ") {
+            if let Some(word) = l.strip_prefix("ok ") {
+                out.push(word.to_string());
+            }
+            // Closed, so that its answering ends.
+            let _ = w.shutdown(std::net::Shutdown::Both);
+            let _ = server.join();
+            return Ok(out);
+        }
+        out.push(l);
+    }
+    Err("the admin protocol closed without an answer".into())
+}
+
+/// Answers requests on `conn` while `allowed()` (else says `refused` and
+/// stops), until it closes.
+fn answer_on(state: &State, conn: UnixStream, allowed: impl Fn() -> bool, refused: &str) -> io::Result<()> {
     let mut out = conn.try_clone()?;
     let mut r = BufReader::new(conn);
     loop {
@@ -74,8 +145,8 @@ pub fn serve(state: &State, conn: UnixStream, app: &str) -> io::Result<()> {
             out.write_all(b"error line too long\n")?;
             return Ok(());
         }
-        if !state.allowed(app).iter().any(|w| w == crate::state::PAIRING) {
-            out.write_all(format!("error {app} isn't allowed pairing\n").as_bytes())?;
+        if !allowed() {
+            out.write_all(format!("error {refused}\n").as_bytes())?;
             return Ok(());
         }
         let answer = request(state, line.trim_end_matches(['\n', '\r']));
@@ -122,12 +193,33 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             }
             Ok("ok\n".into())
         }
+        ["requests"] => {
+            let mut out = String::new();
+            for r in crate::catalog::chumby::requests(state.dir()) {
+                out.push_str(&format!("request {} {} {}\n", r.code, r.chumby, r.what.replace('\n', " ")));
+            }
+            Ok(out + "ok\n")
+        }
+        ["auto-update"] => Ok(format!("ok {}\n", if crate::catalog::auto_updates(state.dir()) { "on" } else { "off" })),
         [cmd, ..] if CHANGES.iter().any(|&(c, n)| c == *cmd && n != words.len()) => {
             Err(bad(&format!("{cmd}: wrong number of words")))
         }
         [cmd, .., token] if CHANGES.iter().any(|&(c, _)| c == *cmd) && !state.is_owner_token(token) => {
             eprintln!("neochumbyd: admin: {cmd}: wrong token");
             Err(bad("wrong token"))
+        }
+        [cmd @ ("approve" | "refuse"), code, _] if crate::catalog::chumby::parse_code(code).is_some() => {
+            let yes = *cmd == "approve";
+            let r = crate::catalog::chumby::decide(state.dir(), code, yes).map_err(io::Error::other)?;
+            eprintln!(
+                "neochumbyd: admin: {} {}: {} asked to {}",
+                if yes { "approved" } else { "refused" },
+                r.code,
+                r.chumby,
+                r.what
+            );
+            let summary: String = r.summary.lines().map(|l| format!("summary {}\n", l.trim_start())).collect();
+            Ok(format!("{summary}ok {}\n", r.chumby))
         }
         [cmd @ ("approve" | "replace"), code, _] => {
             let name = state.approve(code, *cmd == "replace")?;
@@ -147,13 +239,31 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             eprintln!("neochumbyd: admin: forgot {name}");
             Ok("ok\n".into())
         }
+        ["install", spec, asks, _] => {
+            let mut out = String::new();
+            let lines = crate::catalog::admin_install(state.dir(), spec, asks).map_err(io::Error::other)?;
+            let (app, summary) = lines.split_last().ok_or_else(|| io::Error::other("nothing installed"))?;
+            for l in summary {
+                out.push_str(&format!("{l}\n"));
+            }
+            Ok(format!("{out}ok {app}\n"))
+        }
+        ["uninstall", app, _] => {
+            crate::catalog::admin_uninstall(state.dir(), app).map_err(io::Error::other)?;
+            Ok("ok\n".into())
+        }
+        ["auto-update", on @ ("on" | "off"), _] => {
+            crate::catalog::set_auto_updates(state.dir(), *on == "on")?;
+            Ok("ok\n".into())
+        }
+        ["auto-update", ..] => Err(bad("auto-update [on|off TOKEN]")),
         ["set", name, setting, _] => {
             let (key, value) = setting.split_once('=').ok_or_else(|| bad("set NAME KEY=VALUE TOKEN"))?;
             state.set(name, key, value)?;
             eprintln!("neochumbyd: admin: {name}: {key}={value}");
             Ok("ok\n".into())
         }
-        ["paired" | "pending" | "check", ..] => Err(bad(&format!("{}: wrong number of words", words[0]))),
+        ["paired" | "pending" | "requests" | "check", ..] => Err(bad(&format!("{}: wrong number of words", words[0]))),
         _ => Err(bad("unknown command")),
     }
 }

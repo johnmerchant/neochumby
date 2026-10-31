@@ -9,6 +9,15 @@ description = "Wasmtime with Pulley for the wasm benchmark: `compile` (on the ho
 # Built by dev/wasmbench/tools/wasmtime.sh, apart from the device workspace.
 [workspace]
 
+# The main workspace's rule, and the main.rs allows it: it is on
+# .github/unsafe-allowed (tools/check-unsafe).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+
 [features]
 compile = ["wasmtime/cranelift"]
 

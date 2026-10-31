@@ -1,0 +1,181 @@
+#!/bin/sh
+# The shared libraries a tree for the dist's Linux (5.9 and later) carries
+# in its lib/ (tools/tree --linux), and the sysroot its apps are linked
+# against, made in DIR:
+#
+#   DIR/lib/ld-musl-arm.so.1        musl's libc.so, which is its own loader
+#                                   (the interpreter the apps name)
+#   DIR/usr/lib/libncursesw.so.6    ncurses, wide-character
+#   DIR/usr/lib/libpanelw.so.6      and its panels (cbonsai's)
+#   DIR/usr/lib/pkgconfig/          for neochumby-ncurses' NEOCHUMBY_NCURSES=system
+#   DIR/usr/include/                ncurses' headers
+#
+# musl is the dist's Buildroot's: the same release, its tarball checked
+# against the same SHA-256, with the fixes Buildroot backports
+# (tools/linux-libs.d/musl/). ncurses is neochumby-ncurses' submodule,
+# configured as that crate's static build is: linux and xterm-256color
+# compiled in, and no terminfo database. Both are compiled by zig
+# (tools/zigcc), as the apps are, for the ARM926EJ-S. The dist's image
+# itself stays static (BR2_STATIC_LIBS): none of this is in its initramfs.
+#
+# A second run with the same inputs does nothing.
+#
+#   tools/linux-libs DIR
+#       (zig, cc, make, patch, curl and sha256sum or shasum on PATH)
+set -eu
+dir=${1:?usage: tools/linux-libs DIR}
+mkdir -p "$dir"
+dir=$(cd "$dir" && pwd)
+root=$(cd "$(dirname "$0")/.." && pwd)
+musl_version=1.2.6
+# As Buildroot's package/musl/musl.hash has it.
+musl_sha256=d585fd3b613c66151fc3249e8ed44f77020cb5e6c1e635a616d3f9f82460512a
+ncurses=$root/crates/neochumby-ncurses/third_party/ncurses
+patches=$root/tools/linux-libs.d/musl
+export ZIGCC_TARGET=arm-linux-musleabi
+cc=$root/tools/zigcc
+jobs=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+
+sha256() {
+  if command -v sha256sum > /dev/null; then
+    sha256sum "$1" | cut -d' ' -f1
+  else
+    shasum -a 256 "$1" | cut -d' ' -f1
+  fi
+}
+
+# Runs the rest, its output in the log $1, shown only if it fails.
+logged() {
+  log=$1
+  shift
+  "$@" > "$log" 2>&1 || {
+    tail -n 40 "$log" >&2
+    echo "tools/linux-libs: $* failed (above, the end of $log)" >&2
+    exit 1
+  }
+}
+
+git -C "$root" submodule update --quiet --init -- crates/neochumby-ncurses >&2
+# What the libraries are made from; DIR is made again when it changes.
+key=$(
+  {
+    echo "musl $musl_version $musl_sha256"
+    cat "$patches"/*.patch "$0" "$cc"
+    git -C "$ncurses" rev-parse HEAD
+    zig version
+  } | cksum
+)
+[ "$(cat "$dir/.made" 2>/dev/null)" = "$key" ] && exit 0
+
+work=$dir.work
+rm -rf "$work" "$dir"
+mkdir -p "$work" "$dir/lib" "$dir/usr/lib/pkgconfig" "$dir/usr/include"
+
+# zig's compiler runtime, which libc.so links in place of libgcc: the
+# soft-float, division and atomic helpers musl's C needs, hidden (libc.so
+# doesn't export them). zig's own libc takes the rest of compiler_rt's
+# functions (memcpy, strlen, log10 and the like) in place of musl's, but
+# here musl's are the ones exported, and a hidden definition beside one
+# hides it too: the symbol takes the most constraining visibility of its
+# definitions. So, from a copy, only compiler_rt's own (__-prefixed) symbols,
+# and of those not the few musl defines too.
+zig_lib=$(zig env | sed -n 's/.*\.lib_dir = "\([^"]*\)".*/\1/p; s/.*"lib_dir": *"\([^"]*\)".*/\1/p' | head -n 1)
+decl='pub inline fn symbol(comptime func: *const anyopaque, comptime name: []const u8) void {'
+grep -qxF "$decl" "$zig_lib/compiler_rt.zig" 2> /dev/null || {
+  echo "tools/linux-libs: no \`$decl\` in $zig_lib/compiler_rt.zig: zig changed it" >&2
+  exit 1
+}
+mkdir "$work/rt"
+cp -R "$zig_lib/compiler_rt" "$zig_lib/compiler_rt.zig" "$work/rt/"
+chmod -R u+w "$work/rt"
+awk -v decl="$decl" '
+  { print }
+  $0 == decl { print "    if (comptime musl_has(name)) return;" }
+  END {
+    print "fn musl_has(comptime name: []const u8) bool {"
+    print "    @setEvalBranchQuota(100000);"
+    print "    if (!std.mem.startsWith(u8, name, \"__\")) return true;"
+    print "    for ([_][]const u8{ \"__aeabi_mem\", \"__aeabi_read_tp\", \"__stack_chk_\" }) |p| {"
+    print "        if (std.mem.startsWith(u8, name, p)) return true;"
+    print "    }"
+    print "    return false;"
+    print "}"
+  }' "$zig_lib/compiler_rt.zig" > "$work/rt/compiler_rt.zig"
+zig build-lib "$work/rt/compiler_rt.zig" -target "$ZIGCC_TARGET" -mcpu=arm926ej_s -O ReleaseSmall \
+  -fPIC -ffunction-sections -fdata-sections --name compiler_rt -femit-bin="$work/libcompiler_rt.a" \
+  --cache-dir "$work/zig-cache"
+
+# musl's libc.so.
+tarball=${XDG_CACHE_HOME:-$HOME/.cache}/neochumby/musl-$musl_version.tar.gz
+if [ ! -f "$tarball" ] || [ "$(sha256 "$tarball")" != "$musl_sha256" ]; then
+  mkdir -p "$(dirname "$tarball")"
+  curl -fsSL -o "$tarball.part" "https://musl.libc.org/releases/musl-$musl_version.tar.gz"
+  got=$(sha256 "$tarball.part")
+  [ "$got" = "$musl_sha256" ] || {
+    rm -f "$tarball.part"
+    echo "tools/linux-libs: musl-$musl_version.tar.gz: SHA-256 $got, not $musl_sha256" >&2
+    exit 1
+  }
+  mv "$tarball.part" "$tarball"
+fi
+mkdir "$work/musl"
+tar -xzf "$tarball" -C "$work/musl" --strip-components 1
+for p in "$patches"/*.patch; do
+  patch -s -p1 -d "$work/musl" < "$p"
+done
+(
+  cd "$work/musl"
+  logged configure.log env CC="$cc" LDFLAGS=-s ./configure --target="$ZIGCC_TARGET" --prefix=/usr --syslibdir=/lib \
+    --disable-static
+  logged make.log make -j"$jobs" lib/libc.so LIBCC="$work/libcompiler_rt.a"
+)
+cp "$work/musl/lib/libc.so" "$dir/lib/ld-musl-arm.so.1"
+
+# ncurses: tic and infocmp for this machine first (to compile the
+# terminals in), as neochumby-ncurses' build does.
+common="--without-cxx --without-cxx-binding --without-ada --without-tests --without-manpages
+  --without-debug --without-gpm --disable-db-install --disable-pc-files --prefix=/usr"
+mkdir "$work/host" "$work/ncurses"
+(
+  cd "$work/host"
+  # shellcheck disable=SC2086
+  logged configure.log env CC="${HOST_CC:-cc}" sh "$ncurses/configure" $common --without-shared
+  logged make.log make -j"$jobs" libs
+  logged progs.log make -j"$jobs" -C progs tic infocmp
+)
+# zig's runtime for ARMv5 needs __sync_ helpers that only the Rust
+# binaries provide: configure's link tests get stand-ins (csrc/probe.S),
+# which the libraries themselves never link (LIBS= below).
+"$cc" -c "$root/crates/neochumby-ncurses/csrc/probe.S" -o "$work/probe.o"
+(
+  cd "$work/ncurses"
+  # shellcheck disable=SC2086
+  logged configure.log env CC="$cc" CFLAGS=-O2 LDFLAGS=-s LIBS="$work/probe.o" sh "$ncurses/configure" $common \
+    --host="$ZIGCC_TARGET" --with-build-cc="${HOST_CC:-cc}" \
+    --with-tic-path="$work/host/progs/tic" --with-infocmp-path="$work/host/progs/infocmp" \
+    --with-shared --without-normal --without-progs --without-profile --disable-rpath --disable-relink \
+    --disable-database --with-fallbacks=linux,xterm-256color --disable-home-terminfo \
+    --enable-widec
+  # "libs" makes libpanelw too (and forms and menus, which no app uses).
+  logged make.log make -j"$jobs" libs LIBS=
+  logged install.log make install.includes DESTDIR="$dir"
+)
+for lib in ncursesw panelw; do
+  # The real file under its soname (a FAT stick holds no links); the
+  # link the linker looks for, -l$lib, beside it.
+  cp "$work/ncurses/lib/lib$lib.so.6".[0-9]* "$dir/usr/lib/lib$lib.so.6"
+  ln -s "lib$lib.so.6" "$dir/usr/lib/lib$lib.so"
+  cat > "$dir/usr/lib/pkgconfig/$lib.pc" << EOF
+prefix=/usr
+libdir=\${prefix}/lib
+includedir=\${prefix}/include
+
+Name: $lib
+Description: ncurses' lib$lib, shared, from tools/linux-libs
+Version: 6
+Libs: -L\${libdir} -l$lib
+Cflags: -I\${includedir}
+EOF
+done
+rm -rf "$work"
+echo "$key" > "$dir/.made"

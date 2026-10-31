@@ -30,24 +30,33 @@ binaries are static (musl), so they don't depend on its userland.
 | --- | --- | --- |
 | `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, a terminal for programs written for one, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
 | `crates/neochumby/fonts` | The terminal's fonts: [Spleen](https://github.com/fcambus/spleen) 2.2.0, every size, as PSF (its README has the source) | BSD-2-Clause (`LICENSE.spleen`) |
+| `crates/neochumby/themes` | The terminal's own colour schemes: GitHub Dark, the default and the only one built into the session (GitHub's [Primer](https://github.com/primer/primitives) colours, as [terminalcolors.com](https://terminalcolors.com/themes/github/dark/) gives them), and xterm's | MIT |
+| `crates/neochumby/third_party/iTerm2-Color-Schemes` | [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (3d8a6a1, a submodule that only `tools/tree` checks out): most of the tree's `colors`, from its `ghostty/` themes | MIT, for the collection; each theme's copyright is its author's, as its README credits them |
+| `crates/neochumby/third_party/themes` | Schemes from their own repositories, over iTerm2-Color-Schemes' copies of them: [Catppuccin](https://github.com/catppuccin/ghostty) (b0b03cc: Frappé, Latte, Macchiato, Mocha), [Dracula](https://github.com/dracula/ghostty) (b0e6459), [Rosé Pine](https://github.com/rose-pine/ghostty) (d8b4ec0: and Dawn, Moon) and [Tokyo Night](https://github.com/folke/tokyonight.nvim) (cdc07ac: Day, Moon, Night, Storm), their Ghostty themes as they are; each one's `SOURCE` has its repository, commit and files | MIT (Catppuccin, Dracula, Rosé Pine) and Apache-2.0 (Tokyo Night), each `LICENSE` beside it |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, over TCP or a serial line | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
-| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
-| `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
+| `crates/neochumby-guest` | The wasm runner's host API for apps built as WebAssembly: the screen, touches, the accelerometer, time and the session, as safe functions | MIT |
+| `crates/neochumby-wasm` | `neochumby-wasm`, the runner for apps built as WebAssembly: WAMR in the app's jail, a host API that grants only what its manifest lists, and seccomp and Landlock where the kernel has them | MIT |
+| `crates/neochumby-wamr` | [WAMR](https://github.com/bytecodealliance/wasm-micro-runtime), the WebAssembly Micro Runtime (WAMR-2.4.5, built by `wamr-sys` from [our fork of wamr-rust-sdk](https://github.com/johnmerchant/wamr-rust-sdk), pinned, with its patches), for the Chumby: its AOT loader and fast interpreter, with a small safe interface, for apps as WebAssembly (proposal 0003) | MIT; WAMR and wamr-sys are Apache-2.0 WITH LLVM-exception |
+| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses (or, for Linux 5.9 and later, the same built shared, by `tools/linux-libs`) | MIT, and ncurses' own X11-style licence |
+| `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves, native or WebAssembly under [Wasmtime](https://wasmtime.dev) (the `wasm-companions` feature, which release builds have) | MIT; Wasmtime is Apache-2.0 WITH LLVM-exception |
 | `apps/home` | neochumby-home, the app list, in text mode: the installed apps, pairing, the time, and CHUMBY MODE on the stock 2.6 kernel (the dist's Linux has no stock software to go back to) | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker, with a now-playing screen in text mode; and `neochumby-airplay-proto`, its messages, for frontends of other apps | MIT |
+| `apps/catalog` | GET APPS: the catalog on the Chumby, in text mode, from its neochumbyd, which installs an app only once its owner has approved it on the Chumby and on the server | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) in text mode, beside a Chumby | MIT |
 | `apps/htop` | neochumby-htop: [htop](https://github.com/htop-dev/htop) (3.5.3, a submodule) in text mode, in Spleen 6x12, the touchscreen its mouse (F10, Quit, is past the 53rd column: the corner hold leaves it) | GPL-2.0-or-later |
 | `apps/top` | neochumby-top: [procps-ng](https://gitlab.com/procps-ng/procps)' top (4.0.7, a submodule) in text mode, until tapped | GPL-2.0-or-later |
 | `apps/cmatrix` | MATRIX: [cmatrix](https://github.com/abishekvashok/cmatrix) (v2.0, a submodule) in text mode, until tapped | GPL-3.0-or-later |
+| `apps/clockwasm` | WASM CLOCK: a big digital clock built as WebAssembly, run by the wasm runner, and the same face built natively, to measure one against the other | MIT |
 | `apps/clock` | CLOCK: [tty-clock](https://github.com/xorg62/tty-clock) (8868f3e, a submodule), until tapped | BSD-3-Clause |
 | `apps/bonsai` | BONSAI: [cbonsai](https://gitlab.com/jallbrit/cbonsai) (v1.4.2, a submodule) growing a tree, a new one every 20 seconds, until tapped | GPL-3.0-only |
 | `apps/pipes` | PIPES: [pipes-rs](https://github.com/dnorhoj/pipes-rs) (v0.1.1, a submodule), pipes.sh in Rust, until tapped | GPL-3.0-only |
 | `apps/aquarium` | AQUARIUM: [asciiquarium-rs](https://github.com/cablehead/asciiquarium-rs) (beef5b7, a submodule), asciiquarium in Rust, until tapped | GPL-2.0-or-later |
 | `apps/genact` | GENACT: [genact](https://github.com/svenstaro/genact) (1.6.0, from crates.io), looking busy, until tapped | MIT |
+| `apps/ttfx` | TTFX: [ttfx](https://github.com/omacom/ttfx) (v0.5.1, a submodule), [TerminalTextEffects](https://github.com/ChrisBuilds/terminaltexteffects) by ChrisBuilds in Rust: "neochumby" and the time and date, through one effect after another, in Spleen 6x12, until tapped; Linux 5.9 and later | MIT (TerminalTextEffects' copyright kept in its LICENSE and NOTICE) |
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
@@ -71,6 +80,14 @@ program. The
 soft-float routines' runtime exception puts no conditions on the programs
 they're linked into.
 
+The colour schemes are data, not code: `tools/tree` converts them into
+one file, the tree's `colors`, with their licences beside it in
+`colors.LICENSE`, and neither is committed. Nord, Solarized and Gruvbox
+are iTerm2-Color-Schemes' copies: Nord's and Solarized's own repositories
+have no Ghostty themes (only iTerm2's, Solarized's in a colour space of
+their own), and Gruvbox's terminal colours (gruvbox-contrib) carry no
+licence.
+
 ## Apps
 
 Everything you see is an app, the app list included. An app is one crate,
@@ -82,6 +99,7 @@ crate's `Cargo.toml`:
 [package.metadata.neochumby]
 title = "QUAKE"                      # listed in app lists
 exec = "neochumby-quake"             # binaries, by name; exec runs in front
+wasm = "neochumby-x"                 # or, in place of exec, a binary built as WebAssembly
 color = "8c5a28"                    # optional; `colour` works too
 service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
@@ -96,6 +114,7 @@ player = true                        # a player: MUSIC buttons may open it (need
 font = "spleen-8x16"                 # text mode: its terminal's font
 tap = "q"                            # text mode: what a tap types until it asks for the mouse
 frontend = "airplay"                 # it shows that app, in its place, once the owner approves
+linux = "5.9"                        # the oldest Linux it runs on (tools/tree --linux); absent: any, the stock 2.6 too
 ```
 
 An app can use any of these keys:
@@ -107,7 +126,13 @@ An app can use any of these keys:
   the two halves over the paired connection. neochumbyd knows no app by
   name. An app with a companion sets `neochumbyd` too, and its Chumby half
   opens it with `neochumby::companion!()`, which fails the build if the
-  app's `Cargo.toml` declares no companion.
+  app's `Cargo.toml` declares no companion. A companion that is a `.wasm`
+  file (`companion=weather.wasm` in the tree's manifest) runs under
+  Wasmtime, inside the same sandbox: it gets its frames, its own state
+  directory, the Chumby's name, and HTTPS GETs to the hosts its owner
+  approved (`network=host1,host2`) at public addresses, and nothing else.
+  Only a neochumbyd built with the `wasm-companions` feature runs one
+  (release builds, `cargo neochumbyd` and `tools/deploy` have it).
 - **`server`:** a server half that runs once on the server for all its
   Chumbys, rather than once per Chumby as a companion does, such as a
   household web page. neochumbyd starts it when it starts, starts it again
@@ -176,12 +201,30 @@ An app can use any of these keys:
   the program hasn't asked for the mouse (`q` quits top).
 - **The owner's font and colours:** `neochumbyd set NAME font=spleen-8x16`
   sets every text-mode app's font, over its own, and `colors=` its colours:
-  `github-dark` (the default) or `xterm`, built in; a theme in the tree's
-  `themes/` directory, in Ghostty's format (`background = #rrggbb`,
-  `foreground = ...`, `palette = N=#rrggbb`), which most theme sites
-  offer; or 18 hex colours joined by `:` (background, foreground, then
-  colours 0 to 15). Without a neochumbyd, the same lines go in
-  `/psp/neochumby.conf`.
+  `github-dark`, the default, built in; any of the tree's `colors`, some
+  900 schemes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+  and a few themes' own repositories ("What's here"), each named in lower
+  case with `-` between words (`dracula`, `catppuccin-mocha`,
+  `rose-pine-moon`, `tokyonight-storm`, `nord`, `gruvbox-dark`,
+  `solarized-dark-higher-contrast`, `xterm`; `grep -o '^[a-z0-9-]*'
+  TREE/colors` lists them); a theme of your own in the tree's `themes/`
+  directory, in Ghostty's format (`background = #rrggbb`,
+  `foreground = ...`, `cursor-color = ...`, `palette = N=#rrggbb`), which
+  most theme sites offer; or 18 hex colours joined by `:` (background,
+  foreground, then colours 0 to 15). A name it can't find is logged, and
+  GitHub Dark used. Each scheme is its 16 colours, background, foreground
+  and cursor: on 2.6.16 the cursor is drawn in its colour, and on the
+  dist kernels in reverse video, as the Linux console draws it; a theme's
+  other colours (the selection's, the cursor's text) aren't used. Without
+  a neochumbyd, the same lines go in `/psp/neochumby.conf`.
+- **`wasm`:** in place of `exec`, a binary that `tools/tree` builds for
+  `wasm32-wasip1` and compiles for the Chumby (`tools/wamrc`, when LLVM 18
+  is there: `nix develop .#wasm`; else it runs interpreted, slowly). The
+  session runs it with `neochumby-wasm`, the wasm runner, in the app's
+  jail, in text mode or with `fb` as an `exec` is, and it reaches only
+  what its `access` grants, through the runner's host API
+  (`neochumby-guest`; [proposal 0003](docs/proposals/0003-wasm-apps.md)).
+  WASM CLOCK is one.
 - **`player`:** a Chumby's default player is the one a start app's MUSIC
   button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
   (the start app asks the session, which tells the player's service).
@@ -210,9 +253,9 @@ out first:
 
 ```sh
 git submodule update --init   # or clone with --recursive
-rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
+rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl wasm32-wasip1
 cargo chumby          # the session and apps, for the Chumby
-cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux
+cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux (with wasm companions)
 ```
 
 The server half also builds for 64-bit ARM Linux, such as a Raspberry Pi
@@ -230,6 +273,8 @@ A Chumby runs neochumby from a tree of the session and its apps:
 neochumby                  the session
 neochumby-sync             the receiver for delivery=sync (not on a stick made by hand)
 userhook2                  the boot hook, which pairing installs
+colors, colors.LICENSE     the colour schemes text-mode apps can be drawn in (colors=), and their licences
+themes/                    your own schemes, if any (colors=)
 apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
@@ -239,6 +284,7 @@ apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.tx
 apps/htop/                 neochumby-htop, manifest
 apps/top/                  neochumby-top, manifest
 apps/cmatrix/              neochumby-cmatrix, manifest (and so on for clock, bonsai, pipes, aquarium, genact)
+lib/                       for Linux 5.9 and later: ld-musl-arm.so.1, libncursesw.so.6, libpanelw.so.6
 ```
 
 `tools/tree OUT [-d DATA] [--pinned] [APP ...]` builds that tree. It always includes
@@ -263,6 +309,12 @@ Each app's binaries are built for the Chumby, and its companion and server
 program for the server, with the toolchain above. Its manifest is made from its
 `Cargo.toml`, and its `files/` directory, if it has one, is copied as it
 is. Game data is added from `DATA`, your own copies laid out the same way.
+Every binary is static, but in a tree for the dist's Linux (`--linux 5.9`
+and later) the apps that use curses (htop, top, cmatrix, clock, bonsai)
+link musl and ncurses dynamically, from the tree's `lib/`
+(`tools/linux-libs` builds them, with zig, and `pkg-config` finds them).
+The jail puts those at `/lib` for such an app; the dist's image itself
+stays static, and a tree for the stock 2.6 has no `lib/`.
 The tree can come from a stick or from a server.
 
 ### From a stick
@@ -400,6 +452,93 @@ web=|tail -n 200 -f /srv/web/access.log
 Without that file it serves /var/log/syslog or /var/log/messages, and the
 journal where `journalctl` runs.
 
+### The catalog
+
+The catalog (GET APPS on the screen) is other people's apps, built as
+WebAssembly and published as crates on crates.io with the keyword
+`neochumby-app` ([proposal 0003](docs/proposals/0003-wasm-apps.md#the-catalog)
+has what such a crate holds). crates.io is only where they are
+published: nothing in the catalog is reviewed or endorsed by the Rust
+project or crates.io. `neochumbyd serve` looks for them once a day, and
+keeps what it found in `<state>/catalog.json`; Chumbys read only that.
+`serve --no-catalog-refresh` turns the daily look off: then only
+`neochumbyd catalog refresh` asks crates.io and GitHub.
+
+```sh
+neochumbyd catalog                 # what was found, best first
+neochumbyd catalog refresh         # ask crates.io and GitHub now
+neochumbyd install crate:neochumby-weather@1.2.0 --wamrc "$(tools/wamrc)"
+neochumbyd uninstall weather
+neochumbyd catalog log             # every install, update and removal
+neochumbyd catalog auto-update off # or on, the default
+```
+
+`install` names a version, always. It fetches and checks the crate and
+its modules, then shows the title, the publisher on crates.io, its
+downloads, whether its build is verified, the access it asks for, its
+companion's hosts, and whether it will run compiled or interpreted, and
+asks y/N. Without a terminal it needs `--yes --access WORDS`, WORDS naming
+exactly what it asks, its access words and its companion's hosts
+(`--access fb,touch,api.open-meteo.com`). The app goes in the tree as
+`apps/<name>/`. GITHUB_TOKEN, if set, raises GitHub's limit for
+discovery.
+
+Installing and removing are the owner's: the command line does them
+through the admin socket's protocol (`install`, `uninstall`), with the
+owner's token from the state directory, as a page given the socket does
+with the token its owner types.
+
+**Updates.** Installing a newer version is an update. After each refresh,
+an installed app whose listing has a newer version is updated by itself
+if that version asks for nothing it didn't have: no new access word and
+no new host. One that asks for more waits for the owner, who installs it
+as above (or approves it from a Chumby's GET APPS). Every update is
+checked as an install is, and logged in `<state>/catalog.log`.
+`neochumbyd catalog auto-update off` stops updates by themselves; then
+each one waits for the owner.
+
+**"Verified build"** means one of GitHub's artifact attestations for the
+app's `.wasm` verified on the server: a Sigstore bundle signed by a
+certificate from Sigstore's Fulcio for a GitHub Actions run of a workflow
+in the crate's own repository, logged in Sigstore's Rekor, for that very
+file. It is a label, never a requirement. Anything else is **unverified**,
+and `install`, the log and GET APPS say so, and why.
+
+With a wamrc built by `tools/wamrc` (`--wamrc`, or NEOCHUMBY_WAMRC, on
+`install` and `serve`), the app is compiled for the Chumby, sandboxed, and
+compiled again when neochumbyd starts with a wamrc for another WAMR.
+Without one it runs on the interpreter, which is slow. SECURITY has what
+is checked.
+
+**GET APPS** (the catalog app) shows the catalog on a paired Chumby, in
+text mode, a page at a time: each app's title, publisher, a line of its
+description, downloads, and **verified build** or **UNVERIFIED**, with why. An app's
+details say what it asks for, plainly, its version and size, and whether
+it would be slow (no wamrc on the server); access a catalog app never gets
+is shown as refused. Its companion is neochumbyd itself
+(`companion = "neochumbyd:catalog"`), which answers from the cache, and
+looks up each app's details (by fetching and checking it, as an install
+does) once per version: the best-ranked in the background, others when
+first asked. A Chumby can have looked up only apps in the cache, from
+crates.io and GitHub only, a few a minute. GET installs nothing on the Chumby's say alone. Its owner
+allows the access on the Chumby; neochumbyd checks the app again and
+waits, and the Chumby shows a code:
+
+```sh
+neochumbyd pairing                 # lists what Chumbys ask to install or remove
+neochumbyd approve ABCD-EF23       # shows it, and lets it go ahead (the admin socket's approve, with the owner's token)
+neochumbyd refuse ABCD-EF23
+```
+
+A request lapses after ten minutes, or when the Chumby leaves GET APPS.
+Once approved, the Chumby shows the install's progress and where home
+lists the new app; when it leaves GET APPS, neochumbyd restarts its
+session, so that the session knows the new app (on `delivery=sync`, the
+next round brings it). The installed catalog apps can be updated or
+removed. An update that asks for nothing new goes ahead on the Chumby's
+say, as serve's own updates do, unless automatic updates are off; one
+that asks for more, and a removal, are approved the same way.
+
 ### Delivery: NFS or sync
 
 Each paired Chumby gets its tree one of two ways, chosen on the server:
@@ -440,7 +579,8 @@ rules (it opens no app). Once a minute, it:
    in the set's journal only after it is on the stick;
 4. hashes any file kept from a round that was cut short, then writes the
    set's completion marker (`a.complete`, carrying its manifest) last, and
-   rewrites `current` to make it live from the next boot.
+   rewrites `current` to make it live from the next boot. Both are synced
+   to the stick before the round says so.
 
 Files arrive only over the paired session, from the pinned neochumbyd key,
 never SSH. Writes stay inside the stick's `neochumby/`, and happen only

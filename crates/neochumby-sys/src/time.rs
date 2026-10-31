@@ -28,6 +28,33 @@ pub fn monotonic() -> Duration {
     Duration::new(ts.tv_sec.max(0) as u64, ts.tv_nsec.clamp(0, 999_999_999) as u32)
 }
 
+/// The wall clock (CLOCK_REALTIME) now, in seconds since the epoch.
+#[allow(deprecated)]
+pub fn wall_clock() -> i64 {
+    // SAFETY: time(2) with a null pointer only returns the time.
+    let now: libc::time_t = unsafe { libc::time(std::ptr::null_mut()) };
+    now as i64
+}
+
+/// Sets the wall clock (CLOCK_REALTIME) to `secs` since the epoch: for root
+/// only (EPERM otherwise). clock_settime(2), which 2.6.16 has; musl makes
+/// it the 64-bit call where the kernel has that, else the 32-bit one.
+#[allow(deprecated)]
+pub fn set_wall_clock(secs: i64) -> std::io::Result<()> {
+    let tv_sec = libc::time_t::try_from(secs)
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::InvalidInput, "a time this C library can't hold"))?;
+    // SAFETY: libc::timespec is integers (and, on some systems, padding),
+    // for which zero is valid.
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    ts.tv_sec = tv_sec;
+    // SAFETY: clock_settime only reads `ts`, a live local of the type it
+    // takes; CLOCK_REALTIME is a clock every kernel we run on has.
+    if unsafe { libc::clock_settime(libc::CLOCK_REALTIME, &ts) } != 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 /// The wall clock in the local time zone, from the C library's time zone
 /// (TZ).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

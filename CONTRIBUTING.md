@@ -14,7 +14,12 @@ changes easy to take.
   (`apps/quake/build.rs`). A change that can't be made that way goes in a
   fork, as a commit marked with a comment naming the app
   (`// neochumby-quake: ...`), and the submodule is pinned to that commit:
-  no patch files applied at build time. `tools/tree` (and so `tools/stick`
+  no patch files applied at build time. WAMR is the exception: it comes
+  from our fork of wamr-rust-sdk
+  ([johnmerchant/wamr-rust-sdk](https://github.com/johnmerchant/wamr-rust-sdk)),
+  pinned by commit in `crates/neochumby-wamr/Cargo.toml`, whose `wamr-sys`
+  pins WAMR to a release and applies its `patches/` (in the project's
+  format) to a copy of WAMR's source as it builds. `tools/tree` (and so `tools/stick`
   and `tools/deploy`) checks out the submodules of the apps it builds, so a
   clone without `--recurse-submodules` works there; `cargo` alone needs
   `git submodule update --init` first.
@@ -44,10 +49,24 @@ The workspace denies `unsafe` code. Every raw system call lives in
 `crates/neochumby-sys`, behind safe functions, each `unsafe` block with a
 `// SAFETY:` comment saying why it holds; anything else needing one adds a
 function there, and uses std instead wherever std does the job safely. The
-games (Doom, Quake), fetch, htop and top are allowed it as FFI to their C. We use libc
+games (Doom, Quake) and the terminal apps that link a C program (fetch, htop,
+top, cmatrix, clock, bonsai) are allowed it as FFI to their C, and
+`crates/neochumby-wamr` as FFI to WAMR, in its one module `runtime.rs`. We use libc
 rather than rustix: rustix calls the kernel directly and needs Linux 3.2,
 the Chumby runs 2.6.16, and its `ioctl` and `mmap` are `unsafe` too (see
 neochumby-sys's documentation).
+
+CI holds every crate to this: `tools/check-unsafe`, in the "Format, lint,
+test" job. Each crate of ours, in the workspace or standalone (dev/, tools/),
+denies `unsafe_code`, by `[lints] workspace = true` or its own `[lints.rust]`;
+only the crates listed in `.github/unsafe-allowed` may allow it
+(`#![allow(unsafe_code)]`), and no rustc flag or `--cap-lints` may relax it.
+Those crates deny clippy's `undocumented_unsafe_blocks` and
+`missing_safety_doc` too, so that every `unsafe` block and `unsafe impl` has
+a `// SAFETY:` comment above it and every `unsafe fn` a `# Safety` section.
+A crate that needs unsafe code of its own asks for it in the same pull
+request, with a line in that file (its name, and why), which a code owner
+approves. `python3 -I tools/check-unsafe` runs the check locally.
 
 ## Building and checking
 
@@ -59,19 +78,19 @@ CI's, fetched and verified.
 nix develop             # the tools (flake.nix); or install what dev/setup lists
 dev/setup               # checks the tools, checks out the submodules, fetches QEMU and the images
 cargo chumby            # the session and neochumby-home, for the Chumby
-cargo neochumbyd        # the server
+cargo neochumbyd        # the server, with wasm companions (--features wasm-companions)
 tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 dev/emulate start /tmp/tree   # the tree on an emulated Chumby (Testing without a Chumby, below)
 # the end-to-end scenarios as CI runs them: boot on dist; boot and smoke on classic
-cargo build --release -p neochumbyd
+cargo build --release -p neochumbyd --features wasm-companions
 E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e
 NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic
 ```
 
 Without Nix, the tools are: Rust with the
-`armv5te-unknown-linux-musleabi` and `x86_64-unknown-linux-musl` targets
+`armv5te-unknown-linux-musleabi`, `x86_64-unknown-linux-musl` and `wasm32-wasip1` targets
 (`rustup target add ...`), zig 0.17 on PATH (the C compiler, linker and
-musl: https://ziglang.org), CMake 3.21 or later (for fetch), Python 3.9 or
+musl: https://ziglang.org), CMake 3.21 or later (for fetch and WAMR), libclang (for WAMR's bindings), Python 3.9 or
 later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
 verify CI's images' attestations with it). `dev/setup --check` says which
 are missing and how to get them on this system. `git submodule update
@@ -265,6 +284,10 @@ dev/emulate stop
   (neochumby-proto's `mux`). Pairing and `delivery=sync` work there; NFS
   doesn't. The pairing it keeps goes back in /psp at the next start
   (`dev/emulate kept` copies it out), and `--psp` starts afresh.
+- **Weak keys on 2.6.16.** With no network, an emulated 2.6.16 Chumby
+  (stock, classic) never gathers the entropy /dev/random waits for, so the
+  emulator's hook lowers the threshold. The keys it makes, its pairing key
+  included, are weak: for testing only. Pair real Chumbys on real ones.
 
 `python3 dev/test_emulate.py` (CI runs it) checks the images dev/emulate
 makes and its whole control path against a stub QEMU, without firmware.
@@ -281,7 +304,7 @@ passes where, so far:
 | `smoke` | passes | fails | on 5.9.16 the kernel's framebuffer console blinks its cursor over the session's screen (`vt.global_cursor_default=0` stops it), so the screen seldom settles; and the session reads touches from `/dev/input/event0`, which there is the top button (the touchscreen is `event1`), so no tap reaches it; there is no `/dev/switch` either |
 | `stock` | passes | skipped | the stock firmware's own boot |
 | `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
-| `link` | passes | passes (5.9.16) | not in CI: it runs a neochumbyd here, at the other end of the serial line, and a round over the line takes minutes; `pairing` and `powercut` likewise (both pass on classic) |
+| `link` | passes | passes (CI) | CI's link job runs it on classic and dist, with `pairing` and `powercut` on classic, on every push to main and on pull requests touching what they cover (a round over the line takes minutes) |
 
 The session on dist still uses the stock kernel's `/dev/switch` and
 `/dev/accel`, where 5.9.16 offers evdev and IIO: the scenarios that need
@@ -328,8 +351,9 @@ Where it taps comes from the pictures' own tap zones.
 the other end of the emulated Chumby's serial line. PAIR pairs over the
 line, with the code both ends show; at the next start neochumbyd has the
 Chumby's log and its screen over the developer link, and with
-`delivery=sync` a first round fills set a of its stick, which the boot
-after runs.
+`delivery=sync` a first round fills set a of its stick. The power is cut
+the moment the round says set a is live, and the stick as the cut left it
+boots set a.
 
 **Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`). The
 Chumby taps PAIR against a neochumbyd on the PC, and the code it logs must
@@ -350,6 +374,19 @@ the log must show the hook running a complete set, `check-set` agreeing,
 and the next round making the new set live, which one more boot runs. With
 `--device` the person beside the Chumby is asked to pull the plug. (Every
 cut point of a round, on the host, is neochumby-sync's own crash test.)
+
+**The wasm runner's hostile modules** (`dev/emulate-wasm TREE OUT`, a tree
+with `neochumby-wasm` and the suite's modules staged into it by
+`NEOCHUMBY_WASM_STAGE=TREE cargo test -p neochumby-wasm --test hostile`).
+Each module of the suite is run on the console with the tree's runner, on
+the profile's own kernel: an import not granted, compiled code passed off
+as bytecode and a catalog app asking for `system` are refused before they
+run; out-of-bounds accesses trap; a forged `.aot` is passed over; memory
+stops at its cap; a runaway loop runs until it is killed. With seccomp
+(dist) the runner locks itself down and a forbidden call kills it; on
+2.6.16 (classic, stock) a catalog app is refused unless trusted. It uses
+`dev/emulate exec`, so it runs on the dist and classic profiles, not on
+a real Chumby.
 
 ### A real Chumby: --device NAME
 
@@ -418,6 +455,7 @@ player = true                        # optional: a player (below)
 font = "spleen-8x16"                 # optional, text mode: its terminal's font
 tap = "q"                            # optional, text mode: what a tap types
 frontend = "airplay"                 # optional: it shows another app (below)
+linux = "5.9"                        # optional: the oldest Linux it runs on (tools/tree --linux)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -583,7 +621,7 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `system` | `/proc`, `/sys` and `/etc` |
 | `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
-| `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service` (below) |
+| `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service`, `nosuid,nodev,noexec` (below) |
 | `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
 | `root` | no jail: it runs as root, as the session does. Listed alone, or with `fb` for an app that draws the screen itself: without `fb`, a root app runs in text mode too |
 
@@ -606,6 +644,10 @@ else belongs in `/tmp`.
   One already over as the session started may stay that size, to tidy up,
   but not grow. Write small files, and replace them whole (write a new
   one, then rename it over the old).
+- It's `nosuid,nodev,noexec`, as `/tmp` is: nothing your app writes there
+  runs. The jail remounts its bind of the directory so (Linux 2.6.16 and
+  5.9 both can). A kernel that can't leaves it as `/psp` is, executable,
+  and the session says so once.
 
 **Playing a stream.** The stock player (`btplay` and its daemon) can't
 run in a jail. An app with `speaker` may ask the session to run it, and
@@ -637,13 +679,17 @@ CHUMBY MODE. From any other app it's refused and logged.
 In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
 `Pipe::brightness(n)`.
 
-**Your binaries.** Each `exec` and `service` must be a static ARM ELF.
-Before it starts one, the session refuses a file with a `PT_LOAD` below
-`0x1000` (page zero), a `PT_INTERP`, or a non-ARM ELF, and it checks every
-executable file in your app's directory the same way. Page zero is where
+**Your binaries.** Each `exec` and `service` must be a static ARM ELF,
+but in a tree for Linux 5.9 and later: there, if your crate links
+neochumby-ncurses, `tools/tree` links it dynamically against the tree's
+own musl and ncurses (in its `lib/`, from `tools/linux-libs`), and its
+jail has them at `/lib`. Before it starts one, the session refuses a file
+with a `PT_LOAD` below `0x1000` (page zero), a `PT_INTERP` (on 5.9 and
+later, any but `/lib/ld-musl-arm.so.1`), or a non-ARM ELF, and it checks
+every executable file in your app's directory the same way. Page zero is where
 the ARM `mmap` check doesn't reach the ELF loader. Put helper programs in
-the app's directory, not in `/tmp`: `/tmp` and the speaker handover are
-`noexec`.
+the app's directory, not in `/tmp`: `/tmp`, `storage` and the speaker
+handover are `noexec`.
 
 **The network.** The stock kernel can't take the network away from a
 process. Instead, once a second, the session looks for internet sockets in
@@ -811,6 +857,20 @@ the app:
   app's own (the same as its app's server program), with no other
   groups. Keep everything it writes in `NEOCHUMBY_STATE`: it can't write
   neochumbyd's state, the tree or another app's directory.
+- **As WebAssembly:** a companion built for `wasm32-wasip1` and named in
+  the manifest as a `.wasm` file runs under Wasmtime (neochumbyd's
+  `wasm.rs`), in a process that is sandboxed, and under its app's uid, as
+  above. Its state directory is its `.`, and nothing else of the disk is
+  there; its environment is `NEOCHUMBY_CHUMBY` alone; it has no sockets.
+  It reaches the network through one import, `neochumby` `https_get`:
+  HTTPS GETs, without redirects, to only the hosts in the manifest's
+  `network=host1,host2`, and only where they resolve to public addresses
+  (not the server, its LAN, link-local, CGNAT or multicast; checked as the
+  name is looked up and again once connected). It has 64 MiB, and traps
+  if it runs five seconds without calling the host (waiting on stdin is a
+  host call). neochumbyd runs wasm companions only when built with the
+  `wasm-companions` cargo feature, as release builds are; without it,
+  such a companion isn't started, and neochumbyd's log says why.
 
 `apps/airplay` is a worked example of both halves, and `apps/logs` one
 whose companion is optional.
@@ -948,7 +1008,7 @@ weekly (dist/README.md, "Mainline, weekly"), and the newest is on
 
 ## Publishing the SDK crates
 
-Seven crates are published on crates.io, as an SDK for apps outside this
+Six crates are published on crates.io, as an SDK for apps outside this
 repository: experimental, and any release may break them. In dependency
 order:
 
@@ -956,49 +1016,35 @@ order:
    `neochumby-softfloat`
 2. `neochumby-sync`
 3. `neochumby`
-4. `neochumby-ncurses`
 
-The rest stay `publish = false`.
+The rest stay `publish = false`. `neochumby-ncurses` 0.0.1 is on
+crates.io, but it isn't published any more.
 
-- **Versions come from CI, not from the repository.** Nobody bumps a
-  crate's version or tags a release. On every push to main, once it
-  builds, tests and packages, CI's "Publish to crates.io" job publishes
-  each crate that changed, at crates.io's latest version plus one in the
-  last component (0.0.N, then 0.0.N+1). A crate's `version` in its
-  Cargo.toml (and in `[workspace.dependencies]`, where the others take it
-  by path and version) is only the floor: its first release, or a version
-  to jump to by raising it. It stays 0.0.1 in the repository while
-  crates.io moves on. CI writes the real versions into its own checkout,
-  never into a commit. These versions are not the bundle's dated releases
-  (vYYYY.MM.N).
-- **What counts as changed.** CI packages the crate at its latest
-  release's version, with its dependencies at their versions as this run
-  decides them, and compares that with the `.crate` on crates.io
-  (ignoring `.cargo_vcs_info.json` and `Cargo.lock`). Any difference
-  publishes a new release, whether in a source file, the manifest, a
-  dependency requirement, or workspace metadata it inherits. At 0.0.x
-  every release is incompatible with the one before, so a crate's
-  republished dependencies also republish it, with its requirement on
-  them raised. A crate not on crates.io yet is published at its floor.
-- **Records and re-runs.** CI tags each release `<crate>-v<version>`. The
-  tags are records only: comparing with crates.io decides what to
-  publish, so a re-run on the same commit publishes nothing new, and a
-  re-run after a failed run publishes what that run didn't. Running CI
-  from the Actions tab (workflow_dispatch) on main does the same, unless
-  `release` is set: a release builds and publishes nothing else. Anywhere
-  else (pull requests, or other branches), the job prints what it
-  would publish, at which versions and in which order, and runs `cargo
-  publish --dry-run` instead.
+- **A crate is released by hand, with a tag.** Raise its `version` in its
+  Cargo.toml, and in `[workspace.dependencies]`, where the others take it
+  by path and version, in a pull request. Once that's merged, tag the
+  commit on main and push the tag:
+
+      git tag neochumby-sync-v0.0.2 origin/main
+      git push origin neochumby-sync-v0.0.2
+
+  CI's "Publish to crates.io" job then publishes that one crate. It
+  checks that the tag names a published crate, at the version its
+  Cargo.toml says, on a commit on main; nothing else runs for the tag. A
+  crate whose dependency changed needs that dependency released first.
+  At 0.0.x every release is incompatible with the one before, so raise
+  the requirement in its dependents too, and release them after it.
+  These versions are not the bundle's dated releases (vYYYY.MM.N).
+- **Re-runs.** Re-running the job for a version already on crates.io
+  passes and publishes nothing.
 - **What's packaged.** Each crate's `include` lists what it carries: what
-  it builds from, its README and its licence texts. neochumby-ncurses
-  carries ncurses' sources, less what its build configures out. CI's
-  "Package the SDK crates" job packages them all and builds each from its
+  it builds from, its README and its licence texts. CI's "Package the SDK
+  crates" job packages them all on every run and builds each from its
   package, on the host and for the Chumby (`cargo publish --dry-run`), so
   `cargo package --list -p <crate>` and that job are where to look after
   changing one.
 - **Later:** at 0.1 and above, `cargo semver-checks` against the published
-  release will choose between a patch and a minor release, instead of
-  every change being incompatible.
+  release will choose between a patch and a minor release.
 
 ## Pull requests
 

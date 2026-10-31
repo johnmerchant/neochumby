@@ -42,6 +42,8 @@ impl OwnHost {
 /// This host's name, if it has one.
 fn hostname() -> Option<Vec<u8>> {
     let mut buf = [0u8; 256];
+    // SAFETY: buf is buf.len() writable bytes, which gethostname writes at
+    // most.
     if unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } != 0 {
         return None;
     }
@@ -53,7 +55,10 @@ fn hostname() -> Option<Vec<u8>> {
 /// `name` is a NUL-terminated string that outlives the answer.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn chum_gethostbyname(name: *const c_char) -> *mut libc::hostent {
+    // SAFETY: name is a NUL-terminated string, as the caller promises
+    // (net_udp.c passes its own buffers), which gethostbyname only reads.
     let h = unsafe { gethostbyname(name) };
+    // SAFETY: as above: NUL-terminated, and live through the call.
     if !h.is_null() || hostname().as_deref() != Some(unsafe { CStr::from_ptr(name) }.to_bytes()) {
         return h;
     }

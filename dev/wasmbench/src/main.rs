@@ -15,6 +15,8 @@
 //! CoreMark's Iterations/Sec, are its own measurements. At the end, a
 //! table of medians, and each against native.
 
+// Unsafe code, through libc: on .github/unsafe-allowed.
+#![allow(unsafe_code)]
 
 use std::collections::BTreeMap;
 use std::io::Read;

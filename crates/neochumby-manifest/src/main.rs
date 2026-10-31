@@ -11,6 +11,8 @@
 //! `player`, which are true or false, and the lists `access`, what the app
 //! reaches beyond its jail ([`ACCESS`]), and `listen`, the TCP ports a
 //! `server` program may bind, each written as one comma-separated value.
+//! `linux` is the oldest Linux the app runs on, MAJOR.MINOR (as "5.9"):
+//! tools/tree leaves it out of a tree for an older one.
 //! `neochumbyd` is `required` or `optional` (absent: the app never needs
 //! one), and an app with a `companion` must set it: only a neochumbyd runs
 //! companions. It is stated, not inferred from `companion`. Nothing in the
@@ -26,6 +28,11 @@
 //! `frontend` names another app that this one shows in its place, through
 //! that app's service (neochumby::service), once the owner approves it: it
 //! needs an `exec`, and may draw in text mode or with `fb`.
+//!
+//! `wasm` names a binary built for `wasm32-wasip1` in place of an `exec`,
+//! run by the session's wasm runner (docs/proposals/0003-wasm-apps.md); the
+//! tree's manifest names its module, `<binary>.wasm`. Its front runs in
+//! text mode or with `fb`, as an exec's does.
 
 use std::process::ExitCode;
 
@@ -36,6 +43,7 @@ use toml::Value;
 const KEYS: &[&str] = &[
     "title",
     "exec",
+    "wasm",
     "color",
     "service",
     "companion",
@@ -47,6 +55,7 @@ const KEYS: &[&str] = &[
     "interrupt",
     "player",
     "access",
+    "linux",
     "font",
     "tap",
     "frontend",
@@ -168,6 +177,8 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
             (false, Value::Array(a)) if *key == "access" => access(a)?,
             (false, _) if *key == "access" => return Err("access: not a list of strings".into()),
             (false, Value::String(s)) if *key == "tap" => escape(s),
+            // The binary built for wasm32-wasip1, as tools/tree names it.
+            (false, Value::String(s)) if *key == "wasm" => format!("{s}.wasm"),
             (false, Value::String(s)) => s.clone(),
             (false, _) => return Err(format!("{key}: not a string")),
             (true, Value::Boolean(b)) => b.to_string(),
@@ -185,6 +196,14 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
     match meta.get("neochumbyd").and_then(Value::as_str) {
         None | Some("required" | "optional") => {}
         Some(v) => return Err(format!(r#"neochumbyd: {v:?} is not "required" or "optional" (or leave it out)"#)),
+    }
+    if let Some(v) = meta.get("linux").and_then(Value::as_str) {
+        let ok = v.split_once('.').is_some_and(|(a, b)| {
+            !a.is_empty() && !b.is_empty() && (a.chars().chain(b.chars())).all(|c| c.is_ascii_digit())
+        });
+        if !ok {
+            return Err(format!(r#"linux: {v:?} is not MAJOR.MINOR (as "5.9")"#));
+        }
     }
     if meta.contains_key("listen") && !meta.contains_key("server") {
         return Err("listen is a server program's: set server too".into());
@@ -209,8 +228,8 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         if fb {
             return Err(format!("{key}: an app with fb draws the screen itself, and has no terminal"));
         }
-        if !meta.contains_key("exec") {
-            return Err(format!("{key}: only an exec has a terminal"));
+        if !meta.contains_key("exec") && !meta.contains_key("wasm") {
+            return Err(format!("{key}: only an exec (or a wasm module) has a terminal"));
         }
     }
     if let Some(f) = meta.get("font").and_then(Value::as_str) {
@@ -235,6 +254,9 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         if name.strip_prefix("neochumby-") == Some(app) {
             return Err("frontend: an app is its own frontend already".into());
         }
+    }
+    if meta.contains_key("wasm") && meta.contains_key("exec") {
+        return Err("wasm: an app's front is its exec or its wasm module, not both".into());
     }
     if meta.contains_key("companion") && !meta.contains_key("neochumbyd") {
         return Err(r#"companion: only a neochumbyd runs it; set neochumbyd = "required" or "optional""#.into());
@@ -326,6 +348,14 @@ mod tests {
     }
 
     #[test]
+    fn linux_is_major_minor() {
+        assert_eq!(manifest(&wrap(r#"linux = "5.9""#)).unwrap(), "linux=5.9\n");
+        for bad in ["5", "5.", "five.9", "5.9.1"] {
+            assert!(manifest(&wrap(&format!("linux = \"{bad}\""))).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
     fn neochumbyd_is_required_optional_or_absent() {
         assert_eq!(manifest(&wrap(r#"neochumbyd = "required""#)).unwrap(), "neochumbyd=required\n");
         assert_eq!(manifest(&wrap(r#"neochumbyd = "optional""#)).unwrap(), "neochumbyd=optional\n");
@@ -403,6 +433,17 @@ mod tests {
             "service=neochumby-x\nplayer=false\n"
         );
         assert!(manifest(&wrap("exec = \"neochumby-x\"\nplayer = \"yes\"")).is_err());
+    }
+
+    #[test]
+    fn wasm_names_a_module_in_place_of_exec() {
+        assert_eq!(manifest(&wrap("wasm = \"neochumby-x\"")).unwrap(), "wasm=neochumby-x.wasm\n");
+        assert_eq!(
+            manifest(&wrap("wasm = \"neochumby-x\"\nfont = \"spleen-8x16\"")).unwrap(),
+            "wasm=neochumby-x.wasm\nfont=spleen-8x16\n"
+        );
+        let both = manifest(&wrap("exec = \"neochumby-x\"\nwasm = \"neochumby-x\"")).unwrap_err();
+        assert!(both.starts_with("wasm:"), "{both}");
     }
 
     #[test]

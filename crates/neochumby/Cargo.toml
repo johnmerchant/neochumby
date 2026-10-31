@@ -12,8 +12,9 @@ readme = "README.md"
 keywords = ["chumby", "framebuffer", "embedded", "arm"]
 categories = ["embedded", "hardware-support"]
 # What the published crate carries: what it builds from, the terminal's
-# fonts (Spleen, with its licence) and colour schemes among it.
-include = ["src/**", "fonts/**", "themes/**", "README.md", "LICENSE"]
+# fonts (Spleen, with its licence) and its own colour schemes among it;
+# not third_party/, which only tools/tree reads.
+include = ["/src/**", "/fonts/**", "/themes/**", "/README.md", "/LICENSE"]
 
 [dependencies]
 libc.workspace = true

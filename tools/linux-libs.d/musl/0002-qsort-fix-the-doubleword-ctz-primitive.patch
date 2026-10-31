@@ -1,0 +1,37 @@
+Description: qsort: fix leonardo heap corruption from bug in doubleword ctz primitive
+ the pntz function, implementing a "count trailing zeros" variant for a
+ bit vector consisting of two size_t words, erroneously returned zero
+ rather than the number of bits in the low word when the first bit set
+ was the low bit of the high word.
+ .
+ as a result, a loop in the trinkle function which should have a
+ guaranteed small bound on the number of iterations, could run
+ unboundedly, thereby overflowing a stack-based working-space array
+ which was sized for the bound.
+ .
+ CVE-2026-40200 has been assigned for this issue.
+Author: Rich Felker <dalias@aerifal.cx>
+Upstream-Status: Backport [228da39e38c1cae13cbe637e771412c1984dba5d, qsort: fix leonardo heap corruption from bug in doubleword ctz primitive]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5Fc77Z6fVVe4rWJxPT
+---
+diff --git a/src/stdlib/qsort.c b/src/stdlib/qsort.c
+index ab79dc6f..13219ab3 100644
+--- a/src/stdlib/qsort.c
++++ b/src/stdlib/qsort.c
+@@ -34,11 +34,11 @@
+ 
+ typedef int (*cmpfun)(const void *, const void *, void *);
+ 
++/* returns index of first bit set, excluding the low bit assumed to always
++ * be set, starting from low bit of p[0] up through high bit of p[1] */
+ static inline int pntz(size_t p[2]) {
+-	int r = ntz(p[0] - 1);
+-	if(r != 0 || (r = 8*sizeof(size_t) + ntz(p[1])) != 8*sizeof(size_t)) {
+-		return r;
+-	}
++	if (p[0] != 1) return ntz(p[0] - 1);
++	if (p[1]) return 8*sizeof(size_t) + ntz(p[1]);
+ 	return 0;
+ }
+ 

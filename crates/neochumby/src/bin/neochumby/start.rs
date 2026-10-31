@@ -76,6 +76,8 @@ pub mod tests {
             font: None,
             tap: Vec::new(),
             frontend: None,
+            wasm: None,
+            catalog: false,
         }
     }
 

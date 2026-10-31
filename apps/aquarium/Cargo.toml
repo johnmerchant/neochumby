@@ -23,6 +23,9 @@ rand = "0.8"
 title = "AQUARIUM"
 exec = "neochumby-aquarium"
 tap = "q"
+# Not on the stock 2.6.16: crossterm's event loop (mio) needs epoll_create1 and SOCK_CLOEXEC,
+# which 2.6.16 lacks (EINVAL).
+linux = "5.9"
 color = "3c78c8"
 
 [lints]

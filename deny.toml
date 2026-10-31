@@ -60,6 +60,10 @@ exceptions = [
     { crate = "neochumby-pipes", allow = ["GPL-3.0-only"] },
     { crate = "neochumby-cmatrix", allow = ["GPL-3.0-or-later"] },
     { crate = "neochumby-softfloat", allow = ["GPL-3.0-or-later WITH GCC-exception-3.1"] },
+    # Mozilla's root certificates, as data (CDLA-Permissive-2.0), which
+    # ureq builds in for neochumbyd's HTTPS: the catalog's, and wasm
+    # companions' GETs.
+    { crate = "webpki-roots", allow = ["CDLA-Permissive-2.0"] },
     # ncurses' own licence (an X11 variant), with X11 and FSFUL files and
     # its configure scripts' GPL with the Autoconf exception.
     { crate = "neochumby-ncurses", allow = [
@@ -88,4 +92,6 @@ deny = [{ crate = "asciiquarium-rs", wrappers = ["neochumby-aquarium"] }]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# wamr-sys, from our fork of wamr-rust-sdk, pinned by commit in
+# crates/neochumby-wamr/Cargo.toml (CONTRIBUTING.md).
+allow-git = ["https://github.com/johnmerchant/wamr-rust-sdk"]

@@ -208,6 +208,20 @@ fn send(out: &mut Outgoing<Channel>, ms: Vec<ToChumby>) -> io::Result<()> {
     ms.iter().try_for_each(|m| out.send(m))
 }
 
+/// Why `program` (shairport-sync) didn't start, saying which program: a
+/// bare "No such file or directory" reads as the companion's own.
+fn spawn_error(program: &std::ffi::OsStr, e: io::Error) -> io::Error {
+    let what = std::path::Path::new(program).display();
+    if e.kind() == io::ErrorKind::NotFound {
+        io::Error::new(
+            e.kind(),
+            format!("{what}: not found (install shairport-sync on this host, or set NEOCHUMBY_SHAIRPORT to it): {e}"),
+        )
+    } else {
+        io::Error::new(e.kind(), format!("{what}: {e}"))
+    }
+}
+
 fn run() -> io::Result<()> {
     let name = std::env::var("NEOCHUMBY_CHUMBY")
         .ok()
@@ -223,7 +237,13 @@ fn run() -> io::Result<()> {
     // A pipe or file left by an earlier run: shairport-sync makes it anew.
     let _ = std::fs::remove_file(&pipe);
     std::fs::write(&conf, config(&name, base + slot, base + 10 + 10 * slot, &pipe))?;
-    let mut child = Command::new(shairport).arg("-c").arg(&conf).stdin(Stdio::null()).stdout(Stdio::piped()).spawn()?;
+    let mut child = Command::new(&shairport)
+        .arg("-c")
+        .arg(&conf)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .spawn()
+        .map_err(|e| spawn_error(&shairport, e))?;
     let mut pcm_out = child.stdout.take().expect("piped");
     let _receiver = Receiver(child);
     eprintln!("neochumby-airplay: receiver \"{}\" for {name} on port {}", display_name(&name), base + slot);
@@ -303,6 +323,17 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_missing_shairport_is_named() {
+        let e = super::spawn_error(
+            std::ffi::OsStr::new("shairport-sync"),
+            std::io::Error::from(std::io::ErrorKind::NotFound),
+        );
+        let m = e.to_string();
+        assert!(m.starts_with("shairport-sync: not found"), "{m}");
+        assert!(m.contains("NEOCHUMBY_SHAIRPORT"), "{m}");
+    }
+
     use std::path::Path;
 
     #[test]

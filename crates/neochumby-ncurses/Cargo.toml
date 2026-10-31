@@ -7,11 +7,11 @@ description = "ncurses, built from source as a static library for the Chumby, fo
 # config.guess and config.sub (GPL-3.0-or-later with the Autoconf exception,
 # which lets them be distributed on ncurses' own terms).
 license = "MIT AND X11-distribute-modifications-variant AND X11 AND FSFUL AND GPL-3.0-or-later WITH Autoconf-exception-generic-3.0"
-# Its own semver, not the workspace's: published on crates.io (see
-# CONTRIBUTING.md).
+# Its own semver, not the workspace's. 0.0.1 is on crates.io; it isn't
+# published any more (the dist images will ship ncurses themselves).
 version = "0.0.1"
 edition.workspace = true
-publish = true
+publish = false
 repository.workspace = true
 readme = "README.md"
 keywords = ["chumby", "ncurses", "curses", "embedded"]

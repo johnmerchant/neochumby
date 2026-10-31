@@ -1,0 +1,19 @@
+# The crates allowed unsafe code (#![allow(unsafe_code)] in their own
+# source): one per line, the package name and then, on the same line, why.
+# Every other crate denies it, and tools/check-unsafe (CI) holds them to
+# that. Adding a crate here is a change a code owner reviews: see
+# CONTRIBUTING.md, "Unsafe code".
+neochumby-sys                Every raw system call, behind safe functions
+neochumby-wamr               FFI to WAMR, in its one module runtime.rs
+neochumby-bonsai             FFI to cbonsai, its C
+neochumby-clock              FFI to tty-clock, its C
+neochumby-cmatrix            FFI to cmatrix, its C
+neochumby-doom               FFI to doomgeneric, its C engine
+neochumby-fetch              FFI to fastfetch, its C
+neochumby-htop               FFI to htop, its C
+neochumby-quake              FFI to Quake, its C engine
+neochumby-top                FFI to procps top, its C
+neochumby-kernel-sideloader  Bare metal: its assembly payload (asm.rs) and raw memory (raw.rs)
+neochumby-wasmbench          A measurement spike: ptrace, fork and waitpid through libc
+wasmi-run                    The wasm benchmark: clock_gettime through libc
+wasmtime-run                 The wasm benchmark: clock_gettime, and deserializing precompiled modules

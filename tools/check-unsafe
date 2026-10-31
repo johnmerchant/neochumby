@@ -1,0 +1,259 @@
+#!/usr/bin/env -S python3 -I
+"""Checks that no crate of ours can have unsafe code unless it is on the
+allowlist, .github/unsafe-allowed (CONTRIBUTING.md, "Unsafe code"):
+
+    python3 -I tools/check-unsafe
+
+from anywhere in the repository. Our crates are the workspace's members
+(cargo metadata --no-deps) and every other Cargo.toml in the repository
+that git knows of or would add (crates/neochumby-init, dev/, tools/),
+leaving out third-party code: submodules, and anything under a third_party/
+or vendor/ directory. It fails if:
+
+  - a crate neither inherits its workspace's lints ([lints] workspace =
+    true, the workspace denying or forbidding unsafe_code) nor denies or
+    forbids unsafe_code in its own [lints.rust];
+  - a Rust source file outside an allowlisted crate allows, expects or
+    warns unsafe_code (#![allow(unsafe_code)], in cfg_attr too);
+  - an allowlisted crate doesn't deny clippy's undocumented_unsafe_blocks
+    and missing_safety_doc (inherited, or in its own [lints.clippy]), which
+    make each unsafe block and impl carry a SAFETY comment and each unsafe
+    fn a # Safety section; or any source relaxes either lint, or an
+    allowlisted crate's source relaxes a clippy group (clippy::all,
+    clippy::style, clippy::restriction) that holds one;
+  - anything (cargo's configuration, a build script, a workflow, a script)
+    passes rustc or clippy -A/-W/--allow/--warn/--force-warn for one of
+    those lints, or --cap-lints;
+  - the allowlist names a crate that doesn't exist, or gives no reason.
+
+It needs only Python 3.11 (tomllib), git and cargo.
+"""
+
+import json
+import os
+import re
+import subprocess
+import sys
+import tomllib
+
+ALLOWLIST = ".github/unsafe-allowed"
+SELF = "tools/check-unsafe"
+LEVELS_OK = ("deny", "forbid")
+
+HOW = f"""\
+Unsafe code belongs in crates/neochumby-sys, behind a safe function with a
+// SAFETY: comment (CONTRIBUTING.md, "Unsafe code"). If this crate really
+needs its own, ask for an exception: add a line to {ALLOWLIST},
+
+    <crate>  <one line: why it needs unsafe code>
+
+in the same pull request, where a code owner reviews it."""
+
+# allow(...), expect(...), warn(...), force_warn(...) naming unsafe_code,
+# however it is spaced or wrapped (cfg_attr included).
+ATTR = re.compile(r"\b(allow|expect|warn|force_warn)\s*\(([^()]*)\)")
+UNSAFE_CODE = re.compile(r"\bunsafe[_-]code\b")
+# Clippy's lints that make unsafe code say why it is sound, and the groups
+# that hold them (missing_safety_doc is clippy::style's, so clippy::all's).
+CLIPPY_LINTS = ("undocumented_unsafe_blocks", "missing_safety_doc")
+CLIPPY = re.compile(r"\bclippy::(?:undocumented[_-]unsafe[_-]blocks|missing[_-]safety[_-]doc)\b")
+CLIPPY_GROUP = re.compile(r"\bclippy::(?:all|style|restriction)\b")
+# rustc's and clippy's flags, written any way cargo or a shell would pass
+# them: -Aunsafe_code, "-A", "unsafe_code" (TOML), --allow=unsafe-code,
+# CARGO_ENCODED_RUSTFLAGS' \x1f.
+SEP = r"""[\s"',=\x1f\\]*"""
+FLAG = re.compile(
+    r"(?:-A|-W|--allow|--warn|--force-warn)" + SEP
+    + r"(?:unsafe[_-]code|clippy::(?:undocumented[_-]unsafe[_-]blocks|missing[_-]safety[_-]doc))\b"
+)
+CAP = re.compile(r"--cap-lints\b")
+
+
+def run(*args):
+    return subprocess.run(args, check=True, capture_output=True, text=True).stdout
+
+
+def ours(path):
+    parts = path.split("/")
+    return "third_party" not in parts and "vendor" not in parts
+
+
+def lint_level(value):
+    # "deny", or { level = "deny", priority = -1 }
+    if isinstance(value, dict):
+        value = value.get("level")
+    return value
+
+
+def read_toml(path):
+    with open(path, "rb") as f:
+        return tomllib.load(f)
+
+
+def main():
+    root = run("git", "rev-parse", "--show-toplevel").strip()
+    os.chdir(root)
+    errors = []
+
+    def fail(where, msg):
+        errors.append(f"{where}: {msg}")
+
+    # Every file git has or would add (submodules' contents aren't listed).
+    files = [
+        f
+        for f in run("git", "ls-files", "-z", "--cached", "--others", "--exclude-standard").split("\0")
+        if f and ours(f) and os.path.isfile(f)
+    ]
+
+    # Our crates: directory -> (name, manifest).
+    crates = {}
+    for f in files:
+        if os.path.basename(f) != "Cargo.toml":
+            continue
+        try:
+            manifest = read_toml(f)
+        except tomllib.TOMLDecodeError as e:
+            fail(f, f"can't be read: {e}")
+            continue
+        if "package" in manifest:
+            crates[os.path.dirname(f)] = (manifest["package"].get("name"), manifest)
+    meta = json.loads(run("cargo", "metadata", "--no-deps", "--format-version", "1", "--offline"))
+    for p in meta["packages"]:
+        rel = os.path.relpath(p["manifest_path"], root)
+        if ours(rel) and os.path.dirname(rel) not in crates:
+            fail(rel, f"{p['name']} is a workspace member git doesn't know of")
+
+    by_name = {name: d for d, (name, _) in crates.items()}
+
+    # The allowlist.
+    allowed = {}
+    with open(ALLOWLIST, encoding="utf-8") as f:
+        for n, line in enumerate(f, 1):
+            line = line.strip()
+            if not line or line.startswith("#"):
+                continue
+            name, _, reason = line.partition(" ")
+            if not reason.strip():
+                fail(f"{ALLOWLIST}:{n}", f"{name} has no reason given")
+            if name not in by_name:
+                fail(f"{ALLOWLIST}:{n}", f"{name} isn't a crate of ours")
+            allowed[name] = n
+
+    # Each crate denies unsafe_code, in its manifest or its workspace's; an
+    # allowlisted one denies clippy's lints for documenting it, too.
+    for d, (name, manifest) in sorted(crates.items()):
+        cargo_toml = os.path.join(d, "Cargo.toml")
+        lints = manifest.get("lints", {})
+        where = cargo_toml
+        if lints.get("workspace") is True:
+            ws = workspace_root(d, manifest)
+            if ws is None:
+                fail(cargo_toml, f"{name} inherits its workspace's lints, but no workspace was found")
+                continue
+            where = ws
+            lints = read_toml(ws).get("workspace", {}).get("lints", {})
+        table = "[workspace.lints" if where != cargo_toml else "[lints"
+        level = lint_level(lints.get("rust", {}).get("unsafe_code"))
+        if level not in LEVELS_OK:
+            if where != cargo_toml:
+                fail(where, f"{table}.rust] unsafe_code is {level!r}, not \"deny\" or \"forbid\" ({name} inherits it)")
+            else:
+                fail(
+                    cargo_toml,
+                    f"{name} doesn't deny unsafe_code: give it [lints] workspace = true, or, "
+                    f"outside the main workspace, [lints.rust] unsafe_code = \"deny\" (it has {level!r})",
+                )
+        if name in allowed:
+            for lint in CLIPPY_LINTS:
+                level = lint_level(lints.get("clippy", {}).get(lint))
+                if level not in LEVELS_OK:
+                    fail(
+                        where,
+                        f"{name} is allowed unsafe code, so must deny clippy's {lint} "
+                        f"({table}.clippy] {lint} = \"deny\"; it has {level!r})",
+                    )
+
+    # Source files: an opt-out only in an allowlisted crate (the innermost
+    # crate whose directory holds the file).
+    dirs = sorted(crates, key=len, reverse=True)
+
+    def crate_of(path):
+        for d in dirs:
+            if d == "" or path.startswith(d + "/"):
+                return crates[d][0]
+        return None
+
+    used = set()
+    for f in files:
+        if not f.endswith(".rs"):
+            continue
+        text = read_text(f)
+        if text is None:
+            continue
+        # Whole-line comments only: documentation may talk about the lint.
+        code = re.sub(r"(?m)^[ \t]*//.*$", "", text)
+        for m in ATTR.finditer(code):
+            args = m.group(2)
+            name = crate_of(f)
+            line = code.count("\n", 0, m.start()) + 1
+            if CLIPPY.search(args):
+                fail(f"{f}:{line}", f"{m.group(0)!r}: every unsafe block, impl and fn says why it is sound (CONTRIBUTING.md)")
+            elif name in allowed and CLIPPY_GROUP.search(args):
+                fail(f"{f}:{line}", f"{m.group(0)!r} in {name}, which is allowed unsafe code: it would relax missing_safety_doc")
+            if not UNSAFE_CODE.search(args):
+                continue
+            if name in allowed:
+                used.add(name)
+                continue
+            fail(f"{f}:{line}", f"{m.group(0)!r} in {name or 'no crate'}, which isn't on {ALLOWLIST}")
+
+    # rustc's flags, anywhere: cargo's configuration, build scripts,
+    # workflows, scripts.
+    for f in files:
+        if f in (SELF, ALLOWLIST) or f.endswith(".md"):
+            continue
+        text = read_text(f)
+        if text is None:
+            continue
+        for rx, what in ((FLAG, "relaxes an unsafe lint with a rustc flag"), (CAP, "caps rustc's lints (--cap-lints)")):
+            for m in rx.finditer(text):
+                line = text.count("\n", 0, m.start()) + 1
+                fail(f"{f}:{line}", f"{what}: {m.group(0)!r}")
+
+    for name in sorted(set(allowed) - used):
+        print(f"{ALLOWLIST}:{allowed[name]}: note: {name} no longer allows unsafe_code anywhere; take it off the list", file=sys.stderr)
+
+    if errors:
+        for e in errors:
+            print(f"check-unsafe: {e}", file=sys.stderr)
+        print(f"\n{HOW}", file=sys.stderr)
+        return 1
+    print(f"check-unsafe: {len(crates)} crates deny unsafe_code; {len(used)} allowed it ({ALLOWLIST})")
+    return 0
+
+
+def workspace_root(d, manifest):
+    """The directory of the workspace a crate in d belongs to, as cargo finds it."""
+    if "workspace" in manifest:
+        return os.path.join(d, "Cargo.toml")
+    explicit = manifest.get("package", {}).get("workspace")
+    if isinstance(explicit, str):
+        return os.path.normpath(os.path.join(d, explicit, "Cargo.toml"))
+    while d:
+        d = os.path.dirname(d)
+        candidate = os.path.join(d, "Cargo.toml")
+        if os.path.isfile(candidate) and "workspace" in read_toml(candidate):
+            return candidate
+    return None
+
+
+def read_text(path):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return f.read()
+    except (UnicodeDecodeError, OSError):
+        return None
+
+
+if __name__ == "__main__":
+    sys.exit(main())

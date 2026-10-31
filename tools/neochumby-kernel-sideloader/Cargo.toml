@@ -21,3 +21,12 @@ debug = false
 # Standalone: this is a bare-metal ARM binary, not a member of the
 # neochumby workspace (which denies unsafe code).
 [workspace]
+
+# The main workspace's rule; asm.rs and raw.rs allow it, and it is on
+# .github/unsafe-allowed (tools/check-unsafe).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"

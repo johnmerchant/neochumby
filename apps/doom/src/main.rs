@@ -3,10 +3,12 @@
 //! (freedoom1.wad, doom1.wad), or in the working directory, unless NEOCHUMBY_WAD or -iwad says
 //! otherwise.
 
-// FFI to a C engine (GPL), so allowed unsafe code, as neochumby-sys is. Its
-// unsafe blocks follow the engine's contract and carry no SAFETY comments.
+// FFI to a C engine (GPL), so allowed unsafe code, as neochumby-sys is.
+// Each unsafe block says, in its SAFETY comment, what doomgeneric requires of
+// it and why that holds. The engine is single-threaded: it calls the DG_*
+// functions and the sound module from the one thread that runs
+// doomgeneric_Tick, so nothing below is ever reentered or raced.
 #![allow(unsafe_code)]
-#![allow(clippy::undocumented_unsafe_blocks)]
 
 mod platform;
 mod sound;

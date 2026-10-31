@@ -1,0 +1,123 @@
+#!/bin/sh
+# dev/emulate's hostile-module suite for the wasm runner, on the emulated
+# Chumby's own kernel: boots TREE and runs each module of
+# crates/neochumby-wasm/tests/hostile.rs with the tree's neochumby-wasm, on
+# the console, checking how each ends:
+#   - a text app runs, and writes to its terminal;
+#   - an import its access doesn't grant, compiled code passed off as
+#     bytecode, and a catalog app asking for "system" are refused before
+#     they run (exit 2);
+#   - out-of-bounds accesses, in the module and through the host, trap
+#     (exit 1);
+#   - a forged .aot is passed over for the bytecode;
+#   - with tools/wamrc (it needs LLVM 18), compiled code: a module runs as
+#     AOT, an out-of-bounds load in AOT code traps (bounds checks compiled
+#     in), and one module's .aot swapped in under another's record is
+#     refused for the bytecode;
+#   - memory past the cap is refused inside the module;
+#   - a runaway loop runs until it is killed, and is killed;
+#   - on a kernel with seccomp (dist), the runner is locked down before
+#     the module runs, a catalog app runs, and a forbidden call kills it
+#     (SIGSYS); on 2.6.16 (classic, stock), a catalog app is refused
+#     unless trusted.
+# The console goes in OUT.
+#
+#   cargo build --release --target armv5te-unknown-linux-musleabi -p neochumby-wasm
+#   cp target/armv5te-unknown-linux-musleabi/release/neochumby-wasm TREE/
+#   NEOCHUMBY_WASM_STAGE=TREE cargo test -p neochumby-wasm --test hostile
+#   dev/emulate-wasm TREE OUT
+#
+# On dev/emulate's profile (NEOCHUMBY_EMU_PROFILE). A tree without the
+# runner or the staged modules makes it exit 77.
+set -eu
+tree=${1:?usage: dev/emulate-wasm TREE OUT}
+out=${2:?usage: dev/emulate-wasm TREE OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+[ -x "$tree/neochumby-wasm" ] && [ -d "$tree/wasmtest/hello" ] || {
+  echo "dev/emulate-wasm: $tree has no neochumby-wasm or wasmtest/ (see the usage)"
+  exit 77
+}
+mkdir -p "$out"
+# The compiled cases, from staged ones, as tools/tree compiles an app.
+aot=no
+t=$tree/wasmtest
+if "$dev/../tools/wamrc" >/dev/null 2>&1; then
+  aot=yes
+  for c in aot-real:hello aot-oob:oob-load; do
+    rm -rf "${t:?}/${c%%:*}"
+    cp -R "$t/${c#*:}" "$t/${c%%:*}"
+    "$dev/../tools/wamrc" --compile "$t/${c%%:*}/app.wasm" "$t/${c%%:*}/app.aot" >> "$t/${c%%:*}/manifest" 2>/dev/null
+  done
+  rm -rf "$t/aot-swapped"
+  cp -R "$t/aot-real" "$t/aot-swapped"
+  cp "$t/aot-oob/app.aot" "$t/aot-swapped/app.aot"
+fi
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-wasm.XXXXXX")
+trap 'emu stop >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
+emu() { "$dev/emulate" --state "$state" "$@"; }
+slow=$(emu scale)
+fail() {
+  echo "FAIL: $*"
+  emu log > "$out/console.log" 2>&1 || true
+  exit 1
+}
+
+emu start "$tree" || exit $?
+emu wait log 'neochumby: opening home' $((300 * slow)) || fail "the session didn't start"
+T=/mnt/usb/neochumby
+# Runs CMD on the console; its output, and its exit as the last line.
+# The kernel's messages, which the console interleaves, taken out.
+on() { emu exec sh -c "$1; echo exit=\$?" 2>&1 | tr -d '\r' | grep -v '@@' | sed 's/\[ *[0-9]*\.[0-9]*\] .*$//'; }
+wasm() { on "${2:-} NEOCHUMBY_WASM=$T/wasmtest/$1/app.wasm $T/neochumby-wasm"; }
+# expect CASE EXIT TEXT [ENV]: the case ends with EXIT, having said TEXT.
+expect() {
+  got=$(wasm "$1" "${4:-}")
+  echo "$got" | sed "s/^/  $1: /"
+  echo "$got" | grep -Eq "exit=$2([^0-9]|$)" || fail "$1: not exit $2"
+  echo "$got" | grep -q -- "$3" || fail "$1: no \"$3\""
+}
+kernel=$(on 'uname -r' | head -n 1)
+echo "== kernel $kernel"
+seccomp=no
+on "$T/neochumby-wasm --selftest-seccomp" | grep -q 'exit=77' || seccomp=yes
+
+echo "== refused before they run"
+expect ungranted 2 'needs "fb" in its access'
+expect aot-as-wasm 2 "isn't WebAssembly bytecode"
+expect catalog-system 2 'never granted "system"'
+got=$(wasm cap-initial); echo "$got" | grep -Eq 'exit=[02]([^0-9]|$)' || fail "cap-initial: $got"
+echo "== trapped"
+expect oob-host 1 'out of bounds memory access'
+expect oob-load 1 'out of bounds memory access'
+echo "== run"
+expect hello 0 '^hello'
+expect aot 0 'compiled from another .wasm'
+expect cap 0 'locked down'
+if [ "$aot" = yes ]; then
+  echo "== compiled"
+  expect aot-real 0 'compiled (AOT)'
+  expect aot-oob 1 'out of bounds memory access'
+  expect aot-swapped 0 "isn't the one its compiler recorded"
+else
+  echo "== compiled: skipped (no tools/wamrc here)"
+fi
+echo "== a runaway loop, killed"
+got=$(on "NEOCHUMBY_WASM=$T/wasmtest/runaway/app.wasm $T/neochumby-wasm & p=\$!; sleep 3; kill -0 \$p && echo still-\$((1 + 1)); kill -9 \$p; wait \$p")
+# The word is made as it runs, so the echoed command (and the kernel's
+# messages, which the console interleaves) can't be taken for it.
+echo "$got" | grep -q 'still-2' || fail "runaway: it stopped by itself"
+echo "$got" | grep -q 'exit=137' || fail "runaway: not killed"
+if [ "$seccomp" = yes ]; then
+  echo "== seccomp ($kernel)"
+  expect locked 0 'locked down: .*seccomp'
+  expect catalog 0 '^hello'
+  got=$(on "$T/neochumby-wasm --selftest-seccomp")
+  echo "$got" | grep -q 'exit=159' || fail "selftest: not killed by SIGSYS: $got"
+else
+  echo "== no seccomp ($kernel)"
+  expect locked 0 'neither seccomp nor Landlock'
+  expect catalog 2 'only on a kernel with seccomp'
+  expect catalog 0 '^hello' NEOCHUMBY_WASM_TRUSTED=1
+fi
+emu log > "$out/console.log" 2>&1 || true
+echo "dev/emulate-wasm: passed ($kernel)"
