@@ -78,7 +78,9 @@ case ${1:-} in
     exit 0
     ;;
 esac
-[ -x "$wamrc" ] || build
+# Built again if what is cached says another id (an earlier tools/wamrc
+# wrote the release alone), so that neochumbyd's .aot keys match the runner's.
+[ -x "$wamrc" ] && [ "$(cat "$cache/wamrc.id" 2>/dev/null)" = "$id" ] || build
 case ${1:-} in
   "") echo "$wamrc" ;;
   --compile)
