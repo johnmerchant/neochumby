@@ -109,7 +109,10 @@ pub fn check(path: &Path, loader: Option<&str>) -> io::Result<Option<String>> {
         let named = read_interpreter(&mut f, len, u32_at(p, 4), u32_at(p, 16))
             .ok_or_else(|| invalid(format!("{}: an unreadable interpreter", path.display())))?;
         if loader != Some(named.as_str()) || interpreter.is_some() {
-            return Err(invalid(format!("{}: needs an interpreter, {named}, which the jail doesn't have", path.display())));
+            return Err(invalid(format!(
+                "{}: needs an interpreter, {named}, which the jail doesn't have",
+                path.display()
+            )));
         }
         interpreter = Some(named);
     }
