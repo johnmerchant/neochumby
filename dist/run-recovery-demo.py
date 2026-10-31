@@ -1,16 +1,16 @@
 #!/usr/bin/env python3
-"""Automated end-to-end test for the sideload recovery path.
+"""Automated end-to-end test for the dist image's flashed recovery path.
 
-Boots the sideload zImage directly (no sideloader, no marker) with a
-synthetic zeroed NAND image, on qemu-chumby's machine through its
-chumby-machine runner.  The built-in initramfs must see no
-`neochumby.sideloaded=1` marker and leave the NAND's drivers unloaded:
-only root loads them.  Then root does, on the console (modprobe), and
-`/proc/mtd` must list mtd0 and `/dev/mtdblock0` exist.
+Boots the sideload zImage directly (no handoff, no marker) with a synthetic
+zeroed NAND image, on qemu-chumby's machine through its chumby-machine
+runner.  The built-in initramfs must see no `neochumby.sideloaded=1` marker
+and leave the NAND's drivers unloaded: only root loads them.  Then root
+does, on the console (modprobe), and `/proc/mtd` must list mtd0 and
+`/dev/mtdblock0` exist.
 
 This needs no stock firmware: the QEMU `chumby-classic` NAND model reports
-the chip ID itself, so a zeroed 64 MiB image is enough.  The sideloaded path
-is `run-demo.py`, which needs the user's own stock zImage and NAND.
+the chip ID itself, so a zeroed 64 MiB image is enough.  The module handoff
+is the separate tool in `tools/neochumby-kernel-sideloader`.
 """
 import os
 import re
@@ -19,7 +19,7 @@ import sys
 import tempfile
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-REPO = os.path.normpath(os.path.join(HERE, "..", ".."))
+REPO = os.path.normpath(os.path.join(HERE, ".."))
 sys.dont_write_bytecode = True
 sys.path.insert(0, os.environ.get("CHUMBY_MACHINE_PATH") or os.path.join(REPO, "emu", "qemu", "qemu-chumby"))
 import chumby_machine as cm  # noqa: E402
@@ -35,7 +35,7 @@ def env(name, default=None):
 def main():
     qemu = os.environ.get("QEMU")
     kernel = env("KERNEL", os.path.join(REPO, "build", "sideload-zImage"))
-    work = env("WORK", os.path.join(HERE, "build", "recovery-demo"))
+    work = env("WORK", os.path.join(REPO, "build", "recovery-demo"))
     timeout = int(env("TIMEOUT", "120"))
     os.makedirs(work, exist_ok=True)
     if not os.path.exists(kernel):

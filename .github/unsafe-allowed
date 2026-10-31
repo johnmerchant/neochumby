@@ -13,7 +13,6 @@ neochumby-fetch              FFI to fastfetch, its C
 neochumby-htop               FFI to htop, its C
 neochumby-quake              FFI to Quake, its C engine
 neochumby-top                FFI to procps top, its C
-neochumby-kernel-sideloader  Bare metal: its assembly payload (asm.rs) and raw memory (raw.rs)
 neochumby-wasmbench          A measurement spike: ptrace, fork and waitpid through libc
 wasmi-run                    The wasm benchmark: clock_gettime through libc
 wasmtime-run                 The wasm benchmark: clock_gettime, and deserializing precompiled modules

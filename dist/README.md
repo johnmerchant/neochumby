@@ -18,10 +18,10 @@ dist/build OUT        # OUT/sideload-zImage and OUT/sideload-rootfs.cpio.gz
 dist/fetch OUT        # the same files, CI's build of them (below)
 ```
 
-`sideload-zImage` has the initramfs built in, so it boots when flashed and is
-what the sideloader hands off.  `sideload-rootfs.cpio.gz` is the same
-initramfs beside it, for userhook2 or another kexec path.  Both carry the
-`sideload` label; `uname -r` reports `5.9.16-mx21-sideload`.
+`sideload-zImage` has the initramfs built in, so it boots when flashed; it is
+also the image the stock `userhook2` kexecs into.  `sideload-rootfs.cpio.gz`
+is the same initramfs beside it, for userhook2 or another kexec path.  Both
+carry the `sideload` label; `uname -r` reports `5.9.16-mx21-sideload`.
 
 It runs Buildroot (2026.02.3, pinned with its hash) in a container: Apple's
 container, docker or podman. The first build makes the cross toolchain
@@ -188,10 +188,10 @@ where it's built) and `sideload` (each kernel built) jobs, and with
 its legal-info to the `package` and `prebuilt` jobs, which publish it on
 main (above). Buildroot's work is cached; the first run is
 slow, and later runs rebuild only what changed. The `sideload` job runs
-`run-recovery-demo.py` with a zeroed NAND image, on changes under `dist/`,
-`tools/neochumby-kernel-sideloader/` or `emu/qemu/` and on
-`workflow_dispatch`. The sideloaded path still needs the user's own stock
-firmware, so it stays local (`run-demo.py`).
+`dist/run-recovery-demo.py` with a zeroed NAND image, on changes under
+`dist/` or `emu/qemu/` and on `workflow_dispatch`. The module handoff is
+separate (`tools/neochumby-kernel-sideloader`), and stays local: it needs the
+user's own stock firmware.
 
 | Path | What |
 | --- | --- |
