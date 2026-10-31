@@ -11,6 +11,8 @@
 //! `player`, which are true or false, and the lists `access`, what the app
 //! reaches beyond its jail ([`ACCESS`]), and `listen`, the TCP ports a
 //! `server` program may bind, each written as one comma-separated value.
+//! `linux` is the oldest Linux the app runs on, MAJOR.MINOR (as "5.9"):
+//! tools/tree leaves it out of a tree for an older one.
 //! `neochumbyd` is `required` or `optional` (absent: the app never needs
 //! one), and an app with a `companion` must set it: only a neochumbyd runs
 //! companions. It is stated, not inferred from `companion`. Nothing in the
@@ -47,6 +49,7 @@ const KEYS: &[&str] = &[
     "interrupt",
     "player",
     "access",
+    "linux",
     "font",
     "tap",
     "frontend",
@@ -186,6 +189,14 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         None | Some("required" | "optional") => {}
         Some(v) => return Err(format!(r#"neochumbyd: {v:?} is not "required" or "optional" (or leave it out)"#)),
     }
+    if let Some(v) = meta.get("linux").and_then(Value::as_str) {
+        let ok = v.split_once('.').is_some_and(|(a, b)| {
+            !a.is_empty() && !b.is_empty() && (a.chars().chain(b.chars())).all(|c| c.is_ascii_digit())
+        });
+        if !ok {
+            return Err(format!(r#"linux: {v:?} is not MAJOR.MINOR (as "5.9")"#));
+        }
+    }
     if meta.contains_key("listen") && !meta.contains_key("server") {
         return Err("listen is a server program's: set server too".into());
     }
@@ -323,6 +334,14 @@ mod tests {
 
     fn wrap(meta: &str) -> String {
         format!("[package]\nname = \"neochumby-x\"\n[package.metadata.neochumby]\n{meta}\n")
+    }
+
+    #[test]
+    fn linux_is_major_minor() {
+        assert_eq!(manifest(&wrap(r#"linux = "5.9""#)).unwrap(), "linux=5.9\n");
+        for bad in ["5", "5.", "five.9", "5.9.1"] {
+            assert!(manifest(&wrap(&format!("linux = \"{bad}\""))).is_err(), "{bad}");
+        }
     }
 
     #[test]

@@ -29,6 +29,8 @@
 //!   frontend=airplay           it shows another app (its service), in its
 //!                              place, once the owner approves
 //!                              (neochumby::service)
+//!   linux=5.9                  the oldest Linux it runs on, which tools/tree
+//!                              reads: a tree for an older one leaves it out
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.

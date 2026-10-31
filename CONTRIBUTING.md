@@ -418,6 +418,7 @@ player = true                        # optional: a player (below)
 font = "spleen-8x16"                 # optional, text mode: its terminal's font
 tap = "q"                            # optional, text mode: what a tap types
 frontend = "airplay"                 # optional: it shows another app (below)
+linux = "5.9"                        # optional: the oldest Linux it runs on (tools/tree --linux)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it

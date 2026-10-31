@@ -43,20 +43,29 @@
 #   host                          the machine building it, natively (a Mac,
 #                                 say, to run neochumbyd there)
 #
-#   tools/tree OUT [-d DATA] [--server-target TRIPLE] [--pinned] [APP ...]
+# A tree is for one Linux, --linux MAJOR.MINOR: the stock firmware's
+# 2.6 (the default), or the dist's 5.9 and later. An app whose manifest
+# says it needs a newer one (`linux`) is left out, with a line saying so.
+#
+#   tools/tree OUT [-d DATA] [--linux X.Y] [--server-target TRIPLE] [--pinned] [APP ...]
 #       e.g. tools/tree /tmp/t doom quake
 #       (zig, git, curl and sha256sum or shasum on PATH)
 set -eu
-usage="usage: tools/tree OUT [-d DATA] [--server-target TRIPLE] [--pinned] [APP ...]"
+usage="usage: tools/tree OUT [-d DATA] [--linux X.Y] [--server-target TRIPLE] [--pinned] [APP ...]"
 out=${1:?$usage}
 shift
 data=
+linux=2.6
 server_t=x86_64-unknown-linux-musl
 pinned=
 while :; do
   case ${1:-} in
     -d)
       data=${2:?$usage}
+      shift 2
+      ;;
+    --linux)
+      linux=${2:?$usage}
       shift 2
       ;;
     --server-target)
@@ -70,6 +79,15 @@ while :; do
     *) break ;;
   esac
 done
+case $linux in
+  *[!0-9.]* | *.*.* | .* | *.) linux= ;;
+  [0-9]*.[0-9]*) ;;
+  *) linux= ;;
+esac
+[ -n "$linux" ] || {
+  echo "tools/tree: --linux: MAJOR.MINOR, as 2.6 or 5.9" >&2
+  exit 2
+}
 host_t=$(rustc -vV | sed -n 's/^host: //p')
 [ "$server_t" = host ] && server_t=$host_t
 case $server_t in
@@ -101,6 +119,11 @@ export CC_x86_64_unknown_linux_musl=$root/tools/zigcc-x86_64 AR_x86_64_unknown_l
 export CC_aarch64_unknown_linux_musl=$root/tools/zigcc-aarch64 AR_aarch64_unknown_linux_musl=$root/tools/zigar
 
 field() { sed -n "s/^$2=//p" "$1" | head -n 1; }
+
+# Whether Linux $1 is at least $2, both MAJOR.MINOR.
+at_least() {
+  [ "${1%.*}" -gt "${2%.*}" ] || { [ "${1%.*}" -eq "${2%.*}" ] && [ "${1#*.}" -ge "${2#*.}" ]; }
+}
 
 # An app that isn't pinned: refused with --pinned, else a warning.
 unpinned() {
@@ -235,6 +258,11 @@ for app in home "$@"; do
   target/release/neochumby-manifest "$src/Cargo.toml" > "$manifest"
   crate=$(sed -n 's/^name *= *"\(neochumby-[a-z0-9_-]*\)".*/\1/p' "$src/Cargo.toml" | head -n 1)
   name=${crate#neochumby-}
+  needs=$(field "$manifest" linux)
+  if [ -n "$needs" ] && ! at_least "$linux" "$needs"; then
+    echo "tools/tree: $name needs Linux $needs, and this tree is for $linux: left out" >&2
+    continue
+  fi
   # This repository's apps build in its workspace; others in their own,
   # beside it.
   case $src in
