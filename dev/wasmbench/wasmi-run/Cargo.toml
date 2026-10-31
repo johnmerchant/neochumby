@@ -9,6 +9,15 @@ description = "A tiny wasmi host for the wasm benchmark: runs a WASI command wit
 # Built by dev/wasmbench/tools/wasmi.sh, apart from the device workspace.
 [workspace]
 
+# The main workspace's rule, and the main.rs allows it: it is on
+# .github/unsafe-allowed (tools/check-unsafe).
+[lints.rust]
+unsafe_code = "deny"
+
+[lints.clippy]
+undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
+
 [dependencies]
 wasmi = { version = "2", default-features = false, features = ["std", "validate", "auto-dispatch"] }
 libc = "0.2"

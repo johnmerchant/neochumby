@@ -12,6 +12,10 @@ description = "A stand-in for AirPlay's receiver, for testing on an emulated Chu
 # companion.
 [workspace]
 
+# The main workspace's rule: no unsafe code (tools/check-unsafe).
+[lints.rust]
+unsafe_code = "deny"
+
 [dependencies]
 neochumby-airplay-proto = { path = "../../apps/airplay/proto" }
 neochumby-proto = { path = "../../crates/neochumby-proto" }

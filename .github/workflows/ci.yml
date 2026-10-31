@@ -218,6 +218,9 @@ jobs:
         with:
           toolchain: stable
           components: rustfmt, clippy
+      # No unsafe code but in the crates on .github/unsafe-allowed, and
+      # those deny clippy's lints for documenting it (CONTRIBUTING.md).
+      - run: python3 -I tools/check-unsafe
       # Ours, not the third-party crates in submodules that some apps build
       # from (they keep their own formatting).
       - run: cargo fmt --check $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.manifest_path | contains("/third_party/") | not) | "-p " + .name')

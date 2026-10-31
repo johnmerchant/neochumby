@@ -49,11 +49,24 @@ The workspace denies `unsafe` code. Every raw system call lives in
 `crates/neochumby-sys`, behind safe functions, each `unsafe` block with a
 `// SAFETY:` comment saying why it holds; anything else needing one adds a
 function there, and uses std instead wherever std does the job safely. The
-games (Doom, Quake), fetch, htop and top are allowed it as FFI to their C, and
+games (Doom, Quake) and the terminal apps that link a C program (fetch, htop,
+top, cmatrix, clock, bonsai) are allowed it as FFI to their C, and
 `crates/neochumby-wamr` as FFI to WAMR, in its one module `runtime.rs`. We use libc
 rather than rustix: rustix calls the kernel directly and needs Linux 3.2,
 the Chumby runs 2.6.16, and its `ioctl` and `mmap` are `unsafe` too (see
 neochumby-sys's documentation).
+
+CI holds every crate to this: `tools/check-unsafe`, in the "Format, lint,
+test" job. Each crate of ours, in the workspace or standalone (dev/, tools/),
+denies `unsafe_code`, by `[lints] workspace = true` or its own `[lints.rust]`;
+only the crates listed in `.github/unsafe-allowed` may allow it
+(`#![allow(unsafe_code)]`), and no rustc flag or `--cap-lints` may relax it.
+Those crates deny clippy's `undocumented_unsafe_blocks` and
+`missing_safety_doc` too, so that every `unsafe` block and `unsafe impl` has
+a `// SAFETY:` comment above it and every `unsafe fn` a `# Safety` section.
+A crate that needs unsafe code of its own asks for it in the same pull
+request, with a line in that file (its name, and why), which a code owner
+approves. `python3 -I tools/check-unsafe` runs the check locally.
 
 ## Building and checking
 
