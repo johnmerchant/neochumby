@@ -242,6 +242,8 @@ jobs:
       - run: cargo clippy --all-targets --manifest-path crates/neochumby-init/Cargo.toml -- -D warnings
       - run: cargo test --manifest-path crates/neochumby-init/Cargo.toml
       - run: cargo test -p neochumby-sys --features boot
+      - run: cargo clippy --all-targets -p neochumby-sys --features compat26 -- -D warnings
+      - run: cargo test -p neochumby-sys --features compat26
       - run: cargo test -p neochumby-logs
       # dev/emulate, without firmware or QEMU: the images it makes (through
       # qemu-chumby's chumby_machine) against chumby-image's, and its

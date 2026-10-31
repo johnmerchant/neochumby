@@ -60,6 +60,8 @@ pub mod user;
 pub mod alsa;
 #[cfg(all(target_os = "linux", feature = "boot"))]
 pub mod boot;
+#[cfg(feature = "compat26")]
+pub mod compat26;
 #[cfg(target_os = "linux")]
 pub mod evdev;
 #[cfg(target_os = "linux")]
