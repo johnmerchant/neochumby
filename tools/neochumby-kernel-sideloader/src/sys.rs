@@ -123,18 +123,26 @@ pub(crate) fn read_file(path: &[u8], mem: &Mem, max: u32) -> Option<u32> {
     if max > mem.len() {
         return None;
     }
+    print_str("sideloader: opening file\n");
     let fd = raw::open(path, 0);
     if fd < 0 {
+        print_str("sideloader: open failed\n");
         return None;
     }
     let mut got: u32 = 0;
+    let mut report: u32 = 0;
+    // A single read of several MiB into the /dev/mem mapping hangs on the
+    // stock 2.6.16 kernel; read in bounded chunks instead.
+    const CHUNK: u32 = 0x10000;
     loop {
         if got >= max {
             raw::close(fd as usize);
             return None;
         }
-        let n = raw::read(fd as usize, mem, got, max - got);
+        let want = if max - got < CHUNK { max - got } else { CHUNK };
+        let n = raw::read(fd as usize, mem, got, want);
         if n < 0 {
+            print_str("sideloader: read failed\n");
             raw::close(fd as usize);
             return None;
         }
@@ -142,7 +150,14 @@ pub(crate) fn read_file(path: &[u8], mem: &Mem, max: u32) -> Option<u32> {
             break;
         }
         got += n as u32;
+        if got >= report {
+            print_str("sideloader: read ");
+            print_dec(got);
+            print_str(" bytes\n");
+            report = got + 0x0010_0000;
+        }
     }
+    print_str("sideloader: file read done\n");
     raw::close(fd as usize);
     Some(got)
 }
