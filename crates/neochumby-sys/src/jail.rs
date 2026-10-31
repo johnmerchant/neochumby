@@ -406,6 +406,7 @@ impl Jail {
             fstype: None,
             flags: libc::MS_BIND as libc::c_ulong,
             data: None,
+            soft: false,
         });
         Ok(self)
     }
