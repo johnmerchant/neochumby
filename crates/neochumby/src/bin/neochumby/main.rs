@@ -7,6 +7,10 @@
 //! services and exits, and the boot carries on with the Chumby's own
 //! software.
 //!
+//! A Chumby whose server is `serial` (an emulated one, with no network)
+//! reaches its neochumbyd over its serial line, which the session shares
+//! out to everything that connects (line.rs).
+//!
 //! On a paired Chumby, its output also goes to its neochumbyd, which can
 //! ask it to restart, or for its screen, and, once its owner allows it,
 //! tap its screen and press its top button (devlink.rs). A restart stops
@@ -24,29 +28,42 @@
 //!                             accelerometer
 //!   neochumby check-set DIR   for the boot hook: exits 0 if the synced set
 //!                             in DIR is complete (neochumby_sync)
+//!   neochumby terminal ...    the session's own: shows a text-mode app's
+//!                             terminal (terminal.rs)
+//!
+//! A text-mode app (one whose access doesn't list `fb`) runs on a terminal
+//! the session shows (terminal.rs), in the font and colours the settings
+//! name (`font=`, `colors=`), from the server or else /psp/neochumby.conf.
 //!
 //! With `delivery=sync` in its settings, the session also runs
 //! neochumby-sync from the tree as a service of its own (restarted like
 //! the apps' services), which keeps a copy of the tree on the stick for the
 //! boot hook to run. A tree made for a stick has no neochumby-sync, and
 //! needs none. The session also keeps the boot hook in
-//! /psp up to date with the tree's (conf::refresh_hook).
+//! /psp up to date with the tree's (conf::refresh_hook), and neochumby-boot
+//! beside it, which checks a tree over NFS before anything in it runs
+//! (neochumby::verified). Started by neochumby-boot, the session runs from
+//! a checked copy, and checks each program it runs too.
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs is described in
 //! child.rs. The default player is chosen as the session starts
 //! (player.rs).
 
+mod backlight;
 mod button;
 mod child;
 mod companion;
 mod devlink;
 mod jail;
+mod line;
 mod network;
 mod player;
 mod run;
 mod services;
 mod start;
+mod storage;
+mod terminal;
 
 use std::fs::{File, OpenOptions};
 use std::io::Read;
@@ -54,7 +71,7 @@ use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use std::time::{Duration, Instant};
@@ -65,6 +82,7 @@ use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
+use neochumby::verified;
 use neochumby_proto::{Delivery, Settings};
 
 /// The escape hatch: a touch held this long in this corner. The resistive
@@ -224,6 +242,26 @@ impl Volumes {
     }
 }
 
+/// The Chumby's own stream player, which hands a URL to its daemon
+/// (btplayd), as the stock software and classic's wxshow run it.
+const BTPLAY: &str = "/usr/bin/btplay";
+
+/// Runs the stock player with `args`: no shell, so a URL is one argument
+/// and nothing else. It may not return soon, so a thread waits for it: the
+/// loop never does. Its daemon outlives it, by design; it stays out of the
+/// apps' process groups and holds none of the session's descriptors
+/// (they're close-on-exec).
+fn btplay(args: Vec<String>) {
+    let mut cmd = Command::new(BTPLAY);
+    cmd.args(&args).current_dir("/").stdin(Stdio::null()).stdout(Stdio::null()).stderr(Stdio::null());
+    cmd.process_group(0);
+    std::thread::spawn(move || match cmd.status() {
+        Ok(s) if s.success() => {}
+        Ok(s) => eprintln!("neochumby: {BTPLAY} {}: {s}", args.join(" ")),
+        Err(e) => eprintln!("neochumby: {BTPLAY}: {e}"),
+    });
+}
+
 /// The Chumby, as the session's loop sees it.
 struct Chumby {
     escape: Arc<AtomicBool>,
@@ -237,6 +275,13 @@ struct Chumby {
     restart: Option<Arc<AtomicBool>>,
     /// The top button as neochumbyd holds it, through the developer link.
     remote: Option<Arc<devlink::Remote>>,
+    /// The backlight, if the kernel has one.
+    backlight: Option<backlight::Backlight>,
+    /// The backlight as the Chumby booted with it.
+    boot_brightness: Option<u32>,
+    /// The tree, and the owner's font and colours, for terminals.
+    root: std::path::PathBuf,
+    look: terminal::Look,
 }
 
 impl run::Device for Chumby {
@@ -305,9 +350,40 @@ impl run::Device for Chumby {
     fn restart(&mut self) -> bool {
         self.restart.as_ref().is_some_and(|r| r.swap(false, Ordering::SeqCst))
     }
+
+    /// One write to /proc or /sys, so the loop does it.
+    fn brightness(&mut self, level: Option<u32>) {
+        let Some(v) = level.or(self.boot_brightness) else { return };
+        let Some(b) = &self.backlight else {
+            eprintln!("neochumby: no backlight to set to {v}");
+            return;
+        };
+        match b.set(v) {
+            Ok(()) => eprintln!("neochumby: the backlight: {v} ({})", b.path().display()),
+            Err(e) => eprintln!("neochumby: {}: {e}", b.path().display()),
+        }
+    }
+
+    fn play(&mut self, url: Option<&str>) {
+        match url {
+            Some(u) => btplay(vec!["--start-daemon".into(), u.into()]),
+            None => btplay(vec!["--passthru=stop".into()]),
+        }
+    }
+
+    fn speaker_group(&self) -> Option<u32> {
+        audio::holder().and_then(neochumby_sys::process::group_of)
+    }
+
+    fn terminal(&mut self, app: &App) -> std::io::Result<Option<(terminal::Terminal, File)>> {
+        terminal::open(app, &self.root, &self.look).map(Some)
+    }
 }
 
 fn session() {
+    // On a Chumby with no network, its serial line to neochumbyd: before
+    // anything connects there.
+    line::start();
     // First, so that it carries everything the session logs.
     let link = devlink::Link::start();
     let root = apps::root();
@@ -317,6 +393,18 @@ fn session() {
         Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
         Ok(false) => {}
         Err(e) => eprintln!("neochumby: {}: {e}", conf::HOOK),
+    }
+    // As the hook is, and from the same trees: what checks a tree over NFS
+    // on the next boot.
+    if conf::paired().is_some() && root != Path::new(conf::STICK_TREE) {
+        match verified::install_boot(&root) {
+            Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", verified::BOOT),
+            Ok(false) => {}
+            Err(e) => eprintln!("neochumby: {}: {e}", verified::BOOT),
+        }
+    }
+    if verified::on() {
+        eprintln!("neochumby: the tree is checked against neochumbyd's signed manifest");
     }
 
     // The master volume as the boot set it from /psp/volume: nothing has
@@ -334,6 +422,16 @@ fn session() {
         Some(m) => eprintln!("neochumby: the player is {}", m.name),
         None => eprintln!("neochumby: no player here (player = true in a manifest)"),
     }
+    // The owner's font and colours for text-mode apps, as `start` is
+    // chosen: names, checked as each terminal opens.
+    let setting = |key: &str| {
+        let server = settings.other.iter().find(|(k, _)| k == key).map(|(_, v)| v.clone());
+        server.or_else(|| conf::get(conf::CONF, key))
+    };
+    let look = terminal::Look { font: setting("font"), colors: setting("colors") };
+    // On a kernel with a console on the screen, its cursor would blink over
+    // what apps draw.
+    neochumby::term::vt::quiet();
     let escape = Arc::new(AtomicBool::new(false));
     watch_escape(escape.clone());
 
@@ -343,6 +441,10 @@ fn session() {
             run::Ended::ChumbyMode
         }
         Some(first) => {
+            let backlight = backlight::Backlight::find();
+            if backlight.is_none() {
+                eprintln!("neochumby: no backlight (/proc/sys/sense1/brightness or /sys/class/backlight)");
+            }
             let chumby = Chumby {
                 escape,
                 boot_volume,
@@ -351,6 +453,10 @@ fn session() {
                 button_tried: Some(Instant::now()),
                 restart: link.as_ref().map(devlink::Link::restart_flag),
                 remote: link.as_ref().map(devlink::Link::remote),
+                boot_brightness: backlight.as_ref().and_then(backlight::Backlight::level),
+                backlight,
+                root: root.clone(),
+                look,
             };
             // On either ending, the loop has closed the button, stopped the
             // services (neochumby-sync with them) and put the speaker back.
@@ -366,10 +472,11 @@ fn session() {
             link.release();
         }
         // Just after a deploy, the NFS client may still hold the replaced
-        // file's handle: the first try fails as stale, and drops it.
+        // file's handle: the first try fails as stale, and drops it. A
+        // checked tree is checked again, from its new manifest.
         let exe = root.join("neochumby");
         for _ in 0..5 {
-            let e = Command::new(&exe).exec();
+            let e = if verified::on() { verified::boot(&root) } else { Command::new(&exe).exec() };
             eprintln!("neochumby: restart: {}: {e}", exe.display());
             neochumby::sleep_ms(1000);
         }
@@ -412,6 +519,8 @@ fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
         companion: false,
         access: neochumby::apps::Access { root: true, ..Default::default() },
         player: false,
+        font: None,
+        tap: Vec::new(),
     }]
 }
 
@@ -441,6 +550,7 @@ fn main() {
         None => session(),
         Some("sensors") => sensors(),
         Some("check-set") => check_set(std::env::args().nth(2)),
+        Some("terminal") => terminal::serve(&std::env::args().skip(2).collect::<Vec<_>>()),
         Some(other) => {
             eprintln!("neochumby: unknown command {other}");
             std::process::exit(2);

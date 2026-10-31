@@ -4,8 +4,9 @@
 Boots the sideload zImage directly (no sideloader, no marker) with a
 synthetic zeroed NAND image, on qemu-chumby's machine through its
 chumby-machine runner.  The built-in initramfs must see no
-`neochumby.sideloaded=1` marker, load the NAND modules, and print
-`/proc/mtd` and `/dev/mtdblock0`.
+`neochumby.sideloaded=1` marker and leave the NAND's drivers unloaded:
+only root loads them.  Then root does, on the console (modprobe), and
+`/proc/mtd` must list mtd0 and `/dev/mtdblock0` exist.
 
 This needs no stock firmware: the QEMU `chumby-classic` NAND model reports
 the chip ID itself, so a zeroed 64 MiB image is enough.  The sideloaded path
@@ -46,14 +47,17 @@ def main():
     log_path = os.path.join(work, "recovery.log")
     checks = [
         ("init: no sideload marker; this kernel was flashed", "no marker -> flashed"),
-        ("init: loading the NAND recovery modules", "NAND modules loaded"),
-        ("init: /proc/mtd: mtd0:", "/proc/mtd has mtd0"),
-        ("init: /dev/mtdblock0", "/dev/mtdblock0 exists"),
-        ("init: module mxc_nand loaded", "mxc_nand module is live"),
+        ("init: NAND modules stay unloaded; root loads them", "NAND modules left to root"),
         ("init: starting shell", "recovery shell started"),
     ]
+    # What root's modprobe must give.
+    loaded_checks = [
+        (r"^mtd0: 04000000 00004000 \"mxc_nand\"$", "/proc/mtd has mtd0"),
+        (r"^/dev/mtdblock0$", "/dev/mtdblock0 exists"),
+        (r"^mxc_nand ", "mxc_nand module is live"),
+    ]
     m = cm.Machine(tempfile.mkdtemp(prefix="nc-recovery-"))
-    ok, text, uname = True, "", ""
+    ok, text, uname, loaded = True, "", "", ""
     try:
         m.start(kernel=kernel, nand=nand, append="console=ttymxc0,115200 rdinit=/init loglevel=7", fast=True,
                 qemu=qemu, extra=["-no-reboot"])
@@ -61,6 +65,18 @@ def main():
             m.wait_log("~ # ", timeout)
             # The prompt means busybox is up; ask the kernel what it is.
             _, uname = m.exec("uname -a", 30)
+            # Nothing loaded the NAND's drivers; root does.
+            _, before = m.exec("grep -c '^mxc_nand ' /proc/modules || true", 30)
+            if before.strip() != "0":
+                print("ERROR: recovery check failed: mxc_nand loaded before root asked", file=sys.stderr)
+                ok = False
+            # Kernel messages on the console would break the lines checked,
+            # as would ls's colours: test -b, not ls.
+            _, loaded = m.exec(
+                "dmesg -n 1; modprobe cmdlinepart; modprobe mxc_nand && modprobe mtdblock && "
+                "cat /proc/mtd && test -b /dev/mtdblock0 && echo /dev/mtdblock0 && grep '^mxc_nand ' /proc/modules",
+                60,
+            )
         except cm.Error as e:
             print(f"ERROR: recovery check failed: no busybox prompt ({e})", file=sys.stderr)
             ok = False
@@ -73,6 +89,11 @@ def main():
     for marker, what in checks:
         if marker not in text:
             print(f"ERROR: recovery check failed: {what}", file=sys.stderr)
+            ok = False
+    for pattern, what in loaded_checks:
+        if not re.search(pattern, loaded, re.M):
+            print(f"ERROR: recovery check failed after root's modprobe: {what}", file=sys.stderr)
+            print(loaded, file=sys.stderr)
             ok = False
     if not re.search(r"^Linux \(none\) [0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?-mx21-sideload #\d+ .* armv5tejl GNU/Linux$", uname, re.M):
         print("ERROR: recovery check failed: uname -a is not a sideload kernel (VERSION-mx21-sideload)", file=sys.stderr)

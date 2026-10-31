@@ -1,11 +1,11 @@
 //! ncinit: the dist image's /init, process 1.
 //!
-//! It mounts the kernel's file systems, loads the NAND modules when the
-//! image was flashed (not sideloaded), runs a neochumby stick's boot hook,
+//! It mounts the kernel's file systems, runs a neochumby stick's boot hook,
 //! and keeps a shell on the console and one on the screen. Throughout, it
 //! loads the module for each device the kernel announces (its modalias,
 //! matched against depmod's modules.alias), for the devices there at boot
-//! too, and reaps every process the kernel hands it.
+//! too, except the NAND's drivers, which only root loads (modprobe), and
+//! reaps every process the kernel hands it.
 //!
 //! Process 1 must not exit: the kernel panics when it does. Nothing here
 //! unwraps; what fails is logged and skipped. A panic all the same, or the
@@ -41,8 +41,10 @@ const STICK_WAIT: Duration = Duration::from_secs(15);
 const RESPAWN_GAP: Duration = Duration::from_secs(1);
 /// How long the loop waits for an event before reaping.
 const TICK_MS: u16 = 500;
-/// The NAND's drivers, which a sideloaded kernel never loads, whatever
-/// device asks for them: the flash stays the stock firmware's.
+/// The NAND's drivers, which ncinit never loads, whatever device asks for
+/// them, flashed or sideloaded: writing the flash is root's deliberate act
+/// (modprobe mxc_nand), never the boot's. Sideloaded, the flash is the
+/// stock firmware's.
 const NAND_DRIVERS: &str = "kernel/drivers/mtd/";
 
 fn main() {
@@ -131,34 +133,15 @@ impl Init {
         }
     }
 
-    /// Without the sideloader's marker the kernel was flashed, and the
-    /// NAND's modules are loaded; a normal sideload never loads them.
+    /// Says how the kernel was started: sideloaded (the sideloader's
+    /// marker) or flashed. Either way the NAND's drivers stay unloaded until
+    /// root loads them.
     fn nand(&mut self) {
         if self.sideloaded {
             log("sideloaded; NAND modules stay unloaded");
-            return;
-        }
-        log("no sideload marker; this kernel was flashed");
-        log("loading the NAND recovery modules");
-        for m in ["cmdlinepart", "mxc_nand", "mtdblock"] {
-            self.load(m, None);
-        }
-        for line in fs::read_to_string("/proc/mtd").unwrap_or_default().lines() {
-            log(&format!("/proc/mtd: {line}"));
-        }
-        if let Ok(dir) = fs::read_dir("/dev") {
-            let mut blocks: Vec<String> = dir
-                .flatten()
-                .filter_map(|e| e.file_name().into_string().ok())
-                .filter(|n| n.starts_with("mtdblock"))
-                .collect();
-            blocks.sort();
-            for b in blocks {
-                log(&format!("/dev/{b}"));
-            }
-        }
-        if modules::loaded(&fs::read_to_string("/proc/modules").unwrap_or_default()).contains("mxc_nand") {
-            log("module mxc_nand loaded");
+        } else {
+            log("no sideload marker; this kernel was flashed");
+            log("NAND modules stay unloaded; root loads them (modprobe mxc_nand)");
         }
     }
 
@@ -257,8 +240,8 @@ impl Init {
     fn load(&mut self, name: &str, why: Option<&str>) {
         for m in self.db.load_order(name, &self.loaded) {
             let Some(path) = self.db.module(&m).map(|m| m.path.clone()) else { continue };
-            if self.sideloaded && path.starts_with(NAND_DRIVERS) {
-                step(&format!("Loading {m}"), Status::Skipped, &format!("{m} stays unloaded: sideloaded"));
+            if path.starts_with(NAND_DRIVERS) {
+                step(&format!("Loading {m}"), Status::Skipped, &format!("{m} stays unloaded: root loads NAND drivers"));
                 self.loaded.insert(m);
                 continue;
             }
@@ -322,6 +305,16 @@ fn mount_kernel_fs() {
                 ok = false;
             }
         }
+    }
+    // Pseudo-terminals, on devtmpfs' /dev/ptmx: the session runs each
+    // text-mode app on one (neochumby::term).
+    let _ = fs::create_dir_all("/dev/pts");
+    let pts = MountFlags { nosuid: true, noexec: true, ..MountFlags::default() };
+    if let Err(e) = boot::mount("devpts", Path::new("/dev/pts"), "devpts", pts)
+        && e.kind() != io::ErrorKind::ResourceBusy
+    {
+        kmsg(&format!("/dev/pts: {e}"));
+        ok = false;
     }
     // Only now: the screen's console is in /dev, devtmpfs.
     screen_step("Mounting /proc, /sys and /dev", if ok { Status::Ok } else { Status::Failed });
