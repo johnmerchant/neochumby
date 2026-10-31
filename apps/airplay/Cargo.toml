@@ -1,37 +1,66 @@
 [package]
 name = "neochumby-airplay"
-description = "AirPlay for neochumby: a receiver per Chumby on its neochumbyd, played on the Chumby's speaker"
+description = "AirPlay for neochumby: a receiver per Chumby on its neochumbyd, played on the Chumby's speaker, with a now-playing screen in text mode"
 license = "MIT"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
-# Both halves, so AirPlay comes and goes as this one crate:
+# Its three programs, so AirPlay comes and goes as this one crate:
 #   neochumby-airplay            the Chumby's: a background service playing
-#                                the stream (the manifest's service=)
+#                                the stream and serving frontends (the
+#                                manifest's service=)
+#   neochumby-airplay-screen     the Chumby's: AirPlay's own frontend, the
+#                                now-playing screen in text mode (exec=)
 #   neochumby-airplay-companion  neochumbyd's: an AirPlay receiver for the
-#                                Chumby (the manifest's companion=)
+#                                Chumby (companion=)
+# and a library of what needs no Chumby, tested on the host. What they say
+# to each other, and to another app's frontend, is neochumby-airplay-proto.
+[lib]
+path = "src/lib.rs"
+
 [[bin]]
 name = "neochumby-airplay"
 path = "src/main.rs"
 
 [[bin]]
+name = "neochumby-airplay-screen"
+path = "src/frontend.rs"
+
+[[bin]]
 name = "neochumby-airplay-companion"
-path = "src/companion.rs"
+path = "src/companion/main.rs"
 
 [dependencies]
+neochumby-airplay-proto.workspace = true
 neochumby-proto.workspace = true
 neochumby-sys.workspace = true
+# The companion's: shairport-sync's metadata pipe is base64.
+base64 = "0.22"
 
 # Only the Chumby's half uses the device library.
 [target.'cfg(target_arch = "arm")'.dependencies]
 neochumby.workspace = true
 
+# Only the companion, on neochumbyd's host, decodes cover art (tools/tree
+# builds it for the Chumby too, with the app's other binaries, where it
+# never runs and goes without).
+[target.'cfg(not(target_arch = "arm"))'.dependencies]
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+
 [package.metadata.neochumby]
+title = "AIRPLAY"
+exec = "neochumby-airplay-screen"
+color = "8c64dc"
 service = "neochumby-airplay"
 companion = "neochumby-airplay-companion"
 neochumbyd = "required"
+# The service plays; the screen is in text mode, so needs nothing.
 access = ["speaker"]
+# A player: its service takes the session's `pause` and `resume`.
+player = true
+# 53 by 20 characters, a cell twice as tall as it is wide.
+font = "spleen-6x12"
 
 [lints]
 workspace = true
