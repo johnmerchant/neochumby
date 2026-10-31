@@ -31,7 +31,7 @@ index 04148198e..7c64f8faf 100644
            - enum:
                - fsl,imx25-pwm
 diff --git a/drivers/pwm/pwm-imx1.c b/drivers/pwm/pwm-imx1.c
-index d5535d208..0d03acce3 100644
+index 075d46180..2e3e5a2fc 100644
 --- a/drivers/pwm/pwm-imx1.c
 +++ b/drivers/pwm/pwm-imx1.c
 @@ -22,7 +22,12 @@

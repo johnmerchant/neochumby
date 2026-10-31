@@ -139,10 +139,10 @@ index 000000000..6ee6d744d
 +        fsl,otg-xcvr-mode = "tx-diff-rx-diff";
 +    };
 diff --git a/drivers/usb/host/Kconfig b/drivers/usb/host/Kconfig
-index b3b1ec696..b0dff2a71 100644
+index 10cff12a3..50ff77edf 100644
 --- a/drivers/usb/host/Kconfig
 +++ b/drivers/usb/host/Kconfig
-@@ -681,6 +681,17 @@ config USB_RENESAS_USBHS_HCD
+@@ -682,6 +682,17 @@ config USB_RENESAS_USBHS_HCD
  	  To compile this driver as a module, choose M here: the
  	  module will be called renesas-usbhs.
  
