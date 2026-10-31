@@ -198,6 +198,24 @@ neochumbyd delivered.
   code is safe, and "unverified" doesn't mean malicious. The modules'
   sha256, pinned in the crate, are what is checked. None of this makes the
   Rust project or crates.io vouch for an app.
+- **A Chumby's GET APPS only asks.** It names the version and the exact
+  access its owner allowed on its screen; neochumbyd fetches and checks
+  the app again, refuses it if it asks for anything else, and installs
+  only once the owner approves the code the Chumby shows, through the
+  admin socket's protocol with the owner's token (`neochumbyd approve
+  CODE` on the command line, as the server's admin, or a page given the
+  socket). Removing an app is approved the same way, and so is an update
+  that asks for more; one that asks for nothing new needs only the
+  Chumby's owner, unless automatic updates are off. The code only names
+  the request (the Chumby's connection is already authenticated); it
+  isn't a secret. An app installed from the catalog can't name
+  neochumbyd's catalog as its companion.
+- **What neochumbyd fetches for a Chumby is limited.** GET APPS shows only
+  apps already in the cache, and looking one up (its details, which mean
+  fetching its crate) is for apps in the cache only, from crates.io and
+  GitHub only (a module hosted anywhere else is fetched at install, not to
+  show it), kept once looked up, and at most a few a minute for each
+  Chumby. A Chumby can't make neochumbyd fetch a URL of its choosing.
 - **The admin socket** pairs Chumbys and changes their settings. It has no
   path. Only an app whose owner allows it (`neochumbyd allow <app>
   pairing`; `disallow` takes it back, at once) gets one, as an inherited

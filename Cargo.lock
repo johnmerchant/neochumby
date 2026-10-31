@@ -1793,6 +1793,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-catalog"
+version = "0.1.0"
+dependencies = [
+ "neochumby",
+ "neochumby-proto",
+ "rustix 1.1.6",
+]
+
+[[package]]
 name = "neochumby-classic"
 version = "0.1.0"
 dependencies = [

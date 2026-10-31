@@ -361,29 +361,7 @@ pub struct Approval {
 /// approval and the writing. Nothing is written.
 pub fn prepare(http: &Http, spec: &Spec, tree: &Path, wamrc: Option<Wamrc>) -> Result<Plan, String> {
     let previous = installed(tree, &spec.app)?;
-    let src = &http.sources;
-
-    // The index: is this version there, and what is its checksum?
-    let index_url = format!("{}{}", src.index, spec.index_path());
-    let index = http.get_ok(&index_url, CRATE_LIMIT).map_err(|e| format!("{spec}: crates.io's index: {e}"))?;
-    let entry = String::from_utf8_lossy(&index)
-        .lines()
-        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
-        .find(|v| v["vers"].as_str() == Some(&spec.version) && v["name"].as_str() == Some(&spec.name))
-        .ok_or_else(|| format!("{spec}: no such version in crates.io's index"))?;
-    if entry["yanked"].as_bool() == Some(true) {
-        return Err(format!("{spec}: that version is yanked"));
-    }
-    let cksum =
-        entry["cksum"].as_str().filter(|c| c.len() == 64).ok_or_else(|| format!("{spec}: no checksum in the index"))?;
-
-    // The crate, checked against it, and its Cargo.toml.
-    let crate_url = format!("{}/{n}/{n}-{v}.crate", src.static_crates, n = spec.name, v = spec.version);
-    let krate = http.get_ok(&crate_url, CRATE_LIMIT)?;
-    if !sha256(&krate).eq_ignore_ascii_case(cksum) {
-        return Err(format!("{spec}: the .crate isn't the one crates.io's index records: refused"));
-    }
-    let cargo_toml = unpack_cargo_toml(&krate, spec)?;
+    let cargo_toml = crate_toml(http, spec)?;
     let meta = Meta::parse(&cargo_toml, spec).map_err(|e| format!("{spec}: {e}"))?;
     for (what, m) in [("app", Some(&meta.app)), ("companion", meta.companion.as_ref())] {
         if let Some(m) = m {
@@ -407,15 +385,21 @@ pub fn prepare(http: &Http, spec: &Spec, tree: &Path, wamrc: Option<Wamrc>) -> R
 
     // The label, and what crates.io says of it: shown, never required.
     let attestation = attestation(http, &meta);
-    let owners = http.get_json(&format!("{}/v1/crates/{}/owners", src.crates_api, spec.name)).ok().map(|v| {
-        v["users"].as_array().into_iter().flatten().filter_map(|u| u["login"].as_str().map(str::to_string)).collect()
-    });
-    let downloads = http
-        .get_json(&format!("{}/v1/crates/{}", src.crates_api, spec.name))
-        .ok()
-        .and_then(|v| Some((v["crate"]["downloads"].as_u64()?, v["crate"]["recent_downloads"].as_u64().unwrap_or(0))));
+    let (owners, downloads) = (owners(http, spec), downloads(http, spec));
 
     Ok(Plan { spec: spec.clone(), meta, wasm, companion, attestation, owners, downloads, wamrc, previous })
+}
+
+/// Its owners on crates.io (their logins), if crates.io says.
+pub fn owners(http: &Http, spec: &Spec) -> Option<Vec<String>> {
+    let v = http.get_json(&format!("{}/v1/crates/{}/owners", http.sources.crates_api, spec.name)).ok()?;
+    Some(v["users"].as_array().into_iter().flatten().filter_map(|u| u["login"].as_str().map(str::to_string)).collect())
+}
+
+/// Its downloads, all and recent, if crates.io says.
+pub fn downloads(http: &Http, spec: &Spec) -> Option<(u64, u64)> {
+    let v = http.get_json(&format!("{}/v1/crates/{}", http.sources.crates_api, spec.name)).ok()?;
+    Some((v["crate"]["downloads"].as_u64()?, v["crate"]["recent_downloads"].as_u64().unwrap_or(0)))
 }
 
 /// Whether one of GitHub's attestations for `meta`'s app `.wasm` verifies,
@@ -440,6 +424,34 @@ pub fn attestation(http: &Http, meta: &Meta) -> Result<Verified, String> {
         }
     }
     Err(why)
+}
+
+/// The Cargo.toml of `spec`'s `.crate`: the version must be in crates.io's
+/// index and not yanked, and the `.crate` must be the one the index's
+/// checksum names. Nothing in it is checked yet ([`Meta::parse`]).
+pub fn crate_toml(http: &Http, spec: &Spec) -> Result<String, String> {
+    let src = &http.sources;
+    // The index: is this version there, and what is its checksum?
+    let index_url = format!("{}{}", src.index, spec.index_path());
+    let index = http.get_ok(&index_url, CRATE_LIMIT).map_err(|e| format!("{spec}: crates.io's index: {e}"))?;
+    let entry = String::from_utf8_lossy(&index)
+        .lines()
+        .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
+        .find(|v| v["vers"].as_str() == Some(&spec.version) && v["name"].as_str() == Some(&spec.name))
+        .ok_or_else(|| format!("{spec}: no such version in crates.io's index"))?;
+    if entry["yanked"].as_bool() == Some(true) {
+        return Err(format!("{spec}: that version is yanked"));
+    }
+    let cksum =
+        entry["cksum"].as_str().filter(|c| c.len() == 64).ok_or_else(|| format!("{spec}: no checksum in the index"))?;
+
+    // The crate, checked against it, and its Cargo.toml.
+    let crate_url = format!("{}/{n}/{n}-{v}.crate", src.static_crates, n = spec.name, v = spec.version);
+    let krate = http.get_ok(&crate_url, CRATE_LIMIT)?;
+    if !sha256(&krate).eq_ignore_ascii_case(cksum) {
+        return Err(format!("{spec}: the .crate isn't the one crates.io's index records: refused"));
+    }
+    unpack_cargo_toml(&krate, spec)
 }
 
 /// The Cargo.toml in a `.crate` (`NAME-VERSION/Cargo.toml`), refusing one

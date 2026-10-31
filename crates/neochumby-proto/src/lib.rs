@@ -49,6 +49,7 @@ use std::net::TcpStream;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
+pub mod catalog;
 pub mod channel;
 pub mod dev;
 mod msg;
