@@ -6,8 +6,8 @@ release included. This crate is built for
 stack for the original Chumby Classic, and is published to start an SDK
 for it, not as a general-purpose library.
 
-How a Chumby and its neochumbyd talk: TLS 1.3 over TCP with raw public
-keys, pairing by a code both sides show, and the messages a session
+How a Chumby and its neochumbyd talk: TLS 1.3 with raw public keys, over
+TCP or over a serial line shared by several sessions (`mux`), pairing by a code both sides show, and the messages a session
 carries (an app's frames to and from its companion, and the `Sync*`
 messages of `delivery=sync`). Builds for the Chumby and for servers.
 

@@ -1,0 +1,29 @@
+[package]
+name = "neochumby-wasmbench"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "A measurement spike: which WebAssembly runtime is fastest on a Chumby Classic, against native code"
+
+# Built into a tree only for the spike (`tools/tree OUT ./dev/wasmbench`,
+# after dev/wasmbench/tools/stage.sh fills files/), apart from the device
+# workspace.
+[workspace]
+
+[dependencies]
+neochumby = { path = "../../crates/neochumby" }
+libc = "0.2"
+
+[package.metadata.neochumby]
+title = "BENCH"
+exec = "neochumby-wasmbench"
+colour = "ffaa00"
+# system: /proc, for each run's peak RSS (VmHWM).
+access = ["fb", "touch", "system"]
+
+[profile.release]
+opt-level = 2
+lto = true
+panic = "abort"
+codegen-units = 1

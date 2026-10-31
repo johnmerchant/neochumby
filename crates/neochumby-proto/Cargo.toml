@@ -1,6 +1,6 @@
 [package]
 name = "neochumby-proto"
-description = "How a Chumby and its neochumbyd talk: TLS 1.3 over TCP"
+description = "How a Chumby and its neochumbyd talk: TLS 1.3 over TCP or a serial line"
 license = "MIT"
 # Its own semver, not the workspace's: published on crates.io (see
 # CONTRIBUTING.md).

@@ -10,22 +10,19 @@
 #
 #   dev/emulate-powercut TREE NEOCHUMBYD OUT
 #
-# TREE from tools/tree, with neochumby-sync; NEOCHUMBYD the x86_64
-# neochumbyd built with it. Pending on the emulated Chumby: a round needs a
-# neochumbyd, and the emulated Chumby has no network (qemu-chumby runs it
-# with -nic none), so every profile skips it (77) until the session can
-# reach neochumbyd another way. dev/emulate has what the rest needs (a
-# stick image the Chumby writes, powercut, exec on the console). Under
-# dev/emulate's old user mode, which shared the PC's network, it paired the
-# emulated Chumby with
-# a neochumbyd on this PC, through neochumby-home's PAIR, sets
-# delivery=sync, lets a first round fill set a of a FAT stick image, adds a
-# big file to the tree, boots through the real boot hook (start --boot,
-# needing a static busybox), cuts the power once the second round is
+# TREE from tools/tree, with neochumby-sync; NEOCHUMBYD the neochumbyd
+# built with it, for this machine. The emulated Chumby has no network: it
+# reaches neochumbyd over its serial line, joined to neochumbyd's
+# --listen-unix socket (dev/emulate start --server). It pairs the emulated
+# Chumby through neochumby-home's PAIR, sets delivery=sync, lets a first
+# round fill set a of its stick, adds a big file to the tree, boots the
+# stick through the boot hook, cuts the power once the second round is
 # writing set b (dev/emulate powercut), boots the stick as it was left, and
 # checks the hook ran a complete set, `check-set` agrees, and the next round
 # makes set b live, which one more boot then runs. A cut that came after the
-# round finished proves nothing, so then it tries again, sooner.
+# round finished proves nothing, so then it tries again, sooner. The line
+# carries about 100 KB/s, so a round of a tree with debug symbols takes
+# minutes: give it a small tree.
 #
 # With NEOCHUMBY_EMU_DEVICE=NAME, a real Chumby already paired with the
 # neochumbyd serving TREE (NEOCHUMBY_EMU_HOST, NEOCHUMBYD_DIR), set
@@ -39,7 +36,11 @@ neochumbyd=${2:?usage: dev/emulate-powercut TREE NEOCHUMBYD OUT}
 out=${3:?usage: dev/emulate-powercut TREE NEOCHUMBYD OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
 mkdir -p "$out"
-state=$out/state
+# The emulator's directory (the stick image, the console's log), in a
+# temporary directory removed on exit, as the other scenarios keep it,
+# rather than left in OUT.
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-powercut.XXXXXX")
+trap 'rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
 step() { echo "== $*"; }
 fail() {
@@ -71,11 +72,6 @@ grow() {
   head -c $((24 << 20)) /dev/urandom > "$1/apps/home/powercut.bin"
 }
 
-if [ "$backend" != device ]; then
-  echo "dev/emulate-powercut: skipped: pending: the emulated Chumby has no network to reach neochumbyd (this is $backend)"
-  exit 77
-fi
-
 if [ "$backend" = device ]; then
   work=$out/tree
   slim "$tree" "$work"
@@ -92,33 +88,44 @@ if [ "$backend" = device ]; then
   exit 0
 fi
 
-# The emulated Chumby, everything on this PC: user mode's steps, kept for
-# the port (unreachable until then).
+# The emulated Chumby, and a neochumbyd on this machine at the other end
+# of its serial line.
 work=$out/tree
 ndstate=$out/nd
 rm -rf "$ndstate" "$out/psp0"
 slim "$tree" "$work"
 mkdir -p "$out/psp0"
-api=127.0.0.1:17340
-"$neochumbyd" serve --state "$ndstate" --tree "$work" --api "$api" --nfs 127.0.0.1:12049 > "$out/neochumbyd.log" 2>&1 &
+# The line's socket: a short path, as a Unix socket's must be.
+sockdir=$(mktemp -d /tmp/ncline.XXXXXX)
+sock=$sockdir/line.sock
+"$neochumbyd" serve --state "$ndstate" --tree "$work" --api 127.0.0.1:0 --nfs 127.0.0.1:0 \
+  --listen-unix "$sock" > "$out/neochumbyd.log" 2>&1 &
 server=$!
-trap 'kill $server 2>/dev/null || true' EXIT
+trap 'kill $server 2>/dev/null || true; rm -rf "$state" "$sockdir"' EXIT
+i=0
+until [ -S "$sock" ]; do
+  i=$((i + 1))
+  [ "$i" -lt $((100 * slow)) ] || fail "neochumbyd didn't start"
+  sleep 0.1
+done
 nd() { "$neochumbyd" "$@" --state "$ndstate"; }
-# A clean stop: the stick is unmounted and flushed, a moment after.
+# A clean stop: what the Chumby wrote to its stick flushed first (from its
+# console where it has one, else by its kernel within half a minute).
 stopped() {
+  emu exec sync >/dev/null 2>&1 || sleep $((35 * slow))
   emu stop
   sync
   sleep 1
 }
 
 step "pair through neochumby-home"
-# Both sets, the big file and room to spare.
+# The tree, both sets, the big file and room to spare.
 size=$(du -sm "$work" | cut -f1)
-emu mkstick --force --size $((size * 2 + 24 + 64)) "$out/stick.img"
-emu start --psp "$out/psp0" --stick "$out/stick.img" --server "$api" "$work"
+emu start --psp "$out/psp0" --size $((size * 3 + 24 + 64)) --server "$sock" "$work"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
-emu tap 80 220 # PAIR
+emu wait log "neochumby-home: showing" $((30 * slow)) || fail "home didn't draw"
+emu tap 80 232 --hold 300 # PAIR, in the bottom row
 i=0
 until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9a-f-]*\).*/\1/p') && [ -n "$code" ]; do
   i=$((i + 1))
@@ -127,17 +134,19 @@ until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9a-f-]*\).*/\1/p'
 done
 nd approve "$code"
 nd set chumby delivery=sync
-# The Chumby keeps the pairing in /psp once it hears it was approved.
+# The Chumby keeps the pairing in /psp once it hears it was approved, and
+# the emulator's hook copies it to the stick.
 i=0
-until [ -f "$state/psp/neochumby.conf" ] && [ -f "$state/psp/neochumby.key" ]; do
+until emu kept >/dev/null 2>&1; do
   i=$((i + 1))
   [ "$i" -lt $((300 * slow)) ] || fail "the Chumby didn't keep the pairing"
   sleep 0.1
 done
 stopped
+cp "$state/stick.img" "$out/stick.img"
 
 step "the first round: set a"
-emu start --stick "$out/stick.img" --server "$api" "$work"
+emu start --stick "$out/stick.img" --server "$sock"
 emu wait log 'neochumby-sync: set a is live from the next boot' $((300 * slow)) || fail "the first round didn't finish"
 stopped
 cp "$out/stick.img" "$out/before.img"
@@ -150,10 +159,10 @@ while :; do
   [ "$attempt" -le 4 ] || fail "four cuts all came after the round had finished"
   cp "$out/before.img" "$out/stick.img"
   step "boot through the hook, and cut the power while set b is written (attempt $attempt)"
-  emu start --boot --stick "$out/stick.img"
+  emu start --boot --stick "$out/stick.img" --server "$sock"
   emu wait log "apps from the stick's set a" $((60 * slow)) || fail "the boot hook didn't run set a"
   i=0
-  until emu exec /bin/busybox ls /mnt/usb/neochumby 2>/dev/null | grep -q '^b'; do
+  until emu exec test -e /mnt/usb/neochumby/b >/dev/null 2>&1; do
     i=$((i + 1))
     [ "$i" -lt $((600 * slow)) ] || fail "the second round didn't start writing set b"
     sleep 0.1
@@ -165,7 +174,7 @@ while :; do
   emu log > "$out/log-cut-$attempt.txt"
 
   step "the next boot, from the stick as the cut left it"
-  emu start --boot --stick "$out/cut.img"
+  emu start --boot --stick "$out/cut.img" --server "$sock"
   emu wait log "apps from the stick's set [ab]" $((60 * slow)) || fail "the boot hook ran no set"
   ran=$(emu log | sed -n "s/.*apps from the stick's set \([ab]\).*/\1/p" | head -n 1)
   emu exec "/mnt/usb/neochumby/$ran/neochumby" check-set "/mnt/usb/neochumby/$ran" ||
@@ -189,7 +198,7 @@ emu log > "$out/log-after.txt"
 stopped
 
 step "and the boot after it runs set b"
-emu start --boot --stick "$out/cut.img"
+emu start --boot --stick "$out/cut.img" --server "$sock"
 emu wait log "apps from the stick's set b" $((60 * slow)) || fail "the boot after the round didn't run set b"
 emu stop
 emu log > "$out/log-last.txt"

@@ -18,7 +18,7 @@ termwiz = "0.23"
 [package.metadata.neochumby]
 title = "PIPES"
 exec = "neochumby-pipes"
-access = ["screen", "touch", "terminal"]
+tap = "q"
 # Not on the stock 2.6.16: rand seeds itself with getrandom, which on 2.6.16 waits on /dev/random
 # for entropy the Chumby rarely has.
 linux = "5.9"
