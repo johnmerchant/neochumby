@@ -22,7 +22,7 @@ rand = "0.8"
 [package.metadata.neochumby]
 title = "AQUARIUM"
 exec = "neochumby-aquarium"
-access = ["screen", "touch", "terminal"]
+tap = "q"
 # Not on the stock 2.6.16: crossterm's event loop (mio) needs epoll_create1 and SOCK_CLOEXEC,
 # which 2.6.16 lacks (EINVAL).
 linux = "5.9"

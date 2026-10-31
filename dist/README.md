@@ -7,16 +7,11 @@ Chumby changes: a reboot goes back to the stock firmware, which kexecs
 again.
 
 **sideload.**  The kernel has no NAND driver built in.  The NAND drivers are
-modules in the initramfs, and `/init` loads them only when the kernel was
-booted without the sideloader's `neochumby.sideloaded=1` marker — that is,
-when the image was flashed instead of handed off.  A normal sideload never
-loads them, so `/proc/mtd` and `/dev/mtd*` stay absent.  If someone does
-flash the image, the built-in initramfs still boots and can load NAND for
-recovery instead of leaving the Chumby unusable.
-
-This is a deliberate trade-off: the image carries the NAND modules so a
-mistaken flash is recoverable.  Root can still load them deliberately; the
-normal init policy does not.
+modules in the initramfs, and nothing loads them but root (`modprobe
+mxc_nand`): `/init` never does, flashed or sideloaded, whatever device asks.
+So `/proc/mtd` and `/dev/mtd*` stay absent until root asks for them.  If
+someone does flash the image, it still boots, and root can load NAND for
+recovery.
 
 ```
 dist/build OUT        # OUT/sideload-zImage and OUT/sideload-rootfs.cpio.gz
@@ -103,7 +98,9 @@ taken on trust:
   --archive`'s archive of it.
 
 The pull request's CI then shows whether the patches still apply and the
-image builds and boots; when they don't, port them on that branch. One
+image builds and boots (CI builds mainline only weekly, but always for
+`kernel-sync/mainline` and for any change to `kernel/mainline/` or its
+defconfig); when they don't, port them on that branch. One
 pull request per track: a later bump updates the open one (replacing the
 job's own commit, or adding to what someone has pushed there), and none is
 ever merged but by hand. `dist/kernel-sync check` shows the pins against
@@ -123,7 +120,7 @@ dist/fetch [--kernel 5.9.16|stable|mainline] OUT
 
 puts in `OUT` the image CI built from this checkout's inputs, in the layout
 `dist/build OUT` writes, in seconds. CI publishes each kernel's build on
-main to the rolling
+main (mainline's from a weekly run, below) to the rolling
 [`dist-prebuilt`](https://github.com/johnmerchant/neochumby/releases/tag/dist-prebuilt)
 prerelease as `neochumby-dist-INPUTS-KERNEL.tar.xz`, where `INPUTS` is the
 last commit that changed what it's built from (`dist/` but this README,
@@ -145,6 +142,20 @@ there's no build for these inputs (they have local changes, or changed on
 a branch, or main's CI hasn't published yet) or the download doesn't
 verify: build it with `dist/build` then. `classic/fetch OUT` does the same
 for the classic image.
+
+**Mainline, weekly.** Pushes and pull requests build only 5.9.16 and
+stable; mainline is built at main's head every Sunday (and by hand, a
+`workflow_dispatch` with `mainline`), booted and published like the
+others, and with them for a change to mainline alone. So most inputs
+commits have no mainline build, and `dist/fetch --kernel mainline` then
+takes the newest one on the release of a commit in the checkout's
+history instead, checked the same way (its `MANIFEST` naming the inputs it
+was built from), with a line saying which commit that is and how far
+behind. It must have the track's current pin and be at most 14 days
+behind `HEAD`, so an old signed build can't stand in once newer ones are
+gone; else it refuses (build it, or wait for the weekly build). With
+local changes to the inputs it refuses, as for the others. Dated releases carry
+5.9.16, stable and classic, not mainline.
 
 `dev/emulate` and `dev/e2e` do this themselves, into `build/sideload-dist`
 (`build/sideload-dist-stable` or `-mainline` with
@@ -171,8 +182,9 @@ the end-to-end scenarios that pass there so far that way
 (CONTRIBUTING.md, "Scenarios", says which, and why the others don't yet).
 
 CI's `dist` job (`.github/workflows/ci.yml`) builds this image for each
-kernel, or restores it whole when nothing it's built from changed, and
-passes it on to the `e2e` (5.9.16) and `sideload` (all three) jobs, and with
+kernel (mainline weekly, above), or restores it whole when nothing it's
+built from changed, and passes it on to the `e2e` (5.9.16, and mainline
+where it's built) and `sideload` (each kernel built) jobs, and with
 its legal-info to the `package` and `prebuilt` jobs, which publish it on
 main (above). Buildroot's work is cached; the first run is
 slow, and later runs rebuild only what changed. The `sideload` job runs
@@ -185,14 +197,17 @@ firmware, so it stays local (`run-demo.py`).
 | --- | --- |
 | `configs/chumby_classic_defconfig` | The Buildroot configuration (5.9.16); `chumby_classic_stable_defconfig` and `_mainline_defconfig` the tracks', each with its pinned version |
 | `board/chumby-classic/linux.fragment` | Our sideload kernel options on top of `imx_v4_v5_defconfig` (5.9.16; a track's is `kernel/TRACK/linux.fragment`). `dist/build` fails if any of them didn't make it into the kernel |
-| `package/neochumby-init/` | `/init`: ncinit, from `crates/neochumby-init`, built by Buildroot's own Rust and linked statically. It checks the sideload marker and loads the NAND modules only when it is absent (and never otherwise, whatever device asks), loads every other module as its device appears (its modalias against depmod's `modules.alias`, for the devices there at boot too), runs a neochumby stick, keeps a shell on the serial console and, when no stick's hook has the screen, one on the screen (tty1), and reaps every orphan |
+| `package/neochumby-init/` | `/init`: ncinit, from `crates/neochumby-init`, built by Buildroot's own Rust and linked statically. It never loads the NAND's drivers (only root does, with modprobe), loads every other module as its device appears (its modalias against depmod's `modules.alias`, for the devices there at boot too), runs a neochumby stick, keeps a shell on the serial console and, when no stick's hook has the screen, one on the screen (tty1), and reaps every orphan |
 | `patches/` | 5.9.16's tarball hash, which Buildroot checks, and its patches (`linux/5.9.16/`), and the headers' hash |
 | `kernel/stable/`, `kernel/mainline/` | Each track's patches and its pin's hash (`linux/`), and its kernel options (`linux.fragment`): above. Every kernel's series has Spleen 5x8 (`lib/fonts: add Spleen 5x8`), the screen console's only font: 64x30 characters on the 320x240 screen |
 | `kernel-sync` | Moves the tracks' pins to kernel.org's, verified (CI's kernel-sync job) |
 | `Containerfile` | The build's Linux |
 
-What's in it so far: the kernel with the NAND recovery modules, ncinit,
-BusyBox, `wpa_supplicant` and the rt73's firmware. Still to come: the
-Chumby's own devices (the squeeze switch, the
-accelerometer, the backlight and the speaker mute, which were out-of-tree
-drivers on 2.6.16), and the hook that kexecs.
+What's in it so far: the kernel with the NAND recovery modules (for root), ncinit,
+BusyBox, `wpa_supplicant` and the rt73's firmware. The backlight is a
+backlight class device (`pwm-backlight`, levels 0-100) and the speaker's
+mute the sound card's `Speaker Switch` (the machine driver's DAPM pin on
+keypad column 4), which the session uses where 2.6.16 has
+`/proc/sys/sense1`. Still to come: the Chumby's own devices as the session
+opens them (the squeeze switch and the accelerometer, which were
+out-of-tree drivers on 2.6.16), and the hook that kexecs.

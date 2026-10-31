@@ -45,16 +45,24 @@ pub mod elf;
 pub mod fd;
 pub mod fs;
 pub mod net;
+pub mod privilege;
 pub mod process;
 pub mod pty;
+pub mod sandbox;
+pub mod serial;
 pub mod signal;
 pub mod speaker;
 pub mod time;
+pub mod user;
 
+#[cfg(target_os = "linux")]
+pub mod alsa;
 #[cfg(all(target_os = "linux", feature = "boot"))]
 pub mod boot;
 #[cfg(feature = "compat26")]
 pub mod compat26;
+#[cfg(target_os = "linux")]
+pub mod evdev;
 #[cfg(target_os = "linux")]
 pub mod jail;
 #[cfg(target_os = "linux")]
