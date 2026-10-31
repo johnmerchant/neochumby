@@ -65,15 +65,20 @@ def main():
             m.wait_log("~ # ", timeout)
             # The prompt means busybox is up; ask the kernel what it is.
             _, uname = m.exec("uname -a", 30)
-            # Nothing loaded the NAND's drivers; root does.
-            _, before = m.exec("grep -c '^mxc_nand ' /proc/modules || true", 30)
-            if before.strip() != "0":
-                print("ERROR: recovery check failed: mxc_nand loaded before root asked", file=sys.stderr)
+            # Nothing loaded the NAND's drivers; root does. Kernel messages
+            # on the console would break the lines checked (one printed
+            # while the count was asked for read as a module loaded), so
+            # they're off from here; and the count is the last line that
+            # is one.
+            _, before = m.exec("dmesg -n 1; grep -c '^mxc_nand ' /proc/modules || true", 30)
+            counts = [line.strip() for line in before.splitlines() if line.strip().isdigit()]
+            if counts[-1:] != ["0"]:
+                print(f"ERROR: recovery check failed: mxc_nand loaded before root asked: {before!r}",
+                      file=sys.stderr)
                 ok = False
-            # Kernel messages on the console would break the lines checked,
-            # as would ls's colours: test -b, not ls.
+            # As would ls's colours: test -b, not ls.
             _, loaded = m.exec(
-                "dmesg -n 1; modprobe cmdlinepart; modprobe mxc_nand && modprobe mtdblock && "
+                "modprobe cmdlinepart; modprobe mxc_nand && modprobe mtdblock && "
                 "cat /proc/mtd && test -b /dev/mtdblock0 && echo /dev/mtdblock0 && grep '^mxc_nand ' /proc/modules",
                 60,
             )
