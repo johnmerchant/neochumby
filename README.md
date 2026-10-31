@@ -31,7 +31,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, a terminal for programs written for one, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
 | `crates/neochumby/fonts` | The terminal's fonts: [Spleen](https://github.com/fcambus/spleen) 2.2.0, every size, as PSF (its README has the source) | BSD-2-Clause (`LICENSE.spleen`) |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
-| `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys | MIT |
+| `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, over TCP or a serial line | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
@@ -54,6 +54,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `dist/` | The sideload image: a Buildroot build of Linux 5.9.16 with an initramfs built in (`sideload-zImage`), and the same initramfs on its own (`sideload-rootfs.cpio.gz`) | MIT |
 | `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> sideload Linux 5.9.16 kernel sideloader and QEMU demo (draft) | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
+| `dev/wasmbench` | Proposal 0003's benchmark of WebAssembly runtimes on a Chumby: its workloads in Rust, and EEMBC's [CoreMark](https://github.com/eembc/coremark) (1f483d5, a submodule) | MIT; CoreMark Apache-2.0, with EEMBC's terms for its name |
 | `emu/` | The emulator: [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit (a submodule), QEMU's `chumby-classic` machine with its runner and image tool, and the script that builds it | GPL-2.0-or-later, like QEMU (its image tool: MIT) |
 
 Everything we write is MIT, except in `apps/doom`, `apps/quake`,
@@ -84,6 +85,8 @@ exec = "neochumby-quake"             # binaries, by name; exec runs in front
 color = "8c5a28"                    # optional; `colour` works too
 service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
+server = "neochumby-web"             # runs once on the server, for all Chumbys
+listen = [8080]                      # the TCP ports the server program may bind
 neochumbyd = "required"              # or "optional"; absent: never needed
 start = true                         # it may be the start app
 interrupt = false                    # no service may replace it in front
@@ -104,6 +107,22 @@ An app can use any of these keys:
   name. An app with a companion sets `neochumbyd` too, and its Chumby half
   opens it with `neochumby::companion!()`, which fails the build if the
   app's `Cargo.toml` declares no companion.
+- **`server`:** a server half that runs once on the server for all its
+  Chumbys, rather than once per Chumby as a companion does, such as a
+  household web page. neochumbyd starts it when it starts, starts it again
+  if it exits, and stops it when neochumbyd stops. It may bind the TCP
+  ports `listen` names. With its owner's leave, it reaches neochumbyd
+  through the admin socket (below).
+
+  | Key | Runs | How many |
+  | --- | --- | --- |
+  | `exec` | on the Chumby | the app, in front |
+  | `service` | on the Chumby | in the background |
+  | `companion` | on the server | one per Chumby |
+  | `server` | on the server | one for all of them |
+
+  Companions and server programs run sandboxed: see
+  [SECURITY](SECURITY.md).
 - **`exec`:** what runs, full-screen, when the app is opened. The session
   (`neochumby`) runs one app at a time in front. An app opens another, or
   CHUMBY MODE, by asking the session over its request pipe
@@ -216,7 +235,7 @@ apps/top/                  neochumby-top, manifest
 apps/cmatrix/              neochumby-cmatrix, manifest (and so on for clock, bonsai, pipes, aquarium, genact)
 ```
 
-`tools/tree OUT [-d DATA] [APP ...]` builds that tree. It always includes
+`tools/tree OUT [-d DATA] [--pinned] [APP ...]` builds that tree. It always includes
 the session and neochumby-home, plus the apps you name, from wherever
 they are:
 
@@ -224,11 +243,18 @@ they are:
 | --- | --- |
 | `doom` | `apps/doom` in this repository |
 | `./path`, `/path` | a crate on this machine |
-| `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it prints the commit to pin) |
-| `crate:neochumby-x@1.0.0` | crates.io (unversioned, the newest) |
+| `git+https://github.com/you/neochumby-x#REV` | a git repository with the crate at its root, at commit REV (unpinned, it warns and prints the commit to pin) |
+| `crate:neochumby-x@1.0.0` | crates.io, checked against the index's SHA-256 (unversioned, it warns and takes the newest) |
 
-Each app's binaries are built for the Chumby, and its companion for the
-server, with the toolchain above. Its manifest is made from its
+An app from elsewhere runs on your Chumby, and its companion on your
+server, so pin it: a full commit
+id after `#` (a branch or tag can move), a version after `@`. With
+`--pinned` (`tools/tree OUT --pinned APP ...`, and the same for
+`tools/stick` and `tools/deploy`), an app that isn't pinned is refused
+rather than warned about.
+
+Each app's binaries are built for the Chumby, and its companion and server
+program for the server, with the toolchain above. Its manifest is made from its
 `Cargo.toml`, and its `files/` directory, if it has one, is copied as it
 is. Game data is added from `DATA`, your own copies laid out the same way.
 The tree can come from a stick or from a server.
@@ -259,6 +285,58 @@ BusyBox's `mount` asks the port mapper on port 111 even when given the
 ports, so the server should refuse port 111 rather than drop it. Otherwise
 the mount hangs.
 
+**A sandbox for apps' programs.** neochumbyd runs no companion or server
+program without one, and it says at start which sandbox they get and
+what that leaves open. Either of two is enough, and both may apply at
+once; [SECURITY](SECURITY.md) weighs them:
+
+- **This system's own:** Landlock on Linux (5.13 and later, where the
+  kernel has it on), or Apple's sandbox on macOS, for neochumbyd running
+  as its own user. Nothing to set.
+- **A uid per app.** Started as root with `--app-uids FIRST-LAST`,
+  neochumbyd becomes the user that owns its state directory, and runs each
+  app's companions and server program under one uid of the app's own from
+  that range, with no other groups, in `<state>/apps/<app>` (the app's,
+  0750 in neochumbyd's group), and in Landlock too where the kernel has
+  it. They then can't read neochumbyd's key, pairings or settings, change
+  the tree, or reach another app's files. Pick a range no user or service
+  has: systemd's `DynamicUser=` takes 61184-65519, so for example:
+
+  ```sh
+  sudo chown neochumbyd: /var/lib/neochumbyd && sudo chmod 2771 /var/lib/neochumbyd
+  sudo neochumbyd serve --state /var/lib/neochumbyd --app-uids 61000-61099
+  ```
+
+  The state directory must be other-executable (programs pass through it
+  to their directories and binaries); neochumbyd makes its own files in it
+  unreadable to others. An existing `<state>/plugin-uids` (the flag's
+  earlier name) is taken over as `<state>/app-uids`.
+
+With neither, neochumbyd serves Chumbys but runs no companion or server
+program, and says why. `--unsandboxed` runs them as neochumbyd's own user
+instead, able to read its key and pairings and change the tree; it does
+nothing where there is a sandbox, and is refused as root, where they would
+run as root.
+
+Under systemd, a unit along these lines keeps a root neochumbyd to the
+four capabilities it keeps (not yet run by us on a systemd host):
+
+```ini
+[Service]
+ExecStart=/var/lib/neochumbyd/neochumbyd serve --state /var/lib/neochumbyd --app-uids 61000-61099
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_KILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/neochumbyd
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Restart=on-failure
+```
+
 **Pairing** makes a Chumby boot from neochumbyd with no stick:
 
 1. Put a `neochumby.conf` holding `server=<neochumbyd's address>` on a
@@ -278,6 +356,18 @@ matches on both screens only if nothing sits between them, and it is too
 long for anyone in the middle to find a connection that makes it match.
 A request waits ten minutes; at most eight wait at once. After pairing,
 each end checks the other's key on every connection.
+
+**The admin socket** lets an app's server program, such as a household
+web page, do what the commands above do: list the Chumbys paired and
+asking, approve or refuse a request (`replace` approves as `--replace`
+does), forget a Chumby, and set its settings
+(`neochumbyd set`). Only an app you allow gets it: `neochumbyd allow
+<app> pairing` (`disallow` to take it back; `allow` alone lists what's
+allowed). A web page that pairs Chumbys, such as neochumby-classic's when
+it becomes a server program, needs this. Every change through it needs
+the **owner's token**, which `neochumbyd token` prints: give it to the web
+page when it asks. `neochumbyd token new` replaces it. The protocol is
+described in `crates/neochumbyd/src/admin.rs`.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its
 companion on neochumbyd runs an AirPlay receiver named after it ("Kitchen
@@ -453,11 +543,24 @@ it says so and the scenarios skip.
 For `stock`, make your NAND image and kernel with qemu-chumby's
 `chumby-image` (its README, "Images") and give them to `dev/emulate` as
 `NEOCHUMBY_EMU_KERNEL`, `NEOCHUMBY_EMU_NAND` and `NEOCHUMBY_EMU_PSP` (your
-factory-like settings directory), in the environment or in an `.env.local`
+factory-like settings directory), in the environment, in
+`~/.config/neochumby/env.local` (every checkout's), or in an `.env.local`
 beside this README that git ignores. `dev/emulate --help` has the rest:
 the stick's layout and boot hook, the settings, and what each profile
-can't do yet. The emulated Chumby never has a network (`-nic none`), so
-pairing and `delivery=sync` need a real Chumby (`dev/emulate --device`).
+can't do yet. The emulated Chumby never has a network (`-nic none`).
+It reaches a neochumbyd over its serial line instead: qemu-chumby's
+`--link` joins its second UART to a Unix socket where neochumbyd listens,
+and its session carries the same TLS sessions over that line as over TCP:
+
+```sh
+neochumbyd serve --state /tmp/nd --tree TREE --listen-unix /tmp/nd.sock
+dev/emulate start --server /tmp/nd.sock TREE   # the stick's neochumby.conf says server=serial
+neochumbyd pairing; neochumbyd approve CODE      # after tapping PAIR
+neochumbyd set chumby delivery=sync              # then dev/emulate stop and start again
+```
+
+It stays paired from one start to the next. The line carries about 100
+KB/s, so NFS doesn't run over it: `delivery=sync` does.
 
 ## The sideload image
 

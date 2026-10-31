@@ -33,9 +33,13 @@ Native apps stay as they are. Nothing here makes Doom slower.
 
 A Chumby Classic (ARM926EJ-S at about 266 MHz, no FPU), its stock 2.6.16
 kernel, one run per row after a warm-up, medians of three to five. Each
-workload is the same C built twice: natively (static musl, soft float,
+workload was the same C built twice: natively (static musl, soft float,
 `-O2`) and to `wasm32-wasip1`. "×" is the speed against native: above 1 is
-faster.
+faster. The spike's own workloads (soft float, pixels, the 200 KB module
+and the empty `main`) have since been ported to Rust, in
+`dev/wasmbench/workloads`, with the same loops, sizes and checksums;
+CoreMark stays C, a pinned submodule. The numbers below are the C's until
+the Rust is measured on a Chumby.
 
 | Workload | native | WAMR AOT | WAMR AOT, no bounds checks | WAMR fast interpreter | wasm3 | wasmi 2 | Wasmtime (Pulley) |
 | --- | --- | --- | --- | --- | --- | --- | --- |

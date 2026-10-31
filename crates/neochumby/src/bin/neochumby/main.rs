@@ -7,6 +7,10 @@
 //! services and exits, and the boot carries on with the Chumby's own
 //! software.
 //!
+//! A Chumby whose server is `serial` (an emulated one, with no network)
+//! reaches its neochumbyd over its serial line, which the session shares
+//! out to everything that connects (line.rs).
+//!
 //! On a paired Chumby, its output also goes to its neochumbyd, which can
 //! ask it to restart, or for its screen, and, once its owner allows it,
 //! tap its screen and press its top button (devlink.rs). A restart stops
@@ -46,11 +50,13 @@
 //! child.rs. The default player is chosen as the session starts
 //! (player.rs).
 
+mod backlight;
 mod button;
 mod child;
 mod companion;
 mod devlink;
 mod jail;
+mod line;
 mod network;
 mod player;
 mod run;
@@ -236,8 +242,6 @@ impl Volumes {
     }
 }
 
-/// The backlight: 0 (off) to 65535 (full). Only root may write it.
-const BRIGHTNESS: &str = "/proc/sys/sense1/brightness";
 /// The Chumby's own stream player, which hands a URL to its daemon
 /// (btplayd), as the stock software and classic's wxshow run it.
 const BTPLAY: &str = "/usr/bin/btplay";
@@ -271,6 +275,8 @@ struct Chumby {
     restart: Option<Arc<AtomicBool>>,
     /// The top button as neochumbyd holds it, through the developer link.
     remote: Option<Arc<devlink::Remote>>,
+    /// The backlight, if the kernel has one.
+    backlight: Option<backlight::Backlight>,
     /// The backlight as the Chumby booted with it.
     boot_brightness: Option<u32>,
     /// The tree, and the owner's font and colours, for terminals.
@@ -345,11 +351,16 @@ impl run::Device for Chumby {
         self.restart.as_ref().is_some_and(|r| r.swap(false, Ordering::SeqCst))
     }
 
-    /// One write to /proc, so the loop does it.
+    /// One write to /proc or /sys, so the loop does it.
     fn brightness(&mut self, level: Option<u32>) {
         let Some(v) = level.or(self.boot_brightness) else { return };
-        if let Err(e) = std::fs::write(BRIGHTNESS, format!("{v}\n")) {
-            eprintln!("neochumby: {BRIGHTNESS}: {e}");
+        let Some(b) = &self.backlight else {
+            eprintln!("neochumby: no backlight to set to {v}");
+            return;
+        };
+        match b.set(v) {
+            Ok(()) => eprintln!("neochumby: the backlight: {v} ({})", b.path().display()),
+            Err(e) => eprintln!("neochumby: {}: {e}", b.path().display()),
         }
     }
 
@@ -370,6 +381,9 @@ impl run::Device for Chumby {
 }
 
 fn session() {
+    // On a Chumby with no network, its serial line to neochumbyd: before
+    // anything connects there.
+    line::start();
     // First, so that it carries everything the session logs.
     let link = devlink::Link::start();
     let root = apps::root();
@@ -427,6 +441,10 @@ fn session() {
             run::Ended::ChumbyMode
         }
         Some(first) => {
+            let backlight = backlight::Backlight::find();
+            if backlight.is_none() {
+                eprintln!("neochumby: no backlight (/proc/sys/sense1/brightness or /sys/class/backlight)");
+            }
             let chumby = Chumby {
                 escape,
                 boot_volume,
@@ -435,7 +453,8 @@ fn session() {
                 button_tried: Some(Instant::now()),
                 restart: link.as_ref().map(devlink::Link::restart_flag),
                 remote: link.as_ref().map(devlink::Link::remote),
-                boot_brightness: std::fs::read_to_string(BRIGHTNESS).ok().and_then(|s| s.trim().parse().ok()),
+                boot_brightness: backlight.as_ref().and_then(backlight::Backlight::level),
+                backlight,
                 root: root.clone(),
                 look,
             };

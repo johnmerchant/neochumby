@@ -42,7 +42,6 @@
 use std::fs::File;
 use std::io::{self, Read, Write};
 use std::marker::PhantomData;
-use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{OwnedFd, RawFd};
 use std::os::unix::fs::FileTypeExt;
 use std::os::unix::net::UnixStream;
@@ -239,14 +238,8 @@ fn handed_over() -> Option<UnixStream> {
 /// for an app run by hand.
 pub fn connect(app: &str, p: &Paired, me: &Identity) -> io::Result<Session> {
     let server_key = unhex_key(&p.server_key)?;
-    let addr = (p.server.as_str(), p.api_port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address"))?;
-    let tcp = TcpStream::connect_timeout(&addr, CONNECT)?;
-    // A neochumbyd gone without a word is noticed in about a minute.
-    neochumby_sys::net::keepalive(&tcp, 30, 10, 3);
-    let mut s = Session::connect(tcp, me, &server_key)?;
+    let stream = crate::line::connect(&p.server, p.api_port, CONNECT)?;
+    let mut s = Session::connect(stream, me, &server_key)?;
     // The settings are the session's business, not the app's.
     version::hello(&mut s, conf::name(), CONNECT).map_err(|e| match e.kind() {
         io::ErrorKind::PermissionDenied => {

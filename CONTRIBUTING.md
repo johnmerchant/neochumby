@@ -76,7 +76,7 @@ later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
 verify CI's images' attestations with it). `dev/setup --check` says which
 are missing and how to get them on this system. `git submodule update
 --init` checks out the third-party C (Doom, Quake, fastfetch, htop, procps,
-ncurses) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
+ncurses, and dev/wasmbench's CoreMark) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
 only `classic/build` needs.
 
 The server half (neochumbyd and companions) is built for x86_64 Linux by
@@ -86,11 +86,38 @@ builds companions for another, and `tools/deploy` picks the one its server
 runs. A companion must build for all three: keep anything
 platform-specific behind `cfg`, as neochumbyd does.
 
-CI runs the same checks on every pull request. To run them yourself:
+CI runs the same checks on every pull request (and builds the dist image
+for 5.9.16 and stable; mainline weekly, or when a change is to it alone:
+dist/README.md, "Mainline, weekly"). To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
 crates), and `cargo test -p neochumby-proto -p neochumby-sync -p
-neochumbyd`.
+neochumbyd`. CI also checks what the build takes in: `cargo deny check
+bans licenses sources` (as `deny.toml` sets them) and `gitleaks git` over
+every commit, on every run, and RustSec's advisories (`cargo deny check
+advisories`) daily and whenever `Cargo.lock` or `deny.toml` changes. A new
+dependency must pass `cargo deny`: a licence not yet allowed, or a source
+other than crates.io, is added to `deny.toml` in the same pull request,
+saying why.
+
+neochumbyd's tests include one end to end on loopback
+(`crates/neochumbyd/tests/server.rs`): a Chumby pairs, and a server
+program approves it through the admin socket, sandboxed where the system
+can, and checks that it can't read neochumbyd's key or the owner's token.
+`neochumby-sys`'s tests check the sandbox itself; on Linux they need
+Landlock, and in CI they fail without it.
+
+One test needs root, as it changes uids: apps' programs under uids of
+their own (`isolate::tests::as_root`, `--app-uids`). CI runs it with sudo.
+On a Linux machine, run it as CI does, or as root in a container (rootless
+podman will do), where it leaves nothing behind. Run as CI does, it leaves
+a directory in `/tmp`, owned by made-up uids, to remove as root:
+
+```sh
+bin=$(cargo test -p neochumbyd --no-run --message-format=json |
+  jq -r 'select(.profile.test and .target.kind == ["bin"]) | .executable')
+sudo "$bin" --ignored --exact isolate::tests::as_root
+```
 
 Code that runs on the Chumby but needs no Chumby goes in a crate that also
 builds on the host, so CI can test it there. `neochumby-sync` is one: its
@@ -190,13 +217,14 @@ prepare` does just this part.
 
 | Profile | What boots | Needs |
 | --- | --- | --- |
-| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`) |
+| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`; CI builds mainline weekly, so that may be its newest build, not this checkout's) |
 | `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
 | `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
 
 `--profile NAME` or `NEOCHUMBY_EMU_PROFILE` picks one. Your own settings,
-such as where your firmware is, can go in `.env.local` at the top of the
-checkout (git ignores it). Without a profile's images or QEMU, `start` and
+such as where your firmware is, can go in `~/.config/neochumby/env.local`,
+shared by every checkout, or in `.env.local` at the top of a checkout
+(git ignores it), which wins over it. Without a profile's images or QEMU, `start` and
 the scenarios exit 77, skipped (the stock profile's images are yours and
 never fetched; for the others, when neither fetching nor building works
 here).
@@ -230,7 +258,13 @@ dev/emulate stop
   directory, or `--state DIR`: the stick, the NAND copy, the console's log
   and chumby-machine's sockets.
 - **No network.** The emulated Chumby never has one (QEMU runs with `-nic
-  none`): `--server`, pairing and `delivery=sync` need a real Chumby.
+  none`). `start --server SOCK` joins its second UART (ttyS1 on 2.6.16,
+  ttymxc1 on dist) to SOCK, a neochumbyd's `--listen-unix` socket, and
+  writes `server=serial` in the stick's neochumby.conf: the session then
+  reaches neochumbyd over that line, with the same TLS sessions as over TCP
+  (neochumby-proto's `mux`). Pairing and `delivery=sync` work there; NFS
+  doesn't. The pairing it keeps goes back in /psp at the next start
+  (`dev/emulate kept` copies it out), and `--psp` starts afresh.
 
 `python3 dev/test_emulate.py` (CI runs it) checks the images dev/emulate
 makes and its whole control path against a stub QEMU, without firmware.
@@ -247,12 +281,14 @@ passes where, so far:
 | `smoke` | passes | fails | on 5.9.16 the kernel's framebuffer console blinks its cursor over the session's screen (`vt.global_cursor_default=0` stops it), so the screen seldom settles; and the session reads touches from `/dev/input/event0`, which there is the top button (the touchscreen is `event1`), so no tap reaches it; there is no `/dev/switch` either |
 | `stock` | passes | skipped | the stock firmware's own boot |
 | `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
-| `pairing`, `powercut` | skipped | skipped | they need a neochumbyd the Chumby can reach, and it has no network |
+| `link` | passes | passes (5.9.16) | not in CI: it runs a neochumbyd here, at the other end of the serial line, and a round over the line takes minutes; `pairing` and `powercut` likewise (both pass on classic) |
 
-The session on dist still uses the stock kernel's device nodes
-(`/dev/switch`, `/dev/accel`, `/proc/sys/sense1`), where 5.9.16 offers
-evdev, IIO, the backlight class and ALSA: the scenarios that need devices
-pass there once the session (or dist) bridges the two.
+The session on dist still uses the stock kernel's `/dev/switch` and
+`/dev/accel`, where 5.9.16 offers evdev and IIO: the scenarios that need
+devices pass there once the session (or dist) bridges the two. The
+backlight and the speaker's mute it already finds as each kernel has them:
+`/proc/sys/sense1` on 2.6.16, else the backlight class and the sound
+card's `Speaker Switch`.
 
 **boot** (`dev/emulate-boot TREE OUT`): the boot runs the stick's hook,
 the hook runs the session from the stick, and home opens and draws (with
@@ -288,19 +324,24 @@ made-up data and placeholder artwork. The script checks that:
 
 Where it taps comes from the pictures' own tap zones.
 
-**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`; pending). The
+**link** (`dev/emulate-link TREE NEOCHUMBYD OUT`): a neochumbyd here, at
+the other end of the emulated Chumby's serial line. PAIR pairs over the
+line, with the code both ends show; at the next start neochumbyd has the
+Chumby's log and its screen over the developer link, and with
+`delivery=sync` a first round fills set a of its stick, which the boot
+after runs.
+
+**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`). The
 Chumby taps PAIR against a neochumbyd on the PC, and the code it logs must
 be the one `neochumbyd pairing` lists. A wrong code and a six-digit one are
 turned down, a refusal leaves `/psp` alone, and an approval (typed in
 capitals, without dashes) pins neochumbyd's key in the conf, after which
 the next boot's log reaches `neochumbyd log`. A new key under the same name
 pairs only with `--replace`, and once forgotten, the Chumby is turned away.
-It ran under the old user-mode emulator, which shared the PC's network;
-the emulated Chumby has none, so it waits for another way to reach
-neochumbyd (a serial link, say).
+It runs over the serial line, as link does.
 
 **A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
-OUT`; pending on the emulator, as pairing). The Chumby pairs with a
+OUT`; over the serial line, as pairing). The Chumby pairs with a
 neochumbyd, syncs its tree to its stick (`delivery=sync`), then boots
 through the hook while a second round writes the other set, and
 `dev/emulate powercut OUT.img` cuts the power: the machine stopped where it
@@ -346,8 +387,11 @@ What the emulator can't catch is what real devices are for:
 An app is a crate named `neochumby-<name>`. It lives in this repository
 under `apps/<name>/`, or in its own repository with the crate at the root,
 where it is added to a tree from its git URL or from crates.io
-(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`). Its
-`Cargo.toml` says what it is:
+(`tools/tree OUT git+https://github.com/you/neochumby-weather#REV`).
+cargo-deny sees only this repository's `Cargo.lock`, so an app
+`tools/tree` fetches from git or crates.io, and what it depends on, isn't
+checked for licences or advisories: pin it (a full commit id, a version),
+and read what you pin. Its `Cargo.toml` says what it is:
 
 ```toml
 [package]
@@ -363,6 +407,8 @@ exec = "neochumby-weather"           # runs in front when the app is opened
 color = "4a90d9"                    # optional; `colour` works too
 service = "neochumby-weather-sync"   # optional: runs in the background
 companion = "neochumby-weather-companion"   # optional: its server half
+server = "neochumby-weather-web"     # optional: once on the server
+listen = [8080]                      # optional: the ports `server` may bind
 neochumbyd = "optional"              # "required" | "optional" | absent
 start = true                         # optional: it may be the start app
 interrupt = false                    # optional: no service replaces it (games)
@@ -383,7 +429,8 @@ for a `git+` app (in `~/.cache/neochumby/app-sources`), and a crate
 published to crates.io carries their files in its package.
 
 Binaries named by `exec` and `service` are built for the Chumby
-(`armv5te-unknown-linux-musleabi`), and a `companion` for the server. Depend
+(`armv5te-unknown-linux-musleabi`), and a `companion` and a `server` for
+the server. An app may be only a server program. Depend
 on the `neochumby` crate for the screen (`fb`), touch, squeeze and
 accelerometer (`input`), the manifest and settings (`apps`, `conf`),
 crash reports (`debug`) and the request pipe (`session`). A program
@@ -579,9 +626,10 @@ yours. The session also stops your stream:
 
 **The backlight.** Only root may set it. The start app and its service
 may write `brightness <n>` (0, off, to 65535, full), and carry on. The
-session writes `/proc/sys/sense1/brightness`, and puts back the level the
-Chumby booted with at CHUMBY MODE. From any other app it's refused and
-logged.
+session writes `/proc/sys/sense1/brightness` (on a newer kernel without
+it, the first `/sys/class/backlight` device, scaled to its
+`max_brightness`), and puts back the level the Chumby booted with at
+CHUMBY MODE. From any other app it's refused and logged.
 
 In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
 `Pipe::brightness(n)`.
@@ -749,11 +797,45 @@ the app:
   stdin and leave on stdout, a u32 big-endian length then the bytes
   (`neochumby_proto::frame`); a typed message is one such frame.
 - **Environment:** the companion gets `NEOCHUMBY_CHUMBY` (the Chumby's name)
-  and `NEOCHUMBY_STATE` (a directory of its own). It should exit when its
-  stdin closes.
+  and `NEOCHUMBY_STATE` (a directory of its own, also its HOME, with its
+  TMPDIR in it). It should exit when its stdin closes.
+- **The sandbox:** it may write only its own directory, and read the tree
+  and the system ([SECURITY](SECURITY.md) has the details). Its stderr goes
+  to neochumbyd's log. It gets only a short list of neochumbyd's
+  environment: what it needs from the host comes in a `NEOCHUMBY_`
+  variable, such as AirPlay's `NEOCHUMBY_AIRPLAY_PORT`.
+- **Its own uid:** with `--app-uids`, a companion runs as a uid of its
+  app's own (the same as its app's server program), with no other
+  groups. Keep everything it writes in `NEOCHUMBY_STATE`: it can't write
+  neochumbyd's state, the tree or another app's directory.
 
 `apps/airplay` is a worked example of both halves, and `apps/logs` one
 whose companion is optional.
+
+**Server programs.** A server half that runs once on the server for all
+its Chumbys, not once per Chumby (a household web page), is named by
+`server`:
+- **Starting:** neochumbyd starts it when it starts, sandboxed as a
+  companion is. If it exits, it is started again after 1 s, then 2, 4 and
+  so on up to a minute.
+- **Stopping:** when neochumbyd stops, it gets SIGTERM, and SIGKILL five
+  seconds later.
+- **Environment:** `NEOCHUMBY_STATE` (the app's own directory, shared with
+  its companions; its working directory and HOME, with its TMPDIR in it)
+  and `NEOCHUMBY_TREE` (the app tree, to read the apps' manifests). Its
+  stdout and stderr go to neochumbyd's log.
+- **Ports:** it may bind only the TCP ports `listen` names, on kernels
+  whose Landlock can say (Linux 6.7 on).
+- **The admin socket,** if its owner allows it (`neochumbyd allow <app>
+  pairing`): descriptor 3, with `NEOCHUMBY_ADMIN=3`. Mark it close-on-exec
+  as the program starts (in Python, `os.set_inheritable(3, False)`). It's
+  lines of text: send `paired`, `pending`, `approve CODE TOKEN`,
+  `refuse CODE TOKEN`, `forget NAME TOKEN`, `set NAME KEY=VALUE TOKEN` or
+  `check TOKEN`; the answer is lines of data, then `ok` or
+  `error MESSAGE`. `crates/neochumbyd/src/admin.rs` has the details.
+- **Every change needs the owner.** Changes take the owner's token
+  (`neochumbyd token`). A web page asks the person for it, and should
+  check it (`check TOKEN`) before it lets them change anything.
 
 ## Files in the tree
 
@@ -771,6 +853,9 @@ month's releases from 0: `v2026.10.0`) cuts a dated release; CI's
 sources onto it from `dist-prebuilt`, and links qemu-chumby's build (a
 manual CI run on main with `release` set does the same, creating the
 release). It builds nothing, so cut one once main's CI has finished.
+The mainline kernel track's image isn't in a release: CI builds it only
+weekly (dist/README.md, "Mainline, weekly"), and the newest is on
+`dist-prebuilt`.
 
 ## Publishing the SDK crates
 
@@ -847,11 +932,14 @@ are three ways, from quickest to most faithful:
    `NEOCHUMBY_EMU_PROFILE=stock dev/e2e TREE NEOCHUMBYD OUT` runs the
    scenarios on it, with `dev/emulate-stock`, which only it can: neochumby
    inside the stock boot, handing back to the stock software. Put where
-   your images are in `.env.local` at the checkout's root
-   (`NEOCHUMBY_EMU_KERNEL=`, `_NAND=`, `_PSP=` lines; git ignores it), and
-   `dev/emulate` and `dev/e2e` find them. CI can't, having no firmware
-   (and it never will), so this suite is yours to run locally, and its
-   results are the evidence.
+   your images are in `~/.config/neochumby/env.local`, which every
+   checkout and worktree shares, or in `.env.local` at a checkout's root,
+   which wins over it (git ignores it): `NEOCHUMBY_EMU_KERNEL=`, `_NAND=`,
+   `_PSP=` lines, and for a real Chumby with `--device`, where its
+   neochumbyd is (`NEOCHUMBY_EMU_HOST=`, `NEOCHUMBYD_DIR=`). `dev/emulate`
+   and `dev/e2e` find them. CI can't, having no firmware (and it never
+   will), so this suite is yours to run locally, and its results are the
+   evidence.
 3. **A real Chumby**, if you have one: deploy, then `neochumbyd log`,
    `neochumbyd shot` (see [On a Chumby](#on-a-chumby)). Needed for what no
    emulator models: timing, the touchscreen's noise, a USB stick's own

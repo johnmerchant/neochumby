@@ -5,10 +5,9 @@
 //! handshake and after, is a u16 big-endian length and a Noise message.
 
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
 use std::time::{Duration, Instant};
 
-use crate::{MAX_MSG, Msg, PublicKey, hex, invalid, pairing_code, unhex};
+use crate::{MAX_MSG, Msg, PublicKey, Stream, hex, invalid, pairing_code, unhex};
 
 const PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const PROLOGUE: &[u8] = b"neochumby 1";
@@ -61,7 +60,7 @@ impl Identity {
 
 /// An open, authenticated connection.
 pub struct Session {
-    tcp: TcpStream,
+    tcp: Box<dyn Stream>,
     noise: snow::TransportState,
     peer: PublicKey,
     code: String,
@@ -75,21 +74,26 @@ pub struct Session {
 impl Session {
     /// The Chumby's side: opens the handshake. Its peer's key is not yet
     /// checked.
-    pub(crate) fn client(tcp: TcpStream, me: &Identity) -> io::Result<Session> {
+    pub(crate) fn client(tcp: Box<dyn Stream>, me: &Identity) -> io::Result<Session> {
         Session::handshake(tcp, me, true, None)
     }
 
     /// neochumbyd's side, its peer's key not yet checked; the handshake by
     /// `deadline`, if one is given.
-    pub(crate) fn server(tcp: TcpStream, me: &Identity, deadline: Option<Instant>) -> io::Result<Session> {
+    pub(crate) fn server(tcp: Box<dyn Stream>, me: &Identity, deadline: Option<Instant>) -> io::Result<Session> {
         Session::handshake(tcp, me, false, deadline)
     }
 
     /// XX, by `deadline` if one is given; the socket's read timeout is put
     /// back as it was.
-    fn handshake(tcp: TcpStream, me: &Identity, initiator: bool, deadline: Option<Instant>) -> io::Result<Session> {
+    fn handshake(
+        mut tcp: Box<dyn Stream>,
+        me: &Identity,
+        initiator: bool,
+        deadline: Option<Instant>,
+    ) -> io::Result<Session> {
         let was = tcp.read_timeout()?;
-        let mut io = crate::ByDeadline { tcp: &tcp, deadline };
+        let mut io = crate::ByDeadline { tcp: &mut *tcp, deadline };
         let b = builder()?.local_private_key(&me.private).map_err(invalid)?.prologue(PROLOGUE).map_err(invalid)?;
         let mut hs = if initiator { b.build_initiator() } else { b.build_responder() }.map_err(invalid)?;
         let mut buf = vec![0u8; NOISE_MAX];
@@ -126,8 +130,9 @@ impl Session {
         self.code.clone()
     }
 
-    pub fn tcp(&self) -> &TcpStream {
-        &self.tcp
+    /// What the session runs over.
+    pub fn stream(&self) -> &dyn Stream {
+        self.tcp.as_ref()
     }
 
     /// The protocol version agreed with the peer: 0 until
