@@ -36,7 +36,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-wasm` | `neochumby-wasm`, the runner for apps built as WebAssembly: WAMR in the app's jail, a host API that grants only what its manifest lists, and seccomp and Landlock where the kernel has them | MIT |
 | `crates/neochumby-wamr` | [WAMR](https://github.com/bytecodealliance/wasm-micro-runtime), the WebAssembly Micro Runtime (WAMR-2.4.5, built by `wamr-sys` from [our fork of wamr-rust-sdk](https://github.com/johnmerchant/wamr-rust-sdk), pinned, with its patches), for the Chumby: its AOT loader and fast interpreter, with a small safe interface, for apps as WebAssembly (proposal 0003) | MIT; WAMR and wamr-sys are Apache-2.0 WITH LLVM-exception |
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
-| `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
+| `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves, native or WebAssembly under [Wasmtime](https://wasmtime.dev) (the `wasm-companions` feature, which release builds have) | MIT; Wasmtime is Apache-2.0 WITH LLVM-exception |
 | `apps/home` | neochumby-home, the app list, in text mode: the installed apps, pairing, the time, and CHUMBY MODE on the stock 2.6 kernel (the dist's Linux has no stock software to go back to) | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
@@ -108,7 +108,13 @@ An app can use any of these keys:
   the two halves over the paired connection. neochumbyd knows no app by
   name. An app with a companion sets `neochumbyd` too, and its Chumby half
   opens it with `neochumby::companion!()`, which fails the build if the
-  app's `Cargo.toml` declares no companion.
+  app's `Cargo.toml` declares no companion. A companion that is a `.wasm`
+  file (`companion=weather.wasm` in the tree's manifest) runs under
+  Wasmtime, inside the same sandbox: it gets its frames, its own state
+  directory, the Chumby's name, and HTTPS GETs to the hosts its owner
+  approved (`network=host1,host2`) at public addresses, and nothing else.
+  Only a neochumbyd built with the `wasm-companions` feature runs one
+  (release builds, `cargo neochumbyd` and `tools/deploy` have it).
 - **`server`:** a server half that runs once on the server for all its
   Chumbys, rather than once per Chumby as a companion does, such as a
   household web page. neochumbyd starts it when it starts, starts it again
@@ -208,7 +214,7 @@ out first:
 git submodule update --init   # or clone with --recursive
 rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
 cargo chumby          # the session and apps, for the Chumby
-cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux
+cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux (with wasm companions)
 ```
 
 The server half also builds for 64-bit ARM Linux, such as a Raspberry Pi

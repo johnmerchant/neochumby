@@ -221,15 +221,20 @@ jobs:
       - run: cargo fmt --check $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.manifest_path | contains("/third_party/") | not) | "-p " + .name')
       # The crates that build for the host: the protocol, sync's rounds (on
       # both sides, so a temporary directory stands in for the stick),
-      # neochumbyd, the manifest tool, the system calls, the macros, WAMR
-      # (its interpreter, on the host), the wasm runner (its hostile-module
-      # suite, under the runner's kernel), AirPlay's companion, and
-      # neochumby-classic's engine (its host build renders frames to files).
+      # neochumbyd (without and with its wasm companions, the
+      # `wasm-companions` feature, which release builds have: WAT modules
+      # under Wasmtime, and an HTTPS server on 127.0.0.1), the manifest tool, the
+      # system calls, the macros, WAMR (its interpreter, on the host), the
+      # wasm runner (its hostile-module suite, under the runner's kernel),
+      # AirPlay's companion, and neochumby-classic's engine (its host build
+      # renders frames to files).
       - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -p neochumby-wamr -p neochumby-wasm -- -D warnings
+      - run: cargo clippy --all-targets -p neochumbyd --features wasm-companions -- -D warnings
       - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
       # The logs app's text, layout and drawing, and its companion.
       - run: cargo clippy --all-targets -p neochumby-logs -- -D warnings
       - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -p neochumby-wamr -p neochumby-wasm
+      - run: cargo test -p neochumbyd --features wasm-companions
       - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
       # ncinit, a workspace of its own (Buildroot builds it for the dist
       # image), and the system calls only it uses.
@@ -292,9 +297,10 @@ jobs:
             -p neochumby -p neochumby-home -p neochumby-airplay -p neochumby-doom -p neochumby-quake \
             -p neochumby-fetch -p neochumby-htop -p neochumby-top -p neochumby-cmatrix -p neochumby-clock \
             -p neochumby-bonsai -p neochumby-pipes -p neochumby-aquarium -p neochumby-genact -p neochumby-classic -p neochumby-logs -p neochumby-wamr -p neochumby-wasm
+      # neochumbyd as it is released: with wasm companions (Wasmtime).
       - name: The server's binaries
         run: |
-          cargo build --release --target x86_64-unknown-linux-musl -p neochumbyd
+          cargo build --release --target x86_64-unknown-linux-musl -p neochumbyd --features wasm-companions
           cargo build --release --target x86_64-unknown-linux-musl \
             -p neochumby-airplay --bin neochumby-airplay-companion
           cargo build --release --target x86_64-unknown-linux-musl \
@@ -302,7 +308,7 @@ jobs:
       # The server half for 64-bit ARM Linux too (a Raspberry Pi, say).
       - name: The server's binaries for 64-bit ARM
         run: |
-          cargo build --release --target aarch64-unknown-linux-musl -p neochumbyd
+          cargo build --release --target aarch64-unknown-linux-musl -p neochumbyd --features wasm-companions
           cargo build --release --target aarch64-unknown-linux-musl \
             -p neochumby-airplay --bin neochumby-airplay-companion
           cargo build --release --target aarch64-unknown-linux-musl \

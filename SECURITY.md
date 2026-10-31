@@ -134,6 +134,20 @@ neochumbyd delivered.
 
   A uid per app closes those last ones: a program can't truncate, chmod
   or chown what isn't its own, or signal another user's processes.
+- **Wasm companions are held tighter still.** A companion that is a
+  `.wasm` file (as catalog apps' are) runs in a process of neochumbyd's
+  own, in the same sandbox and under the same uid as a native companion,
+  and inside that under Wasmtime, granted nothing but its frames on stdin
+  and stdout, its own state directory (no other file), the Chumby's name,
+  and HTTPS GETs, without redirects, to the hosts its owner approved for
+  it. Any other host is refused, and so is an approved one whose name
+  resolves to a loopback, private, link-local, CGNAT, multicast,
+  unspecified or reserved address, IPv4 or IPv6, checked as it is looked
+  up and again on the connected socket, so DNS rebinding doesn't reach
+  your LAN. It has 64 MiB of memory, and is stopped if it runs five
+  seconds without calling the host. Wasm companions need neochumbyd built
+  with the `wasm-companions` feature, as release builds are; a neochumbyd
+  built without it starts none.
 - **A uid per app** (`--app-uids FIRST-LAST`, neochumbyd started as root):
   neochumbyd runs as the user owning its state directory, and each app's
   companions and server program under one uid of the app's own, with no

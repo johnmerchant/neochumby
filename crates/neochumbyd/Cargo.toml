@@ -19,6 +19,28 @@ png = "0.18"
 rustix = { version = "1", features = ["fs"] }
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
+# A wasm companion's HTTPS GETs (wasm.rs, egress.rs): rustls with ring, as
+# neochumby-proto's, and the Mozilla roots built in, so nothing reads the
+# host's certificate store. No openssl.
+ureq = { version = "3", default-features = false, features = ["rustls"], optional = true }
+# Wasm companions (wasm.rs): Cranelift, without the cache, profiling or
+# the debugger. WASI preview 1 is built on preview 2's host types, which
+# bring the component model and async into the build; neither is turned
+# on when a companion runs.
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "runtime", "std", "call-hook"], optional = true }
+wasmtime-wasi = { version = "50", default-features = false, features = ["p1"], optional = true }
+
+[features]
+# Wasm companions, under Wasmtime: some 10 MB of the binary. Release
+# builds (CI's) have it. Without it, neochumbyd runs no app's .wasm
+# companion, and says why.
+wasm-companions = ["dep:ureq", "dep:wasmtime", "dep:wasmtime-wasi"]
+
+[dev-dependencies]
+# The wasm companions' tests: WAT, and an HTTPS server on 127.0.0.1.
+rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+wat = "1"
 
 [lints]
 workspace = true
@@ -28,3 +50,8 @@ workspace = true
 [[test]]
 name = "server"
 harness = false
+
+# `neochumbyd wasm-companion` as a process: only with Wasmtime.
+[[test]]
+name = "wasm_companion"
+required-features = ["wasm-companions"]
