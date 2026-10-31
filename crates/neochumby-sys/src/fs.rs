@@ -1,9 +1,11 @@
 //! Files, for what std leaves out or does with newer calls: link(2), the
-//! no-follow flag for opens, a whole sync, and the free space on a
+//! no-follow flag for opens, a lock, a whole sync, and the free space on a
 //! filesystem.
 
 use std::ffi::CString;
+use std::fs::File;
 use std::io;
+use std::os::fd::AsRawFd;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 
@@ -30,6 +32,21 @@ pub fn hard_link(from: &Path, to: &Path) -> io::Result<()> {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// Takes an exclusive lock on `f` (flock(2)) without waiting: true if this
+/// has it, false if another open of the same file holds one. It goes when
+/// `f` is closed, or its process ends. A directory opened for reading can be
+/// locked too. std's `File::try_lock` does this from Rust 1.89, newer than
+/// the Rust Buildroot builds this crate with for ncinit (1.88).
+pub fn try_lock(f: &File) -> io::Result<bool> {
+    // SAFETY: flock(2) takes a descriptor, which `f` keeps open for the
+    // call, and plain flags; it touches no memory of ours.
+    if unsafe { libc::flock(f.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+        return Ok(true);
+    }
+    let e = io::Error::last_os_error();
+    if e.kind() == io::ErrorKind::WouldBlock { Ok(false) } else { Err(e) }
 }
 
 fn cpath(p: &Path) -> io::Result<CString> {
@@ -65,6 +82,22 @@ mod tests {
         assert_eq!(std::fs::read(d.join("b")).unwrap(), b"x");
         assert_eq!(hard_link(&d.join("a"), &d.join("b")).unwrap_err().kind(), io::ErrorKind::AlreadyExists);
         std::fs::remove_dir_all(d).unwrap();
+    }
+
+    #[test]
+    fn a_lock_is_one_open_file_s() {
+        let d = std::env::temp_dir().join(format!("neochumby-sys-lock-{}", std::process::id()));
+        std::fs::create_dir_all(&d).unwrap();
+        let first = File::open(&d).unwrap();
+        assert!(try_lock(&first).unwrap());
+        // Another open of the directory, even in this process, waits.
+        let second = File::open(&d).unwrap();
+        assert!(!try_lock(&second).unwrap());
+        drop(first);
+        assert!(try_lock(&second).unwrap());
+        drop(second);
+        // rmdir(2): std's remove_dir_all uses calls 2.6.16 hasn't got on ARM.
+        std::fs::remove_dir(d).unwrap();
     }
 
     #[test]
