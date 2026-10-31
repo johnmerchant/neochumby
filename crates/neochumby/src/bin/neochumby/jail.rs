@@ -31,7 +31,9 @@
 //!   terminal  /dev/ptmx and the Chumby's /dev/pts, for pseudo-terminals
 //!             (neochumby::term)
 //!   storage   /psp/apps/<name>, its own, lasting across boots and shared
-//!             by its exec and service (storage.rs)
+//!             by its exec and service (storage.rs); sealed nosuid, nodev
+//!             and noexec (Jail::seal: 2.6.16 and 5.9 both can), or, on a
+//!             kernel that can't seal a bind mount, as /psp is (said once)
 //!   logs      the Chumby's logs, each file bound at its own path: the
 //!             session's (/tmp/neochumby.log), /tmp's other *.log and
 //!             /var/log's files, as they are when the app starts; only
@@ -157,6 +159,9 @@ pub enum Role {
 
 /// The apps' names, in the tree's order, which gives their uids.
 static JAILS: OnceLock<Vec<String>> = OnceLock::new();
+/// Whether the session has said that storage is executable on this
+/// kernel.
+static UNSEALED: std::sync::Once = std::sync::Once::new();
 /// Whether [`prepare`] succeeded. When it hasn't, [`start`] refuses every
 /// app rather than running one unjailed.
 static READY: OnceLock<bool> = OnceLock::new();
@@ -406,9 +411,13 @@ pub fn start(
         j.bind(Path::new("/dev/pts"), "/dev/pts")?;
     }
     if let Some(s) = given.storage {
-        // Its own, already: the session made it so (storage.rs). /psp isn't
-        // `nosuid`, but nothing setuid in it can be any uid but the app's.
-        j.bind(s, &path(s)?)?;
+        // Its own, already: the session made it so (storage.rs). Sealed,
+        // so nothing the app writes there runs. Where the kernel can't seal
+        // it, it is as /psp is, not `nosuid`, but nothing setuid in it can
+        // be any uid but the app's.
+        let at = path(s)?;
+        j.bind(s, &at)?;
+        j.seal(s, &at)?;
     }
     if a.logs {
         for f in logs() {
@@ -447,7 +456,11 @@ pub fn start(
     }
     let user = User { uid, gid: uid, groups };
     let args: [&OsStr; 0] = [];
-    j.spawn(&exe, &args, &env, &dir, &user, keep)
+    let p = j.spawn(&exe, &args, &env, &dir, &user, keep)?;
+    if p.unsealed() {
+        UNSEALED.call_once(|| eprintln!("neochumby: this kernel can't seal a bind mount: storage is executable"));
+    }
+    Ok(p)
 }
 
 /// In a checked tree, `app`'s programs: `exe`, and every executable ARM

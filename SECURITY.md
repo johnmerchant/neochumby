@@ -39,10 +39,10 @@ neochumbyd delivered.
   of an app that names it binds at `/lib/ld-musl-arm.so.1` with the
   tree's other libraries (`lib/`). They are files of the tree like any
   other: in its manifest, and in a checked tree each is bound from its
-  checked copy. An app's `/tmp` and
-  the speaker handover are `noexec`. That closes one NULL-pointer family
-  (the ARM ELF loader can map page zero even though `mmap` refuses it); it
-  does not fix the 2.6.16 kernel.
+  checked copy. An app's `/tmp`, its `storage` and the speaker handover
+  are `noexec`. That closes one NULL-pointer family (the ARM ELF loader
+  can map page zero even though `mmap` refuses it); it does not fix the
+  2.6.16 kernel.
 - **That stops apps that are buggy or careless, not ones written to
   attack.** The stock kernel (Linux 2.6.16, from 2006) has no user, pid
   or network namespaces, no seccomp, no cgroups and no netfilter, and it
@@ -61,10 +61,12 @@ neochumbyd delivered.
   `btplay`, run with an `http://` URL checked character by character as
   one argument, never through a shell. `storage` is capped by measuring
   (every 2 seconds), not by the kernel, so an app can overshoot its 64 KiB
-  briefly before it's ended. **`storage` is not `noexec`:** it's a bind
-  mount from `/psp`, and 2.6.16 can't change a bind mount's flags, so an
-  app could put a page-zero ELF there and run it. Until that's closed, an
-  app with `storage` is trusted code, as any app is (above).
+  briefly before it's ended. **`storage` is `noexec`, `nosuid` and
+  `nodev`:** it's a bind mount from `/psp`, which the jail remounts so in
+  its own namespace, on 2.6.16 as on 5.9 (2.6.16 does it by remounting
+  `/psp` itself with the flags it has; the bind alone gets the three). A
+  kernel that refuses (EINVAL) leaves it as `/psp` is, executable, and the
+  session logs that once; any other failure, and the app doesn't start.
 - **What each delivery guarantees** (README, "Delivery: NFS or sync"):
   - **`sync`:** every file comes over the pinned session, hashed as it
     arrives, and the Chumby boots the stick's set without the network. Its

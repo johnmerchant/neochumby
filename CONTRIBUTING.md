@@ -584,7 +584,7 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `system` | `/proc`, `/sys` and `/etc` |
 | `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
-| `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service` (below) |
+| `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service`, `nosuid,nodev,noexec` (below) |
 | `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
 | `root` | no jail: it runs as root, as the session does. Listed alone, or with `fb` for an app that draws the screen itself: without `fb`, a root app runs in text mode too |
 
@@ -607,6 +607,10 @@ else belongs in `/tmp`.
   One already over as the session started may stay that size, to tidy up,
   but not grow. Write small files, and replace them whole (write a new
   one, then rename it over the old).
+- It's `nosuid,nodev,noexec`, as `/tmp` is: nothing your app writes there
+  runs. The jail remounts its bind of the directory so (Linux 2.6.16 and
+  5.9 both can). A kernel that can't leaves it as `/psp` is, executable,
+  and the session says so once.
 
 **Playing a stream.** The stock player (`btplay` and its daemon) can't
 run in a jail. An app with `speaker` may ask the session to run it, and
@@ -647,8 +651,8 @@ with a `PT_LOAD` below `0x1000` (page zero), a `PT_INTERP` (on 5.9 and
 later, any but `/lib/ld-musl-arm.so.1`), or a non-ARM ELF, and it checks
 every executable file in your app's directory the same way. Page zero is where
 the ARM `mmap` check doesn't reach the ELF loader. Put helper programs in
-the app's directory, not in `/tmp`: `/tmp` and the speaker handover are
-`noexec`.
+the app's directory, not in `/tmp`: `/tmp`, `storage` and the speaker
+handover are `noexec`.
 
 **The network.** The stock kernel can't take the network away from a
 process. Instead, once a second, the session looks for internet sockets in
