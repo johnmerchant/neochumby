@@ -7,3 +7,4 @@
 /tools/zigcc*      @johnmerchant
 /tools/zigar       @johnmerchant
 /SECURITY.md       @johnmerchant
+/tools/check-unsafe @johnmerchant
