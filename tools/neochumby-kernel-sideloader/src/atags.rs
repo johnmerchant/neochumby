@@ -1,4 +1,4 @@
-//! ARM ATAGS for the 5.9.16 handoff.
+//! ARM ATAGS for the sideload kernel handoff.
 
 use crate::raw::Mem;
 

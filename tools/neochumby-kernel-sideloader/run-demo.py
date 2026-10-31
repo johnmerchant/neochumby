@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
-"""Run the stock 2.6.16 -> 5.9.16 sideload kernel-sideloader demo on
-qemu-chumby's machine, through its chumby-machine runner.
+"""Run the stock 2.6.16 -> sideload Linux demo on qemu-chumby's machine,
+through its chumby-machine runner.
 
 The stock kernel still boots from NAND (it has no other boot path).  The
-5.9.16 zImage and initramfs are loaded from outside NAND by QEMU
+sideload zImage and initramfs are loaded from outside NAND by QEMU
 -device loader at 0xc2000000; the stock kernel does not overwrite that
-reserved area before rcS.  The 5.9.16 kernel is built with CONFIG_MTD=n.
+reserved area before rcS.  The demo works for 5.9.16 and for the dist's
+7.x images; neither loads NAND in the sideloaded path.
 
 Both the original NAND and the scratch image are hashed before and after;
 the drive uses snapshot=on.
@@ -111,7 +112,7 @@ def main():
             ok = True
         except cm.Error:
             pass
-        print("sideload: got 5.9.16 shell" if ok else "sideload: NO 5.9.16 SHELL", file=sys.stderr)
+        print("sideload: got sideload kernel shell" if ok else "sideload: NO SIDELOAD KERNEL SHELL", file=sys.stderr)
         if ok:
             for cmd in [
                 "uname -a",
@@ -119,7 +120,7 @@ def main():
                 "cat /proc/cmdline",
                 "cat /proc/mtd; echo MTD_RC=$?",
                 "ls -l /dev/mtd*; echo MTD_DEV_RC=$?",
-                "dmesg | grep -iE 'nand:|mxc_nand|nand device|nand flash'; echo NAND_GREP_RC=$?",
+                "dmesg | grep -iE 'nand:|mxc_nand|nand device|nand flash' | grep -v 'stays unloaded'; echo NAND_GREP_RC=$?",
                 "ls -l /sys/class/mtd; echo SYS_MTD_RC=$?",
                 "grep -q 'neochumby.sideloaded=1' /proc/cmdline; echo SIDELOADED_RC=$?",
                 "grep -E '^(mtd|mtdblock|nandcore|mxc_nand) ' /proc/modules; echo NAND_MODULE_RC=$?",
@@ -138,11 +139,11 @@ def main():
             ]
             for marker, what in guest_checks:
                 if marker not in text:
-                    print(f"ERROR: 5.9.16 check failed: {what}", file=sys.stderr)
+                    print(f"ERROR: sideload check failed: {what}", file=sys.stderr)
                     ok = False
-            if not re.search(r"^Linux \(none\) 5\.9\.16-mx21-sideload #\d+ .* armv5tejl GNU/Linux$",
-                             text, re.M):
-                print("ERROR: 5.9.16 check failed: uname -a is not the sideload kernel", file=sys.stderr)
+            if not re.search(r"^Linux \(none\) [0-9]+\.[0-9]+\.[0-9]+(-rc[0-9]+)?-mx21-sideload "
+                             r"#\d+ .* armv5tejl GNU/Linux$", text, re.M):
+                print("ERROR: sideload check failed: uname -a is not the sideload kernel", file=sys.stderr)
                 ok = False
     finally:
         m.stop()

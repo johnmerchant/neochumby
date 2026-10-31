@@ -1,10 +1,10 @@
-//! neochumby-kernel-sideloader: boot a NAND-less Linux 5.9.16 from stock
-//! Chumby Linux 2.6.16.
+//! neochumby-kernel-sideloader: boot a NAND-less Linux 5.9.16 or 7.x from
+//! stock Chumby Linux 2.6.16.
 //!
 //! This is a bare-metal, statically linked ARM EABI program with a `PT_LOAD`
 //! at virtual address 0.  It runs from `/psp/rfs1/rcS` (or a shell/USB
 //! stick), uses CVE-2009-2698 to obtain uid 0 and all capabilities, maps
-//! `/dev/mem`, stages a 5.9.16 zImage + initramfs outside NAND (a QEMU
+//! `/dev/mem`, stages a sideload zImage + initramfs outside NAND (a QEMU
 //! loader blob at 0xc2000000, or files on a USB stick), and hands off with
 //! the MMU off.
 //!

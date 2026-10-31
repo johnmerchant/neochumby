@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
 """Build the QEMU -device loader container for the kernel sideloader.
 
-The container is loaded at 0xc3800000, above the stock kernel's mem=56M
-limit, so the stock 2.6.16 kernel never allocates it.  Layout:
+The container is loaded at 0xc2000000.  Layout:
 
     0x00  "NEOCHUM1" + version/header size + offsets/sizes
-    0x1000  Linux 5.9.16 zImage
+    0x1000  Linux zImage
     ...     initramfs (gzipped cpio), unless --no-initramfs
+
+The sideloader copies the zImage to 0xc2000000 and, when the container has
+one, the initramfs to 0xc3000000.  That gives each a non-overlapping window
+below ATAGS at 0xc3f00000: 16 MiB for the container/kernel and 15 MiB for
+the initramfs.
 
 With --no-initramfs the zImage uses the initramfs built into it; that is the
 sideload recovery image.  No NAND is used or written.
@@ -14,8 +18,9 @@ sideload recovery image.  No NAND is used or written.
 import struct
 import sys
 
-BASE = 0xC3800000
-LIMIT = 0x00700000  # keep clear of ATAGS at 0xc3f00000
+BASE = 0xC2000000
+LIMIT = 0x01000000  # 16 MiB, before the initramfs window at 0xc3000000
+INITRD_LIMIT = 0x00F00000  # 15 MiB, from 0xc3000000 to ATAGS at 0xc3f00000
 MAGIC = b"NEOCHUM1"
 
 def main():
@@ -35,6 +40,8 @@ def main():
     r = open(initramfs, "rb").read() if initramfs else b""
     if k[0x24:0x28] != bytes.fromhex("18286f01"):
         sys.exit("not a zImage (magic at 0x24 is not 0x016f2818)")
+    if len(r) > INITRD_LIMIT:
+        sys.exit(f"initramfs {len(r)} bytes does not fit the 15 MiB window")
     koff = 0x1000
     roff = (koff + len(k) + 3) & ~3 if r else 0
     total = (roff + len(r)) if r else (koff + len(k))
