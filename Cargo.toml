@@ -12,11 +12,15 @@ members = [
     "crates/neochumby-softfloat",
     "crates/neochumby-sync",
     "crates/neochumby-sys",
+    "crates/neochumby-wamr",
+    "crates/neochumby-wasm",
+    "crates/neochumby-guest",
     "crates/neochumbyd",
     "apps/airplay",
     "apps/airplay/proto",
     "apps/bonsai",
     "apps/aquarium",
+    "apps/catalog",
     "apps/home",
     "apps/logs",
     "apps/classic",
@@ -26,14 +30,16 @@ members = [
     "apps/htop",
     "apps/cmatrix",
     "apps/clock",
+    "apps/clockwasm",
     "apps/pipes",
     "apps/quake",
     "apps/top",
+    "apps/ttfx",
 ]
 
 # The bundle's releases are dated (vYYYY.MM.N); this version is only for
 # the crates that aren't published. The SDK crates published on crates.io
-# (neochumby and the neochumby-* crates it needs, and neochumby-ncurses)
+# (neochumby and the neochumby-* crates it needs)
 # each have their own semver version: see CONTRIBUTING.md.
 [workspace.package]
 version = "0.1.0"
@@ -66,8 +72,13 @@ toml = "0.8"
 [workspace.lints.rust]
 unsafe_code = "deny"
 
+# Every unsafe block and unsafe impl says why it is sound, in a SAFETY
+# comment above it, and every unsafe fn what its callers must uphold (a
+# # Safety section): in the crates allowed unsafe code too, as each inherits
+# these (tools/check-unsafe holds them to it).
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
 
 [profile.release]
 opt-level = 2

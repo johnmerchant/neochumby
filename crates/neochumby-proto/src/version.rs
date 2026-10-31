@@ -24,6 +24,12 @@
 //!   decode.
 //! - Otherwise both ends use the lower of the two versions ([`agree`]).
 //!
+//! The same `Config` carries neochumbyd's clock ([`CLOCK`], seconds since
+//! the epoch, UTC), for a Chumby that has no clock of its own to go by: a
+//! Chumby Classic has no battery for one, and the stock 2.6.16 and the
+//! dist's 5.9.16 find no RTC. Like the version's, its key has a dot, so a
+//! Chumby that doesn't know it drops it.
+//!
 //! Each end keeps the version agreed on in its [`Session`], which then
 //! sends no message newer than that ([`Msg::since`]). Until the two have
 //! agreed, a session is at version 0.
@@ -37,6 +43,10 @@ use crate::{Msg, Session, VERSION, invalid};
 /// The pair in `Config` that gives neochumbyd's version. Not a setting:
 /// a key with a dot is one no Chumby keeps and no owner can set.
 pub const KEY: &str = "proto.version";
+
+/// The pair in `Config` that gives neochumbyd's clock as it sent it:
+/// seconds since the epoch, UTC. Not a setting either.
+pub const CLOCK: &str = "proto.clock";
 
 /// The version two ends use: the lower of theirs.
 pub fn agree(ours: u16, theirs: u16) -> u16 {
@@ -63,6 +73,9 @@ pub fn config(settings: &Settings) -> Msg {
 fn config_as(settings: &Settings, ours: u16) -> Msg {
     let mut pairs = settings.to_pairs();
     pairs.push((KEY.to_string(), ours.to_string()));
+    if let Ok(now) = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH) {
+        pairs.push((CLOCK.to_string(), now.as_secs().to_string()));
+    }
     Msg::Config(pairs)
 }
 
@@ -93,10 +106,16 @@ fn after_config_as(s: &mut Session, ours: u16, deadline: Instant) -> io::Result<
 /// version's pair. A neochumbyd that doesn't know the Chumby's key answers
 /// [`io::ErrorKind::PermissionDenied`].
 pub fn hello(s: &mut Session, name: String, wait: Duration) -> io::Result<Settings> {
+    hello_clock(s, name, wait).map(|(settings, _)| settings)
+}
+
+/// As [`hello`], and neochumbyd's clock as it sent `Config` ([`CLOCK`],
+/// seconds since the epoch), if it said.
+pub fn hello_clock(s: &mut Session, name: String, wait: Duration) -> io::Result<(Settings, Option<i64>)> {
     hello_as(s, name, wait, VERSION)
 }
 
-fn hello_as(s: &mut Session, name: String, wait: Duration, ours: u16) -> io::Result<Settings> {
+fn hello_as(s: &mut Session, name: String, wait: Duration, ours: u16) -> io::Result<(Settings, Option<i64>)> {
     s.send(&Msg::Hello { name })?;
     let mut next = || s.recv_timeout(wait)?.ok_or_else(|| io::Error::from(io::ErrorKind::TimedOut));
     match next()? {
@@ -115,7 +134,8 @@ fn hello_as(s: &mut Session, name: String, wait: Duration, ours: u16) -> io::Res
         s.set_version(v);
         s.send(&Msg::Version(ours))?;
     }
-    Ok(Settings::from_pairs(pairs.into_iter().filter(|(k, _)| k != KEY)))
+    let clock = pairs.iter().find(|(k, _)| k == CLOCK).and_then(|(_, v)| v.parse().ok());
+    Ok((Settings::from_pairs(pairs.into_iter().filter(|(k, _)| k != KEY && k != CLOCK)), clock))
 }
 
 #[cfg(test)]
@@ -165,8 +185,10 @@ mod tests {
     fn new_and_new_agree_on_the_lower() {
         for (chumby, server_v, agreed) in [(1, 1, 1), (1, 3, 1), (3, 1, 1), (2, 3, 2)] {
             let (mut c, t) = pair(server(server_v));
-            let got = hello_as(&mut c, "den".into(), WAIT, chumby).unwrap();
-            assert_eq!(got, settings(), "the version's pair is not a setting");
+            let (got, clock) = hello_as(&mut c, "den".into(), WAIT, chumby).unwrap();
+            assert_eq!(got, settings(), "the version's and the clock's pairs are not settings");
+            let now = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs() as i64;
+            assert!(clock.is_some_and(|t| (now - t).abs() < 60), "neochumbyd's clock: {clock:?}");
             assert_eq!(c.version(), agreed);
             c.send(&Msg::Dev).unwrap();
             assert_eq!(t.join().unwrap(), (Msg::Dev, agreed));

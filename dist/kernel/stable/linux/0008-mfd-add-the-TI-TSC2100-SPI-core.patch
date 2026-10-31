@@ -103,10 +103,10 @@ index 000000000..25677d109
 +        };
 +    };
 diff --git a/drivers/mfd/Kconfig b/drivers/mfd/Kconfig
-index 763ce6a34..244be4b7c 100644
+index e4fd45724..120da53f3 100644
 --- a/drivers/mfd/Kconfig
 +++ b/drivers/mfd/Kconfig
-@@ -1723,6 +1723,19 @@ config MFD_PALMAS
+@@ -1722,6 +1722,19 @@ config MFD_PALMAS
  	  If you say yes here you get support for the Palmas
  	  series of PMIC chips from Texas Instruments.
  
@@ -127,7 +127,7 @@ index 763ce6a34..244be4b7c 100644
  	tristate "TI TPS61050/61052 Boost Converters"
  	depends on I2C
 diff --git a/drivers/mfd/Makefile b/drivers/mfd/Makefile
-index dd4bb7e77..b0264b78e 100644
+index 72d3944b0..ef1aa9abb 100644
 --- a/drivers/mfd/Makefile
 +++ b/drivers/mfd/Makefile
 @@ -95,6 +95,7 @@ obj-$(CONFIG_MFD_CS40L50_CORE)	+= cs40l50-core.o

@@ -75,8 +75,12 @@ pub struct MusicModule {
     poll: Option<extern "C" fn()>,
 }
 
-// Read-only to the engine, and it is single-threaded.
+// SAFETY: the modules are immutable statics: function pointers, and a
+// pointer to DEVICES, an immutable static too. Neither Rust nor the engine
+// (i_sound.c only reads them, through sound_modules[]) writes them, so
+// sharing them between threads is sharing read-only data.
 unsafe impl Sync for SoundModule {}
+// SAFETY: as for SoundModule.
 unsafe impl Sync for MusicModule {}
 
 /// z_zone.h's PU_STATIC.
@@ -163,12 +167,29 @@ impl Effect {
 
     fn of(sfx: &mut SfxInfo) -> Option<&'static Effect> {
         if !sfx.driver_data.is_null() {
+            // SAFETY: driver_data is the engine's for the sound module, and
+            // null (sounds.c's SOUND()) until this sets it, below, to an
+            // Effect leaked for the life of the process: a valid Effect,
+            // never freed, never written again.
             return Some(unsafe { &*sfx.driver_data.cast::<Effect>() });
         }
+        // S_StartSound sets lumpnum (I_GetSfxLumpNum) before it starts the
+        // sound, so it is a lump of the WAD's.
         let lump = sfx.lumpnum;
+        // SAFETY: W_LumpLength takes any lump number: one out of range is
+        // an I_Error, which exits, not undefined behaviour.
         let len = unsafe { W_LumpLength(lump as c_uint) }.max(0) as usize;
+        // SAFETY: as W_LumpLength; with PU_STATIC, the lump is read in (or
+        // found in the mapped WAD) and stays put until released, below.
+        // Z_Malloc's failure is an I_Error, so the pointer isn't null.
         let data = unsafe { W_CacheLumpNum(lump, PU_STATIC) }.cast::<u8>();
+        // SAFETY: data is the lump's W_LumpLength bytes (w_wad.c), cached
+        // PU_STATIC so that the zone can't purge it while the slice lives;
+        // the slice is only read, by parse, which copies out the samples
+        // before the lump is released.
         let effect = Effect::parse(unsafe { std::slice::from_raw_parts(data, len) });
+        // SAFETY: the lump was cached above, and nothing refers to its data
+        // any more: Effect owns a copy.
         unsafe { W_ReleaseLumpNum(lump) };
         let effect: &'static mut Effect = Box::leak(Box::new(effect?));
         sfx.driver_data = (effect as *mut Effect).cast();
@@ -259,8 +280,14 @@ extern "C" fn shutdown() {
 }
 
 extern "C" fn get_sfx_lump_num(sfx: *mut SfxInfo) -> c_int {
+    // SAFETY: the engine passes an entry of its S_sfx array (s_sound.c's
+    // S_StartSound, through I_GetSfxLumpNum): a valid sfxinfo_t, laid out as
+    // SfxInfo (i_sound.h), static, and not touched by the engine while this
+    // runs.
     let mut sfx = unsafe { &*sfx };
     if !sfx.link.is_null() {
+        // SAFETY: a link is another entry of S_sfx (sounds.c's
+        // SOUND_LINK), as valid as the first.
         sfx = unsafe { &*sfx.link };
     }
     // As M_snprintf into a 9-byte buffer: at most 8 characters.
@@ -270,6 +297,9 @@ extern "C" fn get_sfx_lump_num(sfx: *mut SfxInfo) -> c_int {
     name.extend(sfx.name.iter().take_while(|&&c| c != 0).map(|&c| c as u8));
     name.truncate(8);
     name.push(0);
+    // SAFETY: name is NUL-terminated, at most 9 bytes as the engine's own
+    // lump names, and lives through the call; W_GetNumForName only reads it
+    // (a name not found is an I_Error, which exits).
     unsafe { W_GetNumForName(name.as_mut_ptr().cast()) }
 }
 
@@ -284,6 +314,9 @@ extern "C" fn update() {
 }
 
 extern "C" fn start_sound(sfx: *mut SfxInfo, channel: c_int, vol: c_int, sep: c_int) -> c_int {
+    // SAFETY: as in get_sfx_lump_num: an entry of S_sfx, which the engine
+    // (single-threaded, in S_StartSound) doesn't touch while this runs, so
+    // the one mutable reference is unaliased.
     let Some(effect) = Effect::of(unsafe { &mut *sfx }) else { return -1 };
     let step = ((effect.rate.max(1) as u64) << 16) / RATE as u64;
     let mut started = -1;

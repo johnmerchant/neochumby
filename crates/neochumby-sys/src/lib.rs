@@ -16,9 +16,15 @@
 //!
 //! The calls are the ones the Chumby's stock firmware supports: Linux
 //! 2.6.16, static musl, an ARM926. Nothing here may use a newer system
-//! call, start a thread, or wait on a futex. Parts that only the Chumby
+//! call, start a thread, or wait on a futex, except [`lockdown`]: its newer
+//! calls are asked of the kernel at run time, and do nothing on a kernel
+//! without them. Parts that only the Chumby
 //! needs are built only for Linux (and the crash reports only for ARM);
 //! the rest also serves neochumbyd and app companions on Linux and macOS.
+//!
+//! On `wasm32` the crate is one module, `guest`: the imports a wasm app
+//! makes of neochumby's runner (neochumby-wasm), behind safe functions,
+//! which neochumby-guest offers app authors.
 //!
 //! One module is not system calls: [`speaker`], the files by which
 //! processes hand the speaker over. It is here because this crate builds
@@ -41,31 +47,54 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod chan;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod elf;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fd;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fs;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod net;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod privilege;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod process;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pty;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sandbox;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod serial;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod signal;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod speaker;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod time;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod user;
+
+// A wasm app's side of the runner's host API: wasm32 only, and nothing
+// else of this crate there.
+#[cfg(target_arch = "wasm32")]
+pub mod guest;
 
 #[cfg(target_os = "linux")]
 pub mod alsa;
 #[cfg(all(target_os = "linux", feature = "boot"))]
 pub mod boot;
+#[cfg(feature = "compat26")]
+pub mod compat26;
 #[cfg(target_os = "linux")]
 pub mod evdev;
 #[cfg(target_os = "linux")]
 pub mod jail;
 #[cfg(target_os = "linux")]
 pub mod klog;
+#[cfg(target_os = "linux")]
+pub mod lockdown;
 #[cfg(target_os = "linux")]
 pub mod mm;
 #[cfg(target_os = "linux")]

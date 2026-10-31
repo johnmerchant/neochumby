@@ -1,6 +1,6 @@
 //! Signals to other processes, by pid or by process group, whether a
 //! process is alive, the descriptors a child is given, what else a child
-//! is started with, and this process's priority.
+//! is started with, and this process's priority and address space.
 
 use std::io;
 use std::os::fd::RawFd;
@@ -239,6 +239,72 @@ pub fn pass_fds(cmd: &mut Command, fds: Vec<RawFd>) {
     }
 }
 
+/// What [`limit_child`] gives a program it starts: rlimits, soft and hard,
+/// so it can't raise them again, and, where the kernel lets a user do it
+/// unprivileged, no network.
+#[derive(Clone, Copy, Debug)]
+pub struct ChildLimits {
+    /// CPU time, in seconds (RLIMIT_CPU): past it the kernel kills it.
+    pub cpu_secs: u64,
+    /// Its address space, in bytes (RLIMIT_AS).
+    pub memory: u64,
+    /// The largest file it may write, in bytes (RLIMIT_FSIZE).
+    pub file_size: u64,
+    /// On Linux, a user namespace and a network namespace of its own
+    /// (unshare(2)), whose only interface is a loopback that is down: it
+    /// can reach nothing. A kernel or a distribution that refuses
+    /// unprivileged user namespaces refuses this, and the program then
+    /// runs with the network it would have had; [`own_network`] says
+    /// which. Elsewhere, nothing.
+    pub no_network: bool,
+}
+
+/// Has `cmd`'s program start with `limits`, and no core dumps: in the
+/// child, between fork and exec, each is set with setrlimit(2), and the
+/// namespaces made. Starting the program fails if an rlimit can't be set.
+pub fn limit_child(cmd: &mut Command, limits: ChildLimits) {
+    // SAFETY: the closure runs in the forked child, where only
+    // async-signal-safe calls are allowed: setrlimit(2) and unshare(2) are
+    // system calls, each reading only a local rlimit, and nothing is
+    // allocated. (musl's setrlimit applies itself to every thread; its
+    // fork has already left the child knowing it has only the one.)
+    unsafe {
+        cmd.pre_exec(move || {
+            let set = |resource, value: u64| {
+                let r = libc::rlimit { rlim_cur: value as libc::rlim_t, rlim_max: value as libc::rlim_t };
+                if libc::setrlimit(resource, &r) == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+            };
+            set(libc::RLIMIT_CPU, limits.cpu_secs)?;
+            set(libc::RLIMIT_AS, limits.memory)?;
+            set(libc::RLIMIT_FSIZE, limits.file_size)?;
+            set(libc::RLIMIT_CORE, 0)?;
+            #[cfg(target_os = "linux")]
+            if limits.no_network {
+                // Refused is not an error: own_network says it.
+                libc::unshare(libc::CLONE_NEWUSER | libc::CLONE_NEWNET);
+            }
+            Ok(())
+        });
+    }
+}
+
+/// Whether the running process `pid` has a network namespace other than
+/// this process's (as [`ChildLimits::no_network`] asks), from /proc: None
+/// where that can't be told (not Linux, or it has exited).
+pub fn own_network(pid: u32) -> Option<bool> {
+    let theirs = std::fs::read_link(format!("/proc/{pid}/ns/net")).ok()?;
+    let ours = std::fs::read_link("/proc/self/ns/net").ok()?;
+    Some(theirs != ours)
+}
+
+/// Limits this process's address space to `bytes` (RLIMIT_AS, soft and
+/// hard), so that it can't raise it again: an allocation past it fails.
+pub fn limit_memory(bytes: u32) -> io::Result<()> {
+    let r = libc::rlimit { rlim_cur: bytes as libc::rlim_t, rlim_max: bytes as libc::rlim_t };
+    // SAFETY: setrlimit(2) reads one rlimit, `r`, live through the call.
+    if unsafe { libc::setrlimit(libc::RLIMIT_AS, &r) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -263,6 +329,16 @@ mod tests {
             assert!(!group_alive(id));
             assert!(!alive(id));
         }
+    }
+
+    #[test]
+    fn a_limited_child_has_its_limits() {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.args(["-c", "ulimit -t; ulimit -c"]).stdout(std::process::Stdio::piped());
+        limit_child(&mut cmd, ChildLimits { cpu_secs: 7, memory: 1 << 30, file_size: 1 << 20, no_network: true });
+        let out = cmd.output().unwrap();
+        assert!(out.status.success());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "7\n0\n");
     }
 
     #[test]

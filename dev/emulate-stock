@@ -62,7 +62,7 @@ index=
 listed=0
 for d in $(ls "$tree/apps"); do
   m=$tree/apps/$d/manifest
-  grep -q '^title=' "$m" && grep -q '^exec=' "$m" || continue
+  grep -q '^title=' "$m" && grep -Eq '^(exec|wasm)=' "$m" || continue
   [ "$d" = probe ] && index=$listed
   listed=$((listed + 1))
 done

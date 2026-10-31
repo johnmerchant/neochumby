@@ -18,7 +18,7 @@ use std::process::Command;
 use neochumby_ncurses as _;
 
 unsafe extern "C" {
-    fn htop_main(argc: c_int, argv: *const *const c_char) -> c_int;
+    fn htop_main(argc: c_int, argv: *mut *const c_char) -> c_int;
 }
 
 fn htop(args: impl Iterator<Item = String>) -> ! {
@@ -26,9 +26,14 @@ fn htop(args: impl Iterator<Item = String>) -> ! {
         std::iter::once("htop".to_string()).chain(args).map(|a| CString::new(a).unwrap_or_default()).collect();
     let mut argv: Vec<*const c_char> = args.iter().map(|a| a.as_ptr()).collect();
     argv.push(std::ptr::null());
-    // SAFETY: argv is argc C strings then a null, as main() takes them, and
-    // they outlive the call.
-    let code = unsafe { htop_main(args.len() as c_int, argv.as_ptr()) };
+    // SAFETY: htop's main(), renamed (build.rs), takes argc and argv as
+    // the C runtime passes them: argc NUL-terminated strings, then a null.
+    // It keeps pointers into them while it runs (getopt's optarg), and may
+    // reorder the array (getopt_long permutes it), so argv is passed
+    // mutable; it never writes the strings. args and argv outlive the
+    // call, after which the process exits. It is called once, on the main
+    // thread, before any other of its C runs, as a real main() would be.
+    let code = unsafe { htop_main(args.len() as c_int, argv.as_mut_ptr()) };
     std::process::exit(code)
 }
 

@@ -10,6 +10,10 @@ description = "A test app for the end-to-end scenarios: a known screen, and ever
 # apart from the device workspace.
 [workspace]
 
+# The main workspace's rule: no unsafe code (tools/check-unsafe).
+[lints.rust]
+unsafe_code = "deny"
+
 [dependencies]
 neochumby = { path = "../../crates/neochumby" }
 

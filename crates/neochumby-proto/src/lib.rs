@@ -49,6 +49,7 @@ use std::net::TcpStream;
 use std::os::unix::net::UnixStream;
 use std::time::{Duration, Instant};
 
+pub mod catalog;
 pub mod channel;
 pub mod dev;
 mod msg;
@@ -625,14 +626,17 @@ mod tests {
     }
 
     /// What a new neochumbyd sends a version-0 Chumby is only version-0
-    /// messages, `Config` with one pair more: decoded by version 0's
-    /// format, which takes any pairs.
+    /// messages, `Config` with two pairs more (its version and its clock):
+    /// decoded by version 0's format, which takes any pairs.
     #[test]
     fn config_with_the_version_is_version_0s_format() {
         let s = Settings { start: Some("wx".into()), ..Default::default() };
         let m = version::config(&s);
         assert_eq!(m.since(), Some(0));
-        assert_eq!(m.encode(), b"\x09\x00\x02\x00\x05start\x00\x02wx\x00\x0dproto.version\x00\x011".to_vec());
+        let e = m.encode();
+        let head = b"\x09\x00\x03\x00\x05start\x00\x02wx\x00\x0dproto.version\x00\x011\x00\x0bproto.clock\x00";
+        assert!(e.starts_with(head), "{e:?}");
+        assert_eq!(Msg::decode(&e).unwrap(), m);
     }
 
     #[test]

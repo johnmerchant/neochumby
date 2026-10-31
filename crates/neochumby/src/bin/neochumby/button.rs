@@ -1,5 +1,6 @@
-//! The top button (/dev/switch). Only one process at a time can have it
-//! open, so the session opens it once and decides who gets each press:
+//! The top button (/dev/switch; on the dist kernels, which have none, its
+//! input device: neochumby::input::open_button). Only one process at a
+//! time can have /dev/switch open, so the session opens it once and decides who gets each press:
 //! - an app whose manifest says `button = true` (Doom and Quake fire with
 //!   it) inherits the open file while it's in front, as NEOCHUMBY_BUTTON,
 //!   and the session doesn't read it meanwhile;

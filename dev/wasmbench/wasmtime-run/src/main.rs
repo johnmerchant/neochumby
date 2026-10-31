@@ -6,6 +6,9 @@
 //! The run side is the runtime alone, deserializing pulley32 bytecode
 //! compiled ahead on the host, with the same minimal WASI as wasmi-run.
 
+// Unsafe code, through libc: on .github/unsafe-allowed.
+#![allow(unsafe_code)]
+
 use std::io::Write;
 use std::time::Instant;
 

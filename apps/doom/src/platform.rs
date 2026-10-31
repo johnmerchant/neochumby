@@ -31,6 +31,11 @@ const GRID: [[u8; 3]; 3] =
 /// Doom draws 200 lines; the rest of the 240 are bars, top and bottom.
 const BAR: usize = (fb::H - 200) / 2;
 
+// build.rs builds doomgeneric for DOOMGENERIC_RESX x DOOMGENERIC_RESY =
+// 320x240, so DG_ScreenBuffer holds fb::W * fb::H pixels: the unsafe blocks
+// below rely on it.
+const _: () = assert!(fb::W == 320 && fb::H == 240);
+
 unsafe extern "C" {
     static mut DG_ScreenBuffer: *mut u32;
     fn doomgeneric_Create(argc: c_int, argv: *mut *mut c_char);
@@ -80,6 +85,12 @@ pub fn run(args: &[String]) -> ! {
         std::iter::once("doom".to_string()).chain(args.iter().cloned()).map(|a| CString::new(a).unwrap()).collect();
     let mut ptrs: Vec<*mut c_char> = argv.iter_mut().map(|a| a.as_ptr() as *mut c_char).collect();
     ptrs.push(std::ptr::null_mut());
+    // SAFETY: doomgeneric_Create takes main()'s argc and argv: argc
+    // NUL-terminated strings, then a null. It keeps them (myargv, which
+    // M_CheckParm reads for the life of the game), and argv and ptrs live
+    // as long: this function never returns. The engine is called from this
+    // thread only, once created and then tick by tick, as doomgeneric.h
+    // asks, and STATE is set before DG_Init, which Create calls, needs it.
     unsafe {
         doomgeneric_Create(argv.len() as c_int, ptrs.as_mut_ptr());
         // Doom quits by calling exit(): this loop does not end otherwise.
@@ -87,6 +98,17 @@ pub fn run(args: &[String]) -> ! {
             doomgeneric_Tick();
         }
     }
+}
+
+/// doomgeneric's frame: 320x240 XRGB8888, malloc'd by doomgeneric_Create.
+fn screen_buffer() -> *mut u32 {
+    // SAFETY: a read of the pointer's value, not a reference to the static.
+    // It is written once, by doomgeneric_Create, on this thread (the only
+    // one that calls into the engine or is called back from it).
+    let buf = unsafe { DG_ScreenBuffer };
+    // doomgeneric doesn't check its malloc.
+    assert!(!buf.is_null(), "neochumby-doom: no memory for the screen");
+    buf
 }
 
 fn draw_bars(fb: &mut Fb) {
@@ -108,7 +130,12 @@ fn draw_bars(fb: &mut Fb) {
 pub extern "C" fn DG_Init() {
     with(|s| {
         // doomgeneric mallocs the buffer and leaves the bars unwritten.
-        unsafe { std::ptr::write_bytes(DG_ScreenBuffer, 0, fb::W * fb::H) };
+        // SAFETY: doomgeneric_Create calls DG_Init right after it mallocs
+        // the buffer, DOOMGENERIC_RESX * DOOMGENERIC_RESY * 4 bytes: fb::W *
+        // fb::H u32s (asserted above), suitably aligned, not null
+        // (screen_buffer). Zeroes are valid u32s, and nothing else
+        // touches the buffer during the call.
+        unsafe { std::ptr::write_bytes(screen_buffer(), 0, fb::W * fb::H) };
         draw_bars(&mut s.fb);
     });
 }
@@ -116,7 +143,12 @@ pub extern "C" fn DG_Init() {
 #[unsafe(no_mangle)]
 pub extern "C" fn DG_DrawFrame() {
     with(|s| {
-        let src = unsafe { std::slice::from_raw_parts(DG_ScreenBuffer, fb::W * fb::H) };
+        // SAFETY: the buffer is fb::W * fb::H u32s (DG_Init), initialised
+        // (zeroed there, then drawn by the engine), and is never freed. The
+        // engine calls DG_DrawFrame from I_FinishUpdate once it has copied
+        // the frame in, and doesn't write it again until this returns: the
+        // shared slice is the only access while it lives.
+        let src = unsafe { std::slice::from_raw_parts(screen_buffer(), fb::W * fb::H) };
         let dst = s.fb.pixels();
         // XRGB8888 to RGB565, Doom's 200 lines only: the bars are ours.
         for i in BAR * fb::W..(fb::H - BAR) * fb::W {
@@ -198,6 +230,9 @@ pub extern "C" fn DG_GetKey(pressed: *mut c_int, key: *mut u8) -> c_int {
         }
         match s.keys.pop_front() {
             Some((p, k)) => {
+                // SAFETY: the engine's one caller, I_GetEvent (i_input.c),
+                // passes pointers to its own locals, an int and an unsigned
+                // char: valid, aligned and writable for the call.
                 unsafe {
                     *pressed = p as c_int;
                     *key = k;

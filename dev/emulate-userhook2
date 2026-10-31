@@ -46,7 +46,9 @@ fi
 # network an emulated Chumby never has the 64 bits /dev/random waits for,
 # which TLS (ring, without the getrandom system call) waits on once before
 # it reads /dev/urandom. On the emulator only, /dev/random is made readable
-# with less: its keys are for testing.
+# with less (8 bits). So the keys an emulated 2.6.16 Chumby makes (its
+# pairing key, its TLS sessions') are weak: for testing only, never for a
+# Chumby that matters.
 [ -w /proc/sys/kernel/random/read_wakeup_threshold ] &&
   echo 8 >/proc/sys/kernel/random/read_wakeup_threshold
 [ -f "$STICK/neochumby/userhook2" ] || {

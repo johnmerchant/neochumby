@@ -3,7 +3,9 @@
 // binary, without its configure: csrc/config.h is what configure would
 // write, and TOP and LIBRARY are the sources its Makefile.am builds them
 // from. main() is top_main, which src/main.rs calls. curses is
-// neochumby-ncurses'.
+// neochumby-ncurses'. The calls Linux 2.6.16 lacks on ARM are
+// neochumby-sys' stand-ins (compat26), which the binary links in place of
+// musl's with --wrap.
 const TOP: &[&str] = &["src/top/top", "src/top/top_nls", "local/fileutils", "local/signals", "local/strutils"];
 
 const LIBRARY: &[&str] = &[
@@ -64,6 +66,15 @@ fn main() {
         // Upstream's warnings, not ours to fix.
         .warnings(false)
         .compile("top");
+    // top's calls to these reach neochumby_sys::compat26's __wrap_ functions,
+    // which call musl's own as __real_; only for the Chumby's ARM musl, where
+    // those are built.
+    let target = std::env::var("TARGET").unwrap_or_default();
+    if target.starts_with("arm") && target.contains("musl") {
+        for name in ["openat", "readlinkat", "__fstatat_time64", "__pselect_time64"] {
+            println!("cargo:rustc-link-arg-bins=-Wl,--wrap={name}");
+        }
+    }
     println!("cargo:rerun-if-changed=csrc");
     println!("cargo:rerun-if-changed={dir}/src/top");
     println!("cargo:rerun-if-changed={dir}/library");

@@ -65,7 +65,7 @@ fi
 if command -v cargo >/dev/null 2>&1; then
     ok "cargo ($(cargo --version | cut -d' ' -f2))"
     targets=$(rustc --print sysroot 2>/dev/null)/lib/rustlib
-    for t in armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl; do
+    for t in armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl wasm32-wasip1; do
         if [ -d "$targets/$t" ]; then
             ok "Rust target $t"
         else
@@ -87,6 +87,11 @@ if command -v cmake >/dev/null 2>&1; then
     ok "cmake (for the fetch app)"
 else
     bad "CMake 3.21 or later (for the fetch app)" "$(how cmake cmake cmake cmake)"
+fi
+if command -v pkg-config >/dev/null 2>&1; then
+    ok "pkg-config (for a tree for Linux 5.9 and later)"
+else
+    bad "pkg-config (for a tree for Linux 5.9 and later)" "$(how pkg-config pkg-config pkgconf-pkg-config pkgconf)"
 fi
 for t in git curl tar; do
     if command -v "$t" >/dev/null 2>&1; then
@@ -145,7 +150,7 @@ fi
 if [ "$missing" = 0 ]; then
     echo
     echo "Ready. Next:"
-    echo "  cargo chumby && cargo build --release -p neochumbyd"
+    echo "  cargo chumby && cargo build --release -p neochumbyd --features wasm-companions"
     echo "  tools/tree /tmp/tree doom && dev/emulate start /tmp/tree"
     echo "  # the end-to-end scenarios as CI runs them:"
     echo "  E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e"

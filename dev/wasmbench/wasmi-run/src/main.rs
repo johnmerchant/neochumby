@@ -9,6 +9,9 @@
 //! the instantiation and the run took. -e translates eagerly, every function
 //! before the run, instead of wasmi's default, lazily on first call.
 
+// Unsafe code, through libc: on .github/unsafe-allowed.
+#![allow(unsafe_code)]
+
 use std::io::Write;
 use std::time::Instant;
 

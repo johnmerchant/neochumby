@@ -9,6 +9,10 @@ description = "The wasm benchmark's workloads, each built natively for the Chumb
 # Built by dev/wasmbench/tools/workloads.sh, apart from the device workspace.
 [workspace]
 
+# The main workspace's rule: no unsafe code (tools/check-unsafe).
+[lints.rust]
+unsafe_code = "deny"
+
 [lib]
 name = "workloads"
 

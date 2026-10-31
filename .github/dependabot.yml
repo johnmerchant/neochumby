@@ -1,0 +1,15 @@
+# Dependabot keeps the workflows' actions current: once a week, every
+# update in one pull request. The actions are pinned by commit SHA with
+# their version in a trailing comment; Dependabot updates both. Only the
+# actions: the crates' dependencies are kept by hand (and cargo-deny).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+    commit-message:
+      prefix: ci

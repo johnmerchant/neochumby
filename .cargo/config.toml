@@ -2,7 +2,8 @@
 #
 #   cargo chumby       the session (with neochumby-sync, its receiver for
 #                      delivery=sync) and neochumby-home, for the Chumby's ARM926
-#   cargo neochumbyd   the server, for x86_64 Linux
+#   cargo neochumbyd   the server, for x86_64 Linux, as it is released:
+#                      with wasm companions (the wasm-companions feature)
 #
 # Other apps are built as they are added to a tree (tools/tree). The server
 # half (neochumbyd and companions) builds for 64-bit ARM Linux too
@@ -10,7 +11,7 @@
 # natively for the machine building it.
 [alias]
 chumby = "build --release --target armv5te-unknown-linux-musleabi -p neochumby -p neochumby-home"
-neochumbyd = "build --release --target x86_64-unknown-linux-musl -p neochumbyd"
+neochumbyd = "build --release --target x86_64-unknown-linux-musl -p neochumbyd --features wasm-companions"
 
 [target.armv5te-unknown-linux-musleabi]
 linker = "tools/zigcc"
@@ -30,6 +31,13 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 [env]
 CC_armv5te_unknown_linux_musleabi = { value = "tools/zigcc", relative = true }
 AR_armv5te_unknown_linux_musleabi = { value = "tools/zigar", relative = true }
+# C built by CMake from a build script (wamr-sys builds WAMR so).
+CMAKE_TOOLCHAIN_FILE_armv5te_unknown_linux_musleabi = { value = "tools/armv5te.cmake", relative = true }
+# wamr-sys's bindings (bindgen), for the Chumby: for a musl target clang
+# searches the system's headers before its own, so a host's glibc
+# stdint.h (/usr/include) would win over clang's freestanding one. Only
+# clang's own, then.
+BINDGEN_EXTRA_CLANG_ARGS_armv5te_unknown_linux_musleabi = "-nostdlibinc"
 CC_x86_64_unknown_linux_musl = { value = "tools/zigcc-x86_64", relative = true }
 AR_x86_64_unknown_linux_musl = { value = "tools/zigar", relative = true }
 CC_aarch64_unknown_linux_musl = { value = "tools/zigcc-aarch64", relative = true }

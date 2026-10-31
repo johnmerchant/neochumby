@@ -10,7 +10,20 @@
 //!   lr is the caller, so their time can be charged to whoever called them:
 //!   tools/profile does both.
 
+#[cfg(all(target_os = "linux", target_arch = "arm"))]
 use neochumby_sys::crash;
+
+/// Elsewhere (the host, where the library's tests run) there are no crash
+/// reports and no profiler: neochumby_sys::crash is the Chumby's alone.
+#[cfg(not(all(target_os = "linux", target_arch = "arm")))]
+mod crash {
+    pub fn dump() {}
+    pub fn name() -> &'static str {
+        ""
+    }
+    pub fn install(_: &'static str) {}
+    pub fn profile(_: &[u8]) {}
+}
 
 /// Writes the profile, if one is being taken: open, write and close only,
 /// so safe in a signal handler.

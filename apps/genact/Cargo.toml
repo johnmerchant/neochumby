@@ -17,6 +17,9 @@ clap = { version = "4", default-features = false, features = ["std"] }
 title = "GENACT"
 exec = "neochumby-genact"
 tap = "\n"
+# Not on the stock 2.6.16: genact's rand seeds itself with getrandom, which on 2.6.16 waits on
+# /dev/random for entropy the Chumby may not have, on a black screen.
+linux = "5.9"
 color = "3cb464"
 
 [lints]

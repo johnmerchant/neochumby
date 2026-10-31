@@ -16,9 +16,11 @@
 //! this finds an app over its limit; it doesn't stop the writes that put it
 //! there.
 //!
-//! What the session measures: each file, directory or link counts its size
-//! rounded up to a [`BLOCK`], and at least one, so a pile of empty files
-//! counts too. Links are never followed.
+//! What the session measures: each file or link counts its size rounded up
+//! to a [`BLOCK`], and at least one, so a pile of empty files counts too;
+//! each directory counts exactly one block, whatever the filesystem says its
+//! size is (4096 on ext4, little on tmpfs or vfat), so a quota is the same
+//! on every filesystem. Links are never followed.
 
 use std::io;
 use std::os::unix::fs::{PermissionsExt, lchown};
@@ -42,8 +44,7 @@ pub fn usage(dir: &Path) -> u64 {
     rd.flatten()
         .map(|e| {
             let Ok(m) = e.path().symlink_metadata() else { return 0 };
-            let own = m.len().div_ceil(BLOCK).max(1) * BLOCK;
-            if m.is_dir() { own + usage(&e.path()) } else { own }
+            if m.is_dir() { BLOCK + usage(&e.path()) } else { m.len().div_ceil(BLOCK).max(1) * BLOCK }
         })
         .sum()
 }

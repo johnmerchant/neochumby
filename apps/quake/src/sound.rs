@@ -21,14 +21,22 @@ const SAMPLES: usize = 1 << 16;
 const VOLUME: u32 = 80;
 
 /// The engine's ring: samples of 16-bit stereo, kept for the life of the
-/// process.
+/// process. Only for SNDDMA_Submit, while the engine isn't painting into it.
 fn ring() -> &'static [i16] {
+    // SAFETY: the engine calls SNDDMA_Submit only once sound has started
+    // (snd_dma.c's sound_started), so after SNDDMA_Init pointed shm at sn
+    // and its buffer at the leaked ring of `samples` i16s, which nothing
+    // frees or resizes. The engine paints into it only in S_PaintChannels,
+    // on this thread, and not while SNDDMA_Submit runs, the slice's one use.
     unsafe { std::slice::from_raw_parts((*shm).buffer.cast::<i16>(), (*shm).samples as usize) }
 }
 
 #[unsafe(no_mangle)]
 pub extern "C" fn SNDDMA_Init() -> qboolean {
     let ring: &'static mut [i16] = Box::leak(vec![0; SAMPLES].into_boxed_slice());
+    // SAFETY: sn and shm are the engine's (snd_dma.c), written through raw
+    // pointers, not references, on its thread, during S_Startup: it reads
+    // them only once this returns.
     unsafe {
         let d = &raw mut sn;
         (*d).splitbuffer = 0;
@@ -50,6 +58,10 @@ pub extern "C" fn SNDDMA_Init() -> qboolean {
 #[unsafe(no_mangle)]
 pub extern "C" fn SNDDMA_GetDMAPos() -> c_int {
     let played = state().sound.as_mut().map_or(0, |s| s.played());
+    // SAFETY: called (GetSoundtime) only once sound has started, so shm
+    // points to sn, set up by SNDDMA_Init; a read and a write through the
+    // raw pointer, on the engine's thread. samples is a power of two
+    // (SAMPLES), so the mask keeps the position in the ring.
     unsafe {
         (*shm).samplepos = (played as c_int).wrapping_mul(CHANNELS) & ((*shm).samples - 1);
         (*shm).samplepos
@@ -63,6 +75,7 @@ pub extern "C" fn SNDDMA_Submit() {
     let Some(s) = state().sound.as_mut() else { return };
     let ring = ring();
     let frames = ring.len() / 2;
+    // SAFETY: a read of the engine's int by value, on its thread.
     let painted = unsafe { engine::paintedtime };
     let count = (painted as u32).wrapping_sub(s.written() as u32) as i32;
     // Nothing new, or more than the engine mixes ahead (its time is reset

@@ -84,6 +84,11 @@ CONFIG_CGROUPS=y
 CONFIG_MEMCG=y
 CONFIG_SECCOMP=y
 CONFIG_SECCOMP_FILTER=y
+# Landlock, for the wasm runner (neochumby-wasm): it denies itself the
+# file system, TCP and signals outside its jail once it has what it needs.
+CONFIG_SECURITY=y
+CONFIG_SECURITY_LANDLOCK=y
+CONFIG_LSM="landlock"
 
 # The board: the i.MX21 as a device-tree platform. The boot loader passes
 # ATAGs and no device tree: the DTB is appended to the zImage, and the

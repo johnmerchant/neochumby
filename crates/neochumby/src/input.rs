@@ -1,6 +1,7 @@
 //! The Chumby Classic's inputs: the resistive touchscreen (TSC2100, evdev on
 //! /dev/input/event0, or event1 on the dist kernels: [`touchscreen`]), the
-//! squeeze switch (/dev/switch, one byte) and the accelerometer
+//! squeeze switch (/dev/switch, one byte; on the dist kernels an input
+//! device: [`open_button`]) and the accelerometer
 //! (/dev/accel, 56-byte records). Neither Chumby driver supports poll(), so
 //! everything is read non-blocking, each tick.
 //!
@@ -51,6 +52,63 @@ fn find_touchscreen(list: &str) -> Option<String> {
         xy.then(|| format!("/dev/input/{event}"))
     })
 }
+/// The top button, opened non-blocking: the stock kernel's /dev/switch,
+/// else, on the dist kernels, which have none, the input device they make
+/// for it (gpio-keys-polled's "chumby-button": [`find_button`]). Its path
+/// with it. Either is read with [`button_level`].
+pub fn open_button() -> std::io::Result<(File, String)> {
+    let open = |p: &str| OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open(p);
+    match open(SWITCH) {
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+            let list = std::fs::read_to_string("/proc/bus/input/devices").unwrap_or_default();
+            let dev = find_button(&list).ok_or(e)?;
+            Ok((open(&dev)?, dev))
+        }
+        r => r.map(|f| (f, SWITCH.to_string())),
+    }
+}
+
+/// The stock kernel's top button: one byte, its level.
+pub const SWITCH: &str = "/dev/switch";
+
+/// In /proc/bus/input/devices' blocks, the event device of the dist
+/// kernels' top button: keys, no absolute axes, and named for it (the board
+/// file's "chumby-button", or gpio-keys').
+fn find_button(list: &str) -> Option<String> {
+    list.split("\n\n").find_map(|block| {
+        let line = |prefix: &str| block.lines().find_map(|l| l.strip_prefix(prefix));
+        let name = line("N: Name=")?.trim_matches('"');
+        let named = name == "chumby-button" || name.starts_with("gpio-keys");
+        let keys = line("B: KEY=").is_some() && line("B: ABS=").is_none();
+        let event = line("H: Handlers=")?.split_whitespace().find(|h| h.starts_with("event"))?;
+        (named && keys).then(|| format!("/dev/input/{event}"))
+    })
+}
+
+/// The top button's level now (true while pressed), from its open file of
+/// either kind ([`open_button`]): an input device is asked which keys are
+/// down; /dev/switch reads as one byte. None if it can't be read.
+pub fn button_level(f: &mut File) -> Option<bool> {
+    if is_input_device(f) {
+        return neochumby_sys::evdev::any_key_down(f).ok();
+    }
+    let mut b = [0u8; 1];
+    match f.read(&mut b) {
+        Ok(1) => Some(b[0] != 0),
+        _ => None,
+    }
+}
+
+/// Whether `f` is an input device (character major 13), as the dist
+/// kernels' button is and /dev/switch isn't.
+fn is_input_device(f: &File) -> bool {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    f.metadata().is_ok_and(|m| {
+        let d = m.rdev();
+        m.file_type().is_char_device() && (((d >> 8) & 0xfff) | ((d >> 32) & !0xfff)) == 13
+    })
+}
+
 /// The stock firmware's touchscreen calibration ([`Calibration`]).
 pub const CALIBRATION: &str = "/psp/ts_settings";
 
@@ -261,12 +319,11 @@ impl Squeeze {
     /// true` in its manifest.
     pub fn open() -> Squeeze {
         let var = std::env::var(BUTTON_ENV).ok();
-        Squeeze(handed_over(var.as_deref()).or_else(|| open_nonblock("/dev/switch")))
+        Squeeze(handed_over(var.as_deref()).or_else(|| open_button().ok().map(|(f, _)| f)))
     }
 
     pub fn squeezed(&mut self) -> bool {
-        let mut b = [0u8; 1];
-        matches!(self.0.as_mut().map(|f| f.read(&mut b)), Some(Ok(1))) && b[0] != 0
+        self.0.as_mut().and_then(button_level).unwrap_or(false)
     }
 }
 
@@ -390,6 +447,34 @@ mod tests {
         let (tx, ty) = cal.raw(160, 120);
         t.take(&touch_down(tx, ty), &mut got);
         assert_eq!(got, [Touch::Down { x: 160, y: 120, raw: (tx, ty) }]);
+    }
+
+    #[test]
+    fn the_top_button_is_the_device_named_for_it() {
+        // As the dist kernels list them: the top button, then the TSC2100.
+        let dist = "I: Bus=0019 Vendor=0001 Product=0001 Version=0100\nN: Name=\"chumby-button\"\n\
+                    H: Handlers=kbd event0 \nB: EV=3\nB: KEY=10000000\n\n\
+                    I: Bus=0000 Vendor=0000 Product=0000 Version=0000\nN: Name=\"tsc2100_ts\"\n\
+                    H: Handlers=event1 \nB: EV=b\nB: KEY=400 0 0 0 0 0 0 0 0 0 0\nB: ABS=1000003\n";
+        assert_eq!(find_button(dist).as_deref(), Some("/dev/input/event0"));
+        let keys = "N: Name=\"gpio-keys\"\nH: Handlers=kbd event2 \nB: KEY=100000 0 0 0\n";
+        assert_eq!(find_button(keys).as_deref(), Some("/dev/input/event2"));
+        // The stock kernel's touchscreen only: no button among the input devices.
+        assert_eq!(find_button("N: Name=\"tsc2100\"\nH: Handlers=event0 \nB: KEY=400\nB: ABS=1000003\n"), None);
+        assert_eq!(find_button(""), None);
+    }
+
+    #[test]
+    fn a_switch_reads_as_a_byte() {
+        // Not an input device: read as /dev/switch is, its level a byte.
+        let p = std::env::temp_dir().join(format!("neochumby-switch-{}", std::process::id()));
+        std::fs::write(&p, [1u8]).unwrap();
+        assert_eq!(button_level(&mut File::open(&p).unwrap()), Some(true));
+        std::fs::write(&p, [0u8]).unwrap();
+        assert_eq!(button_level(&mut File::open(&p).unwrap()), Some(false));
+        std::fs::write(&p, []).unwrap();
+        assert_eq!(button_level(&mut File::open(&p).unwrap()), None);
+        std::fs::remove_file(&p).unwrap();
     }
 
     #[test]

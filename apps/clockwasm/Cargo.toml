@@ -1,0 +1,35 @@
+[package]
+name = "neochumby-clockwasm"
+description = "A big digital clock built as WebAssembly, run by neochumby's wasm runner; and the same face built natively, to measure one against the other"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+# The app: its face as WebAssembly, drawn through the host.
+[[bin]]
+name = "neochumby-clockwasm"
+path = "src/main.rs"
+
+# The same face built for the Chumby, drawing on the framebuffer itself:
+# not in the tree, only to measure against (README in src/main.rs).
+[[bin]]
+name = "neochumby-clockwasm-native"
+path = "src/native.rs"
+
+[dependencies]
+neochumby-guest = { path = "../../crates/neochumby-guest" }
+
+[target.'cfg(target_arch = "arm")'.dependencies]
+neochumby.workspace = true
+neochumby-sys.workspace = true
+
+[package.metadata.neochumby]
+title = "WASM CLOCK"
+wasm = "neochumby-clockwasm"
+color = "3c8cd0"
+# The framebuffer, and a tap to leave.
+access = ["fb", "touch"]
+
+[lints]
+workspace = true

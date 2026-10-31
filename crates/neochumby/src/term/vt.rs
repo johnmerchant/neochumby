@@ -18,7 +18,8 @@
 //! the screen instead. The colours go in its palette with `ESC ] P`. The
 //! Linux console has 16 colours and draws its background and text in
 //! colours 0 and 7, so a scheme's background and foreground take those
-//! two there.
+//! two there. It has no colour for the cursor, which it draws in reverse
+//! video, so a scheme's cursor colour isn't used here.
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};

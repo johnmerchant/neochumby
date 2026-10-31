@@ -1,0 +1,37 @@
+[package]
+name = "neochumby-catalog"
+description = "GET APPS: the catalog of WebAssembly apps on the Chumby, from its paired neochumbyd, installed only with its owner's approval"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "neochumby-catalog"
+path = "src/main.rs"
+
+[dependencies]
+neochumby-proto.workspace = true
+
+# Only the Chumby's build uses the device library and the terminal. On the
+# host the screens, the layout and the touch reports are tested without
+# either.
+[target.'cfg(target_arch = "arm")'.dependencies]
+neochumby.workspace = true
+# Raw mode and the terminal's size: this app is for Linux 5.9 and later
+# only, where rustix's direct system calls are safe to make.
+rustix = { version = "1", features = ["termios"] }
+
+[package.metadata.neochumby]
+title = "GET APPS"
+exec = "neochumby-catalog"
+color = "2ea043"
+# Its companion is neochumbyd's own catalog, not a program of its own.
+companion = "neochumbyd:catalog"
+neochumbyd = "required"
+font = "spleen-6x12"
+# Not on the stock 2.6.16: rustix (above) needs Linux 3.2.
+linux = "5.9"
+
+[lints]
+workspace = true
