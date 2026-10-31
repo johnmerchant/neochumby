@@ -38,7 +38,7 @@ use neochumby_proto::catalog::{self as wire, Answer, Ask, MAX_DESCRIPTION, PAGE,
 use neochumby_proto::{Msg, Session, channel, valid_name};
 
 use super::discover::{self, Listing};
-use super::http::{Http, Sources};
+use super::http::Http;
 use super::install::{self, ALLOWED, Plan, Spec, WASM_LIMIT, prepare};
 use super::wamrc::Wamrc;
 use super::{is_bytecode, sha256, update};
@@ -390,7 +390,9 @@ impl Service {
 /// `delivery=sync`, whose stick has yet to get the change.
 pub fn run(tree: &Path, state: &Path, chumby: &str, mut s: Session) -> io::Result<()> {
     eprintln!("neochumbyd: GET APPS for {chumby}");
-    let http = Http::new(Sources::configured());
+    // As every catalog request goes (a debug build's local stand-in and its
+    // trusted root included).
+    let http = super::http();
     let mut svc = Service::new(http, state.into(), tree.into(), wamrc(), chumby);
     svc.sync = crate::state::State::open(state.into())
         .is_ok_and(|st| st.settings(chumby).delivery == Some(neochumby_proto::Delivery::Sync));
