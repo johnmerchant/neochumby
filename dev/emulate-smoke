@@ -8,7 +8,9 @@
 #   - neochumby sensors, run on the console beside the session, sees a
 #     touch (where the console has a shell during the session: dist,
 #     classic);
-#   - CHUMBY MODE ends the session cleanly.
+#   - CHUMBY MODE ends the session cleanly (on the stock 2.6 kernel: the
+#     dist's Linux has no stock software to go back to, and home no CHUMBY
+#     MODE there).
 # Screenshots and the console go in OUT.
 #
 #   dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
@@ -138,14 +140,20 @@ dist | classic)
 *) sensors=" sensors," ;;
 esac
 
-step "CHUMBY MODE"
-emu tap 160 220
-emu wait exit $((20 * slow)) || fail "CHUMBY MODE didn't end the session"
-[ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
+if [ "$backend" = dist ]; then
+  echo "skipped: CHUMBY MODE (the dist's Linux has none)"
+  chumby_mode=" CHUMBY MODE,"
+else
+  step "CHUMBY MODE"
+  emu tap 160 220
+  emu wait exit $((20 * slow)) || fail "CHUMBY MODE didn't end the session"
+  [ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
+  chumby_mode=
+fi
 emu log > "$out/log.txt"
 # The boot carries on after the session: the machine is stopped.
 emu stop
 echo "-- the console:"
 cat "$out/log.txt"
-skipped=$(echo "$button$sensors" | sed 's/,$//')
+skipped=$(echo "$button$sensors$chumby_mode" | sed 's/,$//')
 echo "dev/emulate-smoke: all passed ($backend${skipped:+; skipped:$skipped})"
