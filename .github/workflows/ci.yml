@@ -223,11 +223,13 @@ jobs:
       - run: cargo fmt --check $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.manifest_path | contains("/third_party/") | not) | "-p " + .name')
       # The crates that build for the host: the protocol, sync's rounds (on
       # both sides, so a temporary directory stands in for the stick),
-      # neochumbyd, the manifest tool, the system calls, the macros, WAMR
-      # (its interpreter, on the host), the wasm runner (its hostile-module
-      # suite, under the runner's kernel), AirPlay's companion, its screen
-      # and service's memory, and its messages for frontends, and
-      # neochumby-classic's engine (its host build renders frames to files).
+      # neochumbyd (its catalog against a fake crates.io and GitHub on
+      # 127.0.0.1, and a fake wamrc), the manifest tool, the system calls,
+      # the macros, WAMR (its interpreter, on the host), the wasm runner
+      # (its hostile-module suite, under the runner's kernel), AirPlay's
+      # companion, its screen and service's memory, and its messages for
+      # frontends, and neochumby-classic's engine (its host build renders
+      # frames to files).
       - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -p neochumby-wamr -p neochumby-wasm -p neochumby-guest -p neochumby-clockwasm -- -D warnings
       - run: cargo clippy -p neochumby-airplay --lib --bin neochumby-airplay-companion -- -D warnings
       - run: cargo clippy -p neochumby-airplay --profile test --lib --bin neochumby-airplay-companion -- -D warnings

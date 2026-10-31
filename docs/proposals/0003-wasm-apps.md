@@ -316,7 +316,10 @@ pinned and **never updated by themselves**.
    disappears doesn't change an installed app.
 3. **Provenance, as a label.** If GitHub has an artifact attestation
    (Sigstore) for the asset, from the crate's `repository`, the catalog
-   shows **verified build**; otherwise **unverified**. Only a label for now.
+   shows **verified build**; otherwise **unverified**. Only a label.
+   neochumbyd verifies the Sigstore bundle itself (the certificate, the
+   signature, the workflow and repository it names, and the file's
+   digest), rather than taking GitHub's word that one exists.
 4. **The owner approves its access.** The `access` list and the
    companion's hosts are shown before install, with the publisher (the
    crate's owners on crates.io), its downloads and whether it's verified.
@@ -384,8 +387,9 @@ The schema lives in one place, `neochumby-manifest`, as now.
 
 ## Open questions
 
-- **Should "verified build" become required** for catalog apps, once
-  enough authors publish attestations?
+- ~~Should "verified build" become required?~~ Decided: it stays a
+  label, verified by neochumbyd, and GET APPS shows unverified apps
+  plainly.
 - **WAMR's fix as a patch or a fork.** CONTRIBUTING asks third-party C
   changes to go in a fork, pinned as a submodule; the alignment fix is one
   three-line change waiting on upstream. A patch applied by the crate's

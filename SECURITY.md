@@ -184,6 +184,49 @@ neochumbyd delivered.
   without it (for people who run a hypervisor like Proxmox, the host's
   kernel may be one), and neochumbyd in LXC or Docker, where it's root in
   the container anyway. Both together close what Landlock leaves open.
+- **Installing from the catalog checks what it fetches, and labels who
+  built it.** `neochumbyd install crate:NAME@VERSION` refuses a yanked
+  version; refuses a `.crate` whose sha256 isn't the one crates.io's
+  sparse index records; and refuses a module that isn't fetched over
+  HTTPS, isn't the sha256 its Cargo.toml pins, or isn't WebAssembly
+  bytecode. It keeps its own copy of each module. It refuses a crate that
+  ships or names an `.aot`: an author's compiled code is native code, and
+  is never taken. The `.aot` is compiled on the server by wamrc, with
+  bounds checks on. wamrc runs in a scratch directory with time, CPU and
+  memory limits, and no network where the kernel lets a user make a
+  network namespace. It refuses the access words `root`, `system`,
+  `terminal`, `logs` and `network`: a catalog app's network belongs to its
+  companion, host by host. Before anything is written it shows the owner
+  what the app asks for, and the owner approves exactly that, access words
+  and hosts.
+- **Installs, removals and the update setting are the owner's,** through
+  the admin socket's protocol with the owner's token, whether from the
+  command line (which reads the token from the state directory, so is
+  run by the server's admin) or a page given the socket.
+- **Updates that ask for nothing new apply by themselves.** After each
+  refresh, a catalog app whose listing has a newer version is updated if
+  that version asks for no access word and no host the installed one
+  wasn't granted; it is checked as an install is, and logged in
+  `<state>/catalog.log`. One that asks for more waits for the owner. So an
+  author can change an app's code, within what it was granted, without the
+  owner looking again: if that matters to you, `neochumbyd catalog
+  auto-update off`. `serve --no-catalog-refresh` stops neochumbyd asking
+  crates.io and GitHub by itself at all.
+- **"Verified build" is checked here, and is a label, not a requirement.**
+  neochumbyd verifies GitHub's attestation for the app's `.wasm` itself,
+  as a Sigstore bundle: its certificate chains to Sigstore's Fulcio (the
+  public-good instance's roots are built into neochumbyd) and was valid
+  when Rekor logged the signature, by the log's signed promise; the DSSE
+  signature checks with that certificate; the certificate is for a GitHub
+  Actions run of a workflow in the crate's own repository; and the signed
+  statement is SLSA provenance naming the module's sha256. It doesn't
+  check certificate transparency or Rekor's inclusion proof (the signed
+  promise stands for it), and an attestation logged only in a Rekor v2 log
+  is unverified for now. The label says a workflow in that repository
+  built that file. It says nothing of whether the author is honest or the
+  code is safe, and "unverified" doesn't mean malicious. The modules'
+  sha256, pinned in the crate, are what is checked. None of this makes the
+  Rust project or crates.io vouch for an app.
 - **The admin socket** pairs Chumbys and changes their settings. It has no
   path. Only an app whose owner allows it (`neochumbyd allow <app>
   pairing`; `disallow` takes it back, at once) gets one, as an inherited
@@ -194,7 +237,8 @@ neochumbyd delivered.
   the socket should mark it close-on-exec, so that programs it runs don't
   get it.
 - **Every change through the admin socket needs the owner's token**
-  (`neochumbyd token`): approving, refusing and forgetting pairings, and
+  (`neochumbyd token`): approving, refusing and forgetting pairings;
+  installing and removing catalog apps, and their update setting; and
   settings (which include remote input, `dev=on`, and where a Chumby's
   apps come from). Pairing is only as safe as the person who types the
   code, so a web page must not approve for anyone who can merely reach
