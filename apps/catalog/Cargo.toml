@@ -30,6 +30,8 @@ color = "2ea043"
 companion = "neochumbyd:catalog"
 neochumbyd = "required"
 font = "spleen-6x12"
+# Not on the stock 2.6.16: rustix (above) needs Linux 3.2.
+linux = "5.9"
 
 [lints]
 workspace = true
