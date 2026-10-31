@@ -392,6 +392,7 @@ jobs:
       sideload: ${{ steps.diff.outputs.sideload }}
       classic: ${{ steps.diff.outputs.classic }}
       kernels: ${{ steps.diff.outputs.kernels }}
+      link: ${{ steps.diff.outputs.link }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -404,7 +405,7 @@ jobs:
           MAINLINE_RUN: ${{ github.event.schedule == '17 6 * * 0' || inputs.mainline }}
         run: |
           if [ "$MAINLINE_RUN" = true ]; then
-            printf '%s\n' sideload=true classic=false 'kernels=["mainline"]' >> "$GITHUB_OUTPUT"
+            printf '%s\n' sideload=true classic=false 'kernels=["mainline"]' link=false >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$BRANCH" = kernel-sync/mainline ] || { git cat-file -e "$BASE^{commit}" 2>/dev/null \
@@ -424,6 +425,14 @@ jobs:
             echo classic=true >> "$GITHUB_OUTPUT"
           else
             echo classic=false >> "$GITHUB_OUTPUT"
+          fi
+          # The serial line's scenarios (the link job): on every push to
+          # main, and on a pull request that touches what they cover.
+          if [ "$GITHUB_EVENT_NAME" != pull_request ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
+            || git diff --name-only "$BASE...$GITHUB_SHA" | grep -qE '^(crates/neochumby-(proto|sync|sys)/|crates/neochumby/src/(line|settings|companion|conf)\.rs$|crates/neochumby/src/bin/neochumby(-sync\.rs$|/(line|devlink|main)\.rs$)|crates/neochumbyd/src/(line|api|sync|state)\.rs$|apps/home/src/pair\.rs$|boot/|dev/(e2e|emulate)|emu/qemu/|classic/|\.github/workflows/ci\.yml$)'; then
+            echo link=true >> "$GITHUB_OUTPUT"
+          else
+            echo link=false >> "$GITHUB_OUTPUT"
           fi
 
   # The dist image, dist/build's, for each kernel the changes job names:
@@ -604,8 +613,7 @@ jobs:
   #             button (the touchscreen is event1), so no tap reaches it
   #   classic   its pictures come from NEOCHUMBY_CLASSIC_PICTURES, and it needs
   #             what smoke does, and /dev/switch, which 5.9.16 hasn't
-  #   pairing, powercut   need a neochumbyd the Chumby can reach: the
-  #             emulated Chumby has no network (-nic none)
+  #   link, pairing, powercut   over the serial line: the link job, below
   #   stock     the stock firmware: local only
   # The classic profile (Linux 2.6.16 from Chumby's GPL source) is to run
   # them all once its image is built here. Where mainline is built, boot
@@ -731,6 +739,108 @@ jobs:
             ${{ runner.temp }}/e2e
             ${{ runner.temp }}/e2e-mainline
             ${{ runner.temp }}/e2e-classic
+          retention-days: 7
+
+  # The scenarios over the serial line (dev/emulate start --server): the
+  # emulated Chumby has no network, and reaches a neochumbyd run here over
+  # its second UART, which qemu-chumby joins to neochumbyd's --listen-unix
+  # socket.
+  #   link      PAIR pairs over the line; the next start has the developer
+  #             link and syncs the tree to its stick (delivery=sync); the
+  #             power is cut the moment the set is live, and the stick as it
+  #             was left boots that set
+  #   pairing   refusal, approval, --replace and forget, over the line
+  #   powercut  the power cut in the middle of a sync round
+  # All three on classic (Linux 2.6.16), link on dist (5.9.16) too. They
+  # sync only the session, its receiver and home, so a round over the line
+  # (about 100 KB/s) takes a minute or two; even so the job takes the best
+  # part of half an hour, so it runs beside e2e on every push to main, and
+  # on a pull request only when it touches what these cover (the changes
+  # job's `link`): the protocol, the session's line, neochumbyd's listener,
+  # sync, pairing, the boot hook, dev/emulate and the emulator.
+  link:
+    name: Serial-line scenarios (classic, dist)
+    needs: [changes, cross, dist, classic]
+    if: >-
+      always() && needs.changes.outputs.link == 'true' && needs.cross.result == 'success'
+      && needs.dist.result == 'success' && needs.classic.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - run: git submodule update --init emu/qemu/qemu-chumby
+
+      # QEMU as the e2e job gets it: prebuilt, else built (and cached).
+      - name: Fetch QEMU
+        id: qemu
+        run: |
+          if emu/qemu/fetch; then
+            echo prebuilt=true >> "$GITHUB_OUTPUT"
+          else
+            echo prebuilt=false >> "$GITHUB_OUTPUT"
+          fi
+      - name: QEMU build dependencies
+        if: steps.qemu.outputs.prebuilt != 'true'
+        run: |
+          sudo apt-get update -q
+          sudo apt-get install -yq --no-install-recommends \
+            build-essential python3 python3-venv ninja-build pkg-config \
+            libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
+            curl xz-utils patch
+      - name: Restore QEMU
+        id: qemu-cache
+        if: steps.qemu.outputs.prebuilt != 'true'
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        with:
+          path: emu/qemu/out
+          key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
+      - name: Build QEMU
+        if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
+        run: emu/qemu/build
+
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: tree
+          path: ${{ runner.temp }}
+      - if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: dist-image-5.9.16
+          path: build/sideload-dist
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: classic-image
+          path: build/classic
+
+      - name: The tree's modes
+        run: |
+          find "$RUNNER_TEMP/tree" -type f -path '*/neochumby*' -exec chmod +x {} +
+          chmod +x "$RUNNER_TEMP/tree.neochumbyd"
+
+      - name: Over the line on the classic profile
+        timeout-minutes: 60
+        env:
+          NEOCHUMBY_EMU_PROFILE: classic
+          E2E_SCENARIOS: link pairing powercut
+        run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/link-classic"
+
+      - name: Over the line on the dist profile
+        if: always() && contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
+        timeout-minutes: 20
+        env:
+          NEOCHUMBY_EMU_PROFILE: dist
+          E2E_SCENARIOS: link
+        run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/link-dist"
+
+      - if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: link
+          path: |
+            ${{ runner.temp }}/link-classic
+            ${{ runner.temp }}/link-dist
           retention-days: 7
 
   # The sideload image's recovery path: the dist image (each kernel's

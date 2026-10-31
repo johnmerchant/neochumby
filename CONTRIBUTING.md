@@ -265,6 +265,10 @@ dev/emulate stop
   (neochumby-proto's `mux`). Pairing and `delivery=sync` work there; NFS
   doesn't. The pairing it keeps goes back in /psp at the next start
   (`dev/emulate kept` copies it out), and `--psp` starts afresh.
+- **Weak keys on 2.6.16.** With no network, an emulated 2.6.16 Chumby
+  (stock, classic) never gathers the entropy /dev/random waits for, so the
+  emulator's hook lowers the threshold. The keys it makes, its pairing key
+  included, are weak: for testing only. Pair real Chumbys on real ones.
 
 `python3 dev/test_emulate.py` (CI runs it) checks the images dev/emulate
 makes and its whole control path against a stub QEMU, without firmware.
@@ -281,7 +285,7 @@ passes where, so far:
 | `smoke` | passes | fails | on 5.9.16 the kernel's framebuffer console blinks its cursor over the session's screen (`vt.global_cursor_default=0` stops it), so the screen seldom settles; and the session reads touches from `/dev/input/event0`, which there is the top button (the touchscreen is `event1`), so no tap reaches it; there is no `/dev/switch` either |
 | `stock` | passes | skipped | the stock firmware's own boot |
 | `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
-| `link` | passes | passes (5.9.16) | not in CI: it runs a neochumbyd here, at the other end of the serial line, and a round over the line takes minutes; `pairing` and `powercut` likewise (both pass on classic) |
+| `link` | passes | passes (CI) | CI's link job runs it on classic and dist, with `pairing` and `powercut` on classic, on every push to main and on pull requests touching what they cover (a round over the line takes minutes) |
 
 The session on dist still uses the stock kernel's `/dev/switch` and
 `/dev/accel`, where 5.9.16 offers evdev and IIO: the scenarios that need
@@ -328,8 +332,9 @@ Where it taps comes from the pictures' own tap zones.
 the other end of the emulated Chumby's serial line. PAIR pairs over the
 line, with the code both ends show; at the next start neochumbyd has the
 Chumby's log and its screen over the developer link, and with
-`delivery=sync` a first round fills set a of its stick, which the boot
-after runs.
+`delivery=sync` a first round fills set a of its stick. The power is cut
+the moment the round says set a is live, and the stick as the cut left it
+boots set a.
 
 **Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`). The
 Chumby taps PAIR against a neochumbyd on the PC, and the code it logs must

@@ -108,14 +108,11 @@ emu start --server "$sock" "$work"
 until_ok 120 logged 'neochumby: opening home' || fail "neochumbyd has no log from the paired Chumby"
 nd shot "$name" "$out/screen.png" || fail "neochumbyd got no screenshot over the line"
 emu wait log 'neochumby-sync: set a is live from the next boot' $((600 * slow)) || fail "the first round didn't finish"
-# The marker and `current` are written last, and may still be in the
-# Chumby's cache: flushed from its console where it has one, else by the
-# kernel within half a minute.
-emu exec sync >/dev/null 2>&1 || sleep $((35 * slow))
-emu stop
-cp "$state/stick.img" "$out/synced.img"
+# The power goes as soon as the round says so: the set it made live must
+# already be on the stick, its marker and `current` included.
+emu powercut "$out/synced.img"
 
-step "the boot after runs the synced set"
+step "the boot after, from the stick as the power cut left it, runs the synced set"
 emu start --boot --stick "$out/synced.img" --server "$sock"
 emu wait log "apps from the stick's set a" $((60 * slow)) || fail "the boot hook didn't run set a"
 until_ok 120 logged 'neochumby-sync: up to date' || fail "the next round didn't find the set up to date"
