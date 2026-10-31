@@ -44,7 +44,7 @@ fn main() {
     let mut cmd = Command::new(exe);
     // -c: centred; -s: with seconds; -b: bold; -C 4: blue.
     cmd.args(["clock", "-c", "-s", "-b", "-C", "4"]).env("LANG", "C.UTF-8");
-    match neochumby::term::run_tapping(cmd, b"q") {
+    match cmd.status() {
         Ok(s) if !s.success() => eprintln!("neochumby-clock: tty-clock: {s}"),
         Ok(_) => {}
         Err(e) => {

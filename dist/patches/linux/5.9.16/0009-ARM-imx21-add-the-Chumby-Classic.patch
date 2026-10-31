@@ -5,6 +5,10 @@ Description: ARM: imx21: add the Chumby Classic
  TSC2100 on CSPI3, the accelerometer on CSPI1, the PWM backlight, SSI1
  sound, and the keypad port as GPIO for the top button and the power and
  speaker switches.
+ .
+ UART2 is registered too, though nothing on the board is wired to it and
+ its pins are left alone: an emulated Chumby, which has no network,
+ reaches neochumbyd over it (ttymxc1).
 Author: John Merchant <john@johnmerchant.dev>
 Upstream-Status: Inappropriate [AI generated code]
 Signed-off-by: John Merchant <john@johnmerchant.dev>
@@ -54,7 +58,7 @@ new file mode 100644
 index 000000000..22426ae5e
 --- /dev/null
 +++ b/arch/arm/mach-imx/mach-chumby-classic.c
-@@ -0,0 +1,529 @@
+@@ -0,0 +1,532 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Chumby Classic (hardware 3.8): a Freescale i.MX21 with 64 MiB of SDRAM,
@@ -538,6 +542,9 @@ index 000000000..22426ae5e
 +				     "chumby");
 +
 +	imx21_add_imx_uart0(&uart_pdata_rts);
++	/* UART2 (ttymxc1) is wired to nothing on the board, so its pins stay
++	 * as they are; an emulated Chumby talks to neochumbyd over it. */
++	imx21_add_imx_uart1(&uart_pdata_norts);
 +	imx21_add_imx_uart2(&uart_pdata_norts);
 +	imx21_add_mxc_nand(&chumby_nand_pdata);
 +	imx21_add_imx2_wdt();

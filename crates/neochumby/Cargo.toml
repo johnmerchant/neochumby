@@ -11,8 +11,9 @@ repository.workspace = true
 readme = "README.md"
 keywords = ["chumby", "framebuffer", "embedded", "arm"]
 categories = ["embedded", "hardware-support"]
-# What the published crate carries: what it builds from.
-include = ["src/**", "README.md", "LICENSE"]
+# What the published crate carries: what it builds from, the terminal's
+# fonts (Spleen, with its licence) and colour schemes among it.
+include = ["src/**", "fonts/**", "themes/**", "README.md", "LICENSE"]
 
 [dependencies]
 libc.workspace = true
@@ -21,7 +22,7 @@ neochumby-macros.workspace = true
 neochumby-sync.workspace = true
 neochumby-sys.workspace = true
 font8x8 = { version = "0.3", default-features = false, features = ["unicode"] }
-# Fb is a DrawTarget: its fonts (the terminal's 5x8), shapes and text.
+# Fb is a DrawTarget: its fonts, shapes and text.
 embedded-graphics = "0.8"
 vte = "0.15"
 neochumby-softfloat = { workspace = true, optional = true }

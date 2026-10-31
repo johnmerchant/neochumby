@@ -42,7 +42,6 @@
 
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read, Write};
-use std::net::{TcpStream, ToSocketAddrs};
 use std::os::fd::{AsFd, AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::sync::Arc;
@@ -53,7 +52,7 @@ use neochumby::conf::{self, Paired};
 use neochumby::fb;
 use neochumby::input::{self, Calibration};
 use neochumby_proto::dev::{BATCH_LINES, Backoff, Lines, LogQueue, shot_chunks};
-use neochumby_proto::{Identity, Msg, PublicKey, Session, Settings, unhex_key, version};
+use neochumby_proto::{Identity, Msg, PublicKey, Session, Settings, Stream as _, unhex_key, version};
 use neochumby_sys::fd::{self, Stdio};
 
 const CONNECT: Duration = Duration::from_secs(5);
@@ -228,16 +227,10 @@ fn link(
 
 /// The session, and whether this Chumby takes input (`dev=on`).
 fn connect(p: &Paired, me: &Identity, server_key: &PublicKey) -> io::Result<(Session, bool)> {
-    let addr = (p.server.as_str(), p.api_port)
-        .to_socket_addrs()?
-        .next()
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "no address"))?;
-    let tcp = TcpStream::connect_timeout(&addr, CONNECT)?;
-    // A neochumbyd gone without a word is noticed in about a minute.
-    neochumby_sys::net::keepalive(&tcp, 30, 10, 3);
-    tcp.set_read_timeout(Some(WRITE))?;
-    tcp.set_write_timeout(Some(WRITE))?;
-    let mut s = Session::connect(tcp, me, server_key)?;
+    let stream = neochumby::line::connect(&p.server, p.api_port, CONNECT)?;
+    stream.set_read_timeout(Some(WRITE))?;
+    stream.set_write_timeout(Some(WRITE))?;
+    let mut s = Session::connect(stream, me, server_key)?;
     // The settings: the session has them already (settings.rs), but the
     // link goes by these, and those sent after, for input.
     let on = version::hello(&mut s, conf::name(), WRITE)?.dev;
@@ -274,17 +267,17 @@ impl Input<'_> {
         }
         let (rx, ry) = Calibration::load().raw(x, y);
         let open = || -> io::Result<File> {
-            let f = OpenOptions::new().write(true).open(input::TOUCHSCREEN)?;
+            let f = OpenOptions::new().write(true).open(input::touchscreen())?;
             // The kernel ignores O_CLOEXEC; nothing the session runs while
             // the finger is down gets this.
             fd::set_cloexec(f.as_fd(), true)?;
             Ok(f)
         };
-        let mut file = open().map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
+        let mut file = open().map_err(|e| format!("{}: {e}", input::touchscreen()))?;
         // Up first: a finger a session left down (one that ended or crashed
         // mid-tap) would make the kernel drop this press as no change.
-        file.write_all(&input::touch_up()).map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
-        file.write_all(&input::touch_down(rx, ry)).map_err(|e| format!("{}: {e}", input::TOUCHSCREEN))?;
+        file.write_all(&input::touch_up()).map_err(|e| format!("{}: {e}", input::touchscreen()))?;
+        file.write_all(&input::touch_down(rx, ry)).map_err(|e| format!("{}: {e}", input::touchscreen()))?;
         eprintln!("neochumby: neochumbyd taps ({x}, {y}) for {hold_ms} ms");
         Ok(Held { file, until: Instant::now() + Duration::from_millis(hold_ms.into()) })
     }
@@ -312,7 +305,7 @@ struct Held {
 impl Drop for Held {
     fn drop(&mut self) {
         if let Err(e) = self.file.write_all(&input::touch_up()) {
-            eprintln!("neochumby: letting go of a tap: {}: {e}", input::TOUCHSCREEN);
+            eprintln!("neochumby: letting go of a tap: {}: {e}", input::touchscreen());
         }
     }
 }

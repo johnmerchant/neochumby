@@ -30,7 +30,11 @@ tree=${1:?usage: dev/emulate-classic TREE PICTURES OUT}
 pictures=${2:?usage: dev/emulate-classic TREE PICTURES OUT}
 out=${3:?usage: dev/emulate-classic TREE PICTURES OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
-state=$out/state
+# The emulator's directory (the stick image, the console's log), in a
+# temporary directory removed on exit, as the other scenarios keep it,
+# rather than left in OUT.
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-classic.XXXXXX")
+trap 'emu stop >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
 emu() { "$dev/emulate" --state "$state" "$@"; }
 slow=$(emu scale)
 step() { echo "== $*"; }

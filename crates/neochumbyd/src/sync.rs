@@ -17,7 +17,7 @@ use crate::api::Api;
 /// Rounds for `name`, the first asked for by `first`, until it hangs up.
 pub fn serve(api: &Api, name: &str, mut s: Session, first: Msg) -> io::Result<()> {
     // The Chumby stops reading while it fsyncs a large file to its stick.
-    s.tcp().set_write_timeout(Some(Duration::from_secs(300)))?;
+    s.stream().set_write_timeout(Some(Duration::from_secs(300)))?;
     let mut m = first;
     loop {
         match m {
