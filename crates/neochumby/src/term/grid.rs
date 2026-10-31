@@ -136,6 +136,9 @@ pub struct Grid {
     fg: u16,
     bg: u16,
     palette: [u16; 256],
+    /// The scheme's cursor colour, unless it's the foreground: the cursor
+    /// is then its cell in reverse video.
+    cursor: Option<u16>,
     cells: Vec<Cell>,
     dirty: Vec<bool>,
     x: usize,
@@ -180,6 +183,7 @@ impl Grid {
             fg,
             bg,
             palette: palette(scheme),
+            cursor: (scheme.cursor != scheme.foreground).then(|| to565(scheme.cursor)),
             cells: vec![blank; cols * rows],
             dirty: vec![true; cols * rows],
             x: 0,
@@ -235,7 +239,11 @@ impl Grid {
             }
             let mut c = self.cells[i];
             if Some(i) == cursor {
-                std::mem::swap(&mut c.fg, &mut c.bg);
+                match self.cursor {
+                    // On a background of its own colour, it's in reverse.
+                    Some(colour) if colour != c.bg => (c.fg, c.bg) = (c.bg, colour),
+                    _ => std::mem::swap(&mut c.fg, &mut c.bg),
+                }
             }
             let drawn = boxes::glyph(c.ch);
             let glyph = match drawn {
@@ -599,7 +607,8 @@ impl vte::Perform for Grid {
                 b'c' => {
                     let replies = std::mem::take(&mut self.replies);
                     let fresh = Grid::new(0, 0, self.font.clone(), &Scheme::default());
-                    let (cols, rows, fg, bg, palette) = (self.cols, self.rows, self.fg, self.bg, self.palette);
+                    let (cols, rows, fg, bg, palette, cursor) =
+                        (self.cols, self.rows, self.fg, self.bg, self.palette, self.cursor);
                     let blank = Cell { ch: ' ', fg, bg, underline: false };
                     *self = Grid {
                         cols,
@@ -607,6 +616,7 @@ impl vte::Perform for Grid {
                         fg,
                         bg,
                         palette,
+                        cursor,
                         cells: vec![blank; cols * rows],
                         dirty: vec![true; cols * rows],
                         bottom: rows - 1,
@@ -685,6 +695,26 @@ mod tests {
         assert!(cell(2).contains(&to565(s.palette[8])));
         // The rest is the scheme's background.
         assert!(cell(3).iter().all(|&p| p == to565(s.background)));
+    }
+
+    #[test]
+    fn the_cursor_in_its_colour() {
+        let mut screen = Screen { w: 320, px: vec![0; 320 * 240] };
+        let first = |s: &Screen| s.px[0];
+        // GitHub Dark's is its foreground: the cell in reverse, as before.
+        let mut g = grid("spleen-8x16");
+        g.draw(&mut screen).unwrap();
+        assert_eq!(first(&screen), to565(Scheme::default().foreground));
+        // One of its own.
+        let mut s = Scheme::default();
+        s.cursor = [0x12, 0x34, 0x56];
+        let mut g = Grid::new(320, 240, Font::builtin("spleen-8x16").unwrap(), &s);
+        g.draw(&mut screen).unwrap();
+        assert_eq!(first(&screen), to565(s.cursor));
+        // Reset (RIS) keeps it.
+        feed(&mut g, b"\x1bc");
+        g.draw(&mut screen).unwrap();
+        assert_eq!(first(&screen), to565(s.cursor));
     }
 
     #[test]

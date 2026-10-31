@@ -6,7 +6,8 @@
 //!
 //! Its look: the font the Chumby's settings name (`font=`, for every app),
 //! else the one the app's manifest names, else Spleen 5x8; and the colours
-//! the settings name (`colors=`, neochumby::term::colors), else GitHub
+//! the settings name (`colors=`, neochumby::term::colors: built in, the
+//! owner's in the tree's themes/, or the tree's collection), else GitHub
 //! Dark. A name that doesn't resolve is logged, and the default used.
 
 use std::fs::File;
@@ -100,10 +101,11 @@ pub fn serve(args: &[String]) -> ! {
         Ok(f) => opts.font = f,
         Err(e) => eprintln!("neochumby: terminal: font {font}: {e}"),
     }
-    match Scheme::named(colors, &neochumby::apps::root()) {
-        Ok(s) => opts.scheme = s,
-        Err(e) => eprintln!("neochumby: terminal: colours {colors}: {e}; using {}", colors::DEFAULT),
+    let (scheme, why) = Scheme::chosen(Some(colors), &neochumby::apps::root());
+    if let Some(e) = why {
+        eprintln!("neochumby: terminal: colours {colors}: {e}; using {}", colors::DEFAULT);
     }
+    opts.scheme = scheme;
     opts.tap = (0..tap.len() / 2).filter_map(|i| u8::from_str_radix(tap.get(2 * i..2 * i + 2)?, 16).ok()).collect();
     let master = match io::stdin().as_fd().try_clone_to_owned() {
         Ok(fd) => File::from(fd),

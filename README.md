@@ -30,6 +30,9 @@ binaries are static (musl), so they don't depend on its userland.
 | --- | --- | --- |
 | `crates/neochumby` | The session (`neochumby`): runs one app at a time in front, starting with the start app, and the apps' services. And the library every app uses: screen, touch, squeeze, accelerometer, a terminal for programs written for one, the apps' manifests, the request pipe, crash reports and a profiler | MIT |
 | `crates/neochumby/fonts` | The terminal's fonts: [Spleen](https://github.com/fcambus/spleen) 2.2.0, every size, as PSF (its README has the source) | BSD-2-Clause (`LICENSE.spleen`) |
+| `crates/neochumby/themes` | The terminal's own colour schemes: GitHub Dark, the default and the only one built into the session (GitHub's [Primer](https://github.com/primer/primitives) colours, as [terminalcolors.com](https://terminalcolors.com/themes/github/dark/) gives them), and xterm's | MIT |
+| `crates/neochumby/third_party/iTerm2-Color-Schemes` | [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes) (3d8a6a1, a submodule that only `tools/tree` checks out): most of the tree's `colors`, from its `ghostty/` themes | MIT, for the collection; each theme's copyright is its author's, as its README credits them |
+| `crates/neochumby/third_party/themes` | Schemes from their own repositories, over iTerm2-Color-Schemes' copies of them: [Catppuccin](https://github.com/catppuccin/ghostty) (b0b03cc: Frappé, Latte, Macchiato, Mocha), [Dracula](https://github.com/dracula/ghostty) (b0e6459), [Rosé Pine](https://github.com/rose-pine/ghostty) (d8b4ec0: and Dawn, Moon) and [Tokyo Night](https://github.com/folke/tokyonight.nvim) (cdc07ac: Day, Moon, Night, Storm), their Ghostty themes as they are; each one's `SOURCE` has its repository, commit and files | MIT (Catppuccin, Dracula, Rosé Pine) and Apache-2.0 (Tokyo Night), each `LICENSE` beside it |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, over TCP or a serial line | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
@@ -70,6 +73,14 @@ Nothing links an app: each runs as a separate
 program. The
 soft-float routines' runtime exception puts no conditions on the programs
 they're linked into.
+
+The colour schemes are data, not code: `tools/tree` converts them into
+one file, the tree's `colors`, with their licences beside it in
+`colors.LICENSE`, and neither is committed. Nord, Solarized and Gruvbox
+are iTerm2-Color-Schemes' copies: Nord's and Solarized's own repositories
+have no Ghostty themes (only iTerm2's, Solarized's in a colour space of
+their own), and Gruvbox's terminal colours (gruvbox-contrib) carry no
+licence.
 
 ## Apps
 
@@ -175,12 +186,22 @@ An app can use any of these keys:
   the program hasn't asked for the mouse (`q` quits top).
 - **The owner's font and colours:** `neochumbyd set NAME font=spleen-8x16`
   sets every text-mode app's font, over its own, and `colors=` its colours:
-  `github-dark` (the default) or `xterm`, built in; a theme in the tree's
-  `themes/` directory, in Ghostty's format (`background = #rrggbb`,
-  `foreground = ...`, `palette = N=#rrggbb`), which most theme sites
-  offer; or 18 hex colours joined by `:` (background, foreground, then
-  colours 0 to 15). Without a neochumbyd, the same lines go in
-  `/psp/neochumby.conf`.
+  `github-dark`, the default, built in; any of the tree's `colors`, some
+  900 schemes from [iTerm2-Color-Schemes](https://github.com/mbadolato/iTerm2-Color-Schemes)
+  and a few themes' own repositories ("What's here"), each named in lower
+  case with `-` between words (`dracula`, `catppuccin-mocha`,
+  `rose-pine-moon`, `tokyonight-storm`, `nord`, `gruvbox-dark`,
+  `solarized-dark-higher-contrast`, `xterm`; `grep -o '^[a-z0-9-]*'
+  TREE/colors` lists them); a theme of your own in the tree's `themes/`
+  directory, in Ghostty's format (`background = #rrggbb`,
+  `foreground = ...`, `cursor-color = ...`, `palette = N=#rrggbb`), which
+  most theme sites offer; or 18 hex colours joined by `:` (background,
+  foreground, then colours 0 to 15). A name it can't find is logged, and
+  GitHub Dark used. Each scheme is its 16 colours, background, foreground
+  and cursor: on 2.6.16 the cursor is drawn in its colour, and on the
+  dist kernels in reverse video, as the Linux console draws it; a theme's
+  other colours (the selection's, the cursor's text) aren't used. Without
+  a neochumbyd, the same lines go in `/psp/neochumby.conf`.
 - **`player`:** a Chumby's default player is the one a start app's MUSIC
   button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
   (the start app asks the session, which tells the player's service).
@@ -224,6 +245,8 @@ A Chumby runs neochumby from a tree of the session and its apps:
 neochumby                  the session
 neochumby-sync             the receiver for delivery=sync (not on a stick made by hand)
 userhook2                  the boot hook, which pairing installs
+colors, colors.LICENSE     the colour schemes text-mode apps can be drawn in (colors=), and their licences
+themes/                    your own schemes, if any (colors=)
 apps/home/                 neochumby-home, manifest
 apps/doom/                 neochumby-doom, manifest, doom1.wad
 apps/quake/                neochumby-quake, manifest, id1/pak0.pak, id1/autoexec.cfg
