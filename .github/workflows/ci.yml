@@ -5,8 +5,8 @@
 # Linux: 5.9.16 and the stable track; mainline weekly, below) built, or
 # restored when its inputs haven't changed, and the end-to-end scenarios
 # run on it (5.9.16), on qemu-chumby's emulated Chumby. And,
-# when the image, the sideloader or the emulator changes (or on demand), the
-# sideload image's recovery path tested. The SDK crates packaged as
+# when the image or the emulator changes (or on demand), the sideload
+# image's recovery path tested. The SDK crates packaged as
 # crates.io would take them; a crate's tag, <crate>-v<version>, publishes
 # it, and nothing else runs (see CONTRIBUTING.md).
 #
@@ -468,7 +468,7 @@ jobs:
             echo 'kernels=["5.9.16","stable"]' >> "$GITHUB_OUTPUT"
           fi
           if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
-            || git diff --name-only "$BASE...$GITHUB_SHA" | grep -qE '^(dist/|tools/neochumby-kernel-sideloader/|emu/qemu/|\.github/workflows/ci\.yml$)'; then
+            || git diff --name-only "$BASE...$GITHUB_SHA" | grep -qE '^(dist/|emu/qemu/|\.github/workflows/ci\.yml$)'; then
             echo sideload=true >> "$GITHUB_OUTPUT"
           else
             echo sideload=false >> "$GITHUB_OUTPUT"
@@ -975,7 +975,7 @@ jobs:
         run: |
           QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
           KERNEL=$PWD/build/sideload-dist/sideload-zImage \
-          python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+          python3 dist/run-recovery-demo.py
 
       # The same on the stable and mainline images: each boots, loads NAND
       # and reports its version, VERSION-mx21-sideload.
@@ -984,14 +984,14 @@ jobs:
         run: |
           QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
           KERNEL=$PWD/build/sideload-dist-stable/sideload-zImage \
-          python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+          python3 dist/run-recovery-demo.py
 
       - name: Recovery end-to-end (mainline)
         if: always() && contains(fromJSON(needs.changes.outputs.kernels), 'mainline')
         run: |
           QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
           KERNEL=$PWD/build/sideload-dist-mainline/sideload-zImage \
-          python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+          python3 dist/run-recovery-demo.py
 
   # The open-source 2.6.16 image (classic/): Chumby's GPL kernel and our
   # BusyBox initramfs. Every run uploads it as the classic-image artifact,

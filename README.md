@@ -61,7 +61,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
 | `dist/` | The sideload image: a Buildroot build of Linux 5.9.16 with an initramfs built in (`sideload-zImage`), and the same initramfs on its own (`sideload-rootfs.cpio.gz`) | MIT |
-| `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> sideload Linux 5.9.16 or 7.x kernel sideloader and QEMU demo (draft) | MIT |
+| `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> Linux 5.9.16 module handoff (draft) | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
 | `dev/wasmbench` | Proposal 0003's benchmark of WebAssembly runtimes on a Chumby: its workloads in Rust, and EEMBC's [CoreMark](https://github.com/eembc/coremark) (1f483d5, a submodule) | MIT; CoreMark Apache-2.0, with EEMBC's terms for its name |
 | `emu/` | The emulator: [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit (a submodule), QEMU's `chumby-classic` machine with its runner and image tool, and the script that builds it | GPL-2.0-or-later, like QEMU (its image tool: MIT) |
@@ -714,8 +714,8 @@ KB/s, so NFS doesn't run over it: `delivery=sync` does.
 
 ## The sideload image
 
-`dist/build` builds the Linux 5.9.16 zImage that the kernel sideloader
-hands off to, with Buildroot. Buildroot needs Linux, so it runs in a
+`dist/build` builds the Linux 5.9.16 sideload image with Buildroot.
+Buildroot needs Linux, so it runs in a
 container, which can be Apple's `container`, `docker` or `podman`:
 `dist/build` uses the first it finds, in that order, and
 `NEOCHUMBY_DIST_RUNTIME` overrides it. The first build downloads and
@@ -755,22 +755,22 @@ does: it waits a few seconds for one, mounts its first partition on
 `/mnt/usb`, and runs its `userhook2` beside the console's shell. That is
 how `dev/emulate`'s dist profile boots a tree (above).
 
-The sideloader's end-to-end tests are in `tools/neochumby-kernel-sideloader`
-and run on the emulator (`dev/emulate prepare` fetches or builds QEMU
-and the image, above) through qemu-chumby's
-`chumby-machine`. Each boots the image, waits for the busybox prompt and
-checks `uname -a` for `5.9.16-mx21-sideload`:
+The dist image's flashed recovery path is tested on the emulator
+(`dev/emulate prepare` fetches or builds QEMU and the image, above) through
+qemu-chumby's `chumby-machine`. It boots the image with a zeroed NAND image,
+waits for the busybox prompt, and checks `uname -a` for
+`5.9.16-mx21-sideload` and that NAND stays unloaded until root asks:
 
 ```sh
-# The flashed path: no stock firmware needed. CI runs this.
 QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
 KERNEL=$PWD/build/sideload-dist/sideload-zImage \
-python3 tools/neochumby-kernel-sideloader/run-recovery-demo.py
+python3 dist/run-recovery-demo.py
 ```
 
-`run-demo.py` is the sideloaded path, from the stock 2.6.16 kernel. It
-needs your own stock zImage and NAND backup; the sideloader's
-[README](tools/neochumby-kernel-sideloader/README.md) has the details.
+The module handoff from the stock 2.6.16 is in
+`tools/neochumby-kernel-sideloader`; its
+[README](tools/neochumby-kernel-sideloader/README.md) has the build and
+hardware steps.
 
 ## Game data
 

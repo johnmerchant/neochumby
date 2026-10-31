@@ -1,5 +1,10 @@
-/target
-/neochumby-kernel-sideloader
 /build/
 __pycache__/
 *.pyc
+/module/*.o
+/module/*.ko
+/module/*.mod.c
+/module/.*.cmd
+/module/Module.symvers
+/module/modules.order
+/module/.tmp_versions/
