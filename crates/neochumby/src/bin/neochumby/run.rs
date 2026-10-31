@@ -81,6 +81,7 @@ use crate::network;
 use crate::services::{Backoff, Services};
 use crate::start;
 use crate::storage;
+use crate::terminal::Terminal;
 
 /// What the session needs of the Chumby itself.
 pub trait Device {
@@ -102,6 +103,13 @@ pub trait Device {
     fn button_fd(&self) -> Option<RawFd>;
     /// Closes the top button, for the Chumby's own software.
     fn close_button(&mut self);
+
+    /// A terminal for `app`, which runs in text mode: its helper, and the
+    /// far end for the app's stdin and stdout. None: the app runs with
+    /// the session's own (as in tests).
+    fn terminal(&mut self, _app: &App) -> std::io::Result<Option<(Terminal, std::fs::File)>> {
+        Ok(None)
+    }
 
     /// Whether a restart was asked for since the last call.
     fn restart(&mut self) -> bool {
@@ -190,6 +198,8 @@ struct Front<'a> {
     asked: Option<(Next<'a>, Instant)>,
     /// Lines it wrote that the session doesn't know.
     unknown: u32,
+    /// Its terminal, in text mode.
+    terminal: Option<Terminal>,
 }
 
 pub struct Session<'a, D: Device> {
@@ -300,8 +310,14 @@ impl<'a, D: Device> Session<'a, D> {
             }
             self.last_open = Some(Instant::now());
             next = match self.open(app, reason) {
-                Ok(front) => {
+                Ok(mut front) => {
+                    let terminal = front.terminal.take();
                     let next = self.watch(front);
+                    // Gone with whatever it started (watch ends the whole
+                    // group), so its terminal has closed.
+                    if let Some(t) = terminal {
+                        t.finish();
+                    }
                     // It has gone, with whatever it started.
                     if self.speaker_by == Some((app.name.as_str(), Role::Front)) {
                         self.speaker_by = None;
@@ -354,9 +370,25 @@ impl<'a, D: Device> Session<'a, D> {
         if let Some(dir) = self.services.storage.dir(app, jail::owner(app)) {
             launch.storage(dir);
         }
-        let (child, pipe) = launch.spawn()?;
+        let mut terminal = None;
+        if app.text()
+            && let Some((t, slave)) = self.device.terminal(app)?
+        {
+            launch.terminal(slave).env("TERM", neochumby::term::TERM);
+            terminal = Some(t);
+        }
+        let (child, pipe) = match launch.spawn() {
+            Ok(started) => started,
+            Err(e) => {
+                // Its terminal closed with the Launch: the helper goes.
+                if let Some(t) = terminal {
+                    t.finish();
+                }
+                return Err(e);
+            }
+        };
         self.services.front(&app.name);
-        Ok(Front { app, child, pipe, asked: None, unknown: 0 })
+        Ok(Front { app, child, pipe, asked: None, unknown: 0, terminal })
     }
 
     /// Watches the app in front until it has gone; what to do next.
@@ -1644,6 +1676,8 @@ mod tests {
             companion: false,
             access: Default::default(),
             player: false,
+            font: None,
+            tap: Vec::new(),
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");

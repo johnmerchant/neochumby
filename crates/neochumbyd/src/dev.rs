@@ -624,6 +624,7 @@ mod tests {
             state_dir: d.clone(),
             hashes: Default::default(),
             links: Links::default(),
+            confine: crate::confine::Confine::Refused("not needed here".into()),
         };
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
