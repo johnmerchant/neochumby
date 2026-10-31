@@ -1,4 +1,6 @@
-//! Sleeping and the local time.
+//! Sleeping, the monotonic clock and the local time.
+
+use std::time::Duration;
 
 /// Sleeps about `ms` milliseconds, as poll(2) with no descriptors. On the
 /// Chumby's kernel, std::thread::sleep panics when an interrupted nanosleep
@@ -8,6 +10,22 @@ pub fn sleep_ms(ms: u32) {
     // SAFETY: with no descriptors, poll(2) reads nothing through its null
     // pointer; it only waits.
     unsafe { libc::poll(std::ptr::null_mut(), 0, ms) };
+}
+
+/// The time since a fixed point (the boot, on Linux), from CLOCK_MONOTONIC
+/// (clock_gettime(2), in 2.6.16): the same clock in every process, and not
+/// moved when the wall clock is set. std's `Instant` reads it too, but
+/// can't be written down for another process to compare.
+// As for `local`: 32-bit musl's time_t.
+#[allow(deprecated)]
+pub fn monotonic() -> Duration {
+    // SAFETY: libc::timespec is integers (and, on some systems, padding),
+    // for which zero is valid.
+    let mut ts: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: `ts` is a live local of the type clock_gettime writes, and
+    // CLOCK_MONOTONIC is a clock every kernel we run on has.
+    unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut ts) };
+    Duration::new(ts.tv_sec.max(0) as u64, ts.tv_nsec.clamp(0, 999_999_999) as u32)
 }
 
 /// The wall clock in the local time zone, from the C library's time zone
@@ -49,4 +67,17 @@ fn local(now: libc::time_t) -> LocalTime {
     unsafe { libc::localtime_r(&now, &mut tm) };
     let field = |v: libc::c_int| v.clamp(0, 60) as u8;
     LocalTime { hour: field(tm.tm_hour), minute: field(tm.tm_min), second: field(tm.tm_sec) }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_monotonic_clock_goes_on() {
+        let a = monotonic();
+        sleep_ms(20);
+        let b = monotonic();
+        assert!(b >= a + Duration::from_millis(15), "{a:?} then {b:?}");
+    }
 }

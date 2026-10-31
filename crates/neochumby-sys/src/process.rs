@@ -85,6 +85,19 @@ pub fn alive(pid: u32) -> bool {
     io::Error::last_os_error().raw_os_error() != Some(libc::ESRCH)
 }
 
+/// When the process `pid` started, in clock ticks since the boot (field 22
+/// of `/proc/<pid>/stat`), or None if that can't be read: no such process,
+/// or no /proc (a system other than Linux). With its pid, it names a
+/// process for good: a pid is given again once its process is gone, but
+/// not with the same start.
+pub fn start_time(pid: u32) -> Option<u64> {
+    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).ok()?;
+    // The command's name, in parentheses (field 2), may hold anything, so
+    // count from the last ')': field 3 is the first after it.
+    let rest = &stat[stat.rfind(')')? + 1..];
+    rest.split_whitespace().nth(22 - 3)?.parse().ok()
+}
+
 /// Whether our child `pid` has exited, without reaping it (waitid(2) with
 /// WNOWAIT). Until it's reaped (`Child::wait`), its pid, and the id of the
 /// process group it leads, can't be given to another process, so its group
@@ -229,6 +242,18 @@ pub fn pass_fds(cmd: &mut Command, fds: Vec<RawFd>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_process_s_start_time() {
+        let me = start_time(std::process::id()).unwrap();
+        assert_eq!(start_time(std::process::id()), Some(me));
+        let mut c = Command::new("sleep").arg("1").spawn().unwrap();
+        assert!(start_time(c.id()).unwrap() >= me);
+        c.kill().unwrap();
+        c.wait().unwrap();
+        assert_eq!(start_time(c.id()), None);
+    }
 
     #[test]
     fn refuses_what_is_not_one_process_or_group() {

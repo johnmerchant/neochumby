@@ -7,25 +7,42 @@
 //! for the Chumby.
 //!
 //! In the directory ([`DIR`] on the device):
-//! - `speaker` holds the holder's pid. It is created with link(2), which
-//!   fails if it exists, so two processes can't both take it; a claim whose
-//!   process has gone is removed by the next taker.
-//! - `speaker.yield` holds the pid of the process asking for the speaker. It
-//!   is replaced with rename(2), so it is never read half-written. It counts
-//!   while its process is alive and for [`LAPSE`] after it was last written.
+//! - `speaker` names the holder, `<pid> <start>`: its pid and when it
+//!   started ([`process::start_time`]; `-` where there is no /proc). It is
+//!   created with link(2), which fails if it exists, so two processes can't
+//!   both take it; a claim whose process has gone is removed by the next
+//!   taker. So is one whose pid is alive but started at another time: the
+//!   pid has been given to another process.
+//! - `speaker.yield` names the process asking for the speaker the same way,
+//!   then when it was written, `<pid> <start> <ms>`: milliseconds of the
+//!   monotonic clock ([`time::monotonic`]), which every process shares and
+//!   setting the wall clock doesn't move. It is replaced with rename(2), so
+//!   it is never read half-written. It counts while its process is alive
+//!   and for [`LAPSE`] after it was written.
+//!
+//! A taker holds a lock on the directory (flock(2)) while it reads and
+//! changes the files, so two newcomers can't both find the same stale claim
+//! and both replace it. One that finds the lock held for long fails with
+//! [`io::ErrorKind::WouldBlock`]: another is taking the speaker, so it
+//! tries again soon, as when it has asked.
 
-use std::fs;
+use std::fs::{self, File};
 use std::io;
-use std::path::PathBuf;
-use std::time::{Duration, SystemTime};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
-use crate::process;
+use crate::{process, time};
 
 /// Where the files are on the device: tmpfs, so they go at reboot.
 pub const DIR: &str = "/tmp/neochumby";
 /// How long a request counts after it was last written: one whose asker
 /// stopped trying lapses then.
 pub const LAPSE: Duration = Duration::from_secs(5);
+
+/// How long a taker waits for another to finish taking the speaker before
+/// it fails with [`io::ErrorKind::WouldBlock`]. Short, as a game may call
+/// it between frames; a 2.6.16 tick (10 ms) is the shortest sleep there.
+const LOCK_WAIT: Duration = Duration::from_millis(20);
 
 const CLAIM: &str = "speaker";
 const REQUEST: &str = "speaker.yield";
@@ -34,7 +51,7 @@ const REQUEST: &str = "speaker.yield";
 #[derive(Clone, Debug)]
 pub struct Handover {
     dir: PathBuf,
-    me: u32,
+    me: Id,
 }
 
 /// What [`Handover::take`] did.
@@ -46,6 +63,40 @@ pub enum Take {
     Asked { holder: u32 },
     /// Another process has already asked for it, and goes first.
     Waiting { asker: u32 },
+}
+
+/// A process as the files name it: its pid, and when it started, if known.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct Id {
+    pid: u32,
+    start: Option<u64>,
+}
+
+impl Id {
+    /// The process `pid` as it is now.
+    fn of(pid: u32) -> Id {
+        Id { pid, start: process::start_time(pid) }
+    }
+
+    /// Whether it is `other`: the same pid, and the same start where both
+    /// are known.
+    fn is(self, other: Id) -> bool {
+        self.pid == other.pid && (self.start.is_none() || other.start.is_none() || self.start == other.start)
+    }
+
+    /// Whether the process is still there: its pid is alive, and hasn't
+    /// been given to another process since.
+    fn alive(self) -> bool {
+        process::alive(self.pid) && self.is(Id::of(self.pid))
+    }
+
+    /// How the files write it.
+    fn line(self) -> String {
+        match self.start {
+            Some(s) => format!("{} {s}", self.pid),
+            None => format!("{} -", self.pid),
+        }
+    }
 }
 
 impl Default for Handover {
@@ -62,24 +113,28 @@ impl Handover {
 
     /// The side of the process `me`, in `dir`.
     fn at(dir: impl Into<PathBuf>, me: u32) -> Handover {
-        Handover { dir: dir.into(), me }
+        Handover { dir: dir.into(), me: Id::of(me) }
     }
 
     /// Takes the speaker if no other live process holds it or has asked for
     /// it. If another holds it, asks it to yield (or renews this process's
     /// request); if another has asked, leaves that request be. Taking it
-    /// withdraws this process's request.
+    /// withdraws this process's request. Fails with
+    /// [`io::ErrorKind::WouldBlock`] if another process is taking it at the
+    /// same moment: try again soon.
     pub fn take(&self) -> io::Result<Take> {
         fs::create_dir_all(&self.dir)?;
+        let _lock = self.lock()?;
         if let Some(asker) = self.other_request() {
             return Ok(Take::Waiting { asker });
         }
         let claim = self.dir.join(CLAIM);
-        // A stale claim is removed and the link tried again; a third failure
-        // means claims are coming and going faster than this can look.
+        // A stale claim is removed and the link tried again. Every taker
+        // holds the lock, so a third failure means claims are coming and
+        // going faster than this can look, from something that doesn't.
         for _ in 0..3 {
-            let tmp = self.dir.join(format!(".{CLAIM}.{}", self.me));
-            fs::write(&tmp, format!("{}\n", self.me))?;
+            let tmp = self.dir.join(format!(".{CLAIM}.{}", self.me.pid));
+            fs::write(&tmp, format!("{}\n", self.me.line()))?;
             let linked = crate::fs::hard_link(&tmp, &claim);
             let _ = fs::remove_file(&tmp);
             match linked {
@@ -90,16 +145,20 @@ impl Handover {
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {}
                 Err(e) => return Err(e),
             }
-            match read_pid(&claim) {
-                Some(p) if p == self.me => {
+            match read(&claim) {
+                Some((p, _)) if p.is(self.me) => {
                     self.withdraw();
                     return Ok(Take::Taken);
                 }
-                Some(holder) if process::alive(holder) => {
+                Some((holder, _)) if holder.alive() => {
                     self.ask()?;
-                    return Ok(Take::Asked { holder });
+                    return Ok(Take::Asked { holder: holder.pid });
                 }
-                _ => remove(&claim)?,
+                _ => {
+                    #[cfg(test)]
+                    tests::before_removing();
+                    remove(&claim)?
+                }
             }
         }
         Err(io::Error::other("the speaker's claim keeps changing"))
@@ -108,7 +167,7 @@ impl Handover {
     /// Gives the speaker up, if this process holds it.
     pub fn release(&self) {
         let claim = self.dir.join(CLAIM);
-        if read_pid(&claim) == Some(self.me) {
+        if read(&claim).is_some_and(|(p, _)| p.is(self.me)) {
             let _ = fs::remove_file(claim);
         }
     }
@@ -116,7 +175,7 @@ impl Handover {
     /// Withdraws this process's request for the speaker, if it has one.
     pub fn withdraw(&self) {
         let request = self.dir.join(REQUEST);
-        if read_pid(&request) == Some(self.me) {
+        if read(&request).is_some_and(|(p, _)| p.is(self.me)) {
             let _ = fs::remove_file(request);
         }
     }
@@ -131,41 +190,62 @@ impl Handover {
     /// holds it or has asked for it. A process that yielded waits for this
     /// before taking the speaker again, rather than asking for it.
     pub fn free(&self) -> bool {
-        let holder = read_pid(&self.dir.join(CLAIM));
-        let held = holder.is_some_and(|p| p != self.me && process::alive(p));
-        !held && self.other_request().is_none()
+        self.holder().is_none() && self.other_request().is_none()
     }
 
     /// The live process holding the speaker, if another one does: the
     /// session asks this when a service dies, to leave a player that's
     /// still going alone.
     pub fn holder(&self) -> Option<u32> {
-        read_pid(&self.dir.join(CLAIM)).filter(|&p| p != self.me && process::alive(p))
+        let (holder, _) = read(&self.dir.join(CLAIM))?;
+        (!holder.is(self.me) && holder.alive()).then_some(holder.pid)
+    }
+
+    /// The directory, locked: while it is open, no other taker looks. A
+    /// taker holds it for a few file operations, but a child forked
+    /// meanwhile (by another thread) holds it too until it execs, so a
+    /// held lock is tried again for up to [`LOCK_WAIT`].
+    fn lock(&self) -> io::Result<File> {
+        let dir = File::open(&self.dir)?;
+        let since = time::monotonic();
+        while !crate::fs::try_lock(&dir)? {
+            if time::monotonic() - since >= LOCK_WAIT {
+                return Err(io::Error::new(io::ErrorKind::WouldBlock, "another process is taking the speaker"));
+            }
+            time::sleep_ms(1);
+        }
+        Ok(dir)
     }
 
     fn ask(&self) -> io::Result<()> {
-        let tmp = self.dir.join(format!(".{REQUEST}.{}", self.me));
-        fs::write(&tmp, format!("{}\n", self.me))?;
+        let tmp = self.dir.join(format!(".{REQUEST}.{}", self.me.pid));
+        fs::write(&tmp, format!("{} {}\n", self.me.line(), time::monotonic().as_millis()))?;
         fs::rename(&tmp, self.dir.join(REQUEST))
     }
 
     /// The pid of another live process whose request hasn't lapsed.
     fn other_request(&self) -> Option<u32> {
-        let request = self.dir.join(REQUEST);
-        let asker = read_pid(&request).filter(|&p| p != self.me)?;
-        let written = fs::metadata(&request).and_then(|m| m.modified()).ok()?;
-        // A request from the future (the clock was set back) has lapsed too:
-        // its asker, if still trying, writes it again.
-        let fresh = SystemTime::now().duration_since(written).is_ok_and(|age| age <= LAPSE);
-        (fresh && process::alive(asker)).then_some(asker)
+        let (asker, written) = read(&self.dir.join(REQUEST))?;
+        // One from the future (from before a reboot, if the directory
+        // outlived it) has lapsed too, as has one with no time.
+        let now = time::monotonic().as_millis();
+        let fresh = written.is_some_and(|w| w <= now && now - w <= LAPSE.as_millis());
+        (fresh && !asker.is(self.me) && asker.alive()).then_some(asker.pid)
     }
 }
 
-fn read_pid(path: &std::path::Path) -> Option<u32> {
-    fs::read_to_string(path).ok()?.trim().parse().ok()
+/// The process a claim or a request names, and the time a request was
+/// written, if it says.
+fn read(path: &Path) -> Option<(Id, Option<u128>)> {
+    let text = fs::read_to_string(path).ok()?;
+    let mut words = text.split_whitespace();
+    let pid = words.next()?.parse().ok()?;
+    let start = words.next().and_then(|s| s.parse().ok());
+    let written = words.next().and_then(|w| w.parse().ok());
+    Some((Id { pid, start }, written))
 }
 
-fn remove(path: &std::path::Path) -> io::Result<()> {
+fn remove(path: &Path) -> io::Result<()> {
     match fs::remove_file(path) {
         Err(e) if e.kind() != io::ErrorKind::NotFound => Err(e),
         _ => Ok(()),
@@ -175,8 +255,27 @@ fn remove(path: &std::path::Path) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs::File;
+    use std::cell::RefCell;
     use std::process::{Child, Command};
+    use std::time::SystemTime;
+
+    thread_local! {
+        /// What a test has [`Handover::take`] do just before it removes a
+        /// stale claim: once, then it's gone.
+        static BEFORE_REMOVING: RefCell<Option<Box<dyn FnOnce()>>> = RefCell::new(None);
+    }
+
+    /// Runs the step a test set in [`BEFORE_REMOVING`], if any.
+    pub(super) fn before_removing() {
+        if let Some(f) = BEFORE_REMOVING.with(|b| b.borrow_mut().take()) {
+            f();
+        }
+    }
+
+    /// The pid a claim or a request names.
+    fn read_pid(path: &Path) -> Option<u32> {
+        read(path).map(|(id, _)| id.pid)
+    }
 
     /// A directory of its own for each test, removed after.
     struct Dir(PathBuf);
@@ -230,9 +329,12 @@ mod tests {
         c.id()
     }
 
-    fn age(path: &std::path::Path, by: Duration) {
-        let f = File::options().write(true).open(path).unwrap();
-        f.set_modified(SystemTime::now() - by).unwrap();
+    /// Rewrites the request at `path` as if written `by` ago (or, if
+    /// negative, that far ahead) by the monotonic clock.
+    fn age(path: &Path, by: i128) {
+        let (id, _) = read(path).unwrap();
+        let at = time::monotonic().as_millis() as i128 - by;
+        fs::write(path, format!("{} {at}\n", id.line())).unwrap();
     }
 
     #[test]
@@ -304,15 +406,81 @@ mod tests {
         let asker = Live::new();
         assert_eq!(d.side(asker.pid()).take().unwrap(), Take::Asked { holder: std::process::id() });
         assert!(me.yield_requested());
-        age(&d.file(REQUEST), LAPSE + Duration::from_secs(1));
+        age(&d.file(REQUEST), LAPSE.as_millis() as i128 + 1000);
         assert!(!me.yield_requested());
-        // Written in the future: the clock was set back.
-        let f = File::options().write(true).open(d.file(REQUEST)).unwrap();
-        f.set_modified(SystemTime::now() + Duration::from_secs(60)).unwrap();
+        // Written in the future: before a reboot the directory outlived.
+        age(&d.file(REQUEST), -60_000);
+        assert!(!me.yield_requested());
+        // With no time (as written before the time was in it).
+        fs::write(d.file(REQUEST), format!("{}\n", asker.pid())).unwrap();
         assert!(!me.yield_requested());
 
         assert_eq!(d.side(dead()).take().unwrap(), Take::Asked { holder: std::process::id() });
         assert!(!me.yield_requested());
+    }
+
+    /// #22: the wall clock starts at 1970 and is set once the Chumby syncs.
+    /// A request written just before that is still fresh after it, since
+    /// its time is the monotonic clock's, not the file's.
+    #[test]
+    fn setting_the_clock_leaves_a_request_fresh() {
+        let d = Dir::new("clock-set");
+        let me = d.side(std::process::id());
+        assert_eq!(me.take().unwrap(), Take::Taken);
+        let asker = Live::new();
+        assert_eq!(d.side(asker.pid()).take().unwrap(), Take::Asked { holder: std::process::id() });
+        let f = fs::File::options().write(true).open(d.file(REQUEST)).unwrap();
+        let hour = Duration::from_secs(3600);
+        for written in [SystemTime::UNIX_EPOCH + hour, SystemTime::now() + hour] {
+            // 2.6.16 can't set a file's times through a descriptor (futimens).
+            match f.set_modified(written) {
+                Err(e) if e.kind() == io::ErrorKind::Unsupported => return,
+                r => r.unwrap(),
+            }
+            assert!(me.yield_requested(), "{written:?}");
+        }
+    }
+
+    /// #20: two newcomers find the same stale claim at once. The second
+    /// looks while the first is between reading the claim and replacing it;
+    /// it finds the first taking the speaker, and on its next try, asks it.
+    #[test]
+    fn two_newcomers_on_a_stale_claim_take_it_once() {
+        let d = Dir::new("stale-race");
+        assert_eq!(d.side(dead()).take().unwrap(), Take::Taken);
+        let other = Live::new();
+        let (first, second) = (d.side(std::process::id()), d.side(other.pid()));
+        let during = std::rc::Rc::new(RefCell::new(None));
+        let (s, seen) = (second.clone(), during.clone());
+        BEFORE_REMOVING.with(|b| *b.borrow_mut() = Some(Box::new(move || *seen.borrow_mut() = Some(s.take()))));
+        assert_eq!(first.take().unwrap(), Take::Taken);
+        let during = during.borrow_mut().take().expect("the first found the claim stale");
+        assert_eq!(during.unwrap_err().kind(), io::ErrorKind::WouldBlock);
+        assert_eq!(read_pid(&d.file(CLAIM)), Some(std::process::id()));
+        assert_eq!(second.take().unwrap(), Take::Asked { holder: std::process::id() });
+    }
+
+    /// #21: a holder that died without releasing, whose pid was then given
+    /// to another process. The pid is alive, but started at another time.
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn a_reused_pid_is_not_the_holder() {
+        let d = Dir::new("reused");
+        let other = Live::new();
+        let now = Id::of(other.pid());
+        let then = Id { start: now.start.map(|s| s.wrapping_sub(1)), ..now };
+        fs::create_dir_all(&d.0).unwrap();
+        fs::write(d.file(CLAIM), format!("{}\n", then.line())).unwrap();
+        fs::write(d.file(REQUEST), format!("{} {}\n", then.line(), time::monotonic().as_millis())).unwrap();
+        let me = d.side(std::process::id());
+        assert_eq!(me.holder(), None);
+        assert!(!me.yield_requested());
+        assert!(me.free());
+        assert_eq!(me.take().unwrap(), Take::Taken);
+        // The process the claim names now, with its own start, still counts.
+        me.release();
+        assert_eq!(d.side(other.pid()).take().unwrap(), Take::Taken);
+        assert_eq!(me.holder(), Some(other.pid()));
     }
 
     #[test]
