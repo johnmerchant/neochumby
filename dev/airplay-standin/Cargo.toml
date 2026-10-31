@@ -1,0 +1,24 @@
+[package]
+name = "neochumby-airplay-standin"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "A stand-in for AirPlay's receiver, for testing on an emulated Chumby that has no network: made-up tracks, covers and a tone"
+
+# Built for a test tree only (dev/emulate-airplay), apart from the device
+# workspace: the binary goes in the tree's apps/airplay/ as
+# standin-companion, where AirPlay's service runs it in place of its
+# companion.
+[workspace]
+
+[dependencies]
+neochumby-airplay-proto = { path = "../../apps/airplay/proto" }
+neochumby-proto = { path = "../../crates/neochumby-proto" }
+neochumby-sys = { path = "../../crates/neochumby-sys" }
+
+[profile.release]
+opt-level = 2
+lto = true
+panic = "abort"
+codegen-units = 1

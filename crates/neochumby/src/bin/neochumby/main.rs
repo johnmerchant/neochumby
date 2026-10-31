@@ -48,13 +48,15 @@
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs is described in
 //! child.rs. The default player is chosen as the session starts
-//! (player.rs).
+//! (player.rs), and so are the frontends the owner
+//! approved (frontend.rs).
 
 mod backlight;
 mod button;
 mod child;
 mod companion;
 mod devlink;
+mod frontend;
 mod jail;
 mod line;
 mod network;
@@ -429,6 +431,16 @@ fn session() {
         server.or_else(|| conf::get(conf::CONF, key))
     };
     let look = terminal::Look { font: setting("font"), colors: setting("colors") };
+    // The frontends the owner approved (`frontend_<app>=`), as `start` is
+    // chosen: names, trusted only as far as the tree goes (frontend.rs).
+    let approved = frontend::resolve(&all, |key| {
+        let server = settings.other.iter().find(|(k, _)| k == key).map(|(_, v)| v.as_str());
+        let local = conf::get(conf::CONF, key);
+        chosen(server, local.as_deref()).map(|(from, v)| (from, v.to_string()))
+    });
+    frontend::init(&all, approved);
+    // The services' sockets, before any app runs (frontend.rs).
+    frontend::bind(&all);
     // On a kernel with a console on the screen, its cursor would blink over
     // what apps draw.
     neochumby::term::vt::quiet();
@@ -521,6 +533,7 @@ fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
         player: false,
         font: None,
         tap: Vec::new(),
+        frontend: None,
     }]
 }
 

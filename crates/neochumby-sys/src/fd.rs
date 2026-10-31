@@ -53,6 +53,24 @@ pub fn recv_nowait(sock: BorrowedFd<'_>, buf: &mut [u8]) -> io::Result<usize> {
     if n < 0 { Err(io::Error::last_os_error()) } else { Ok(n as usize) }
 }
 
+/// Waits up to `ms` milliseconds (-1: for as long as it takes) for any of
+/// `fds` to have something to read, or to have closed: which of them do,
+/// in order. poll(2), which every kernel has, where std's blocking
+/// primitives wait on futex operations newer than the Chumby's. Nothing
+/// at all, if a signal came first.
+pub fn readable(fds: &[BorrowedFd<'_>], ms: i32) -> io::Result<Vec<bool>> {
+    let mut polls: Vec<libc::pollfd> =
+        fds.iter().map(|f| libc::pollfd { fd: f.as_raw_fd(), events: libc::POLLIN, revents: 0 }).collect();
+    // SAFETY: poll(2) reads and writes the pollfds in `polls`, a live
+    // vector of that many; each descriptor is open while it's borrowed.
+    let n = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as libc::nfds_t, ms) };
+    if n < 0 {
+        let e = io::Error::last_os_error();
+        return if e.kind() == io::ErrorKind::Interrupted { Ok(vec![false; fds.len()]) } else { Err(e) };
+    }
+    Ok(polls.iter().map(|p| p.revents != 0).collect())
+}
+
 /// Standard output or standard error, by number.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Stdio {

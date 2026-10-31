@@ -1,7 +1,8 @@
 //! Socket options std doesn't have.
 
+use std::io;
 use std::net::TcpStream;
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, BorrowedFd};
 
 /// Turns on TCP keepalive for `tcp`. On Linux the connection is probed
 /// after `idle` seconds without traffic, then every `interval` seconds, and
@@ -16,6 +17,38 @@ pub fn keepalive(tcp: &TcpStream, idle: u32, interval: u32, count: u32) {
         set(tcp, libc::IPPROTO_TCP, libc::TCP_KEEPIDLE, idle);
         set(tcp, libc::IPPROTO_TCP, libc::TCP_KEEPINTVL, interval);
         set(tcp, libc::IPPROTO_TCP, libc::TCP_KEEPCNT, count);
+    }
+}
+
+/// The user id of the process at the other end of the Unix socket `sock`:
+/// whoever connected, for a listener's accepted stream; whoever listened,
+/// for a stream that connected (SO_PEERCRED on Linux, from 2.2; getpeereid
+/// elsewhere). As the kernel recorded it then, not as it is now.
+pub fn peer_uid(sock: BorrowedFd<'_>) -> io::Result<u32> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred = libc::ucred { pid: 0, uid: 0, gid: 0 };
+        let mut len = size_of::<libc::ucred>() as libc::socklen_t;
+        // SAFETY: the kernel writes at most `len` bytes into `cred`, a
+        // live ucred of that size, and the length back into `len`; the
+        // descriptor is open while it's borrowed.
+        let r = unsafe {
+            libc::getsockopt(sock.as_raw_fd(), libc::SOL_SOCKET, libc::SO_PEERCRED, (&raw mut cred).cast(), &mut len)
+        };
+        if r != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(cred.uid)
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let (mut uid, mut gid) = (0, 0);
+        // SAFETY: getpeereid(3) writes one uid and one gid through the two
+        // pointers, to our two live locals.
+        if unsafe { libc::getpeereid(sock.as_raw_fd(), &mut uid, &mut gid) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        Ok(uid)
     }
 }
 
@@ -97,4 +130,17 @@ pub fn wireless_essid(iface: &str) -> Option<Vec<u8>> {
     let n = (req.length as usize).min(32);
     let e: Vec<u8> = buf[..n].iter().copied().take_while(|&b| b != 0).collect();
     (!e.is_empty()).then_some(e)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::os::fd::AsFd;
+    use std::os::unix::net::UnixStream;
+
+    #[test]
+    fn a_peer_is_this_user() {
+        let (a, b) = UnixStream::pair().unwrap();
+        assert_eq!(super::peer_uid(a.as_fd()).unwrap(), crate::process::uid());
+        assert_eq!(super::peer_uid(b.as_fd()).unwrap(), crate::process::uid());
+    }
 }
