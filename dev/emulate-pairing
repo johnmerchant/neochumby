@@ -11,14 +11,11 @@
 #
 #   dev/emulate-pairing TREE NEOCHUMBYD OUT
 #
-# TREE from tools/tree; NEOCHUMBYD the x86_64 neochumbyd built with it.
-# Pending: it needs the Chumby to reach a neochumbyd on this PC, and the
-# emulated Chumby has no network (qemu-chumby always runs it with -nic
-# none), so every profile skips it (77) until the session can reach
-# neochumbyd another way (a serial link, say). It ran under dev/emulate's
-# old user mode, which shared the PC's network; the steps below are that
-# scenario, kept for the port. A real Chumby is skipped too: pairing one is
-# its owner's to do.
+# TREE from tools/tree; NEOCHUMBYD the neochumbyd built with it, for this
+# machine. The emulated Chumby has no network: it reaches neochumbyd over
+# its serial line, which qemu-chumby joins to neochumbyd's --listen-unix
+# socket (dev/emulate start --server). A real Chumby is skipped: pairing
+# one is its owner's to do.
 set -eu
 tree=${1:?usage: dev/emulate-pairing TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/emulate-pairing TREE NEOCHUMBYD OUT}
@@ -40,8 +37,10 @@ fail() {
 backend=$(emu backend)
 slow=$(emu scale)
 
-echo "dev/emulate-pairing: skipped: pending: the emulated Chumby has no network to reach neochumbyd (this is $backend)"
-exit 77
+if [ "$backend" = device ]; then
+  echo "dev/emulate-pairing: skipped: pairing a real Chumby is its owner's to do"
+  exit 77
+fi
 
 # The session's files and the home screen: all pairing needs.
 work=$out/tree
@@ -55,15 +54,18 @@ cp -Rp "$tree/apps/home" "$work/apps/"
 ndstate=$out/nd
 rm -rf "$ndstate" "$out/psp0"
 mkdir -p "$out/psp0"
-api=127.0.0.1:17341
-"$neochumbyd" serve --state "$ndstate" --tree "$work" --api "$api" --nfs 127.0.0.1:12050 > "$out/neochumbyd.log" 2>&1 &
+# The line's socket: a short path, as a Unix socket's must be.
+sockdir=$(mktemp -d /tmp/ncline.XXXXXX)
+sock=$sockdir/line.sock
+"$neochumbyd" serve --state "$ndstate" --tree "$work" --api 127.0.0.1:0 --nfs 127.0.0.1:0 \
+  --listen-unix "$sock" > "$out/neochumbyd.log" 2>&1 &
 server=$!
-trap 'kill $server 2>/dev/null || true' EXIT
+trap 'kill $server 2>/dev/null || true; rm -rf "$sockdir"' EXIT
 nd() { "$neochumbyd" "$@" --state "$ndstate"; }
 
 # neochumbyd's key, as it says when it starts.
 i=0
-until server_key=$(sed -n 's/.*; key \([0-9a-f]*\)$/\1/p' "$out/neochumbyd.log") && [ -n "$server_key" ]; do
+until server_key=$(sed -n 's/.*; key \([0-9a-f]*\)$/\1/p' "$out/neochumbyd.log") && [ -n "$server_key" ] && [ -S "$sock" ]; do
   i=$((i + 1))
   [ "$i" -lt $((100 * slow)) ] || fail "neochumbyd didn't start"
   sleep 0.1
@@ -80,18 +82,24 @@ until_ok() {
     sleep 0.1
   done
 }
-asking() { nd pairing | sed -n 's/^asking *chumby *code \([0-9a-f-]*\).*/\1/p'; }
+# The Chumby's name is its own (the stock firmware's host name, else
+# chumby), and its request says it.
+asking() { nd pairing | sed -n 's/^asking *[a-z0-9_-]* *code \([0-9a-f-]*\).*/\1/p'; }
+name() { nd pairing | sed -n -E 's/^(asking|paired) +([a-z0-9_-]+) .*/\2/p' | head -n 1; }
 has_asking() { [ -n "$(asking)" ]; }
 none_asking() { [ -z "$(asking)" ]; }
 shown() { emu log | sed -n 's/.*neochumby-home: pairing with .*, showing \([0-9a-f-]*\).*/\1/p' | tail -n 1; }
 shows_code() { [ "$(shown)" = "$code" ]; }
-kept() { [ -f "$state/psp/neochumby.conf" ] && [ -f "$state/psp/neochumby.key" ]; }
-paired_keys() { nd pairing | sed -n 's/^paired *chumby *\([0-9a-f]*\).*/\1/p'; }
+# The Chumby keeps a key other than $1.
+kept_other() { kept && [ "$(cat "$state/psp/neochumby.key")" != "$1" ]; }
+kept() { emu kept >/dev/null 2>&1 && [ -f "$state/psp/neochumby.conf" ] && [ -f "$state/psp/neochumby.key" ]; }
+paired_keys() { nd pairing | sed -n 's/^paired *[a-z0-9_-]* *\([0-9a-f]*\).*/\1/p'; }
 
 # Taps PAIR on the home screen, and waits for the request: its code.
 pair() {
   emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
-  emu tap 80 220 # PAIR
+  emu wait log "neochumby-home: showing" $((30 * slow)) || fail "home didn't draw"
+  emu tap 80 232 --hold 300 # PAIR, in the bottom row
   until_ok 30 has_asking || fail "the Chumby didn't ask to pair"
   code=$(asking)
   [ "${#code}" -eq 39 ] || fail "the code is $code: not eight groups of four"
@@ -100,7 +108,7 @@ pair() {
 }
 
 step "a request, refused"
-emu start --psp "$out/psp0" --server "$api" "$work"
+emu start --psp "$out/psp0" --server "$sock" "$work"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 pair
 if nd approve 0000-0000-0000-0000-0000-0000-0000-0000 > "$out/wrong.txt" 2>&1; then
@@ -121,18 +129,19 @@ nd approve "$(echo "$code" | tr -d - | tr a-f A-F)"
 emu wait log 'neochumby-home: paired with' $((30 * slow)) || fail "the Chumby didn't hear it was approved"
 until_ok 30 kept || fail "the Chumby didn't keep the pairing"
 grep -qx "server_key=$server_key" "$state/psp/neochumby.conf" || fail "the conf doesn't pin neochumbyd's key"
+first_secret=$(cat "$state/psp/neochumby.key")
 first=$(paired_keys)
 [ "$(echo "$first" | wc -l)" -eq 1 ] && [ -n "$first" ] || fail "not one Chumby paired: $first"
 
 step "paired, the next boot is neochumbyd's Chumby"
 emu stop
-emu start --server "$api" "$work"
-has_log() { nd log chumby 2>/dev/null | grep -q 'neochumby: opening home'; }
+emu start --server "$sock" "$work"
+has_log() { nd log "$(name)" 2>/dev/null | grep -q 'neochumby: opening home'; }
 until_ok 60 has_log || fail "neochumbyd has no log from the paired Chumby"
 
 step "a new key under the same name, only with --replace"
 emu stop
-emu start --psp "$out/psp0" --server "$api" "$work"
+emu start --psp "$out/psp0" --server "$sock" "$work"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 pair
 if nd approve "$code" > "$out/replace.txt" 2>&1; then
@@ -146,11 +155,12 @@ second=$(paired_keys)
 [ -n "$second" ] && [ "$second" != "$first" ] && [ "$(echo "$second" | wc -l)" -eq 1 ] ||
   fail "not the new key alone: $second"
 until_ok 30 none_asking || fail "a request is still waiting"
+until_ok 30 kept_other "$first_secret" || fail "the Chumby didn't keep its new pairing"
 
 step "forgotten, it is turned away"
-nd forget chumby
+nd forget "$(name)"
 emu stop
-emu start --server "$api" "$work"
+emu start --server "$sock" "$work"
 emu wait log 'settings from .*: no longer paired' $((30 * slow)) || fail "the forgotten Chumby wasn't turned away"
 emu stop
 

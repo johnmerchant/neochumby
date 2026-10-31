@@ -306,6 +306,16 @@ fn mount_kernel_fs() {
             }
         }
     }
+    // Pseudo-terminals, on devtmpfs' /dev/ptmx: the session runs each
+    // text-mode app on one (neochumby::term).
+    let _ = fs::create_dir_all("/dev/pts");
+    let pts = MountFlags { nosuid: true, noexec: true, ..MountFlags::default() };
+    if let Err(e) = boot::mount("devpts", Path::new("/dev/pts"), "devpts", pts)
+        && e.kind() != io::ErrorKind::ResourceBusy
+    {
+        kmsg(&format!("/dev/pts: {e}"));
+        ok = false;
+    }
     // The kernel drops what userspace writes to /dev/kmsg past a few lines
     // a second (printk_devkmsg=ratelimit, its default), which a boot's
     // burst of module loads passes: the log is init's, so keep all of it.

@@ -13,9 +13,11 @@ pub mod conf;
 pub mod debug;
 pub mod fb;
 pub mod input;
+pub mod line;
 pub mod session;
 pub mod settings;
 pub mod term;
+pub mod verified;
 
 /// `companion!()`: the compiling app's companion, for [`companion::open`];
 /// an app whose Cargo.toml declares none does not compile.

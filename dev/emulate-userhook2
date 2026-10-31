@@ -6,6 +6,9 @@
 #   - copying the stick's emulate/psp into /psp, for the profiles whose
 #     settings aren't on the NAND (dist, classic);
 #   - linking each --bind directory (emulate/bind/N) at its path;
+#   - with --server, putting the pairing the Chumby kept (emulate/kept)
+#     back in /psp, and copying it there again whenever it changes, so
+#     that it outlasts this start;
 # and copies the hook's log to the console, which is how dev/emulate
 # follows the session: its "neochumby exited: N" is the session's end.
 
@@ -18,6 +21,20 @@ if [ -d "$E/psp" ]; then
   mkdir -p /psp
   cp -R "$E/psp/." /psp/
 fi
+if [ -d "$E/kept" ]; then
+  mkdir -p /psp
+  cp -R "$E/kept/." /psp/
+  (
+    while :; do
+      for f in neochumby.conf neochumby.key neochumby.settings; do
+        [ -f "/psp/$f" ] || continue
+        [ "$(cat "/psp/$f")" = "$(cat "$E/kept/$f" 2>/dev/null)" ] && continue
+        cp "/psp/$f" "$E/kept/$f.new" && mv "$E/kept/$f.new" "$E/kept/$f" && sync
+      done
+      sleep 2
+    done
+  ) &
+fi
 if [ -f "$E/binds" ]; then
   while read -r n path; do
     mkdir -p "${path%/*}"
@@ -25,6 +42,13 @@ if [ -f "$E/binds" ]; then
     ln -s "$E/bind/$n" "$path"
   done <"$E/binds"
 fi
+# A 2.6.16 kernel gathers entropy only from a few devices, and with no
+# network an emulated Chumby never has the 64 bits /dev/random waits for,
+# which TLS (ring, without the getrandom system call) waits on once before
+# it reads /dev/urandom. On the emulator only, /dev/random is made readable
+# with less: its keys are for testing.
+[ -w /proc/sys/kernel/random/read_wakeup_threshold ] &&
+  echo 8 >/proc/sys/kernel/random/read_wakeup_threshold
 [ -f "$STICK/neochumby/userhook2" ] || {
   echo "emutest: the stick holds no neochumby/userhook2"
   exit 0

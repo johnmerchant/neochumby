@@ -86,7 +86,7 @@ fn rounds(forever: bool, log: &mut Log, failed: &mut Option<String>) -> io::Resu
     if settings.delivery != Some(Delivery::Sync) {
         return Ok(None);
     }
-    s.tcp().set_write_timeout(Some(TIMING.step))?;
+    s.stream().set_write_timeout(Some(TIMING.step))?;
     loop {
         // Each round checks the stick is still there before it writes.
         let o = receive::round(&mut s, &stick, TIMING)?;

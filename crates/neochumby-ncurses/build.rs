@@ -1,8 +1,9 @@
 // Builds ncurses (third_party/ncurses) with its own configure and make, as
 // static libraries, libncursesw and libpanelw (which cbonsai uses), for the
 // C compiler cargo is given (tools/zigcc for the Chumby). There is no
-// terminfo database on the Chumby: xterm-256color, which neochumby's
-// terminal is, is compiled in (a "fallback"), and nothing else. Compiling it
+// terminfo database on the Chumby: linux, which neochumby's terminal is
+// (the Linux console's own, where there is one), and xterm-256color, which
+// it was, are compiled in ("fallbacks"), and nothing else. Compiling them
 // takes ncurses' tic and infocmp, which are built for the host first: the
 // host's own may be too old to read ncurses' terminfo.src (macOS's is).
 use std::path::{Path, PathBuf};
@@ -71,7 +72,7 @@ fn main() {
             "--without-progs",
             "--without-profile",
             "--disable-database",
-            "--with-fallbacks=xterm-256color",
+            "--with-fallbacks=linux,xterm-256color",
             "--disable-home-terminfo",
             "--enable-widec",
         ])
