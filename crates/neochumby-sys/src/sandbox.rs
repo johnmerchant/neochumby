@@ -10,6 +10,10 @@
 //!   - read and run the system ([`SYSTEM`]: `/usr`, `/etc`, `/proc` and so
 //!     on), and use `/dev/null` and the random devices;
 //!   - read and run the tree;
+//!   - read and run the program it is started as, wherever it is (a wasm
+//!     companion's process is neochumbyd's own binary, which may be in a
+//!     home directory), unless it is in the state directory and not in
+//!     the tree;
 //!   - read and write its app's own directory, which holds its TMPDIR.
 //!
 //!   Nothing else: not the state directory, not other apps' directories,
@@ -157,16 +161,19 @@ impl Sandbox {
                 "the app's directory must be in the state directory",
             ));
         }
+        // The program itself, as the kernel finds it (through
+        // /proc/self/exe, say): never a way into the state directory.
+        let run = program.canonicalize().ok().filter(|p| !p.starts_with(&state) || p.starts_with(&tree));
         match *self {
             #[cfg(any(target_os = "linux", target_os = "android"))]
-            Sandbox::Landlock(abi) => landlock::command(abi, program, &state, &tree, &own, c.bind),
+            Sandbox::Landlock(abi) => landlock::command(abi, program, run.as_deref(), &state, &tree, &own, c.bind),
             #[cfg(target_os = "macos")]
             Sandbox::Apple => {
                 let home = match c.home.map(Path::canonicalize) {
                     Some(Ok(h)) => h,
                     _ => own.clone(),
                 };
-                Ok(apple::command(program, &state, &tree, &own, &home))
+                Ok(apple::command(program, run.as_deref().unwrap_or(&tree), &state, &tree, &own, &home))
             }
             #[allow(unreachable_patterns)]
             _ => Err(io::Error::new(io::ErrorKind::Unsupported, "not this system's sandbox")),
@@ -199,7 +206,8 @@ fn except(path: &Path, inner: &Path) -> Vec<PathBuf> {
 /// directory and the null devices; no reading the user's home directory or
 /// neochumbyd's state directory but for the tree and the app's own
 /// directory; no connecting to a Unix socket in the state directory (the
-/// file rules don't cover that). The last rule that matches wins.
+/// file rules don't cover that); but reading the program it runs, wherever
+/// it is (PROGRAM, the tree if it may not). The last rule that matches wins.
 pub const APPLE_PROFILE: &str = r#"(version 1)
 (allow default)
 (deny file-write*)
@@ -209,6 +217,7 @@ pub const APPLE_PROFILE: &str = r#"(version 1)
 (deny network-outbound (remote unix-socket (subpath (param "STATE"))))
 (allow file-read* (subpath (param "TREE")))
 (allow file-read* file-write* (subpath (param "OWN")))
+(allow file-read* (literal (param "PROGRAM")))
 "#;
 
 #[cfg(target_os = "macos")]
@@ -231,10 +240,10 @@ mod apple {
         }
     }
 
-    pub fn command(program: &Path, state: &Path, tree: &Path, own: &Path, home: &Path) -> Command {
+    pub fn command(program: &Path, run: &Path, state: &Path, tree: &Path, own: &Path, home: &Path) -> Command {
         let mut cmd = Command::new(SANDBOX_EXEC);
         cmd.arg("-p").arg(APPLE_PROFILE);
-        for (k, v) in [("STATE", state), ("TREE", tree), ("OWN", own), ("HOME", home)] {
+        for (k, v) in [("STATE", state), ("TREE", tree), ("OWN", own), ("HOME", home), ("PROGRAM", run)] {
             let mut d = std::ffi::OsString::from(format!("{k}="));
             d.push(v);
             cmd.arg("-D").arg(d);
@@ -405,6 +414,7 @@ mod landlock {
     pub fn command(
         abi: u32,
         program: &Path,
+        run: Option<&Path>,
         state: &Path,
         tree: &Path,
         own: &Path,
@@ -424,6 +434,9 @@ mod landlock {
         // what's beside the way down).
         for q in except(tree, state) {
             rules.allow(&q, read)?;
+        }
+        if let Some(run) = run {
+            rules.allow(run, READ_FILE | EXECUTE)?;
         }
         rules.allow(own, rules.handled)?;
         if abi >= 4 {
@@ -514,6 +527,39 @@ mod tests {
         for secret in ["identity", "owner-token"] {
             assert_eq!(std::fs::read_to_string(state.join(secret)).unwrap(), "x\n");
         }
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// The program it is started as runs wherever it is, as a wasm
+    /// companion's (neochumbyd's own binary) does from a home directory;
+    /// what is beside it stays closed. One in the state directory, outside
+    /// the tree, doesn't run.
+    #[test]
+    #[cfg(any(target_os = "linux", target_os = "android"))]
+    fn its_own_program_runs_wherever_it_is() {
+        let Ok(sandbox) = detect() else { return eprintln!("skipped: no sandbox") };
+        let dir = std::env::temp_dir().join(format!("neochumby-sandbox-exe-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let (state, home) = (dir.join("state"), dir.join("home"));
+        let (tree, own) = (state.join("tree"), state.join("apps/web"));
+        for d in [&tree, &own, &home] {
+            std::fs::create_dir_all(d).unwrap();
+        }
+        let sh = Path::new("/bin/sh").canonicalize().unwrap();
+        let (copy, hidden) = (home.join("sh"), state.join("sh"));
+        std::fs::copy(&sh, &copy).unwrap();
+        std::fs::copy(&sh, &hidden).unwrap();
+        std::fs::write(home.join(".ssh-key"), "x\n").unwrap();
+        let c = Confinement { state: &state, tree: &tree, own: &own, home: Some(&home), bind: Some(&[]) };
+        let run = |program: &Path, script: &str| {
+            let mut cmd = sandbox.command(program, &c).unwrap();
+            cmd.arg("-c").arg(script).current_dir(&own);
+            cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+            cmd.status().map(|s| s.success()).unwrap_or(false)
+        };
+        assert!(run(&copy, "exit 0"), "its own program, in a home directory");
+        assert!(!run(&copy, &format!("cat '{}'", home.join(".ssh-key").display())), "what's beside it");
+        assert!(!run(&hidden, "exit 0"), "a program in the state directory");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 

@@ -27,7 +27,8 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 toml.workspace = true
 # The catalog's HTTPS: pure Rust, rustls on ring (as neochumby-proto's TLS)
 # with Mozilla's roots built in, so a static musl binary needs no system
-# certificates. No OpenSSL.
+# certificates. No OpenSSL. A wasm companion's HTTPS GETs (wasm.rs,
+# egress.rs) use it too.
 ureq = { version = "3", default-features = false, features = ["rustls"] }
 # Verifying the catalog's Sigstore bundles (catalog/sigstore.rs): the
 # certificate chain with webpki and the signatures with ring, as rustls
@@ -39,9 +40,25 @@ webpki = { package = "rustls-webpki", version = "0.103", default-features = fals
 # Which catalog version is newer (catalog/update.rs).
 semver = "1"
 
+# Wasm companions (wasm.rs): Cranelift, without the cache, profiling or
+# the debugger. WASI preview 1 is built on preview 2's host types, which
+# bring the component model and async into the build; neither is turned
+# on when a companion runs.
+wasmtime = { version = "50", default-features = false, features = ["cranelift", "runtime", "std", "call-hook"], optional = true }
+wasmtime-wasi = { version = "50", default-features = false, features = ["p1"], optional = true }
+
+[features]
+# Wasm companions, under Wasmtime: some 10 MB of the binary. Release
+# builds (CI's) have it. Without it, neochumbyd runs no app's .wasm
+# companion, and says why.
+wasm-companions = ["dep:wasmtime", "dep:wasmtime-wasi"]
+
 [dev-dependencies]
-# Sigstore bundles and a trusted root of the tests' own.
+# Sigstore bundles and a trusted root of the tests' own; the wasm
+# companions' tests: WAT, and an HTTPS server on 127.0.0.1.
 rcgen = { version = "0.14", default-features = false, features = ["crypto", "ring", "pem"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
+wat = "1"
 
 [lints]
 workspace = true
@@ -51,3 +68,8 @@ workspace = true
 [[test]]
 name = "server"
 harness = false
+
+# `neochumbyd wasm-companion` as a process: only with Wasmtime.
+[[test]]
+name = "wasm_companion"
+required-features = ["wasm-companions"]

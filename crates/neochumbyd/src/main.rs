@@ -68,6 +68,11 @@
 //!                                  every change through the admin socket
 //!                                  needs; `new` replaces it
 //!
+//! and, not for typing, `neochumbyd wasm-companion`: the process a wasm
+//! companion runs in, under Wasmtime, sandboxed (wasm.rs). Only a
+//! neochumbyd built with the `wasm-companions` cargo feature has it, as
+//! release builds are; without, it runs no wasm companion, and says so.
+//!
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
 //!   --tree DIR         the app tree to serve, default <state>/tree
@@ -100,6 +105,8 @@ mod catalog;
 mod companion;
 mod confine;
 mod dev;
+#[cfg(feature = "wasm-companions")]
+mod egress;
 mod isolate;
 mod line;
 mod mcp;
@@ -109,6 +116,8 @@ mod server;
 mod state;
 mod sync;
 mod tree;
+#[cfg(feature = "wasm-companions")]
+mod wasm;
 
 use std::net::TcpListener;
 use std::path::PathBuf;
@@ -217,6 +226,13 @@ fn main() {
     // The catalog's commands take options of their own (catalog/).
     if let Some(c) = std::env::args().nth(1).filter(|c| catalog::COMMANDS.contains(&c.as_str())) {
         catalog::main(&c, std::env::args().skip(2).collect());
+    }
+    // Started by companion.rs, with arguments of its own.
+    if std::env::args().nth(1).as_deref() == Some("wasm-companion") {
+        #[cfg(feature = "wasm-companions")]
+        wasm::main(std::env::args().skip(2));
+        #[cfg(not(feature = "wasm-companions"))]
+        fail(companion::no_wasm_companions());
     }
     let a = args();
     // Before anything is written or any thread started: with --app-uids,

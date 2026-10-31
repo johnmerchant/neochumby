@@ -65,11 +65,11 @@ CI's, fetched and verified.
 nix develop             # the tools (flake.nix); or install what dev/setup lists
 dev/setup               # checks the tools, checks out the submodules, fetches QEMU and the images
 cargo chumby            # the session and neochumby-home, for the Chumby
-cargo neochumbyd        # the server
+cargo neochumbyd        # the server, with wasm companions (--features wasm-companions)
 tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 dev/emulate start /tmp/tree   # the tree on an emulated Chumby (Testing without a Chumby, below)
 # the end-to-end scenarios as CI runs them: boot on dist; boot and smoke on classic
-cargo build --release -p neochumbyd
+cargo build --release -p neochumbyd --features wasm-companions
 E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e
 NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic
 ```
@@ -839,6 +839,20 @@ the app:
   app's own (the same as its app's server program), with no other
   groups. Keep everything it writes in `NEOCHUMBY_STATE`: it can't write
   neochumbyd's state, the tree or another app's directory.
+- **As WebAssembly:** a companion built for `wasm32-wasip1` and named in
+  the manifest as a `.wasm` file runs under Wasmtime (neochumbyd's
+  `wasm.rs`), in a process that is sandboxed, and under its app's uid, as
+  above. Its state directory is its `.`, and nothing else of the disk is
+  there; its environment is `NEOCHUMBY_CHUMBY` alone; it has no sockets.
+  It reaches the network through one import, `neochumby` `https_get`:
+  HTTPS GETs, without redirects, to only the hosts in the manifest's
+  `network=host1,host2`, and only where they resolve to public addresses
+  (not the server, its LAN, link-local, CGNAT or multicast; checked as the
+  name is looked up and again once connected). It has 64 MiB, and traps
+  if it runs five seconds without calling the host (waiting on stdin is a
+  host call). neochumbyd runs wasm companions only when built with the
+  `wasm-companions` cargo feature, as release builds are; without it,
+  such a companion isn't started, and neochumbyd's log says why.
 
 `apps/airplay` is a worked example of both halves, and `apps/logs` one
 whose companion is optional.
