@@ -28,6 +28,9 @@
 //!                              hold
 //!   linux=5.9                  the oldest Linux it runs on, which tools/tree
 //!                              reads: a tree for an older one leaves it out
+//!   frontend=airplay           it shows another app (its service), in its
+//!                              place, once the owner approves
+//!                              (neochumby::service)
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
@@ -86,6 +89,10 @@ pub struct App {
     /// What a tap types in text mode while the program hasn't asked for
     /// the mouse.
     pub tap: Vec<u8>,
+    /// The app it shows, as a frontend (`frontend=airplay`): with the
+    /// owner's approval it reaches that app's service (neochumby::service)
+    /// and is opened in its place.
+    pub frontend: Option<String>,
 }
 
 /// An app's `access`: what the session gives it beyond its own directory
@@ -213,6 +220,7 @@ pub fn load(dir: &Path) -> Option<App> {
         access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
         font: field("font").filter(|f| !f.is_empty()),
         tap: field("tap").map(|t| unescape(&t)).unwrap_or_default(),
+        frontend: field("frontend").filter(|f| neochumby_proto::valid_name(f)),
     })
 }
 

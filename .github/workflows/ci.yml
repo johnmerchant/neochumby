@@ -222,14 +222,18 @@ jobs:
       # The crates that build for the host: the protocol, sync's rounds (on
       # both sides, so a temporary directory stands in for the stick),
       # neochumbyd, the manifest tool, the system calls, the macros,
-      # AirPlay's companion, and neochumby-classic's engine (its host build
-      # renders frames to files).
+      # AirPlay's companion, its screen and service's memory, and its
+      # messages for frontends, and neochumby-classic's engine (its host
+      # build renders frames to files).
       - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -- -D warnings
-      - run: cargo clippy -p neochumby-airplay --bin neochumby-airplay-companion -- -D warnings
+      - run: cargo clippy -p neochumby-airplay --lib --bin neochumby-airplay-companion -- -D warnings
+      - run: cargo clippy -p neochumby-airplay --profile test --lib --bin neochumby-airplay-companion -- -D warnings
+      - run: cargo clippy --all-targets -p neochumby-airplay-proto -- -D warnings
       # The logs app's text, layout and drawing, and its companion.
       - run: cargo clippy --all-targets -p neochumby-logs -- -D warnings
       - run: cargo test -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic
-      - run: cargo test -p neochumby-airplay --bin neochumby-airplay-companion
+      - run: cargo test -p neochumby-airplay --lib --bin neochumby-airplay-companion
+      - run: cargo test -p neochumby-airplay-proto
       # ncinit, a workspace of its own (Buildroot builds it for the dist
       # image), and the system calls only it uses.
       - run: cargo fmt --check --manifest-path crates/neochumby-init/Cargo.toml
@@ -336,6 +340,12 @@ jobs:
           for f in neochumby neochumby-sync neochumby-boot apps/home/neochumby-home apps/pipes/neochumby-pipes; do
             [ -z "$(interp "$RUNNER_TEMP/tree-5.9/$f")" ]
           done
+      # AirPlay's receiver for the emulator, which has no network.
+      - name: The AirPlay stand-in
+        run: |
+          cargo build --release --target armv5te-unknown-linux-musleabi --manifest-path dev/airplay-standin/Cargo.toml
+          cp dev/airplay-standin/target/armv5te-unknown-linux-musleabi/release/neochumby-airplay-standin \
+            "$RUNNER_TEMP/tree.airplay-standin"
       # For the end-to-end job. (An artifact keeps no modes: it restores them.)
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
@@ -343,6 +353,7 @@ jobs:
           path: |
             ${{ runner.temp }}/tree
             ${{ runner.temp }}/tree.neochumbyd
+            ${{ runner.temp }}/tree.airplay-standin
           retention-days: 3
 
   # The SDK crates, packaged as crates.io would take them and each built
@@ -608,6 +619,8 @@ jobs:
   # profile; never the stock firmware, which runs only locally, on your own:
   # docs/legal.md). Only those that pass on dist so far:
   #   boot      the stick's hook runs the session, which opens home and draws
+  #   airplay   AirPlay's text-mode screen, its touches and its sound, with
+  #             dev/airplay-standin as the receiver (on classic too)
   # Pending on dist, and why:
   #   smoke     the kernel's framebuffer console blinks its cursor over the
   #             session's screen, so it seldom settles; and the session reads
@@ -628,7 +641,7 @@ jobs:
       always() && needs.cross.result == 'success' && needs.dist.result == 'success'
       && (needs.classic.result == 'success' || needs.classic.result == 'skipped')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -702,14 +715,15 @@ jobs:
       - name: The tree's modes
         run: |
           find "$RUNNER_TEMP/tree" -type f -path '*/neochumby*' -exec chmod +x {} +
-          chmod +x "$RUNNER_TEMP/tree.neochumbyd"
+          chmod +x "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/tree.airplay-standin"
 
       - name: End-to-end scenarios on the dist profile
         if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
         timeout-minutes: 30
         env:
           NEOCHUMBY_EMU_PROFILE: dist
-          E2E_SCENARIOS: boot
+          E2E_SCENARIOS: boot airplay
+          NEOCHUMBY_AIRPLAY_STANDIN: ${{ runner.temp }}/tree.airplay-standin
         run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/e2e"
 
       - name: End-to-end scenarios on the dist profile (mainline)
@@ -728,7 +742,8 @@ jobs:
         timeout-minutes: 30
         env:
           NEOCHUMBY_EMU_PROFILE: classic
-          E2E_SCENARIOS: boot smoke
+          E2E_SCENARIOS: boot smoke airplay
+          NEOCHUMBY_AIRPLAY_STANDIN: ${{ runner.temp }}/tree.airplay-standin
         run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/e2e-classic"
 
       # Its screenshots are neochumby's own screens, never the stock software's.

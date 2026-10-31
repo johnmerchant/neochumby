@@ -418,6 +418,7 @@ player = true                        # optional: a player (below)
 font = "spleen-8x16"                 # optional, text mode: its terminal's font
 tap = "q"                            # optional, text mode: what a tap types
 linux = "5.9"                        # optional: the oldest Linux it runs on (tools/tree --linux)
+frontend = "airplay"                 # optional: it shows another app (below)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -510,6 +511,8 @@ Every app is opened the same way, whoever asked for it.
   `access` lists `storage` (below);
 - with `NEOCHUMBY_PLAYER` naming this Chumby's default player, when it
   has one (below);
+- with `NEOCHUMBY_FRONTEND` or `NEOCHUMBY_CLIENTS` for a frontend the
+  owner approved, and for the app it shows (Frontends, below);
 - in text mode, with a terminal as its stdin and stdout (above); with `fb`,
   owning the screen until it exits. What's on the screen when it starts is
   whatever was there: draw all of it;
@@ -841,6 +844,92 @@ its Chumbys, not once per Chumby (a household web page), is named by
 - **Every change needs the owner.** Changes take the owner's token
   (`neochumbyd token`). A web page asks the person for it, and should
   check it (`check TOKEN`) before it lets them change anything.
+**Frontends.** An app's exec, in front, can talk to its own service:
+the service listens with `neochumby::service::listen("<app>")`, and the
+exec connects with `neochumby::service::connect("<app>")`; each gets a
+`UnixStream`, and what goes over it is the app's. The socket is the
+session's: it binds each service's as it starts, before any app runs,
+and hands it to the service (`NEOCHUMBY_LISTENER`), so no app can take
+another's name first. Another app can do the
+same as that app's **frontend**: it shows the app in its place. Its
+manifest says which (`frontend = "airplay"`), with an `exec`, in text
+mode or with `fb`. The owner approves it in the Chumby's settings,
+`neochumbyd set NAME frontend_<app>=<frontend>` (`-` in the app's name
+written `_`; or the same line in `/psp/neochumby.conf`), from the
+session's next start. Then:
+- the frontend is **opened in the app's place**, however the app is
+  opened: from an app list, by a MUSIC button for a player, or by the
+  app's own service;
+- **its uid is let in** by the app's service (`NEOCHUMBY_CLIENTS`), and it
+  is told which app it's for (`NEOCHUMBY_FRONTEND`). `connect` takes only
+  a socket the session made. Unapproved, the service turns it away.
+  Where jails are off (the emulator), every app is one user and nothing
+  tells them apart;
+- the app keeps everything else: its service, its companion, its
+  `access`, and the player's `pause` and `resume`.
+
+An app has at most one approved frontend. One that isn't in the tree, or
+whose manifest names another app, is refused and logged, and the app
+opens as itself.
+
+### Writing an AirPlay frontend
+
+AirPlay is three programs: the receiver, its companion on neochumbyd
+(shairport-sync, with metadata and remote control); its service on the
+Chumby, which keeps the only connection to the receiver, plays the audio
+and is the player; and a frontend, in front. Its own is the now-playing
+screen in text mode (`apps/airplay/src/frontend.rs`). Yours, in a
+repository of its own, can take its place:
+
+- **Depend on `neochumby-airplay-proto`** (`apps/airplay/proto`), as
+  well as `neochumby`, from this repository's URL: it stays
+  `publish = false`, off crates.io, until the first frontend outside
+  this repository needs it there. Its
+  `frontend` module has the messages, and its `VERSION` their protocol's
+  version: messages are only ever added, and one a frontend doesn't know
+  is skipped.
+- **Connect** with `neochumby::service::connect(neochumby_airplay_proto::APP)`.
+  The service says `Hello`, then everything it knows: whether it has its
+  receiver, the receiver's name, the track, the cover (RGB565, at most
+  128x128) and the state (playing or paused, the time gone and the
+  length, the volume), and each change after. `NowPlaying` keeps them, and
+  runs the time on while playing. Send `ToService::Control` for play/pause,
+  next, previous and the volume. When the connection closes (the service
+  restarts with its receiver), connect again.
+- **The manifest:** `frontend = "airplay"` and an `exec`; `fb` and
+  `touch` in `access` to draw the screen yourself, or neither for text
+  mode. Not `player`, `service` or `companion`: those stay AirPlay's, and
+  AirPlay's service still opens AirPlay, and so your frontend, when a
+  stream begins.
+- **The owner approves it:** `neochumbyd set NAME frontend_airplay=<yours>`.
+
+```rust
+use std::time::Instant;
+
+use neochumby_airplay_proto::frontend::{NowPlaying, ToFrontend, ToService};
+use neochumby_airplay_proto::{APP, Control, Reader, send};
+
+fn main() -> std::io::Result<()> {
+    let mut sock = neochumby::service::connect(APP)?;
+    // What's playing, as it changes.
+    let (mut reader, mut np) = (Reader::default(), NowPlaying::default());
+    while let Some(m) = reader.next::<ToFrontend>(&mut sock)? {
+        np.apply(m, Instant::now());
+        println!("{} - {} ({:?})", np.track.artist, np.track.title, np.state.play);
+    }
+    Ok(())
+}
+
+/// A tap on play/pause.
+fn play_pause(sock: &mut std::os::unix::net::UnixStream) -> std::io::Result<()> {
+    send(sock, &ToService::Control(Control::PlayPause))
+}
+```
+
+To wait on touches and the service together, as AirPlay's own does,
+`neochumby_sys::fd::readable` takes both. `dev/emulate-airplay` tests a
+frontend on the emulator, where the receiver is a stand-in
+(`dev/airplay-standin`).
 
 ## Files in the tree
 

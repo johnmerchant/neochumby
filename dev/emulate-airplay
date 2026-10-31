@@ -1,0 +1,141 @@
+#!/bin/sh
+# dev/emulate's AirPlay scenario: AirPlay's service, its text-mode screen
+# and the session's player and frontend rules, on an emulated Chumby,
+# which has no network, so the receiver is dev/airplay-standin in the
+# companion's place (made-up tracks and covers, and a tone). It checks
+# that
+#   - a stream beginning opens AIRPLAY over home, and the screen shows the
+#     track, its cover, the time and the buttons;
+#   - a tap on play/pause reaches the receiver, and the screen says PAUSED;
+#     again, and it plays;
+#   - next, and the volume, reach it, and the screen follows;
+#   - a title outside ISO 8859-1 shows as `?`s, with no cover;
+#   - its [x] leaves for home;
+#   - the speaker played the tone: what it played, recorded, isn't silent
+#     (AIRPLAY_AUDIO= leaves that out).
+# Screenshots and the console go in OUT; the WAV, tens of megabytes, is
+# measured and dropped.
+#
+#   dev/emulate-airplay TREE STANDIN OUT
+#
+# TREE from tools/tree with airplay; STANDIN, dev/airplay-standin built
+# for the Chumby (cargo build --release --target
+# armv5te-unknown-linux-musleabi in dev/airplay-standin). TREE is left as
+# it is: a copy gets the stand-in, and the settings say paired (with a
+# server nobody runs), so AirPlay, which needs a neochumbyd, starts.
+set -eu
+tree=${1:?usage: dev/emulate-airplay TREE STANDIN OUT}
+standin=${2:?usage: dev/emulate-airplay TREE STANDIN OUT}
+out=${3:?usage: dev/emulate-airplay TREE STANDIN OUT}
+dev=$(cd "$(dirname "$0")" && pwd)
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+state=$(mktemp -d "${TMPDIR:-/tmp}/neochumby-airplay.XXXXXX")
+trap 'emu stop >/dev/null 2>&1 || true; rm -rf "$state"' EXIT
+emu() { "$dev/emulate" --state "$state/emu" "$@"; }
+backend=$(emu backend)
+[ "$backend" != device ] || { echo "dev/emulate-airplay: not on a real Chumby (it needs the stand-in)"; exit 77; }
+slow=$(emu scale)
+step() { echo "== $*"; }
+fail() {
+  echo "FAIL: $*"
+  echo "-- the console:"
+  emu log || true
+  emu stop || true
+  exit 1
+}
+count() { emu log | grep -c "$1" || true; }
+# Waits until RE has been logged N times.
+logged() {
+  i=0
+  until [ "$(count "$1")" -ge "$2" ]; do
+    i=$((i + 1))
+    [ "$i" -lt $((600 * slow)) ] || fail "$3"
+    sleep 0.1
+  done
+}
+
+# The tree, with the stand-in, and settings that say paired.
+[ -f "$tree/apps/airplay/manifest" ] || fail "the tree needs airplay"
+cp -R "$tree" "$state/tree"
+cp "$standin" "$state/tree/apps/airplay/standin-companion"
+chmod +x "$state/tree/apps/airplay/standin-companion"
+mkdir -p "$state/psp"
+printf 'server=127.0.0.1\nserver_key=%064d\n' 0 >"$state/psp/neochumby.conf"
+printf '%064d\n' 0 >"$state/psp/neochumby.key"
+
+# Where to tap: AirPlay's screen in Spleen 6x12, 53 by 20 characters of 6
+# by 12 pixels (apps/airplay/src/screen.rs's layout): the buttons along
+# rows 17 to 19, nine wide from column 2, one apart; [x] at the top right.
+button_x() { echo $(((2 + $1 * 10 + 4) * 6 + 3)); }
+button_y=222
+close_x=303 close_y=6
+
+step "boot ($backend)"
+audio=
+[ -z "${AIRPLAY_AUDIO:-1}" ] || audio="--audio $state/speaker.wav"
+# shellcheck disable=SC2086
+if emu start --psp "$state/psp" $audio "$state/tree"; then :; else
+  code=$?
+  [ "$code" = 77 ] && exit 77
+  fail "dev/emulate start failed ($code)"
+fi
+emu wait log 'neochumby: opening home' $((100 * slow)) || fail "the session didn't open home"
+
+step "a stream begins: AIRPLAY opens over home"
+emu wait log 'airplay-standin: playing "Test Tone in A"' $((60 * slow)) || fail "the stand-in didn't play"
+emu wait log 'neochumby: opening airplay' $((30 * slow)) || fail "the stream didn't open AIRPLAY"
+emu wait log 'neochumby: airplay: a terminal' $((30 * slow)) || fail "AIRPLAY isn't in text mode"
+sleep $((3 * slow))
+emu shot "$out/1-playing.png"
+
+step "play/pause pauses"
+emu tap "$(button_x 1)" $button_y
+logged 'airplay-standin: control PlayPause' 1 "play/pause didn't reach the receiver"
+sleep $((2 * slow))
+emu shot "$out/2-paused.png"
+
+step "and plays again"
+emu tap "$(button_x 1)" $button_y
+logged 'airplay-standin: control PlayPause' 2 "play/pause didn't reach the receiver again"
+
+step "next"
+emu tap "$(button_x 2)" $button_y
+logged 'airplay-standin: control Next' 1 "next didn't reach the receiver"
+emu wait log 'airplay-standin: playing "A Second' $((10 * slow)) || fail "next didn't move on"
+
+step "the volume"
+emu tap "$(button_x 4)" $button_y
+logged 'airplay-standin: control VolumeUp' 1 "volume up didn't reach the receiver"
+sleep $((2 * slow))
+emu shot "$out/3-next.png"
+
+step "previous, twice round to the third: a title outside Latin-1, no cover"
+emu tap "$(button_x 0)" $button_y
+logged 'airplay-standin: control Previous' 1 "previous didn't reach the receiver"
+emu tap "$(button_x 0)" $button_y
+logged 'airplay-standin: control Previous' 2 "previous didn't reach the receiver again"
+emu wait log 'airplay-standin: playing "Caf' $((10 * slow)) || fail "previous didn't move back"
+sleep $((2 * slow))
+emu shot "$out/4-unicode.png"
+
+step "[x] leaves for home"
+emu tap $close_x $close_y
+logged 'neochumby: opening home' 2 "[x] didn't leave"
+emu wait screen $((30 * slow)) || true
+emu shot "$out/5-home.png"
+
+emu log >"$out/console.log"
+emu stop >/dev/null 2>&1 || true
+if [ -n "$audio" ]; then
+  step "the speaker played"
+  python3 -I - "$state/speaker.wav" <<'EOF' || fail "the speaker was silent"
+import struct, sys
+data = open(sys.argv[1], "rb").read()[44:]
+n = len(data) // 2
+loud = sum(1 for (s,) in struct.iter_unpack("<h", data[: n * 2]) if abs(s) > 1000)
+print(f"{n // 2} frames recorded, {loud} samples louder than 1000")
+sys.exit(0 if loud > 44100 else 1)
+EOF
+fi
+echo "PASS: AirPlay in text mode ($backend)"
