@@ -88,6 +88,11 @@ if command -v cmake >/dev/null 2>&1; then
 else
     bad "CMake 3.21 or later (for the fetch app)" "$(how cmake cmake cmake cmake)"
 fi
+if command -v pkg-config >/dev/null 2>&1; then
+    ok "pkg-config (for a tree for Linux 5.9 and later)"
+else
+    bad "pkg-config (for a tree for Linux 5.9 and later)" "$(how pkg-config pkg-config pkgconf-pkg-config pkgconf)"
+fi
 for t in git curl tar; do
     if command -v "$t" >/dev/null 2>&1; then
         ok "$t"
