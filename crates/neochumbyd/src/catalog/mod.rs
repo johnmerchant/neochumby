@@ -33,8 +33,11 @@
 //!
 //! For any page: [`Catalog`] and [`load`] read the cache; [`prepare`],
 //! [`Plan::summary`], [`Plan::approve`] and [`Plan::write`] are an install,
-//! a step at a time.
+//! a step at a time. A Chumby's GET APPS is [`chumby`]: it asks, and the
+//! owner approves the code it shows (`neochumbyd approve CODE`, through
+//! the admin socket's protocol).
 
+pub mod chumby;
 mod discover;
 mod http;
 mod install;
@@ -47,6 +50,7 @@ use std::io::{BufRead, IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 #[allow(unused_imports)]
 pub use discover::{Catalog, GitHub, Listing, Repo, load};
@@ -104,9 +108,21 @@ fn context(state: &Path) -> Result<Context, String> {
     c.as_ref().and_then(|c| c.get(state)).cloned().ok_or_else(|| "this neochumbyd has no tree for the catalog".into())
 }
 
-/// The client every catalog request goes through.
-fn http() -> Http {
-    Http::new(Sources::default())
+/// The client every catalog request goes through: crates.io and GitHub,
+/// or in a debug build a local stand-in (Sources::configured), whose
+/// attestations are checked against NEOCHUMBY_CATALOG_LOCAL_TRUST if set.
+pub fn http() -> Http {
+    let sources = Sources::configured();
+    #[cfg(debug_assertions)]
+    if sources.is_local()
+        && let Some(t) = std::env::var_os("NEOCHUMBY_CATALOG_LOCAL_TRUST")
+    {
+        match std::fs::read_to_string(&t).map_err(|e| e.to_string()).and_then(|j| sigstore::Trust::from_json(&j)) {
+            Ok(trust) => return Http::new(sources).trusting(trust),
+            Err(e) => eprintln!("neochumbyd: NEOCHUMBY_CATALOG_LOCAL_TRUST: {e}"),
+        }
+    }
+    Http::new(sources)
 }
 
 fn usage() -> ! {
@@ -285,10 +301,22 @@ pub fn admin_uninstall(state: &Path, app: &str) -> Result<(), String> {
 /// What `serve` does for the catalog, on a thread of its own: compiles
 /// any catalog app whose `.aot` isn't this wamrc's (none, or another
 /// WAMR's), then, unless `refresh` is false (`--no-catalog-refresh`),
-/// keeps the cache fresh and the apps up to date.
+/// keeps the cache fresh and the apps up to date. Another thread looks up
+/// what Chumbys' GET APPS shows of the best-ranked apps, once per version
+/// (chumby.rs).
 pub fn serve(state: PathBuf, tree: PathBuf, wamrc: Option<PathBuf>, refresh: bool) {
     configure(&state, tree.clone(), wamrc.clone());
+    chumby::set_wamrc(wamrc.clone());
+    let state_for_chumbys = state.clone();
     std::thread::spawn(move || keep(http(), state, tree, wamrc, refresh));
+    std::thread::spawn(move || {
+        let http = http();
+        loop {
+            std::thread::sleep(Duration::from_secs(60));
+            chumby::look_up(&http, &state_for_chumbys);
+            std::thread::sleep(Duration::from_secs(59 * 60));
+        }
+    });
 }
 
 /// [`serve`]'s thread, with `http`.

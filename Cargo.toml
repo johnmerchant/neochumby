@@ -20,6 +20,7 @@ members = [
     "apps/airplay/proto",
     "apps/bonsai",
     "apps/aquarium",
+    "apps/catalog",
     "apps/home",
     "apps/logs",
     "apps/classic",

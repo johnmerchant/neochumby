@@ -43,6 +43,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves, native or WebAssembly under [Wasmtime](https://wasmtime.dev) (the `wasm-companions` feature, which release builds have) | MIT; Wasmtime is Apache-2.0 WITH LLVM-exception |
 | `apps/home` | neochumby-home, the app list, in text mode: the installed apps, pairing, the time, and CHUMBY MODE on the stock 2.6 kernel (the dist's Linux has no stock software to go back to) | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker, with a now-playing screen in text mode; and `neochumby-airplay-proto`, its messages, for frontends of other apps | MIT |
+| `apps/catalog` | GET APPS: the catalog on the Chumby, in text mode, from its neochumbyd, which installs an app only once its owner has approved it on the Chumby and on the server | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
 | `apps/doom` | Doom: [doomgeneric](https://github.com/ozkl/doomgeneric) (e257a095, a submodule) with a Rust platform layer | GPL-2.0 |
 | `apps/fetch` | neochumby-fetch: [fastfetch](https://github.com/fastfetch-cli/fastfetch) (2.70.0, a submodule) in text mode, beside a Chumby | MIT |
@@ -508,6 +509,35 @@ With a wamrc built by `tools/wamrc` (`--wamrc`, or NEOCHUMBY_WAMRC, on
 compiled again when neochumbyd starts with a wamrc for another WAMR.
 Without one it runs on the interpreter, which is slow. SECURITY has what
 is checked.
+
+**GET APPS** (the catalog app) shows the catalog on a paired Chumby, in
+text mode, a page at a time: each app's title, publisher, a line of its
+description, downloads, and **verified build** or **UNVERIFIED**, with why. An app's
+details say what it asks for, plainly, its version and size, and whether
+it would be slow (no wamrc on the server); access a catalog app never gets
+is shown as refused. Its companion is neochumbyd itself
+(`companion = "neochumbyd:catalog"`), which answers from the cache, and
+looks up each app's details (by fetching and checking it, as an install
+does) once per version: the best-ranked in the background, others when
+first asked. A Chumby can have looked up only apps in the cache, from
+crates.io and GitHub only, a few a minute. GET installs nothing on the Chumby's say alone. Its owner
+allows the access on the Chumby; neochumbyd checks the app again and
+waits, and the Chumby shows a code:
+
+```sh
+neochumbyd pairing                 # lists what Chumbys ask to install or remove
+neochumbyd approve ABCD-EF23       # shows it, and lets it go ahead (the admin socket's approve, with the owner's token)
+neochumbyd refuse ABCD-EF23
+```
+
+A request lapses after ten minutes, or when the Chumby leaves GET APPS.
+Once approved, the Chumby shows the install's progress and where home
+lists the new app; when it leaves GET APPS, neochumbyd restarts its
+session, so that the session knows the new app (on `delivery=sync`, the
+next round brings it). The installed catalog apps can be updated or
+removed. An update that asks for nothing new goes ahead on the Chumby's
+say, as serve's own updates do, unless automatic updates are off; one
+that asks for more, and a removal, are approved the same way.
 
 ### Delivery: NFS or sync
 

@@ -36,6 +36,11 @@
 //!                                         KEY= removes it
 //!   check TOKEN               ok          whether TOKEN is the owner's,
 //!                                         for the page's own login
+//!   requests                  request CODE CHUMBY WHAT...
+//!                             ok          each Chumby's GET APPS asking
+//!                                         to install or remove an app
+//!   approve CODE TOKEN        summary ... a request's CODE (ABCD-EF23)
+//!   refuse CODE TOKEN         ok CHUMBY   approves or refuses it
 //!   install SPEC ASKS TOKEN   summary ... installs or updates the catalog
 //!                             ok APP      app SPEC (crate:NAME@VERSION),
 //!                                         checked as `neochumbyd install`
@@ -51,7 +56,8 @@
 //!   auto-update on|off TOKEN  ok
 //!
 //! TOKEN is the owner's (`neochumbyd token`). Every change needs it; only
-//! reading (`paired`, `pending`, `auto-update`) and `check` don't. Typing the code from
+//! reading (`paired`, `pending`, `requests`, `auto-update`) and `check`
+//! don't. Typing the code from
 //! the Chumby's screen is what pairing's security rests on, so the person
 //! approving must be the owner, not just someone on the network who can
 //! reach the web page; and settings include remote input (`dev=on`) and
@@ -187,6 +193,13 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             }
             Ok("ok\n".into())
         }
+        ["requests"] => {
+            let mut out = String::new();
+            for r in crate::catalog::chumby::requests(state.dir()) {
+                out.push_str(&format!("request {} {} {}\n", r.code, r.chumby, r.what.replace('\n', " ")));
+            }
+            Ok(out + "ok\n")
+        }
         ["auto-update"] => Ok(format!("ok {}\n", if crate::catalog::auto_updates(state.dir()) { "on" } else { "off" })),
         [cmd, ..] if CHANGES.iter().any(|&(c, n)| c == *cmd && n != words.len()) => {
             Err(bad(&format!("{cmd}: wrong number of words")))
@@ -194,6 +207,19 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
         [cmd, .., token] if CHANGES.iter().any(|&(c, _)| c == *cmd) && !state.is_owner_token(token) => {
             eprintln!("neochumbyd: admin: {cmd}: wrong token");
             Err(bad("wrong token"))
+        }
+        [cmd @ ("approve" | "refuse"), code, _] if crate::catalog::chumby::parse_code(code).is_some() => {
+            let yes = *cmd == "approve";
+            let r = crate::catalog::chumby::decide(state.dir(), code, yes).map_err(io::Error::other)?;
+            eprintln!(
+                "neochumbyd: admin: {} {}: {} asked to {}",
+                if yes { "approved" } else { "refused" },
+                r.code,
+                r.chumby,
+                r.what
+            );
+            let summary: String = r.summary.lines().map(|l| format!("summary {}\n", l.trim_start())).collect();
+            Ok(format!("{summary}ok {}\n", r.chumby))
         }
         [cmd @ ("approve" | "replace"), code, _] => {
             let name = state.approve(code, *cmd == "replace")?;
@@ -237,7 +263,7 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             eprintln!("neochumbyd: admin: {name}: {key}={value}");
             Ok("ok\n".into())
         }
-        ["paired" | "pending" | "check", ..] => Err(bad(&format!("{}: wrong number of words", words[0]))),
+        ["paired" | "pending" | "requests" | "check", ..] => Err(bad(&format!("{}: wrong number of words", words[0]))),
         _ => Err(bad("unknown command")),
     }
 }

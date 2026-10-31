@@ -5,11 +5,16 @@
 //! minute.
 //!
 //! Only HTTPS is fetched, redirects included. Tests point [`Sources`] at a
-//! server of their own on 127.0.0.1 ([`Sources::local`], test builds only),
-//! and only URLs under it may then be plain HTTP.
+//! server of their own on 127.0.0.1 ([`Sources::local`], test and debug
+//! builds only), and only URLs under it may then be plain HTTP. A debug
+//! build also takes one from NEOCHUMBY_CATALOG_LOCAL
+//! ([`Sources::configured`]), so that the emulator's end-to-end runs can
+//! install from a catalog of their own; a release build never does.
 //!
 //! It also holds what attestations are checked against (sigstore.rs):
-//! Sigstore's public-good instance, except in tests, which sign their own.
+//! Sigstore's public-good instance, except in tests, which sign their own,
+//! and a debug build's NEOCHUMBY_CATALOG_LOCAL_TRUST (a trusted root, as
+//! Sigstore writes one) beside NEOCHUMBY_CATALOG_LOCAL.
 
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -22,6 +27,19 @@ pub const USER_AGENT: &str =
 
 /// The most a JSON reply may be.
 pub const JSON_LIMIT: u64 = 8 << 20;
+
+/// crates.io's and GitHub's hosts: its index, downloads and API; GitHub's
+/// API, its release downloads and where they redirect.
+pub const CATALOG_HOSTS: &[&str] = &[
+    "index.crates.io",
+    "static.crates.io",
+    "crates.io",
+    "api.github.com",
+    "github.com",
+    "objects.githubusercontent.com",
+    "release-assets.githubusercontent.com",
+    "raw.githubusercontent.com",
+];
 
 /// Where the catalog's requests go.
 #[derive(Clone, Debug)]
@@ -56,9 +74,27 @@ impl Default for Sources {
 }
 
 impl Sources {
+    /// The real ones; or, in a debug build only, those under
+    /// NEOCHUMBY_CATALOG_LOCAL (http://127.0.0.1:PORT) if it is set.
+    pub fn configured() -> Sources {
+        #[cfg(debug_assertions)]
+        if let Ok(base) = std::env::var("NEOCHUMBY_CATALOG_LOCAL")
+            && base.starts_with("http://127.0.0.1:")
+        {
+            return Sources::local(base.trim_end_matches('/'));
+        }
+        Sources::default()
+    }
+
+    /// Whether these are a local stand-in's.
+    #[cfg_attr(not(debug_assertions), allow(dead_code))]
+    pub fn is_local(&self) -> bool {
+        self.local.is_some()
+    }
+
     /// Every source under `base` (http://127.0.0.1:PORT), for tests, with no
     /// wait between requests.
-    #[cfg(test)]
+    #[cfg(any(test, debug_assertions))]
     pub fn local(base: &str) -> Sources {
         Sources {
             index: format!("{base}/index/"),
@@ -118,11 +154,24 @@ impl Http {
         }
     }
 
-    /// The same, checking attestations against `trust`: a test's own.
-    #[cfg(test)]
+    /// The same, checking attestations against `trust`: a test's own, or
+    /// a debug build's NEOCHUMBY_CATALOG_LOCAL_TRUST.
+    #[cfg(any(test, debug_assertions))]
     pub fn trusting(mut self, trust: Trust) -> Http {
         self.trust = Arc::new(trust);
         self
+    }
+
+    /// Whether `url` is crates.io's or GitHub's: all neochumbyd fetches on
+    /// a Chumby's behalf (chumby.rs).
+    pub fn is_catalog_source(&self, url: &str) -> bool {
+        if let Some(l) = &self.sources.local {
+            return url.starts_with(&format!("{l}/"));
+        }
+        let Some(rest) = url.strip_prefix("https://") else { return false };
+        // A port or a user in the authority isn't one of these hosts.
+        let host = rest.split(['/', '?', '#']).next().unwrap_or_default().to_ascii_lowercase();
+        CATALOG_HOSTS.contains(&host.as_str())
     }
 
     /// Whether `url` may be fetched: HTTPS, or in tests the local server.
@@ -211,8 +260,28 @@ mod tests {
         }
         assert!(Sources::default().crates_api_gap >= Duration::from_secs(1));
 
+        for url in [
+            "https://static.crates.io/crates/a/a-1.crate",
+            "https://api.github.com/repos/a/b/attestations/sha256:00",
+            "https://github.com/a/b/releases/download/v1/app.wasm",
+            "https://objects.githubusercontent.com/x",
+        ] {
+            assert!(release.is_catalog_source(url), "{url}");
+        }
+        for url in [
+            "https://example.com/app.wasm",
+            "https://github.com.example.com/app.wasm",
+            "https://github.com:444/app.wasm",
+            "https://someone@github.com/app.wasm",
+            "http://github.com/app.wasm",
+        ] {
+            assert!(!release.is_catalog_source(url), "{url}");
+        }
+
         let local = Http::with_token(Sources::local("http://127.0.0.1:9"), None);
         assert!(local.check_url("http://127.0.0.1:9/dl/app.wasm").is_ok());
+        assert!(local.is_catalog_source("http://127.0.0.1:9/dl/app.wasm"));
+        assert!(!local.is_catalog_source("https://github.com/app.wasm"));
         assert!(local.check_url("http://127.0.0.1:99/dl/app.wasm").is_err());
         assert!(local.check_url("http://example.com/app.wasm").is_err());
     }

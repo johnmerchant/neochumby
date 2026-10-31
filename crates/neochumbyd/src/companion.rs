@@ -30,6 +30,11 @@
 //! is a wall inside those. A native companion is trusted code; a wasm one
 //! isn't. A neochumbyd built without the `wasm-companions` feature runs
 //! none ([`WASM_COMPANIONS`]): the Chumby is told the app has none.
+//!
+//! One companion is neochumbyd's own: `companion=neochumbyd:catalog`
+//! (neochumby_proto::catalog::COMPANION) is the catalog, GET APPS, served
+//! here (catalog/chumby.rs). An app installed from the catalog never gets
+//! it.
 
 use std::io;
 use std::path::{Path, PathBuf};
@@ -107,6 +112,14 @@ pub fn app_binary(tree: &Path, app: &str, key: &str) -> Option<PathBuf> {
 /// Runs `app`'s companion for `chumby` and relays between them until
 /// either goes.
 pub fn run(tree: &Path, state: &Path, confine: &Confine, chumby: &str, app: &str, mut s: Session) -> io::Result<()> {
+    let dir = tree.join("apps").join(app);
+    if valid_name(app) && manifest_value(&dir, "companion").as_deref() == Some(neochumby_proto::catalog::COMPANION) {
+        // Never an app from the catalog's.
+        if manifest_value(&dir, "source").as_deref() == Some("catalog") {
+            return s.send(&Msg::Closed);
+        }
+        return crate::catalog::chumby::run(tree, state, chumby, s);
+    }
     let Some(exe) = app_binary(tree, app, "companion") else {
         return s.send(&Msg::Closed);
     };

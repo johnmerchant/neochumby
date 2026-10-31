@@ -17,6 +17,11 @@
 //!                                 another key is unpaired only with
 //!                                 --replace
 //!   neochumbyd refuse CODE
+//!                                 a code of eight letters (ABCD-EF23) is
+//!                                 a Chumby's GET APPS asking to install
+//!                                 or remove a catalog app: approve shows
+//!                                 what it asks and lets it go ahead
+//!                                 (catalog/chumby.rs)
 //!   neochumbyd forget NAME
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
 //!                                  sent to it when it next connects;
@@ -264,8 +269,28 @@ fn main() {
             for p in state.pending().unwrap_or_else(|e| fail(e)) {
                 println!("asking   {}  code {}  from {}  {}", p.name, p.code, p.addr, neochumby_proto::hex(&p.key));
             }
+            for r in catalog::chumby::requests(&a.state) {
+                println!("asking   {}  code {}  to {}", r.chumby, r.code, r.what);
+            }
             println!("{}", tree::hint(&starts));
             println!("{}", tree::player_hint(&players));
+        }
+        // A Chumby's GET APPS asking: through the admin socket's protocol,
+        // with the owner's token, as a page would.
+        "approve" | "refuse" if catalog::chumby::parse_code(&operand()).is_some() => {
+            let token = state.owner_token().unwrap_or_else(|e| fail(format!("the owner's token: {e}")));
+            let line = format!("{} {} {token}", a.command, operand());
+            let answer = admin::local(&state, &line).unwrap_or_else(|e| fail(e));
+            let (chumby, summary) = answer.split_last().unwrap_or_else(|| fail("no answer"));
+            for l in summary {
+                println!("{}", l.strip_prefix("summary ").unwrap_or(l));
+            }
+            println!(
+                "{} {}'s request {}",
+                if a.command == "approve" { "approved" } else { "refused" },
+                chumby,
+                operand()
+            );
         }
         "approve" => {
             let name = state.approve(&operand(), a.replace).unwrap_or_else(|e| fail(e));

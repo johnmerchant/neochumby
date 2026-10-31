@@ -372,12 +372,17 @@ for app in home "$@"; do
       cp "target/$chumby_t/release/neochumby-wasm" "$out/"
     fi
   fi
+  # neochumbyd:<name> is one of neochumbyd's own (the catalog's, for GET
+  # APPS): nothing to build.
   for key in companion server; do
     f=$(field "$manifest" "$key")
-    [ -z "$f" ] || {
-      build --target $server_t -p "$crate" --bin "$f"
-      cp "$bin/$server_t/release/$f" "$dest/"
-    }
+    case $f in
+      '' | neochumbyd:*) ;;
+      *)
+        build --target $server_t -p "$crate" --bin "$f"
+        cp "$bin/$server_t/release/$f" "$dest/"
+        ;;
+    esac
   done
   cp "$manifest" "$dest/manifest"
   [ ! -d "$src/files" ] || cp -R "$src/files/." "$dest/"
