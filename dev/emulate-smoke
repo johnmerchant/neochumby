@@ -49,14 +49,14 @@ opened_home() {
 }
 
 # Where to tap: neochumby-home's layout, rows of apps from y=44, 36 high
-# with 4 between, in name order, those with a title and exec; CHUMBY MODE
+# with 4 between, in name order, those with a title and exec (or wasm); CHUMBY MODE
 # along the bottom. More than four apps go three to a page, with MORE in
 # the fourth row. What happened is read from the session's log.
 index=
 listed=0
 for d in $(ls "$tree/apps"); do
   m=$tree/apps/$d/manifest
-  grep -q '^title=' "$m" && grep -q '^exec=' "$m" || continue
+  grep -q '^title=' "$m" && grep -Eq '^(exec|wasm)=' "$m" || continue
   [ "$d" = doom ] && index=$listed
   listed=$((listed + 1))
 done

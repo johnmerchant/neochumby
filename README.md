@@ -36,6 +36,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, over TCP or a serial line | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
+| `crates/neochumby-guest` | The wasm runner's host API for apps built as WebAssembly: the screen, touches, the accelerometer, time and the session, as safe functions | MIT |
 | `crates/neochumby-wasm` | `neochumby-wasm`, the runner for apps built as WebAssembly: WAMR in the app's jail, a host API that grants only what its manifest lists, and seccomp and Landlock where the kernel has them | MIT |
 | `crates/neochumby-wamr` | [WAMR](https://github.com/bytecodealliance/wasm-micro-runtime), the WebAssembly Micro Runtime (WAMR-2.4.5, built by `wamr-sys` from [our fork of wamr-rust-sdk](https://github.com/johnmerchant/wamr-rust-sdk), pinned, with its patches), for the Chumby: its AOT loader and fast interpreter, with a small safe interface, for apps as WebAssembly (proposal 0003) | MIT; WAMR and wamr-sys are Apache-2.0 WITH LLVM-exception |
 | `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses (or, for Linux 5.9 and later, the same built shared, by `tools/linux-libs`) | MIT, and ncurses' own X11-style licence |
@@ -48,6 +49,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `apps/htop` | neochumby-htop: [htop](https://github.com/htop-dev/htop) (3.5.3, a submodule) in text mode, in Spleen 6x12, the touchscreen its mouse (F10, Quit, is past the 53rd column: the corner hold leaves it) | GPL-2.0-or-later |
 | `apps/top` | neochumby-top: [procps-ng](https://gitlab.com/procps-ng/procps)' top (4.0.7, a submodule) in text mode, until tapped | GPL-2.0-or-later |
 | `apps/cmatrix` | MATRIX: [cmatrix](https://github.com/abishekvashok/cmatrix) (v2.0, a submodule) in text mode, until tapped | GPL-3.0-or-later |
+| `apps/clockwasm` | WASM CLOCK: a big digital clock built as WebAssembly, run by the wasm runner, and the same face built natively, to measure one against the other | MIT |
 | `apps/clock` | CLOCK: [tty-clock](https://github.com/xorg62/tty-clock) (8868f3e, a submodule), until tapped | BSD-3-Clause |
 | `apps/bonsai` | BONSAI: [cbonsai](https://gitlab.com/jallbrit/cbonsai) (v1.4.2, a submodule) growing a tree, a new one every 20 seconds, until tapped | GPL-3.0-only |
 | `apps/pipes` | PIPES: [pipes-rs](https://github.com/dnorhoj/pipes-rs) (v0.1.1, a submodule), pipes.sh in Rust, until tapped | GPL-3.0-only |
@@ -96,6 +98,7 @@ crate's `Cargo.toml`:
 [package.metadata.neochumby]
 title = "QUAKE"                      # listed in app lists
 exec = "neochumby-quake"             # binaries, by name; exec runs in front
+wasm = "neochumby-x"                 # or, in place of exec, a binary built as WebAssembly
 color = "8c5a28"                    # optional; `colour` works too
 service = "neochumby-airplay"        # runs in the background, restarted if it exits
 companion = "neochumby-airplay-companion"   # its server half, run by neochumbyd
@@ -207,6 +210,14 @@ An app can use any of these keys:
   dist kernels in reverse video, as the Linux console draws it; a theme's
   other colours (the selection's, the cursor's text) aren't used. Without
   a neochumbyd, the same lines go in `/psp/neochumby.conf`.
+- **`wasm`:** in place of `exec`, a binary that `tools/tree` builds for
+  `wasm32-wasip1` and compiles for the Chumby (`tools/wamrc`, when LLVM 18
+  is there: `nix develop .#wasm`; else it runs interpreted, slowly). The
+  session runs it with `neochumby-wasm`, the wasm runner, in the app's
+  jail, in text mode or with `fb` as an `exec` is, and it reaches only
+  what its `access` grants, through the runner's host API
+  (`neochumby-guest`; [proposal 0003](docs/proposals/0003-wasm-apps.md)).
+  WASM CLOCK is one.
 - **`player`:** a Chumby's default player is the one a start app's MUSIC
   button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
   (the start app asks the session, which tells the player's service).
@@ -235,7 +246,7 @@ out first:
 
 ```sh
 git submodule update --init   # or clone with --recursive
-rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl
+rustup target add armv5te-unknown-linux-musleabi x86_64-unknown-linux-musl wasm32-wasip1
 cargo chumby          # the session and apps, for the Chumby
 cargo neochumbyd      # the server and the apps' companions, for x86_64 Linux
 ```

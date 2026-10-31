@@ -1758,6 +1758,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-clockwasm"
+version = "0.1.0"
+dependencies = [
+ "neochumby",
+ "neochumby-guest",
+ "neochumby-sys",
+]
+
+[[package]]
 name = "neochumby-cmatrix"
 version = "0.1.0"
 dependencies = [
@@ -1793,6 +1802,10 @@ dependencies = [
  "neochumby",
  "tokio",
 ]
+
+[[package]]
+name = "neochumby-guest"
+version = "0.1.0"
 
 [[package]]
 name = "neochumby-home"

@@ -51,6 +51,20 @@ neochumbyd delivered.
   trusted code: install apps only from sources you trust.** What the
   Chumby runs comes from the paired neochumbyd: guard that, and the tree
   it serves.
+- **An app built as WebAssembly (`wasm` in its manifest) is held
+  tighter.** The runner (`neochumby-wasm`) runs it in the same jail, with
+  bounds-checked memory and only the host functions its `access` grants,
+  refusing one that asks for more before it runs. On Linux 5 and later it
+  then locks itself down with seccomp (about 25 system calls; anything else
+  kills it) and, on the stable and mainline kernels, Landlock (no file
+  system, TCP or signals outside). Its compiled code is only ever compiled
+  by `tools/tree` or neochumbyd, never taken from its author, and in a
+  checked tree (`delivery=nfs`) the session gives it checked copies of its
+  module, its compiled code and its manifest. On 2.6.16 there is no
+  seccomp, and a WAMR bug there is plausibly root, so an app from the
+  catalog (`source=catalog`) runs there only if its owner trusts it
+  (`trusted=APP:APP` in its settings); a catalog app is never given
+  `root`, `system`, `terminal`, `logs` or `network`.
 - **The network can't be taken from an app.** An app whose `access`
   doesn't list `network` gets no name lookup, and the session ends it if
   it finds an internet socket of its in `/proc/net` (it looks once a

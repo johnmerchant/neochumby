@@ -534,6 +534,8 @@ fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
         font: None,
         tap: Vec::new(),
         frontend: None,
+        wasm: None,
+        catalog: false,
     }]
 }
 

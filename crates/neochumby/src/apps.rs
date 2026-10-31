@@ -31,6 +31,11 @@
 //!                              (neochumby::service)
 //!   linux=5.9                  the oldest Linux it runs on, which tools/tree
 //!                              reads: a tree for an older one leaves it out
+//!   wasm=neochumby-x.wasm      in place of exec: a WebAssembly module, run
+//!                              in front by the tree's neochumby-wasm, with
+//!                              aot=, aot-key= and aot-sha256= for its
+//!                              compiled code (neochumby_wasm::aot)
+//!   source=catalog             installed from the catalog: untrusted
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
@@ -93,7 +98,22 @@ pub struct App {
     /// owner's approval it reaches that app's service (neochumby::service)
     /// and is opened in its place.
     pub frontend: Option<String>,
+    /// Its front is a WebAssembly module (`wasm=`), which the tree's runner
+    /// (neochumby-wasm) runs: `exec` is then the runner.
+    pub wasm: Option<PathBuf>,
+    /// Installed from the catalog (`source=catalog`): untrusted. It is
+    /// never given root, system, terminal, logs or network, whatever its
+    /// manifest says.
+    pub catalog: bool,
 }
+
+/// The runner of wasm apps, in the tree beside the session.
+pub const WASM_RUNNER: &str = "neochumby-wasm";
+/// What the session tells the runner: the module, and that the owner
+/// trusts the app (neochumby_wasm's WASM_ENV and TRUSTED_ENV). Only the
+/// session sets them: neither is passed on from its own environment.
+pub const WASM_ENV: &str = "NEOCHUMBY_WASM";
+pub const WASM_TRUSTED_ENV: &str = "NEOCHUMBY_WASM_TRUSTED";
 
 /// An app's `access`: what the session gives it beyond its own directory
 /// and a /tmp of its own. Each is false unless the manifest lists it.
@@ -158,6 +178,16 @@ impl App {
     pub fn text(&self) -> bool {
         !self.access.fb
     }
+
+    /// Whether this Chumby's owner trusts it: named in `trusted`, app names
+    /// separated by `:`, in its settings from neochumbyd (`neochumbyd set
+    /// NAME trusted=clock:weather`), else in /psp/neochumby.conf. On a
+    /// kernel without seccomp (2.6.16), the runner runs a catalog app only
+    /// if it is trusted.
+    pub fn trusted(&self) -> bool {
+        let list = conf::get(crate::settings::SETTINGS, "trusted").or_else(|| conf::get(conf::CONF, "trusted"));
+        list.is_some_and(|l| l.split(':').any(|n| n == self.name))
+    }
 }
 
 /// A manifest's `tap`, its escapes undone: \n, \r, \t, \e, \\ and \xHH.
@@ -200,11 +230,20 @@ pub fn load(dir: &Path) -> Option<App> {
             .map(|(_, v)| v.trim().to_string())
     };
     let file = |k: &str| field(k).filter(|f| !f.is_empty()).map(|f| dir.join(f));
+    let wasm = file("wasm");
+    let catalog = field("source").as_deref() == Some("catalog");
+    let mut access = field("access").map(|a| Access::parse(&a)).unwrap_or_default();
+    if catalog {
+        (access.root, access.system, access.terminal, access.logs, access.network) =
+            (false, false, false, false, false);
+    }
+    // A wasm app's front is the runner, from the tree (apps/<name>/../..).
+    let runner = || Some(dir.parent()?.parent()?.join(WASM_RUNNER));
     Some(App {
         dir: dir.to_path_buf(),
         name: dir.file_name()?.to_string_lossy().into_owned(),
         title: field("title"),
-        exec: file("exec"),
+        exec: file("exec").or_else(|| wasm.as_ref().and_then(|_| runner())),
         color: field("color").or_else(|| field("colour")).and_then(|c| parse_color(&c)).unwrap_or(rgb(220, 160, 40)),
         service: file("service"),
         companion: field("companion").is_some_and(|c| !c.is_empty()),
@@ -217,10 +256,12 @@ pub fn load(dir: &Path) -> Option<App> {
         interrupt: field("interrupt").as_deref() != Some("false"),
         button: field("button").as_deref() == Some("true"),
         player: field("player").as_deref() == Some("true"),
-        access: field("access").map(|a| Access::parse(&a)).unwrap_or_default(),
+        access,
         font: field("font").filter(|f| !f.is_empty()),
         tap: field("tap").map(|t| unescape(&t)).unwrap_or_default(),
         frontend: field("frontend").filter(|f| neochumby_proto::valid_name(f)),
+        wasm,
+        catalog,
     })
 }
 

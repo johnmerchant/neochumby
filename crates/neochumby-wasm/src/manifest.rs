@@ -43,8 +43,10 @@ impl Manifest {
     }
 
     /// Whether `access` lists `word`.
+    /// `screen` is `fb`'s name in trees from before text mode, which named
+    /// the framebuffer so.
     pub fn grants(&self, word: &str) -> bool {
-        self.access.iter().any(|w| w == word)
+        self.access.iter().any(|w| w == word || (word == "fb" && w == "screen"))
     }
 }
 

@@ -3,7 +3,8 @@
 //!
 //! - `neochumby`: drawing as whole operations (fills, blits, text, run by
 //!   native code, not as per-pixel wasm), touches, the accelerometer, the
-//!   time, sleeping, the log and the session's request pipe. Each needs its
+//!   time and the local time zone's offset, sleeping, the log and the
+//!   session's request pipe. Each needs its
 //!   access word ([`crate::grant`]), and also checks it holds what that
 //!   word gave it, so an ungranted call can only trap.
 //! - `wasi_snapshot_preview1`, deliberately small, so that a program built
@@ -73,6 +74,10 @@ pub struct Host {
     pub sleep: fn(u32),
     /// The app's name, for its log lines.
     pub name: String,
+    /// Local time's offset from UTC, in seconds, as it was when the runner
+    /// started: found before the lock-down, as the C library may read the
+    /// zone's file for it.
+    pub utc_offset_s: i32,
     start: Instant,
 }
 
@@ -90,6 +95,7 @@ impl Host {
             random,
             sleep: |ms| std::thread::sleep(std::time::Duration::from_millis(ms.into())),
             name: name.to_string(),
+            utc_offset_s: 0,
             start: Instant::now(),
         }
     }
@@ -118,7 +124,7 @@ fn not_granted(what: &str) -> Trap {
 // ---- neochumby ----
 
 /// The `neochumby` imports every app has.
-pub const ALWAYS: &[&str] = &["now_ms", "sleep_ms", "log", "request"];
+pub const ALWAYS: &[&str] = &["now_ms", "utc_offset_s", "sleep_ms", "log", "request"];
 
 /// `fb_size() -> (width << 16) | height`.
 fn fb_size(c: &mut Caller<'_>, _: &[u64]) -> Result<u64, Trap> {
@@ -214,6 +220,12 @@ fn now_ms(c: &mut Caller<'_>, _: &[u64]) -> Result<u64, Trap> {
     Ok(host(c)?.start.elapsed().as_millis() as u64)
 }
 
+/// `utc_offset_s() -> i32`: local time's offset from UTC, in seconds (the
+/// wall clock is WASI's `clock_time_get`).
+fn utc_offset_s(c: &mut Caller<'_>, _: &[u64]) -> Result<u64, Trap> {
+    Ok(host(c)?.utc_offset_s as u32 as u64)
+}
+
 /// `sleep_ms(ms)`.
 fn sleep_ms(c: &mut Caller<'_>, a: &[u64]) -> Result<u64, Trap> {
     (host(c)?.sleep)(u(a[0]));
@@ -245,7 +257,7 @@ fn request(c: &mut Caller<'_>, a: &[u64]) -> Result<u64, Trap> {
 }
 
 /// The `neochumby` module.
-pub static NEOCHUMBY: [Func; 10] = [
+pub static NEOCHUMBY: [Func; 11] = [
     Func { name: "fb_size", params: &[], result: Some(I), call: fb_size },
     Func { name: "fb_fill", params: &[I, I, I, I, I], result: None, call: fb_fill },
     Func { name: "fb_blit", params: &[I, I, I, I, I, I], result: None, call: fb_blit },
@@ -253,6 +265,7 @@ pub static NEOCHUMBY: [Func; 10] = [
     Func { name: "touch_poll", params: &[I], result: Some(I), call: touch_poll },
     Func { name: "accel", params: &[I], result: Some(I), call: accel },
     Func { name: "now_ms", params: &[], result: Some(L), call: now_ms },
+    Func { name: "utc_offset_s", params: &[], result: Some(I), call: utc_offset_s },
     Func { name: "sleep_ms", params: &[I], result: None, call: sleep_ms },
     Func { name: "log", params: &[I, I], result: None, call: log },
     Func { name: "request", params: &[I, I], result: Some(I), call: request },
