@@ -1,6 +1,6 @@
 //! Signals to other processes, by pid or by process group, whether a
 //! process is alive, the descriptors a child is given, what else a child
-//! is started with, and this process's priority.
+//! is started with, and this process's priority and address space.
 
 use std::io;
 use std::os::fd::RawFd;
@@ -237,6 +237,14 @@ pub fn pass_fds(cmd: &mut Command, fds: Vec<RawFd>) {
             Ok(())
         });
     }
+}
+
+/// Limits this process's address space to `bytes` (RLIMIT_AS, soft and
+/// hard), so that it can't raise it again: an allocation past it fails.
+pub fn limit_memory(bytes: u32) -> io::Result<()> {
+    let r = libc::rlimit { rlim_cur: bytes as libc::rlim_t, rlim_max: bytes as libc::rlim_t };
+    // SAFETY: setrlimit(2) reads one rlimit, `r`, live through the call.
+    if unsafe { libc::setrlimit(libc::RLIMIT_AS, &r) } == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
 }
 
 #[cfg(test)]

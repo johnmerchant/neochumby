@@ -357,6 +357,19 @@ and the next round making the new set live, which one more boot runs. With
 `--device` the person beside the Chumby is asked to pull the plug. (Every
 cut point of a round, on the host, is neochumby-sync's own crash test.)
 
+**The wasm runner's hostile modules** (`dev/emulate-wasm TREE OUT`, a tree
+with `neochumby-wasm` and the suite's modules staged into it by
+`NEOCHUMBY_WASM_STAGE=TREE cargo test -p neochumby-wasm --test hostile`).
+Each module of the suite is run on the console with the tree's runner, on
+the profile's own kernel: an import not granted, compiled code passed off
+as bytecode and a catalog app asking for `system` are refused before they
+run; out-of-bounds accesses trap; a forged `.aot` is passed over; memory
+stops at its cap; a runaway loop runs until it is killed. With seccomp
+(dist) the runner locks itself down and a forbidden call kills it; on
+2.6.16 (classic, stock) a catalog app is refused unless trusted. It uses
+`dev/emulate exec`, so it runs on the dist and classic profiles, not on
+a real Chumby.
+
 ### A real Chumby: --device NAME
 
 The same scenarios run on a real Chumby, paired with a neochumbyd and set

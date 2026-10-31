@@ -16,7 +16,9 @@
 //!
 //! The calls are the ones the Chumby's stock firmware supports: Linux
 //! 2.6.16, static musl, an ARM926. Nothing here may use a newer system
-//! call, start a thread, or wait on a futex. Parts that only the Chumby
+//! call, start a thread, or wait on a futex, except [`lockdown`]: its newer
+//! calls are asked of the kernel at run time, and do nothing on a kernel
+//! without them. Parts that only the Chumby
 //! needs are built only for Linux (and the crash reports only for ARM);
 //! the rest also serves neochumbyd and app companions on Linux and macOS.
 //!
@@ -66,6 +68,8 @@ pub mod evdev;
 pub mod jail;
 #[cfg(target_os = "linux")]
 pub mod klog;
+#[cfg(target_os = "linux")]
+pub mod lockdown;
 #[cfg(target_os = "linux")]
 pub mod mm;
 #[cfg(target_os = "linux")]

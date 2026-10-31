@@ -1873,6 +1873,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-wasm"
+version = "0.1.0"
+dependencies = [
+ "neochumby",
+ "neochumby-sys",
+ "neochumby-wamr",
+ "sha2 0.10.9",
+ "wat",
+]
+
+[[package]]
 name = "neochumbyd"
 version = "0.1.0"
 dependencies = [
