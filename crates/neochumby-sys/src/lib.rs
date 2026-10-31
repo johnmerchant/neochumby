@@ -22,6 +22,10 @@
 //! needs are built only for Linux (and the crash reports only for ARM);
 //! the rest also serves neochumbyd and app companions on Linux and macOS.
 //!
+//! On `wasm32` the crate is one module, `guest`: the imports a wasm app
+//! makes of neochumby's runner (neochumby-wasm), behind safe functions,
+//! which neochumby-guest offers app authors.
+//!
 //! One module is not system calls: [`speaker`], the files by which
 //! processes hand the speaker over. It is here because this crate builds
 //! and tests on the host, and the device library doesn't.
@@ -43,20 +47,39 @@
 
 #![allow(unsafe_code)]
 
+#[cfg(not(target_arch = "wasm32"))]
 pub mod chan;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod elf;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fd;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod fs;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod net;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod privilege;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod process;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod pty;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod sandbox;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod serial;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod signal;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod speaker;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod time;
+#[cfg(not(target_arch = "wasm32"))]
 pub mod user;
+
+// A wasm app's side of the runner's host API: wasm32 only, and nothing
+// else of this crate there.
+#[cfg(target_arch = "wasm32")]
+pub mod guest;
 
 #[cfg(target_os = "linux")]
 pub mod alsa;

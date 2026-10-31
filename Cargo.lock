@@ -2218,6 +2218,9 @@ dependencies = [
 [[package]]
 name = "neochumby-guest"
 version = "0.1.0"
+dependencies = [
+ "neochumby-sys",
+]
 
 [[package]]
 name = "neochumby-home"

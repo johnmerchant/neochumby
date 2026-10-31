@@ -11,87 +11,15 @@
 //!
 //! On anything but wasm32 the functions do nothing and report nothing, so
 //! an app's own code can be built and tested on the host.
+//!
+//! It reaches the host only through neochumby-sys, whose module
+//! neochumby_sys::guest holds the imports, behind safe functions.
 
-/// The imports, and the one module allowed `unsafe`: calls into the host,
-/// which checks every pointer against the module's memory.
+#![forbid(unsafe_code)]
+
+// The imports themselves are in neochumby-sys.
 #[cfg(target_arch = "wasm32")]
-#[allow(unsafe_code)]
-mod sys {
-    #[link(wasm_import_module = "neochumby")]
-    unsafe extern "C" {
-        pub fn fb_size() -> u32;
-        pub fn fb_fill(x: u32, y: u32, w: u32, h: u32, rgb565: u32);
-        pub fn fb_blit(x: u32, y: u32, w: u32, h: u32, px: *const u16, stride: u32);
-        pub fn fb_text(x: u32, y: u32, s: *const u8, len: u32, scale: u32, rgb565: u32);
-        pub fn touch_poll(out: *mut i32) -> i32;
-        pub fn accel(out: *mut i32) -> i32;
-        pub fn now_ms() -> i64;
-        pub fn utc_offset_s() -> i32;
-        pub fn sleep_ms(ms: u32);
-        pub fn log(s: *const u8, len: u32);
-        pub fn request(s: *const u8, len: u32) -> i32;
-    }
-
-    // SAFETY (for each wrapper below): the host reads or writes only the
-    // bytes given by pointer and length, which are a live Rust slice or
-    // array of that size, and checks them against the module's memory
-    // itself; the scalar calls touch no memory of ours.
-
-    pub fn size() -> u32 {
-        // SAFETY: as above.
-        unsafe { fb_size() }
-    }
-
-    pub fn fill(x: u32, y: u32, w: u32, h: u32, c: u16) {
-        // SAFETY: as above.
-        unsafe { fb_fill(x, y, w, h, c.into()) }
-    }
-
-    pub fn blit(x: u32, y: u32, w: u32, h: u32, px: &[u16], stride: u32) {
-        // SAFETY: as above; the caller checked that `px` holds the rows.
-        unsafe { fb_blit(x, y, w, h, px.as_ptr(), stride) }
-    }
-
-    pub fn text(x: u32, y: u32, s: &str, scale: u32, c: u16) {
-        // SAFETY: as above.
-        unsafe { fb_text(x, y, s.as_ptr(), s.len() as u32, scale, c.into()) }
-    }
-
-    pub fn touch(out: &mut [i32; 3]) -> bool {
-        // SAFETY: as above, 12 bytes.
-        unsafe { touch_poll(out.as_mut_ptr()) == 1 }
-    }
-
-    pub fn accel3(out: &mut [i32; 3]) -> bool {
-        // SAFETY: as above, 12 bytes.
-        unsafe { accel(out.as_mut_ptr()) == 1 }
-    }
-
-    pub fn now() -> u64 {
-        // SAFETY: as above.
-        unsafe { now_ms() as u64 }
-    }
-
-    pub fn offset() -> i32 {
-        // SAFETY: as above.
-        unsafe { utc_offset_s() }
-    }
-
-    pub fn sleep(ms: u32) {
-        // SAFETY: as above.
-        unsafe { sleep_ms(ms) }
-    }
-
-    pub fn log_line(s: &str) {
-        // SAFETY: as above.
-        unsafe { log(s.as_ptr(), s.len() as u32) }
-    }
-
-    pub fn ask(s: &str) -> bool {
-        // SAFETY: as above.
-        unsafe { request(s.as_ptr(), s.len() as u32) == 0 }
-    }
-}
+use neochumby_sys::guest as sys;
 
 /// The screen: 320x240, RGB565, drawn by the host in whole operations.
 /// Needs `fb`.
@@ -105,7 +33,7 @@ pub mod fb {
     pub fn size() -> (u32, u32) {
         #[cfg(target_arch = "wasm32")]
         {
-            let s = super::sys::size();
+            let s = super::sys::fb_size_packed();
             (s >> 16, s & 0xffff)
         }
         #[cfg(not(target_arch = "wasm32"))]
@@ -198,7 +126,7 @@ pub fn now_ms() -> u64 {
 /// `SystemTime`.
 pub fn utc_offset_s() -> i32 {
     #[cfg(target_arch = "wasm32")]
-    return sys::offset();
+    return sys::utc_offset();
     #[cfg(not(target_arch = "wasm32"))]
     0
 }
