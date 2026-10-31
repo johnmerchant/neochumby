@@ -7,6 +7,10 @@
 //!                              from older trees, is read too)
 //!   service=neochumby-airplay  runs in the background while neochumby does
 //!   companion=...              its server half, which neochumbyd runs
+//!                              for each Chumby
+//!   server=...                 its half that runs once on the server for
+//!                              all Chumbys, which neochumbyd starts (not
+//!                              read here, nor are access= and listen=)
 //!   neochumbyd=required        needs a paired neochumbyd (or `optional`:
 //!                              uses one when there is one; absent: never)
 //!   start=true                 may be the start app (see the session)
@@ -29,8 +33,8 @@
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
 //!
-//! An app's exec runs in **text mode** unless its access lists `fb` (or
-//! `root`): its stdin and stdout are a terminal of its own, which the
+//! An app's exec runs in **text mode** unless its access lists `fb`, root
+//! or not: its stdin and stdout are a terminal of its own, which the
 //! session shows on the screen (neochumby::term), with touches arriving on
 //! stdin. With `fb`, it has the framebuffer and draws on it itself.
 
@@ -108,6 +112,9 @@ pub struct Access {
     pub network: bool,
     /// /dev/ptmx and /dev/pts.
     pub terminal: bool,
+    /// A directory of its own in /psp, lasting across boots, shared by its
+    /// exec and its service (NEOCHUMBY_STORAGE).
+    pub storage: bool,
     /// The Chumby's logs, read-only.
     pub logs: bool,
     /// No jail: root, as the session.
@@ -128,6 +135,7 @@ impl Access {
                 "system" => a.system = true,
                 "network" => a.network = true,
                 "terminal" => a.terminal = true,
+                "storage" => a.storage = true,
                 "logs" => a.logs = true,
                 "root" => a.root = true,
                 _ => {}
@@ -144,9 +152,9 @@ impl App {
     }
 
     /// Whether its exec runs in text mode, on a terminal the session
-    /// shows: unless it draws the screen itself (`fb`, or `root`).
+    /// shows: unless it draws the screen itself (`fb`), root or not.
     pub fn text(&self) -> bool {
-        !self.access.fb && !self.access.root
+        !self.access.fb
     }
 }
 
@@ -178,8 +186,10 @@ fn parse_color(s: &str) -> Option<u16> {
     Some(rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
 
+/// The app in `dir`, from its manifest: checked against the tree's signed
+/// manifest where the tree is checked (crate::verified).
 pub fn load(dir: &Path) -> Option<App> {
-    let manifest = std::fs::read_to_string(dir.join("manifest")).ok()?;
+    let manifest = String::from_utf8(crate::verified::read(&dir.join("manifest")).ok()?).ok()?;
     let field = |k: &str| {
         manifest
             .lines()
@@ -258,7 +268,7 @@ mod tests {
         for (name, manifest, text) in [
             ("htop", "exec=x\nfont=spleen-6x12\ntap=\\n\n", true),
             ("doom", "exec=x\naccess=fb,touch\n", false),
-            ("home", "exec=x\naccess=root\n", false),
+            ("classic", "exec=x\naccess=root,fb\n", false),
         ] {
             std::fs::create_dir_all(dir.join(name)).unwrap();
             std::fs::write(dir.join(name).join("manifest"), manifest).unwrap();

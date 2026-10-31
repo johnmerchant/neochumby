@@ -1,0 +1,21 @@
+[package]
+name = "wasmi-run"
+version = "0.1.0"
+edition = "2024"
+publish = false
+license = "MIT"
+description = "A tiny wasmi host for the wasm benchmark: runs a WASI command with only the WASI calls the workloads need"
+
+# Built by dev/wasmbench/tools/wasmi.sh, apart from the device workspace.
+[workspace]
+
+[dependencies]
+wasmi = { version = "2", default-features = false, features = ["std", "validate", "auto-dispatch"] }
+libc = "0.2"
+
+[profile.release]
+opt-level = 3
+lto = true
+panic = "abort"
+codegen-units = 1
+strip = true

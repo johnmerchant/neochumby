@@ -7,7 +7,6 @@
 //! written to /psp: this Chumby's key, the conf with the server's key
 //! pinned, and the boot hook, so it boots from the server with no stick.
 
-use std::net::{TcpStream, ToSocketAddrs};
 use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -15,11 +14,18 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::Duration;
 
 use neochumby::conf;
-use neochumby::fb::{self, Fb, rgb};
-use neochumby::input::{Touch, Touchscreen};
 use neochumby_proto::{Identity, Msg, Unverified, hex};
 
-const BG: u16 = rgb(16, 16, 32);
+use crate::term::{Paint, Rgb, Term, Touch, fit};
+
+const WHITE: Rgb = (230, 230, 230);
+const TITLE: Rgb = (255, 200, 120);
+const GREEN: Rgb = (120, 220, 120);
+const CANCEL: Rgb = (120, 120, 140);
+
+/// A line of a pairing screen: its text, its colour, and whether it is
+/// one of the big ones (bold).
+type Line<'a> = (&'a str, Rgb, bool);
 
 enum Progress {
     Code(String),
@@ -38,10 +44,9 @@ fn ask(
         Ok(s) => Identity::from_secret(&s).map_err(|e| e.to_string())?,
         Err(_) => Identity::generate().map_err(|e| e.to_string())?,
     };
-    let addr = (server, api_port).to_socket_addrs().map_err(|e| e.to_string())?.next().ok_or("no address")?;
-    let tcp = TcpStream::connect_timeout(&addr, Duration::from_secs(10)).map_err(|e| e.to_string())?;
+    let stream = neochumby::line::connect(server, api_port, Duration::from_secs(10)).map_err(|e| e.to_string())?;
     // Pairing is how the server's key is learnt: none to check yet.
-    let mut s = Unverified::connect(tcp, &identity).map_err(|e| e.to_string())?;
+    let mut s = Unverified::connect(stream, &identity).map_err(|e| e.to_string())?;
     s.send(&Msg::Pair { name: conf::name() }).map_err(|e| e.to_string())?;
     let _ = tx.send(Progress::Code(s.code()));
     let Msg::Paired { nfs_port, path } = s.recv().map_err(|e| e.to_string())? else {
@@ -64,36 +69,45 @@ fn ask(
     let w = |p: &str, d: &[u8], m| conf::write_atomic(Path::new(p), d, m).map_err(|e| format!("{p}: {e}"));
     w(conf::KEY, identity.secret().as_bytes(), 0o600)?;
     w(conf::CONF, c.as_bytes(), 0o644)?;
+    // A Chumby whose settings never had a hook has no rfs1 yet.
+    std::fs::create_dir_all("/psp/rfs1").map_err(|e| format!("/psp/rfs1: {e}"))?;
     w("/psp/rfs1/userhook2", &hook, 0o755)?;
+    // What checks the tree over NFS from the next boot on, from the tree
+    // pairing runs from, as the hook is (neochumby::verified).
+    if let Err(e) = neochumby::verified::install_boot(root) {
+        eprintln!("neochumby-home: {}: {e}", neochumby::verified::BOOT);
+    }
     Ok(())
 }
 
-fn screen(fb: &mut Fb, lines: &[(&str, usize, u16)], cancel: bool) {
-    fb.clear(BG);
-    let mut y = 24;
-    for (text, scale, colour) in lines {
-        let x = fb::W.saturating_sub(Fb::text_width(text, *scale)) / 2;
-        fb.text(x, y, text, *scale, *colour);
-        y += 8 * scale + 12;
+/// How many rows CANCEL takes along the bottom of a terminal `rows` high.
+fn cancel_rows(rows: usize) -> usize {
+    if rows >= 12 { 3 } else { 1 }
+}
+
+/// A pairing screen: `lines`, each in the middle, a blank row between the
+/// big ones and the rest, and CANCEL along the bottom if `cancel`.
+fn screen(t: &mut Term, lines: &[Line], cancel: bool) {
+    let mut p = Paint::cleared();
+    let mut row = 1;
+    for (text, colour, big) in lines {
+        let text = fit(text, t.cols);
+        p.at((t.cols - text.len()) / 2, row).text(&text, *colour, None, *big);
+        row += if *big { 2 } else { 1 };
     }
     if cancel {
-        fb.rect(8, fb::H - 48, fb::W - 16, 40, rgb(120, 120, 140));
-        fb.text((fb::W - Fb::text_width("CANCEL", 2)) / 2, fb::H - 36, "CANCEL", 2, rgb(0, 0, 0));
+        let h = cancel_rows(t.rows);
+        let top = t.rows - h;
+        p.fill(1, top, t.cols.saturating_sub(2), h, CANCEL);
+        p.at(t.cols.saturating_sub(6) / 2, top + (h - 1) / 2).text("CANCEL", (0, 0, 0), Some(CANCEL), true);
     }
+    t.show(&p.0);
 }
 
 /// Runs the pairing screen until paired, refused or cancelled (CANCEL, or
 /// `cancel` returning true: the top button); true if paired.
-pub fn run(
-    fb: &mut Fb,
-    touch: &mut Touchscreen,
-    server: &str,
-    api_port: u16,
-    root: &Path,
-    mut cancel: impl FnMut() -> bool,
-) -> bool {
-    let white = rgb(230, 230, 230);
-    screen(fb, &[("PAIRING", 3, rgb(255, 200, 120)), (server, 2, white), ("connecting...", 2, white)], true);
+pub fn run(t: &mut Term, server: &str, api_port: u16, root: &Path, mut cancel: impl FnMut() -> bool) -> bool {
+    screen(t, &[("PAIRING", TITLE, true), (server, WHITE, true), ("connecting...", WHITE, false)], true);
 
     let cancelled = Arc::new(AtomicBool::new(false));
     let (tx, rx): (_, Receiver<Progress>) = mpsc::channel();
@@ -115,16 +129,15 @@ pub fn run(
                     // Eight groups of four: four to a line.
                     let (first, second) = code.split_at(code.len().min(19));
                     let second = second.trim_start_matches('-');
-                    let green = rgb(120, 220, 120);
                     screen(
-                        fb,
+                        t,
                         &[
-                            ("PAIRING", 3, rgb(255, 200, 120)),
-                            ("on the server, run", 1, white),
-                            ("neochumbyd approve CODE", 1, white),
-                            ("typing this code:", 1, white),
-                            (first, 2, green),
-                            (second, 2, green),
+                            ("PAIRING", TITLE, true),
+                            ("on the server, run", WHITE, false),
+                            ("neochumbyd approve CODE", WHITE, false),
+                            ("typing this code:", WHITE, true),
+                            (first, GREEN, true),
+                            (second, GREEN, true),
                         ],
                         true,
                     );
@@ -140,15 +153,15 @@ pub fn run(
                         Err(e) => e.chars().take(36).collect(),
                     };
                     let title = if ok { "PAIRED" } else { "NOT PAIRED" };
-                    screen(fb, &[(title, 3, rgb(255, 200, 120)), (&msg, 1, white)], false);
+                    screen(t, &[(title, TITLE, true), (&msg, WHITE, false)], false);
                     neochumby::sleep_ms(4000);
                     return ok;
                 }
             }
         }
-        for t in touch.poll() {
-            match t {
-                Touch::Down { y, .. } => down_on_cancel = y as usize >= fb::H - 48,
+        for touch in t.poll(50) {
+            match touch {
+                Touch::Down { row, .. } => down_on_cancel = row >= t.rows - cancel_rows(t.rows),
                 Touch::Up if down_on_cancel => {
                     cancelled.store(true, Ordering::SeqCst);
                     return false;
@@ -160,6 +173,5 @@ pub fn run(
             cancelled.store(true, Ordering::SeqCst);
             return false;
         }
-        neochumby::sleep_ms(50);
     }
 }

@@ -8,12 +8,14 @@
 //! Prints the manifest, or fails with what is wrong: a crate not named
 //! neochumby-<name>, no metadata, an unknown key, or a value of the wrong
 //! kind. Values are strings, except `start`, `button`, `interrupt` and
-//! `player`, which are true or false, and `access`, a list of what the app
-//! reaches beyond its jail ([`ACCESS`]), written as one comma-separated
-//! value. `neochumbyd` is `required` or `optional`
-//! (absent: the app never needs one), and an app with a `companion` must
-//! set it: only a neochumbyd runs companions. It is stated, not inferred
-//! from `companion`.
+//! `player`, which are true or false, and the lists `access`, what the app
+//! reaches beyond its jail ([`ACCESS`]), and `listen`, the TCP ports a
+//! `server` program may bind, each written as one comma-separated value.
+//! `neochumbyd` is `required` or `optional` (absent: the app never needs
+//! one), and an app with a `companion` must set it: only a neochumbyd runs
+//! companions. It is stated, not inferred from `companion`. Nothing in the
+//! manifest gives an app neochumbyd's admin socket; only its owner does
+//! (`neochumbyd allow <app> pairing`).
 //!
 //! An app's exec runs in text mode, on a terminal, unless its `access`
 //! lists `fb`. In text mode, `font` names its terminal's font ([`FONTS`],
@@ -29,13 +31,16 @@ use std::process::ExitCode;
 
 use toml::Value;
 
-/// The keys an app may set, as apps.rs reads them on the Chumby.
+/// The keys an app may set, as apps.rs reads them on the Chumby (and
+/// neochumbyd reads `companion`, `server` and `listen`).
 const KEYS: &[&str] = &[
     "title",
     "exec",
     "color",
     "service",
     "companion",
+    "server",
+    "listen",
     "neochumbyd",
     "start",
     "button",
@@ -81,8 +86,14 @@ const SPELLINGS: &[(&str, &str)] = &[("colour", "color")];
 ///   (neochumby::term);
 /// - `logs`: the Chumby's logs, read-only: the session's, /tmp's *.log
 ///   and /var/log's files;
-/// - `root`: no jail: it runs as root, as the session does. Listed alone.
-const ACCESS: &[&str] = &["fb", "touch", "speaker", "accel", "system", "network", "terminal", "logs", "root"];
+/// - `storage`: a directory of its own that lasts across boots
+///   (/psp/apps/<name>, NEOCHUMBY_STORAGE), shared by its exec and service,
+///   capped at 64 KiB;
+/// - `root`: no jail: it runs as root, as the session does. Listed alone,
+///   or with `fb` for an app that draws the screen itself (without it, a
+///   root app runs in text mode too).
+const ACCESS: &[&str] =
+    &["fb", "touch", "speaker", "accel", "system", "network", "terminal", "logs", "storage", "root"];
 
 /// What a value may hold: a manifest line is `key=value`, one per line.
 fn plain(s: &str) -> bool {
@@ -121,8 +132,8 @@ fn access(list: &[Value]) -> Result<String, String> {
             _ => return Err(format!("access: {v} is not one of {}", ACCESS.join(", "))),
         }
     }
-    if words.contains(&"root") && words.len() > 1 {
-        return Err("access: root is everything already; list it alone".into());
+    if words.contains(&"root") && words.iter().any(|w| !matches!(*w, "root" | "fb")) {
+        return Err("access: root is everything already; list it alone, or with fb".into());
     }
     if words.is_empty() {
         return Err("access: an empty list; leave it out".into());
@@ -148,6 +159,12 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         let spelled = SPELLINGS.iter().filter(|(_, k)| k == key).find_map(|(s, _)| meta.get(*s));
         let Some(v) = meta.get(*key).or(spelled) else { continue };
         let value = match (FLAGS.contains(key), v) {
+            (_, Value::Array(a)) if *key == "listen" => {
+                let ports = a.iter().map(|p| p.as_integer().filter(|p| (1..=65535).contains(p)));
+                let ports: Option<Vec<String>> = ports.map(|p| p.map(|p| p.to_string())).collect();
+                ports.ok_or("listen: a list of TCP ports, 1 to 65535")?.join(",")
+            }
+            (_, _) if *key == "listen" => return Err("listen: not a list".into()),
             (false, Value::Array(a)) if *key == "access" => access(a)?,
             (false, _) if *key == "access" => return Err("access: not a list of strings".into()),
             (false, Value::String(s)) if *key == "tap" => escape(s),
@@ -169,6 +186,9 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         None | Some("required" | "optional") => {}
         Some(v) => return Err(format!(r#"neochumbyd: {v:?} is not "required" or "optional" (or leave it out)"#)),
     }
+    if meta.contains_key("listen") && !meta.contains_key("server") {
+        return Err("listen is a server program's: set server too".into());
+    }
     if meta.get("player").and_then(Value::as_bool) == Some(true) {
         if !meta.contains_key("exec") {
             return Err("player: a player is opened, so it needs an exec".into());
@@ -181,16 +201,13 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
             return Err(r#"player: a player plays, so its access lists "speaker""#.into());
         }
     }
-    let fb = meta
-        .get("access")
-        .and_then(Value::as_array)
-        .is_some_and(|a| a.iter().any(|v| matches!(v.as_str(), Some("fb" | "root"))));
+    let fb = meta.get("access").and_then(Value::as_array).is_some_and(|a| a.iter().any(|v| v.as_str() == Some("fb")));
     for key in ["font", "tap"] {
         if !meta.contains_key(key) {
             continue;
         }
         if fb {
-            return Err(format!("{key}: an app with fb (or root) draws the screen itself, and has no terminal"));
+            return Err(format!("{key}: an app with fb draws the screen itself, and has no terminal"));
         }
         if !meta.contains_key("exec") {
             return Err(format!("{key}: only an exec has a terminal"));
@@ -270,6 +287,21 @@ mod tests {
     }
 
     #[test]
+    fn a_server_alone() {
+        let m =
+            manifest("[package]\nname = \"neochumby-web\"\n[package.metadata.neochumby]\nserver = \"neochumby-web\"\n");
+        assert_eq!(m.unwrap(), "server=neochumby-web\n");
+        let m = manifest(&wrap("server = \"w\"\nlisten = [8080, 8443]"));
+        assert_eq!(m.unwrap(), "server=w\nlisten=8080,8443\n");
+        // The owner grants pairing; an app can't take it.
+        assert!(manifest(&wrap("server = \"w\"\naccess = [\"pairing\"]")).is_err());
+        assert!(manifest(&wrap("server = \"w\"\nlisten = [0]")).is_err());
+        assert!(manifest(&wrap("server = \"w\"\nlisten = [\"80\"]")).is_err());
+        assert!(manifest(&wrap("exec = \"w\"\nlisten = [80]")).is_err(), "no server");
+        assert!(manifest(&wrap("daemon = \"w\"")).is_err());
+    }
+
+    #[test]
     fn color_or_colour_and_color_wins() {
         assert_eq!(manifest(&wrap("colour = \"8c5a28\"")).unwrap(), "color=8c5a28\n");
         assert_eq!(manifest(&wrap("color = \"112233\"\ncolour = \"8c5a28\"")).unwrap(), "color=112233\n");
@@ -305,10 +337,12 @@ mod tests {
     fn access_is_a_list_of_what_the_session_grants() {
         assert_eq!(manifest(&wrap(r#"access = ["fb", "touch"]"#)).unwrap(), "access=fb,touch\n");
         assert_eq!(manifest(&wrap(r#"access = ["root"]"#)).unwrap(), "access=root\n");
+        assert_eq!(manifest(&wrap(r#"access = ["speaker", "storage"]"#)).unwrap(), "access=speaker,storage\n");
         for bad in [r#"access = "screen""#, r#"access = ["disk"]"#, r#"access = ["fb", "fb"]"#, "access = []"] {
             assert!(manifest(&wrap(bad)).unwrap_err().starts_with("access:"), "{bad}");
         }
-        assert!(manifest(&wrap(r#"access = ["root", "fb"]"#)).unwrap_err().contains("alone"));
+        assert_eq!(manifest(&wrap(r#"access = ["root", "fb"]"#)).unwrap(), "access=root,fb\n");
+        assert!(manifest(&wrap(r#"access = ["root", "touch"]"#)).unwrap_err().contains("alone"));
         // The old word for fb, refused with what replaced it.
         let e = manifest(&wrap(r#"access = ["screen", "touch"]"#)).unwrap_err();
         assert!(e.contains(r#""fb""#) && e.contains("text mode"), "{e}");

@@ -11,8 +11,10 @@
 #   - next, and the volume, reach it, and the screen follows;
 #   - a title outside ISO 8859-1 shows as `?`s, with no cover;
 #   - its [x] leaves for home;
-#   - with --audio, the speaker played the tone (the WAV isn't silent).
-# Screenshots, the WAV and the console go in OUT.
+#   - the speaker played the tone: what it played, recorded, isn't silent
+#     (AIRPLAY_AUDIO= leaves that out).
+# Screenshots and the console go in OUT; the WAV, tens of megabytes, is
+# measured and dropped.
 #
 #   dev/emulate-airplay TREE STANDIN OUT
 #
@@ -71,7 +73,7 @@ close_x=303 close_y=6
 
 step "boot ($backend)"
 audio=
-[ -z "${AIRPLAY_AUDIO:-1}" ] || audio="--audio $out/speaker.wav"
+[ -z "${AIRPLAY_AUDIO:-1}" ] || audio="--audio $state/speaker.wav"
 # shellcheck disable=SC2086
 if emu start --psp "$state/psp" $audio "$state/tree"; then :; else
   code=$?
@@ -127,7 +129,7 @@ emu log >"$out/console.log"
 emu stop >/dev/null 2>&1 || true
 if [ -n "$audio" ]; then
   step "the speaker played"
-  python3 -I - "$out/speaker.wav" <<'EOF' || fail "the speaker was silent"
+  python3 -I - "$state/speaker.wav" <<'EOF' || fail "the speaker was silent"
 import struct, sys
 data = open(sys.argv[1], "rb").read()[44:]
 n = len(data) // 2

@@ -170,22 +170,44 @@ pub enum Touch {
 pub struct Touchscreen {
     file: Option<File>,
     cal: Calibration,
-    /// The last raw X and Y, once each has been reported since opening.
-    /// evdev sends a coordinate only when it changes, so a reader opened
-    /// during a steady touch (as the next app is, after the corner hold)
-    /// sees presses before any position, and must not take one for (0, 0).
+    /// The last raw X and Y. evdev sends a coordinate only when it
+    /// changes, so a reader opened since would never hear one a new touch
+    /// shares with the last (a tap straight below the one that opened the
+    /// app): they start as the device holds them (EVIOCGABS), and are None
+    /// only where it can't say.
     raw: (Option<i32>, Option<i32>),
     pressed: bool,
     was_pressed: bool,
+    /// A touch was down as the reader opened (the corner hold, or the tap
+    /// that opened the app, still held): it is someone else's, and nothing
+    /// is reported until it has lifted.
+    held: bool,
+}
+
+/// What a touchscreen holds as a reader opens it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Now {
+    raw: (Option<i32>, Option<i32>),
+    pressed: bool,
+}
+
+impl Now {
+    /// What `file` holds now: X, Y, and whether the pressure is above 0.
+    fn of(file: &File) -> Now {
+        let axis = |a: u16| neochumby_sys::evdev::abs_value(file, a).ok();
+        Now { raw: (axis(ABS_X), axis(ABS_Y)), pressed: axis(ABS_PRESSURE).is_some_and(|p| p > 0) }
+    }
 }
 
 impl Touchscreen {
     pub fn open() -> Touchscreen {
-        Touchscreen::with(open_nonblock(&touchscreen()), Calibration::load())
+        let file = open_nonblock(&touchscreen());
+        let now = file.as_ref().map(Now::of).unwrap_or_default();
+        Touchscreen::with(file, Calibration::load(), now)
     }
 
-    fn with(file: Option<File>, cal: Calibration) -> Touchscreen {
-        Touchscreen { file, cal, raw: (None, None), pressed: false, was_pressed: false }
+    fn with(file: Option<File>, cal: Calibration, now: Now) -> Touchscreen {
+        Touchscreen { file, cal, raw: now.raw, pressed: now.pressed, was_pressed: false, held: now.pressed }
     }
 
     /// Every touch report since the last call, in order.
@@ -212,6 +234,7 @@ impl Touchscreen {
                 (EV_ABS, ABS_Y) => self.raw.1 = Some(value),
                 (EV_ABS, ABS_PRESSURE) => self.pressed = value > 0,
                 (EV_KEY, BTN_TOUCH) => self.pressed = value != 0,
+                (EV_SYN, _) if self.held => self.held = self.pressed,
                 (EV_SYN, _) => {
                     if let (true, (Some(rx), Some(ry))) = (self.pressed, self.raw) {
                         let (x, y) = self.cal.map(rx, ry);
@@ -312,13 +335,13 @@ mod tests {
     #[test]
     fn a_made_up_touch_reads_as_a_real_one() {
         for cal in calibrations() {
-            let mut t = Touchscreen::with(None, cal);
+            let mut t = Touchscreen::with(None, cal, Now::default());
             let mut got = Vec::new();
             let (rx, ry) = cal.raw(10, 200);
             t.take(&touch_down(rx, ry), &mut got);
             t.take(&touch_up(), &mut got);
             // Again at the same place, as a reader opened since sees it.
-            let mut fresh = Touchscreen::with(None, cal);
+            let mut fresh = Touchscreen::with(None, cal, Now::default());
             fresh.take(&touch_down(rx, ry), &mut got);
             assert_eq!(
                 got,
@@ -326,7 +349,47 @@ mod tests {
             );
             assert!(touch_down(rx, ry).len().is_multiple_of(16) && touch_up().len() == 48);
         }
-        assert!(Touchscreen::with(None, calibrations()[0]).poll().is_empty());
+        assert!(Touchscreen::with(None, calibrations()[0], Now::default()).poll().is_empty());
+    }
+
+    /// What a real touchscreen sends for a touch at the place it last
+    /// reported: the pressure, and no coordinate, which hasn't changed.
+    fn press_in_place() -> Vec<u8> {
+        [event(EV_ABS, ABS_PRESSURE, PRESSURE), event(EV_KEY, BTN_TOUCH, 1), event(EV_SYN, 0, 0)].concat()
+    }
+
+    #[test]
+    fn a_touch_where_the_last_one_was_reaches_a_reader_opened_since() {
+        let cal = calibrations()[0];
+        let (rx, ry) = cal.raw(160, 120);
+        // The device holds the last place: a touch there again sends no
+        // coordinate, and the reader knows it from when it opened.
+        let mut t = Touchscreen::with(None, cal, Now { raw: (Some(rx), Some(ry)), pressed: false });
+        let mut got = Vec::new();
+        t.take(&press_in_place(), &mut got);
+        t.take(&touch_up(), &mut got);
+        assert_eq!(got, [Touch::Down { x: 160, y: 120, raw: (rx, ry) }, Touch::Up]);
+        // Where the device can't say, nothing is made up.
+        let mut blind = Touchscreen::with(None, cal, Now::default());
+        let mut got = Vec::new();
+        blind.take(&press_in_place(), &mut got);
+        assert!(got.is_empty());
+    }
+
+    #[test]
+    fn a_touch_held_as_the_reader_opens_is_not_its_own() {
+        let cal = calibrations()[0];
+        let (rx, ry) = cal.raw(5, 5);
+        let mut t = Touchscreen::with(None, cal, Now { raw: (Some(rx), Some(ry)), pressed: true });
+        let mut got = Vec::new();
+        // Still held, then lifted: nothing.
+        t.take(&press_in_place(), &mut got);
+        t.take(&touch_up(), &mut got);
+        assert!(got.is_empty());
+        // The next touch is.
+        let (tx, ty) = cal.raw(160, 120);
+        t.take(&touch_down(tx, ty), &mut got);
+        assert_eq!(got, [Touch::Down { x: 160, y: 120, raw: (tx, ty) }]);
     }
 
     #[test]

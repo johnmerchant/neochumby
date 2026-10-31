@@ -4,7 +4,7 @@
 
 use std::fs::File;
 use std::io;
-use std::os::fd::{AsRawFd, BorrowedFd, FromRawFd, RawFd};
+use std::os::fd::{AsFd, AsRawFd, FromRawFd, RawFd};
 
 /// A new pseudo-terminal of `cols` by `rows` characters: (master, slave).
 /// Both are close-on-exec, so neither leaks into programs started later;
@@ -47,35 +47,39 @@ pub fn readable(master: &File, ms: u16) -> io::Result<bool> {
     }
 }
 
-/// The size of the terminal `tty` is, as (columns, rows) (TIOCGWINSZ);
-/// None if it isn't one, or has no size.
-pub fn size(tty: BorrowedFd<'_>) -> Option<(u16, u16)> {
-    let mut ws = libc::winsize { ws_row: 0, ws_col: 0, ws_xpixel: 0, ws_ypixel: 0 };
-    // SAFETY: TIOCGWINSZ writes one winsize into `ws`, a live one of ours;
-    // the descriptor is open while it's borrowed.
-    let r = unsafe { libc::ioctl(tty.as_raw_fd(), libc::TIOCGWINSZ as _, &raw mut ws) };
-    (r == 0 && ws.ws_col > 0 && ws.ws_row > 0).then_some((ws.ws_col, ws.ws_row))
-}
-
-/// Puts the terminal `tty` in raw mode (cfmakeraw(3)): each byte typed
-/// reaches the program as it comes, not a line at a time, and nothing is
-/// echoed. What a program that reads mouse reports itself needs; curses
-/// does the same.
-pub fn raw(tty: BorrowedFd<'_>) -> io::Result<()> {
-    // SAFETY: termios is plain data, for which all zeroes is valid.
+/// Puts the terminal `tty` in raw mode (cfmakeraw(3)): each byte typed is
+/// read as it comes, with no echo and no signals, and output goes out as
+/// it is written, its "\n" left alone. For a program on a terminal (the
+/// far end), which reads touches as mouse reports.
+pub fn raw(tty: &impl AsFd) -> io::Result<()> {
+    let fd = tty.as_fd().as_raw_fd();
+    // SAFETY: termios is plain data, for which all zeroes is valid;
+    // tcgetattr fills it in before it is used.
     let mut t: libc::termios = unsafe { std::mem::zeroed() };
-    // SAFETY: tcgetattr writes one termios into `t`, a live one of ours;
-    // the descriptor is open while it's borrowed.
-    if unsafe { libc::tcgetattr(tty.as_raw_fd(), &mut t) } != 0 {
+    // SAFETY: tcgetattr(3) writes one termios into `t`, a live one of
+    // ours; the descriptor is open, borrowed from `tty`.
+    if unsafe { libc::tcgetattr(fd, &mut t) } != 0 {
         return Err(io::Error::last_os_error());
     }
-    // SAFETY: cfmakeraw only changes the fields of `t`, a live termios.
+    // SAFETY: cfmakeraw(3) changes only the termios it is given, ours.
     unsafe { libc::cfmakeraw(&mut t) };
-    // SAFETY: tcsetattr reads one termios from `t`; the descriptor is open.
-    if unsafe { libc::tcsetattr(tty.as_raw_fd(), libc::TCSANOW, &t) } != 0 {
+    // SAFETY: tcsetattr(3) only reads the termios, ours; the descriptor
+    // is open, as above.
+    if unsafe { libc::tcsetattr(fd, libc::TCSANOW, &t) } != 0 {
         return Err(io::Error::last_os_error());
     }
     Ok(())
+}
+
+/// The size of the terminal `tty` (TIOCGWINSZ), as (columns, rows), or
+/// None if it isn't a terminal or doesn't say.
+pub fn size(tty: &impl AsFd) -> Option<(u16, u16)> {
+    // SAFETY: winsize is plain data, for which all zeroes is valid.
+    let mut ws: libc::winsize = unsafe { std::mem::zeroed() };
+    // SAFETY: TIOCGWINSZ writes one winsize into `ws`, a live one of ours;
+    // the descriptor is open, borrowed from `tty`.
+    let r = unsafe { libc::ioctl(tty.as_fd().as_raw_fd(), libc::TIOCGWINSZ as _, &mut ws) };
+    (r == 0 && ws.ws_col > 0 && ws.ws_row > 0).then_some((ws.ws_col, ws.ws_row))
 }
 
 fn cloexec(fd: RawFd) -> io::Result<()> {
@@ -124,26 +128,17 @@ mod tests {
     }
 
     #[test]
-    fn the_size_is_read_back() {
-        use std::os::fd::AsFd;
-        let (master, slave) = open(53, 20).unwrap();
-        assert_eq!(size(slave.as_fd()), Some((53, 20)));
-        assert_eq!(size(master.as_fd()), Some((53, 20)));
-        let f = std::fs::File::open("/dev/null").unwrap();
-        assert_eq!(size(f.as_fd()), None);
-        assert!(raw(f.as_fd()).is_err(), "not a terminal");
-    }
-
-    #[test]
-    fn raw_bytes_come_without_a_line() {
+    fn the_far_end_knows_its_size_and_goes_raw() {
         use std::io::Write;
-        use std::os::fd::AsFd;
-        let (mut master, mut slave) = open(20, 5).unwrap();
-        raw(slave.as_fd()).unwrap();
-        master.write_all(b"\x1b[<0;3;4M").unwrap();
-        let mut b = [0u8; 16];
-        let n = slave.read(&mut b).unwrap();
-        assert_eq!(&b[..n], b"\x1b[<0;3;4M");
+        let (mut master, mut slave) = open(40, 15).unwrap();
+        assert_eq!(size(&slave), Some((40, 15)));
+        raw(&slave).unwrap();
+        // Raw: its "\n" reaches the master as it is, not as "\r\n".
+        slave.write_all(b"a\n").unwrap();
+        let mut buf = [0u8; 8];
+        let n = master.read(&mut buf).unwrap();
+        assert_eq!(&buf[..n], b"a\n");
+        assert_eq!(size(&std::fs::File::open("/dev/null").unwrap()), None);
     }
 
     #[test]

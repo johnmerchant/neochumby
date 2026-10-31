@@ -3,8 +3,9 @@ name = "neochumby-airplay-proto"
 description = "AirPlay on neochumby, for frontends: what's playing and its controls, as the AirPlay app's receiver and service send them"
 license = "MIT"
 # Its own semver, not the workspace's: a frontend in another repository
-# depends on it. Not published yet; when it is, it goes by hand, by tag,
-# as the SDK crates do (CONTRIBUTING.md).
+# depends on it, from this repository for now. Not published until the
+# first frontend outside it needs it on crates.io; then by hand, by tag,
+# as the SDK crates are (CONTRIBUTING.md).
 version = "0.1.0"
 edition.workspace = true
 publish = false

@@ -7,43 +7,53 @@
 //!
 //! The socket is a Unix one in the abstract namespace, which every jail
 //! reaches (it has no file), named after the app: `neochumby-service-<app>`.
-//! Both ends check who is at the other by its uid, which the kernel
-//! vouches for:
+//! **The session makes it** ([`bind`]), for each app with a service, as it
+//! starts and before it runs any app, and hands it to the service as
+//! `NEOCHUMBY_LISTENER` (a descriptor) each time it starts it; so no app
+//! can take another's name first. Both ends check who is at the other by
+//! its uid, which the kernel vouches for:
 //!
 //! - **the service** takes only its own uid (its app's exec runs as the
 //!   same user) and the uids the session lists in `NEOCHUMBY_CLIENTS`: its
 //!   approved frontends'. Anyone else is turned away, and logged.
-//! - **a frontend** takes only a service running as the uid the session
-//!   gives it in `NEOCHUMBY_FRONTEND` (`<app>:<uid>`), and its own app's
-//!   exec only its own uid.
+//! - **a frontend, or the app's exec,** takes only a socket the session
+//!   made (root's, for a jailed app) or one of its own user: never another
+//!   app's.
 //!
 //! The owner approves a frontend with the Chumby's settings
 //! (`frontend_<app>=<frontend>`, the session's frontend.rs), and its
 //! manifest says which app it's for (`frontend = "<app>"`). The approval
-//! applies from the next session start.
+//! applies from the next session start; the session then tells the
+//! frontend which app it is for (`NEOCHUMBY_FRONTEND`).
 //!
-//! Another app could bind the name first. The uid checks stop it posing as
-//! either end, though not from keeping them apart. Where jails are off (the
-//! emulator, a session not run as root) every app is the same user, and
-//! nothing here can tell them apart.
+//! Where jails are off (the emulator, a session not run as root) every app
+//! is the same user, and nothing here can tell them apart.
 
 use std::io;
-use std::os::fd::{AsFd, BorrowedFd};
+use std::os::fd::{AsFd, BorrowedFd, OwnedFd, RawFd};
 use std::os::linux::net::SocketAddrExt;
 use std::os::unix::net::{SocketAddr, UnixListener, UnixStream};
 
-use neochumby_sys::{net, process};
+use neochumby_sys::{fd, net, process};
 
 /// The uids, comma-separated, of the frontends the owner approved for the
 /// app a service belongs to.
 pub const CLIENTS_ENV: &str = "NEOCHUMBY_CLIENTS";
-/// For an approved frontend: the app it's for, and that app's uid when
-/// jailed (`airplay:20001`; `airplay` alone when jails are off).
+/// For an approved frontend: the app it's for.
 pub const FRONTEND_ENV: &str = "NEOCHUMBY_FRONTEND";
+/// The listening socket the session made for a service, a descriptor.
+pub const LISTENER_ENV: &str = "NEOCHUMBY_LISTENER";
 
 /// The socket's name for `app`.
 fn name(app: &str) -> io::Result<SocketAddr> {
     SocketAddr::from_abstract_name(format!("neochumby-service-{app}"))
+}
+
+/// For the session: `app`'s socket, bound and listening, before any app
+/// runs. Fails with [`io::ErrorKind::AddrInUse`] if something holds the
+/// name already.
+pub fn bind(app: &str) -> io::Result<UnixListener> {
+    UnixListener::bind_addr(&name(app)?)
 }
 
 /// A service listening for its exec and its frontends.
@@ -54,14 +64,23 @@ pub struct Listener {
     clients: Vec<u32>,
 }
 
-/// Listens as `app`'s service (its directory in the tree), without
-/// waiting: [`Listener::accept`] returns at once. Fails with
-/// [`io::ErrorKind::AddrInUse`] while something else holds the name: a run
-/// of the service that hasn't quite gone, which it can try again after.
+/// Listens as `app`'s service (its directory in the tree), on the socket
+/// the session handed it, without waiting: [`Listener::accept`] returns at
+/// once. Run by hand, without the session, it binds the name itself, and
+/// fails with [`io::ErrorKind::AddrInUse`] while something else holds it.
 pub fn listen(app: &str) -> io::Result<Listener> {
-    let sock = UnixListener::bind_addr(&name(app)?)?;
-    sock.set_nonblocking(true)?;
+    let given = std::env::var(LISTENER_ENV).ok().and_then(|v| v.parse::<RawFd>().ok()).and_then(fd::handed_over);
     let clients = std::env::var(CLIENTS_ENV).map(|v| parse_uids(&v)).unwrap_or_default();
+    listen_on(app, given, clients)
+}
+
+/// [`listen`], on `given` if there is one.
+fn listen_on(app: &str, given: Option<OwnedFd>, clients: Vec<u32>) -> io::Result<Listener> {
+    let sock = match given {
+        Some(fd) => UnixListener::from(fd),
+        None => bind(app)?,
+    };
+    sock.set_nonblocking(true)?;
     Ok(Listener { sock, app: app.into(), clients })
 }
 
@@ -102,33 +121,25 @@ impl AsFd for Listener {
     }
 }
 
-/// The app this one is an approved frontend for, if the session said so,
-/// and that app's uid when jailed.
-pub fn frontend_of() -> Option<(String, Option<u32>)> {
-    let v = std::env::var(FRONTEND_ENV).ok()?;
-    let (app, uid) = match v.split_once(':') {
-        Some((a, u)) => (a, Some(u.parse().ok()?)),
-        None => (v.as_str(), None),
-    };
-    neochumby_proto::valid_name(app).then(|| (app.to_string(), uid))
+/// The app this one is an approved frontend for, if the session said so.
+pub fn frontend_of() -> Option<String> {
+    std::env::var(FRONTEND_ENV).ok().filter(|a| neochumby_proto::valid_name(a))
 }
 
 /// Connects to `app`'s service: this app's own, or the one it's an
 /// approved frontend for. Fails with [`io::ErrorKind::PermissionDenied`]
-/// if what answers isn't that service, or with
-/// [`io::ErrorKind::ConnectionRefused`] or [`io::ErrorKind::NotFound`]
-/// while it isn't running.
+/// if what answers isn't a socket the session made, nor this user's, or
+/// with [`io::ErrorKind::ConnectionRefused`] while the service isn't
+/// listening.
 pub fn connect(app: &str) -> io::Result<UnixStream> {
     let s = UnixStream::connect_addr(&name(app)?)?;
+    // Whoever made the listening socket: the session (root), or, run by
+    // hand or with jails off, this user.
     let theirs = net::peer_uid(s.as_fd())?;
-    let expected = match frontend_of() {
-        Some((a, Some(uid))) if a == app => uid,
-        _ => process::uid(),
-    };
-    if theirs != expected {
+    if theirs != 0 && theirs != process::uid() {
         return Err(io::Error::new(
             io::ErrorKind::PermissionDenied,
-            format!("{app}'s service isn't the one the session runs, or this app isn't approved as its frontend"),
+            format!("{app}'s socket is another app's (uid {theirs}), not the session's"),
         ));
     }
     Ok(s)
@@ -143,9 +154,8 @@ mod tests {
     #[test]
     fn its_own_end_connects() {
         let app = format!("test-{}", std::process::id());
-        let l = listen(&app).unwrap();
+        let l = listen_on(&app, None, Vec::new()).unwrap();
         assert!(l.accept().unwrap().is_none(), "nothing yet");
-        assert_eq!(listen(&app).err().map(|e| e.kind()), Some(io::ErrorKind::AddrInUse));
         let mut c = connect(&app).unwrap();
         let mut s = l.accept().unwrap().expect("connected");
         c.write_all(b"hi").unwrap();
@@ -154,6 +164,21 @@ mod tests {
         assert_eq!(&b, b"hi");
         drop(l);
         assert!(connect(&app).is_err(), "gone with its listener");
+    }
+
+    /// The session binds the name before any app runs: another app can't
+    /// take it then, and the service listens on what it was handed.
+    #[test]
+    fn once_the_session_has_the_name_no_one_else_can_take_it() {
+        let app = format!("taken-{}", std::process::id());
+        let session = bind(&app).unwrap();
+        // Another app, binding the name as its own.
+        assert_eq!(bind(&app).err().map(|e| e.kind()), Some(io::ErrorKind::AddrInUse));
+        assert_eq!(listen_on(&app, None, Vec::new()).err().map(|e| e.kind()), Some(io::ErrorKind::AddrInUse));
+        // The service, on the session's socket.
+        let l = listen_on(&app, Some(OwnedFd::from(session)), Vec::new()).unwrap();
+        let _c = connect(&app).unwrap();
+        assert!(l.accept().unwrap().is_some());
     }
 
     #[test]

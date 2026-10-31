@@ -1,4 +1,6 @@
-//! How a Chumby and its neochumbyd talk, over TCP: TLS 1.3. (The untested
+//! How a Chumby and its neochumbyd talk: TLS 1.3, over TCP or, on an
+//! emulated Chumby, over a serial line shared by several connections
+//! ([`mux`]); the session is the same either way ([`Stream`]). (The untested
 //! `noise` feature swaps in Noise_XX for both ends at build time; nothing
 //! is negotiated.)
 //!
@@ -41,16 +43,21 @@
 //! is the app's own business; [`channel`] carries it as typed messages.
 
 use std::fmt::Write as _;
-use std::io;
+use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::time::Instant;
+#[cfg(unix)]
+use std::os::unix::net::UnixStream;
+use std::time::{Duration, Instant};
 
 pub mod channel;
 pub mod dev;
 mod msg;
+pub mod mux;
+pub mod server;
 pub mod settings;
 pub mod version;
 pub use msg::{Msg, SyncEntry};
+pub use server::Server;
 pub use settings::{Delivery, Settings};
 
 /// The newest protocol version this build speaks. Version 0 is the
@@ -106,6 +113,64 @@ mod backend;
 
 pub use backend::{Identity, Session};
 
+/// What a session runs over: a byte stream both ways, whose reads and
+/// writes can each be given a deadline. A TCP connection, a Unix socket,
+/// or one connection on a serial line ([`mux::Channel`]).
+pub trait Stream: io::Read + io::Write + Send {
+    /// As [`TcpStream::set_read_timeout`]: a read that waits this long
+    /// fails with [`io::ErrorKind::WouldBlock`] or
+    /// [`io::ErrorKind::TimedOut`]; None waits for ever.
+    fn set_read_timeout(&self, t: Option<Duration>) -> io::Result<()>;
+    /// As [`TcpStream::read_timeout`].
+    fn read_timeout(&self) -> io::Result<Option<Duration>>;
+    /// As [`TcpStream::set_write_timeout`].
+    fn set_write_timeout(&self, t: Option<Duration>) -> io::Result<()>;
+}
+
+impl Stream for TcpStream {
+    fn set_read_timeout(&self, t: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_read_timeout(self, t)
+    }
+
+    fn read_timeout(&self) -> io::Result<Option<Duration>> {
+        TcpStream::read_timeout(self)
+    }
+
+    fn set_write_timeout(&self, t: Option<Duration>) -> io::Result<()> {
+        TcpStream::set_write_timeout(self, t)
+    }
+}
+
+/// A stream chosen at run time (TCP or a Unix socket, say).
+impl<S: Stream + ?Sized> Stream for Box<S> {
+    fn set_read_timeout(&self, t: Option<Duration>) -> io::Result<()> {
+        (**self).set_read_timeout(t)
+    }
+
+    fn read_timeout(&self) -> io::Result<Option<Duration>> {
+        (**self).read_timeout()
+    }
+
+    fn set_write_timeout(&self, t: Option<Duration>) -> io::Result<()> {
+        (**self).set_write_timeout(t)
+    }
+}
+
+#[cfg(unix)]
+impl Stream for UnixStream {
+    fn set_read_timeout(&self, t: Option<Duration>) -> io::Result<()> {
+        UnixStream::set_read_timeout(self, t)
+    }
+
+    fn read_timeout(&self) -> io::Result<Option<Duration>> {
+        UnixStream::read_timeout(self)
+    }
+
+    fn set_write_timeout(&self, t: Option<Duration>) -> io::Result<()> {
+        UnixStream::set_write_timeout(self, t)
+    }
+}
+
 /// A connection whose peer's key is not yet checked. It carries only what
 /// comes before that check, `Hello` and pairing's messages, until
 /// [`Unverified::verify`] makes it a [`Session`]: so no caller can use a
@@ -115,13 +180,21 @@ pub struct Unverified(Session);
 impl Unverified {
     /// neochumbyd's side: any key may connect, and [`Unverified::verify`]
     /// says whether it is one paired.
-    pub fn accept(tcp: TcpStream, me: &Identity) -> io::Result<Unverified> {
-        Session::server(tcp, me).map(Unverified)
+    pub fn accept(stream: impl Stream + 'static, me: &Identity) -> io::Result<Unverified> {
+        Session::server(Box::new(stream), me, None).map(Unverified)
+    }
+
+    /// As [`Unverified::accept`], with the whole handshake done by
+    /// `deadline` ([`io::ErrorKind::TimedOut`] if not), however the peer
+    /// spaces out what it sends: a socket's read timeout bounds one read,
+    /// and a handshake sent a byte at a time takes many.
+    pub fn accept_by(stream: impl Stream + 'static, me: &Identity, deadline: Instant) -> io::Result<Unverified> {
+        Session::server(Box::new(stream), me, Some(deadline)).map(Unverified)
     }
 
     /// A Chumby's side, to pair: it knows no server key yet.
-    pub fn connect(tcp: TcpStream, me: &Identity) -> io::Result<Unverified> {
-        Session::client(tcp, me).map(Unverified)
+    pub fn connect(stream: impl Stream + 'static, me: &Identity) -> io::Result<Unverified> {
+        Session::client(Box::new(stream), me).map(Unverified)
     }
 
     /// The other side's public key, proven in the handshake.
@@ -137,8 +210,9 @@ impl Unverified {
         self.0.code()
     }
 
-    pub fn tcp(&self) -> &TcpStream {
-        self.0.tcp()
+    /// What the session runs over.
+    pub fn stream(&self) -> &dyn Stream {
+        self.0.stream()
     }
 
     /// Sends one of the messages that come before the check.
@@ -168,6 +242,36 @@ impl Unverified {
     }
 }
 
+/// A handshake's socket: each read waits only for what is left until the
+/// deadline, if there is one, and fails at it.
+pub(crate) struct ByDeadline<'a> {
+    pub tcp: &'a mut dyn Stream,
+    pub deadline: Option<Instant>,
+}
+
+impl Read for ByDeadline<'_> {
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        if let Some(d) = self.deadline {
+            let left = d.saturating_duration_since(Instant::now());
+            if left.is_zero() {
+                return Err(io::Error::new(io::ErrorKind::TimedOut, "the handshake took too long"));
+            }
+            self.tcp.set_read_timeout(Some(left))?;
+        }
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for ByDeadline<'_> {
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.tcp.write(buf)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.tcp.flush()
+    }
+}
+
 /// `msg`, if it may cross a connection whose peer is not yet checked.
 fn before_verify<M: std::borrow::Borrow<Msg>>(msg: M) -> io::Result<M> {
     match msg.borrow() {
@@ -180,8 +284,8 @@ impl Session {
     /// A Chumby's side: a session with the neochumbyd holding
     /// `server_key`, or [`io::ErrorKind::PermissionDenied`] if the one
     /// answering holds another.
-    pub fn connect(tcp: TcpStream, me: &Identity, server_key: &PublicKey) -> io::Result<Session> {
-        Unverified::connect(tcp, me)?
+    pub fn connect(stream: impl Stream + 'static, me: &Identity, server_key: &PublicKey) -> io::Result<Session> {
+        Unverified::connect(stream, me)?
             .verify(|k| k == server_key)
             .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"))
     }

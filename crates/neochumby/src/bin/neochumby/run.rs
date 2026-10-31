@@ -46,13 +46,26 @@
 //! while playing can't leave it on; unless another live process holds the
 //! speaker (the handover's claim), whose playing is left alone.
 //!
+//! Besides `speaker`, two more requests don't end the app that asks:
+//! - `play <url>` and `play off`, from an app with `speaker` access: the
+//!   session plays the stream with the Chumby's own player, as root, and
+//!   stops it when that app's exec or service (whichever asked) ends, when
+//!   another process takes the speaker (the handover: the newest player
+//!   wins), when another app plays, and at CHUMBY MODE;
+//! - `brightness <n>`, from the start app or its service: the backlight.
+//!   The session puts back the boot's level at CHUMBY MODE.
+//!
+//! An app with `storage` gets its directory in /psp (storage.rs). One whose
+//! directory has grown over its limit is ended, as the network check ends
+//! one.
+//!
 //! A restart asked by neochumbyd (devlink.rs) ends whatever is in front as
 //! the escape hatch does, closes the button, stops the services and puts
 //! the speaker back as CHUMBY MODE does, and the loop returns for the
 //! session to start again.
 
 use std::os::fd::RawFd;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitStatus;
 use std::time::{Duration, Instant};
 
@@ -69,6 +82,7 @@ use crate::jail::{self, Role};
 use crate::network;
 use crate::services::{Backoff, Services};
 use crate::start;
+use crate::storage;
 use crate::terminal::Terminal;
 
 /// What the session needs of the Chumby itself.
@@ -102,6 +116,20 @@ pub trait Device {
     /// Whether a restart was asked for since the last call.
     fn restart(&mut self) -> bool {
         false
+    }
+
+    /// Sets the backlight to `level`, or with None puts back the level the
+    /// Chumby booted with.
+    fn brightness(&mut self, level: Option<u32>);
+    /// Plays the stream at `url` with the Chumby's own player, or with None
+    /// stops it, without waiting.
+    fn play(&mut self, url: Option<&str>);
+    /// The process group of the live process holding the speaker, if one
+    /// does.
+    fn speaker_group(&self) -> Option<u32>;
+    /// Where the apps' directories are (storage.rs).
+    fn storage_base(&self) -> PathBuf {
+        PathBuf::from(storage::BASE)
     }
 }
 
@@ -199,6 +227,11 @@ pub struct Session<'a, D: Device> {
     /// yielded may say so after the next one asked), and when it goes the
     /// speaker is put back.
     speaker_by: Option<(&'a str, Role)>,
+    /// The app, as its exec or its service, that the session plays a
+    /// stream for.
+    playing_by: Option<(&'a str, Role)>,
+    /// The session set the backlight, so puts it back at the end.
+    lit: bool,
     /// When to look for apps on the network without `network`.
     network: network::Watch,
 }
@@ -229,7 +262,14 @@ impl<'a, D: Device> Session<'a, D> {
         device: D,
         timing: Timing,
     ) -> Session<'a, D> {
-        let services = Services::new(apps, core, root, player.map(|m| m.name.as_str()), timing.service_backoff);
+        let services = Services::new(
+            apps,
+            core,
+            root,
+            device.storage_base(),
+            player.map(|m| m.name.as_str()),
+            timing.service_backoff,
+        );
         Session {
             apps,
             root,
@@ -244,6 +284,8 @@ impl<'a, D: Device> Session<'a, D> {
             suppressed: false,
             button: Edges::default(),
             speaker_by: None,
+            playing_by: None,
+            lit: false,
             network: network::Watch::new(),
         }
     }
@@ -283,6 +325,9 @@ impl<'a, D: Device> Session<'a, D> {
                         self.speaker_by = None;
                         self.device.reset_speaker(Duration::ZERO);
                     }
+                    if self.playing_by == Some((app.name.as_str(), Role::Front)) {
+                        self.stop_playing("it has gone");
+                    }
                     next
                 }
                 Err(e) => {
@@ -303,6 +348,10 @@ impl<'a, D: Device> Session<'a, D> {
         // replaces itself and opens it again.
         self.device.close_button();
         self.services.stop(self.timing.service_patience);
+        self.stop_playing("the session is ending");
+        if self.lit {
+            self.device.brightness(None);
+        }
         self.device.reset_speaker(SPEAKER_WAIT);
         why
     }
@@ -319,6 +368,9 @@ impl<'a, D: Device> Session<'a, D> {
             && let Some(fd) = self.device.button_fd()
         {
             launch.env(neochumby::input::BUTTON_ENV, fd.to_string()).keep(fd);
+        }
+        if let Some(dir) = self.services.storage.dir(app, jail::owner(app)) {
+            launch.storage(dir);
         }
         let mut terminal = None;
         if app.text()
@@ -379,6 +431,9 @@ impl<'a, D: Device> Session<'a, D> {
                 if ev.died.iter().any(|(app, _)| self.speaker_by == Some((app.name.as_str(), Role::Service))) {
                     self.speaker_by = None;
                 }
+                if ev.died.iter().any(|(app, _)| self.playing_by == Some((app.name.as_str(), Role::Service))) {
+                    self.stop_playing("its service has gone");
+                }
                 // The dead service, or something it started, may have held
                 // the speaker; a live player that holds it is left alone.
                 match self.device.speaker_holder() {
@@ -387,14 +442,25 @@ impl<'a, D: Device> Session<'a, D> {
                 }
             }
             for (from, req) in ev.requests {
-                if let Request::Speaker(on) = req {
-                    self.speaker(from, Role::Service, on);
-                    continue;
-                }
-                if let Request::Player(what) = req {
-                    self.player(&format!("service {}", from.name), from, what);
-                    continue;
-                }
+                let req = match req {
+                    Request::Speaker(on) => {
+                        self.speaker(from, Role::Service, on);
+                        continue;
+                    }
+                    Request::Play(url) => {
+                        self.play(from, Role::Service, url);
+                        continue;
+                    }
+                    Request::Brightness(level) => {
+                        self.brightness(&format!("service {}", from.name), from, level);
+                        continue;
+                    }
+                    Request::Player(what) => {
+                        self.player(&format!("service {}", from.name), from, what);
+                        continue;
+                    }
+                    other => other,
+                };
                 if f.asked.is_some() {
                     eprintln!(
                         "neochumby: service {} asks: {}; dropped: {} has asked already",
@@ -408,6 +474,15 @@ impl<'a, D: Device> Session<'a, D> {
                     eprintln!("neochumby: service {} replaces {}", from.name, f.app.name);
                     let _ = child::end(&mut f.child, self.timing.patience);
                     return next;
+                }
+            }
+            self.handover(&f);
+            if self.services.storage.due() {
+                self.services.end_over_storage();
+                if let Some(used) = self.services.storage.over(f.app) {
+                    eprintln!("neochumby: {}: its storage holds {used} bytes, over its limit; ending it", f.app.name);
+                    let status = child::end(&mut f.child, Duration::ZERO);
+                    return self.ended(f, status);
                 }
             }
             if let Some(owners) = self.network.due() {
@@ -465,12 +540,77 @@ impl<'a, D: Device> Session<'a, D> {
         }
     }
 
+    /// `play <url>` or `play off` from `app`, as `role`: only for an app
+    /// whose access lists the speaker. A new stream replaces any other
+    /// (the player plays one); `play off` stops only the app's own.
+    fn play(&mut self, app: &'a App, role: Role, url: Option<String>) {
+        if !app.access.speaker {
+            eprintln!("neochumby: {}: asks to play, but its access doesn't list the speaker", app.name);
+            return;
+        }
+        match url {
+            Some(u) => {
+                eprintln!("neochumby: {} asks to play {u}", app.name);
+                self.device.play(Some(&u));
+                self.playing_by = Some((app.name.as_str(), role));
+            }
+            None if self.playing_by.is_some_and(|(n, _)| n == app.name) => self.stop_playing("it asked"),
+            // Another app's stream, or none.
+            None => {}
+        }
+    }
+
+    /// Stops the stream the session plays, if it plays one; `why`, for the
+    /// log.
+    fn stop_playing(&mut self, why: &str) {
+        if let Some((name, _)) = self.playing_by.take() {
+            eprintln!("neochumby: stopping {name}'s stream: {why}");
+            self.device.play(None);
+        }
+    }
+
+    /// The speaker's handover, for the stream the session plays: when a
+    /// process outside the group of the app that asked holds the speaker,
+    /// a newer player has taken it, and the stream stops. (One that asks
+    /// to play without holding the speaker plays muted, and is left to.)
+    fn handover(&mut self, f: &Front<'a>) {
+        let Some((name, role)) = self.playing_by else { return };
+        let Some(holder) = self.device.speaker_group() else { return };
+        let ours = match role {
+            Role::Front => Some(f.child.id()),
+            Role::Service => self.services.pid(name),
+        };
+        if ours != Some(holder) {
+            self.stop_playing(&format!("process group {holder} has taken the speaker"));
+        }
+    }
+
+    /// `brightness <level>` from `app` (its exec or its service; `who`
+    /// says which, for the log): only from the start app.
+    fn brightness(&mut self, who: &str, app: &App, level: u32) {
+        if app.name != self.start.name {
+            eprintln!("neochumby: {who} asks for brightness {level}; refused: only the start app and its service may");
+            return;
+        }
+        eprintln!("neochumby: {who} sets the brightness to {level}");
+        self.device.brightness(Some(level));
+        self.lit = true;
+    }
+
     /// Takes in what the app in front has asked for.
     fn read(&mut self, f: &mut Front<'a>) {
         for line in f.pipe.receive().lines {
             let next = match Request::parse(&line) {
                 Some(Request::Speaker(on)) => {
                     self.speaker(f.app, Role::Front, on);
+                    continue;
+                }
+                Some(Request::Play(url)) => {
+                    self.play(f.app, Role::Front, url);
+                    continue;
+                }
+                Some(Request::Brightness(level)) => {
+                    self.brightness(&f.app.name, f.app, level);
                     continue;
                 }
                 Some(Request::Player(what)) => {
@@ -519,7 +659,7 @@ impl<'a, D: Device> Session<'a, D> {
             }
             Request::ChumbyMode => Next::ChumbyMode,
             // Taken in before it gets here (watch).
-            Request::Speaker(_) | Request::Player(_) => return None,
+            Request::Speaker(_) | Request::Play(_) | Request::Brightness(_) | Request::Player(_) => return None,
             Request::Open(name) => match self.openable(name) {
                 // What's in front already (its frontend, perhaps).
                 Ok(app) if app.name == f.app.name => return None,
@@ -628,7 +768,7 @@ mod tests {
 
     use std::os::unix::fs::PermissionsExt;
     use std::path::PathBuf;
-    use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+    use std::sync::atomic::{AtomicBool, AtomicU32, AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     use neochumby::apps;
@@ -654,6 +794,14 @@ mod tests {
         /// Who the speaker's holder is said to be.
         holder: Option<u32>,
         restart: Arc<AtomicBool>,
+        /// The backlight levels set, in order (None: the boot's).
+        lit: Arc<Mutex<Vec<Option<u32>>>>,
+        /// The streams played, in order (None: stopped).
+        played: Arc<Mutex<Vec<Option<String>>>>,
+        /// The process group said to hold the speaker; 0 for none.
+        speaker_group: Arc<AtomicU32>,
+        /// Where the apps' directories are.
+        storage: Option<PathBuf>,
     }
 
     impl Device for Fake {
@@ -675,6 +823,22 @@ mod tests {
 
         fn restart(&mut self) -> bool {
             self.restart.swap(false, Ordering::SeqCst)
+        }
+
+        fn brightness(&mut self, level: Option<u32>) {
+            self.lit.lock().unwrap().push(level);
+        }
+
+        fn play(&mut self, url: Option<&str>) {
+            self.played.lock().unwrap().push(url.map(str::to_string));
+        }
+
+        fn speaker_group(&self) -> Option<u32> {
+            Some(self.speaker_group.load(Ordering::SeqCst)).filter(|g| *g != 0)
+        }
+
+        fn storage_base(&self) -> PathBuf {
+            self.storage.clone().unwrap_or_else(|| std::env::temp_dir().join("neochumby-no-storage"))
         }
 
         fn button(&mut self) -> Option<bool> {
@@ -850,6 +1014,155 @@ mod tests {
         // About one open every 200 ms for a second.
         let games = log(&root).iter().filter(|l| *l == "game").count();
         assert!((1..=4).contains(&games), "{games} games");
+    }
+
+    /// `play` from an app with the speaker, and only one: its stream stops
+    /// when it says so, and when it goes.
+    #[test]
+    fn play_is_for_apps_with_the_speaker_and_stops_with_them() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree(
+            "play",
+            &[
+                (
+                    "home",
+                    "start=true\n",
+                    "case $runs in 1) ask 'open quiet' ;; 2) ask 'open radio' ;; *) ask chumby-mode ;; esac",
+                ),
+                // Not allowed, and not a URL play takes: nothing happens.
+                ("quiet", "", "ask 'play http://h/quiet'; ask 'play https://h/s'; sleep 0.2"),
+                (
+                    "radio",
+                    "access=speaker\n",
+                    "ask 'play http://h/a'; sleep 0.2; ask 'play off'; ask 'play http://h/b'; sleep 0.2",
+                ),
+            ],
+        );
+        let fake = Fake::default();
+        let played = fake.played.clone();
+        run_on(&root, &[], fake);
+        assert_eq!(log(&root), ["home", "quiet", "home", "radio", "home"]);
+        let p = |s: &str| Some(s.to_string());
+        // b stops as radio goes, without asking.
+        assert_eq!(*played.lock().unwrap(), [p("http://h/a"), None, p("http://h/b"), None]);
+    }
+
+    /// A service's stream stops when another process takes the speaker
+    /// (the handover), and at CHUMBY MODE.
+    #[test]
+    fn a_services_stream_stops_for_a_newer_player_and_at_the_end() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let stop = "\"$NEOCHUMBY_ROOT/stop\"";
+        let root = tree_with(
+            "handover",
+            &[
+                ("home", "start=true\n", &format!("until [ -f {stop} ]; do sleep 0.02; done\nask chumby-mode")),
+                ("radio", "access=speaker\n", "exit 0"),
+            ],
+            &[(
+                "radio",
+                "echo $$ > \"$NEOCHUMBY_ROOT/svc-pid\"\nask 'play http://h/one'\necho 'radio asked' >> \"$log\"\n\
+                 until [ -f \"$NEOCHUMBY_ROOT/again\" ]; do sleep 0.02; done\n\
+                 ask 'play http://h/two'\necho 'radio asked again' >> \"$log\"\nexec sleep 30",
+            )],
+        );
+        let fake = Fake::default();
+        let (played, group) = (fake.played.clone(), fake.speaker_group.clone());
+        let r = root.clone();
+        std::thread::spawn(move || {
+            wait_for(&r, "radio asked");
+            // Its own group holds the speaker: it plays on.
+            let pid = std::fs::read_to_string(r.join("svc-pid")).unwrap().trim().parse().unwrap();
+            group.store(pid, Ordering::SeqCst);
+            neochumby::sleep_ms(200);
+            // Another player takes it.
+            group.store(4242, Ordering::SeqCst);
+            neochumby::sleep_ms(200);
+            group.store(0, Ordering::SeqCst);
+            // Free again: it plays again, and the session ends.
+            std::fs::write(r.join("again"), "").unwrap();
+            wait_for(&r, "radio asked again");
+            neochumby::sleep_ms(200);
+            std::fs::write(r.join("stop"), "").unwrap();
+        });
+        run_on(&root, &[("settings", "home")], fake);
+        let p = |s: &str| Some(s.to_string());
+        assert_eq!(*played.lock().unwrap(), [p("http://h/one"), None, p("http://h/two"), None]);
+    }
+
+    /// `brightness` from the start app and its service; not from another
+    /// app. The boot's level comes back at CHUMBY MODE.
+    #[test]
+    fn brightness_is_the_start_apps() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree_with(
+            "brightness",
+            &[
+                (
+                    "home",
+                    "start=true\n",
+                    "if [ $runs = 1 ]; then ask 'brightness 9000'; ask 'open other'; exit 0; fi\n\
+                     until grep -q '^home lit' \"$log\"; do sleep 0.02; done\nsleep 0.2\nask chumby-mode",
+                ),
+                ("other", "", "ask 'brightness 1'; sleep 0.2"),
+            ],
+            &[(
+                "home",
+                "while read -r line <&\"$NEOCHUMBY_SESSION\"; do\n  \
+                   [ \"$line\" = 'front other' ] || continue\n  \
+                   until grep -q '^other' \"$log\"; do sleep 0.02; done\n  \
+                   sleep 0.1; ask 'brightness 65535'; echo 'home lit' >> \"$log\"\n\
+                 done",
+            )],
+        );
+        let fake = Fake::default();
+        let lit = fake.lit.clone();
+        run_on(&root, &[("settings", "home")], fake);
+        assert_eq!(*lit.lock().unwrap(), [Some(9000), Some(65535), None]);
+    }
+
+    /// `storage`: a directory of the app's own, named by
+    /// NEOCHUMBY_STORAGE, for its exec and service alike. A service that
+    /// grows it past its limit is ended, and started again as usual.
+    #[test]
+    fn storage_is_the_apps_own_and_limited() {
+        let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
+        let root = tree_with(
+            "storage",
+            &[
+                (
+                    "home",
+                    "start=true\n",
+                    "echo \"home-env [$NEOCHUMBY_NAME] [$NEOCHUMBY_STORAGE]\" >> \"$log\"\n\
+                     until grep -q '^keeper tidied' \"$log\"; do sleep 0.05; done\nask chumby-mode",
+                ),
+                ("keeper", "access=storage\n", "exit 0"),
+            ],
+            &[(
+                "keeper",
+                "echo \"keeper-env [$NEOCHUMBY_STORAGE]\" >> \"$log\"\n\
+                 if [ $runs = 1 ]; then\n  \
+                   echo 3 > \"$NEOCHUMBY_STORAGE/station\"\n  \
+                   dd if=/dev/zero of=\"$NEOCHUMBY_STORAGE/big\" bs=1024 count=70 2>/dev/null\n  \
+                   exec sleep 30\n\
+                 fi\n\
+                 rm \"$NEOCHUMBY_STORAGE/big\"; echo 'keeper tidied' >> \"$log\"; exec sleep 30",
+            )],
+        );
+        let base = root.join("psp-apps");
+        let fake = Fake { storage: Some(base.clone()), ..Fake::default() };
+        let t = Instant::now();
+        run_on(&root, &[("settings", "home")], fake);
+        let log = log(&root);
+        let mine = format!("keeper-env [{}]", base.join("keeper").display());
+        assert_eq!(log.iter().filter(|l| **l == mine).count(), 2, "{log:?}");
+        // home has no storage, but a name.
+        assert!(
+            log.iter().any(|l| l.starts_with("home-env [") && l.ends_with("] []") && l != "home-env [] []"),
+            "{log:?}"
+        );
+        assert_eq!(std::fs::read_to_string(base.join("keeper").join("station")).unwrap(), "3\n");
+        assert!(t.elapsed() < Duration::from_secs(10));
     }
 
     #[test]

@@ -16,14 +16,16 @@
 #   NEOCHUMBY_EMU_DEVICE=NAME dev/e2e TREE NEOCHUMBYD OUT
 #       a real Chumby, paired and set dev=on
 #
-# E2E_SCENARIOS, a space-separated list of boot, smoke, pairing, powercut,
-# stock and classic, runs only those; by default, all.
+# E2E_SCENARIOS, a space-separated list of boot, smoke, link, pairing,
+# powercut, stock, classic and airplay, runs only those; by default, all.
 #
 # TREE from tools/tree, with doom and neochumby-sync, and for the stock
 # firmware's scenario ./dev/probe (`tools/tree OUT doom ./dev/probe`, at
-# most four apps); NEOCHUMBYD the x86_64
-# neochumbyd built with it. NEOCHUMBY_CLASSIC_PICTURES (a renderer's output)
-# adds dev/emulate-classic. Each scenario's screenshots and logs go in
+# most four apps); NEOCHUMBYD the neochumbyd built with it, for this
+# machine (link, pairing and powercut run it here, at the other end of the
+# emulated Chumby's serial line). NEOCHUMBY_CLASSIC_PICTURES (a renderer's output)
+# adds dev/emulate-classic, and NEOCHUMBY_AIRPLAY_STANDIN (dev/airplay-standin,
+# built for the Chumby) dev/emulate-airplay, for a TREE with airplay. Each scenario's screenshots and logs go in
 # OUT/<scenario>/, its output in OUT/<scenario>.txt, and the results in
 # OUT/summary.txt. A scenario a backend can't run exits 77: skipped, not
 # failed. The exit status is 1 if any failed.
@@ -47,10 +49,11 @@ tree=${1:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 out=${3:?usage: dev/e2e TREE NEOCHUMBYD OUT}
 dev=$(cd "$(dirname "$0")" && pwd)
-# The checkout's .env.local, as dev/emulate reads it (the environment wins):
-# where your own firmware images are, say.
-local=${NEOCHUMBY_ENV_LOCAL:-$dev/../.env.local}
-if [ -f "$local" ]; then
+# Your own settings, as dev/emulate reads them (the environment wins): the
+# checkout's .env.local, then ~/.config/neochumby/env.local, shared by every
+# checkout; where your firmware images are, say.
+settings() {
+  [ -f "$1" ] || return 0
   while IFS='=' read -r key value; do
     case $key in
     '' | \#* | [0-9]* | *[!A-Za-z0-9_]*) continue ;;
@@ -59,7 +62,13 @@ if [ -f "$local" ]; then
     "~/"*) value=$HOME/${value#"~/"} ;;
     esac
     eval "[ -n \"\${$key+set}\" ]" || export "$key=$value"
-  done < "$local"
+  done < "$1"
+}
+if [ -n "${NEOCHUMBY_ENV_LOCAL:-}" ]; then
+  settings "$NEOCHUMBY_ENV_LOCAL"
+else
+  settings "$dev/../.env.local"
+  settings "${XDG_CONFIG_HOME:-$HOME/.config}/neochumby/env.local"
 fi
 mkdir -p "$out"
 summary=$out/summary.txt
@@ -103,7 +112,7 @@ run() {
 }
 
 wanted() {
-  case " ${E2E_SCENARIOS:-boot smoke pairing powercut stock classic} " in
+  case " ${E2E_SCENARIOS:-boot smoke link pairing powercut stock classic airplay} " in
   *" $1 "*) return 0 ;;
   esac
   return 1
@@ -111,11 +120,15 @@ wanted() {
 
 ! wanted boot || run boot "$dev/emulate-boot" "$tree" "$out/boot"
 ! wanted smoke || run smoke "$dev/emulate-smoke" "$tree" "$out/smoke"
+! wanted link || run link "$dev/emulate-link" "$tree" "$neochumbyd" "$out/link"
 ! wanted pairing || run pairing "$dev/emulate-pairing" "$tree" "$neochumbyd" "$out/pairing"
 ! wanted powercut || run powercut "$dev/emulate-powercut" "$tree" "$neochumbyd" "$out/powercut"
 ! wanted stock || run stock "$dev/emulate-stock" "$tree" "$out/stock"
 if [ -n "${NEOCHUMBY_CLASSIC_PICTURES:-}" ] && wanted classic; then
   run classic "$dev/emulate-classic" "$tree" "$NEOCHUMBY_CLASSIC_PICTURES" "$out/classic"
+fi
+if [ -n "${NEOCHUMBY_AIRPLAY_STANDIN:-}" ] && wanted airplay; then
+  run airplay "$dev/emulate-airplay" "$tree" "$NEOCHUMBY_AIRPLAY_STANDIN" "$out/airplay"
 fi
 
 echo "--"

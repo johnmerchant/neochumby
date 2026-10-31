@@ -57,9 +57,9 @@ impl Service {
 
 fn run() -> io::Result<()> {
     let stdin = File::from(io::stdin().as_fd().try_clone_to_owned()?);
-    let (cols, rows) = pty::size(stdin.as_fd()).unwrap_or(SIZE);
+    let (cols, rows) = pty::size(&stdin).unwrap_or(SIZE);
     // A touch's report as it comes, not once a line ends.
-    if let Err(e) = pty::raw(stdin.as_fd()) {
+    if let Err(e) = pty::raw(&stdin) {
         eprintln!("neochumby-airplay-screen: raw mode: {e}");
     }
     let layout: Layout = screen::layout(cols, rows);
