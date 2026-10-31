@@ -20,26 +20,30 @@ pub struct Espan {
     pnext: *mut Espan,
 }
 
+// The engine's drawing state, which it sets per surface before a span
+// drawer is called (d_edge.c's D_DrawSurfaces, D_CalcGradients). `static
+// mut`, as the engine writes them between calls; only ever read here, by
+// value.
 unsafe extern "C" {
-    static d_sdivzstepu: f32;
-    static d_tdivzstepu: f32;
-    static d_zistepu: f32;
-    static d_sdivzstepv: f32;
-    static d_tdivzstepv: f32;
-    static d_zistepv: f32;
-    static d_sdivzorigin: f32;
-    static d_tdivzorigin: f32;
-    static d_ziorigin: f32;
-    static sadjust: c_int;
-    static tadjust: c_int;
-    static bbextents: c_int;
-    static bbextentt: c_int;
-    static cacheblock: *const u8;
-    static cachewidth: c_int;
-    static d_viewbuffer: *mut u8;
-    static screenwidth: c_int;
-    static d_pzbuffer: *mut i16;
-    static d_zwidth: u32;
+    static mut d_sdivzstepu: f32;
+    static mut d_tdivzstepu: f32;
+    static mut d_zistepu: f32;
+    static mut d_sdivzstepv: f32;
+    static mut d_tdivzstepv: f32;
+    static mut d_zistepv: f32;
+    static mut d_sdivzorigin: f32;
+    static mut d_tdivzorigin: f32;
+    static mut d_ziorigin: f32;
+    static mut sadjust: c_int;
+    static mut tadjust: c_int;
+    static mut bbextents: c_int;
+    static mut bbextentt: c_int;
+    static mut cacheblock: *const u8;
+    static mut cachewidth: c_int;
+    static mut d_viewbuffer: *mut u8;
+    static mut screenwidth: c_int;
+    static mut d_pzbuffer: *mut i16;
+    static mut d_zwidth: u32;
 }
 
 /// The power of two of |f| (f in [2^e, 2^(e+1))), from its bits; very
@@ -125,8 +129,14 @@ fn coord(sz: i32, z: i32, extra: i32, adjust: c_int, lo: c_int, hi: c_int) -> c_
 }
 
 /// The screen rectangle a list of spans covers: (umin, vmin, umax, vmax).
+///
+/// # Safety
+/// `pspan` is null or the head of a list of valid espan_t, linked by pnext
+/// and ended by a null, none written while this runs.
 unsafe fn bounds(mut pspan: *const Espan) -> (i32, i32, i32, i32) {
     let (mut umin, mut vmin, mut umax, mut vmax) = (i32::MAX, i32::MAX, i32::MIN, i32::MIN);
+    // SAFETY: each pspan dereferenced is non-null and a valid espan_t of
+    // the list, as the caller promises.
     unsafe {
         while !pspan.is_null() {
             let sp = &*pspan;
@@ -179,8 +189,24 @@ impl Plane {
     }
 }
 
+/// # Safety
+/// As the engine calls it (d_edge.c, through d_drawspans): `pspan` is a
+/// surface's list of spans, ended by a null, each on the view buffer
+/// (d_viewbuffer, screenwidth bytes a row), and the d_* gradients,
+/// sadjust/tadjust, bbextents/bbextentt and cacheblock/cachewidth are set
+/// for that surface (D_CalcGradients, and its surface cache block).
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn D_DrawSpans8(mut pspan: *mut Espan) {
+    // SAFETY: the statics are read by value, on the engine's thread, which
+    // doesn't write them during the call. The spans are a valid list (the
+    // caller's promise), so bounds() and each &*pspan are sound. Each
+    // span's pixels, u to u + count - 1 on row v, are on the view buffer,
+    // so pdest and the count writes after it are in it. The texture reads
+    // are in the cache block: s and t are clamped, as id's d_scan.c clamps
+    // them, to 0..=bbextents and 0..=bbextentt (8.. at the steps, its
+    // guard against round-off), each pixel's ss/tt lies between two clamped
+    // ends, and the block is cachewidth bytes by (bbextentt >> 16) + 1 rows
+    // (bbextents >> 16 < cachewidth).
     unsafe {
         let pbase = cacheblock;
         let cw = cachewidth as isize;
@@ -257,8 +283,18 @@ pub unsafe extern "C" fn D_DrawSpans8(mut pspan: *mut Espan) {
 /// works out each span's start in double precision; here the start is an
 /// integer plane at id's scale (2^31), in 64 bits, saturated where id's
 /// float-to-int conversion would have.
+/// # Safety
+/// As the engine calls it (d_edge.c): `pspan` is a list of spans, ended by a
+/// null, each on the z-buffer (d_pzbuffer, d_zwidth values a row), and the
+/// d_zi* gradients are set for the surface.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn D_DrawZSpans(mut pspan: *mut Espan) {
+    // SAFETY: the statics are read by value, on the engine's thread. The
+    // spans are a valid list (the caller's promise). Each span's count
+    // values from u on row v are in the z-buffer, and the writes cover
+    // exactly them: one i16 if dst isn't 4-aligned, then count / 2 u32s
+    // (aligned now: d_pzbuffer is i16-aligned, so dst was 2 off at most),
+    // then one i16 if one is left.
     unsafe {
         let rect = bounds(pspan);
         if rect.0 > rect.2 {

@@ -72,8 +72,13 @@ toml = "0.8"
 [workspace.lints.rust]
 unsafe_code = "deny"
 
+# Every unsafe block and unsafe impl says why it is sound, in a SAFETY
+# comment above it, and every unsafe fn what its callers must uphold (a
+# # Safety section): in the crates allowed unsafe code too, as each inherits
+# these (tools/check-unsafe holds them to it).
 [workspace.lints.clippy]
 undocumented_unsafe_blocks = "deny"
+missing_safety_doc = "deny"
 
 [profile.release]
 opt-level = 2

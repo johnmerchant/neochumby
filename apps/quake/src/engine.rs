@@ -102,6 +102,7 @@ unsafe extern "C" {
     pub static mut d_pzbuffer: *mut i16;
     pub static mut com_argc: c_int;
     pub static mut com_argv: *mut *mut c_char;
+    pub static mut com_filesize: c_int;
     pub static mut shm: *mut dma_t;
     pub static mut sn: dma_t;
     pub static mut paintedtime: c_int;
