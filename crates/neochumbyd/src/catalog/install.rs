@@ -363,6 +363,7 @@ pub fn prepare(http: &Http, spec: &Spec, tree: &Path, wamrc: Option<Wamrc>) -> R
     let previous = installed(tree, &spec.app)?;
     let cargo_toml = crate_toml(http, spec)?;
     let meta = Meta::parse(&cargo_toml, spec).map_err(|e| format!("{spec}: {e}"))?;
+    can_run(&meta).map_err(|e| format!("{spec}: {e}"))?;
     for (what, m) in [("app", Some(&meta.app)), ("companion", meta.companion.as_ref())] {
         if let Some(m) = m {
             http.check_url(&m.url).map_err(|e| format!("{spec}: its wasm.{what}: {e}"))?;
@@ -388,6 +389,15 @@ pub fn prepare(http: &Http, spec: &Spec, tree: &Path, wamrc: Option<Wamrc>) -> R
     let (owners, downloads) = (owners(http, spec), downloads(http, spec));
 
     Ok(Plan { spec: spec.clone(), meta, wasm, companion, attestation, owners, downloads, wamrc, previous })
+}
+
+/// Whether this neochumbyd can run what `meta` has: a companion needs the
+/// `wasm-companions` feature.
+pub fn can_run(meta: &Meta) -> Result<(), String> {
+    if meta.companion.is_some() && !crate::companion::WASM_COMPANIONS {
+        return Err(format!("it has a companion, and {}", crate::companion::no_wasm_companions()));
+    }
+    Ok(())
 }
 
 /// Its owners on crates.io (their logins), if crates.io says.

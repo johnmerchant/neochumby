@@ -452,6 +452,9 @@ pub fn look_up_one(http: &Http, state: &Path, spec: &Spec) -> Result<wire::Detai
     let (d, keep) = match install::Meta::parse(&toml, spec) {
         Ok(meta) => {
             let mut d = from_meta(http, spec, &meta);
+            if let Err(e) = install::can_run(&meta) {
+                d.problem = format!("{spec}: {e}");
+            }
             let attestation = install::attestation(http, &meta);
             // GitHub not answering may not happen again; anything else is
             // this version's for good.

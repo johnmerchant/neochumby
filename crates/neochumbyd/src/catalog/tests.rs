@@ -325,6 +325,13 @@ fn unverified_and_with_a_companion() {
         b = fake.base
     );
     fake.publish(Publish { meta, app: Some(app), ..Publish::default() });
+    // Built without wasm companions, this neochumbyd refuses it, and says
+    // why.
+    if !crate::companion::WASM_COMPANIONS {
+        let e = prepare(&fake.http(), &spec("1.2.0"), &tree, None).err().unwrap();
+        assert!(e.contains("it has a companion") && e.contains("wasm-companions"), "{e}");
+        return;
+    }
     let plan = prepare(&fake.http(), &spec("1.2.0"), &tree, None).unwrap();
     assert!(plan.summary().contains("UNVERIFIED: no attestation"), "{}", plan.summary());
     assert!(plan.summary().contains("network: api.open-meteo.com"));
