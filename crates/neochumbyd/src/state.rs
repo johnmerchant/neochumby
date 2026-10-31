@@ -36,7 +36,7 @@
 
 use std::io::{self, Read};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use neochumby_proto::settings::{self, Settings};
@@ -89,6 +89,11 @@ impl State {
         std::fs::create_dir_all(dir.join("pending"))?;
         std::fs::create_dir_all(dir.join("config"))?;
         Ok(State { dir })
+    }
+
+    /// The state directory.
+    pub fn dir(&self) -> &Path {
+        &self.dir
     }
 
     /// Makes what neochumbyd keeps unreadable to other users, apps'

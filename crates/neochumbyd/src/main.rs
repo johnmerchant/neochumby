@@ -44,6 +44,22 @@
 //!   neochumbyd mcp                 log, restart, shot, set and pairing's
 //!                                  list as an MCP server on stdio, for
 //!                                  Claude Code and the like (mcp.rs)
+//!   neochumbyd catalog [refresh|log] [--json]
+//!                                  the catalog's apps, from its cache
+//!                                  (which `serve` refreshes daily), or
+//!                                  asked of crates.io and GitHub now; or
+//!                                  its log of installs and updates
+//!   neochumbyd catalog auto-update [on|off]
+//!                                  whether catalog apps update by
+//!                                  themselves when the new version asks
+//!                                  for nothing more (on unless turned off)
+//!   neochumbyd install crate:NAME@VERSION [--yes --access WORDS]
+//!                      [--wamrc PATH]
+//!                                  a catalog app into the tree, checked,
+//!                                  shown and approved first, through the
+//!                                  admin socket's protocol with the
+//!                                  owner's token (catalog/, admin.rs)
+//!   neochumbyd uninstall NAME      a catalog app out of it, likewise
 //!   neochumbyd allow APP pairing  lets APP's server program use the admin
 //!                                  socket (admin.rs) as it next starts;
 //!                                  `allow` alone lists what's allowed
@@ -57,6 +73,14 @@
 //!   --tree DIR         the app tree to serve, default <state>/tree
 //!   --nfs ADDR         default 0.0.0.0:2049
 //!   --api ADDR         default 0.0.0.0:7340
+//!   --wamrc PATH       a wamrc built by tools/wamrc (else NEOCHUMBY_WAMRC):
+//!                      catalog apps are compiled for the Chumby on
+//!                      install, and again when it compiles for another
+//!                      WAMR; without one they run interpreted
+//!   --no-catalog-refresh
+//!                      `serve` never asks crates.io or GitHub for the
+//!                      catalog by itself (`neochumbyd catalog refresh`
+//!                      still does), so nor does it update catalog apps
 //!   --app-uids FIRST-LAST
 //!                      started as root, neochumbyd becomes the user that
 //!                      owns DIR, and runs each app's companions and server
@@ -72,6 +96,7 @@
 
 mod admin;
 mod api;
+mod catalog;
 mod companion;
 mod confine;
 mod dev;
@@ -116,6 +141,7 @@ struct Args {
     /// The operands after NAME, for `tap` and `button`.
     rest: Vec<String>,
     hold: Option<String>,
+    wamrc: Option<PathBuf>,
     state: PathBuf,
     tree: Option<PathBuf>,
     nfs: String,
@@ -123,11 +149,13 @@ struct Args {
     app_uids: Option<String>,
     unsandboxed: bool,
     listen_unix: Option<PathBuf>,
+    /// `--no-catalog-refresh`.
+    no_catalog_refresh: bool,
 }
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed] [--listen-unix PATH]"
+        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing|catalog [refresh] [--json]|install crate:NAME@VERSION [--yes --access WORDS]|uninstall NAME [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed] [--listen-unix PATH] [--wamrc PATH] [--no-catalog-refresh]"
     );
     std::process::exit(2)
 }
@@ -141,6 +169,7 @@ fn args() -> Args {
         replace: false,
         rest: Vec::new(),
         hold: None,
+        wamrc: None,
         state: "/var/lib/neochumbyd".into(),
         tree: None,
         nfs: "0.0.0.0:2049".into(),
@@ -148,6 +177,7 @@ fn args() -> Args {
         app_uids: None,
         unsandboxed: false,
         listen_unix: None,
+        no_catalog_refresh: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -161,8 +191,10 @@ fn args() -> Args {
             "-f" | "--follow" => a.follow = true,
             "--replace" => a.replace = true,
             "--hold" => a.hold = Some(value()),
+            "--wamrc" => a.wamrc = Some(value().into()),
             "--app-uids" => a.app_uids = Some(value()),
             "--unsandboxed" => a.unsandboxed = true,
+            "--no-catalog-refresh" => a.no_catalog_refresh = true,
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
             _ if a.operand.is_none() => a.operand = Some(arg),
@@ -182,6 +214,10 @@ fn fail(e: impl std::fmt::Display) -> ! {
 }
 
 fn main() {
+    // The catalog's commands take options of their own (catalog/).
+    if let Some(c) = std::env::args().nth(1).filter(|c| catalog::COMMANDS.contains(&c.as_str())) {
+        catalog::main(&c, std::env::args().skip(2).collect());
+    }
     let a = args();
     // Before anything is written or any thread started: with --app-uids,
     // neochumbyd started as root becomes its own user here.
@@ -417,6 +453,7 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
         std::thread::spawn(move || line::serve(l, api, limits));
     }
     std::thread::spawn(move || api::serve_with(listener, api, limits));
+    catalog::serve(a.state.clone(), tree.clone(), a.wamrc.clone(), !a.no_catalog_refresh);
 
     let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));
     let (servers, failed) = rt.block_on(async {

@@ -392,6 +392,64 @@ web=|tail -n 200 -f /srv/web/access.log
 Without that file it serves /var/log/syslog or /var/log/messages, and the
 journal where `journalctl` runs.
 
+### The catalog
+
+The catalog (GET APPS on the screen) is other people's apps, built as
+WebAssembly and published as crates on crates.io with the keyword
+`neochumby-app` ([proposal 0003](docs/proposals/0003-wasm-apps.md#the-catalog)
+has what such a crate holds). crates.io is only where they are
+published: nothing in the catalog is reviewed or endorsed by the Rust
+project or crates.io. `neochumbyd serve` looks for them once a day, and
+keeps what it found in `<state>/catalog.json`; Chumbys read only that.
+`serve --no-catalog-refresh` turns the daily look off: then only
+`neochumbyd catalog refresh` asks crates.io and GitHub.
+
+```sh
+neochumbyd catalog                 # what was found, best first
+neochumbyd catalog refresh         # ask crates.io and GitHub now
+neochumbyd install crate:neochumby-weather@1.2.0 --wamrc "$(tools/wamrc)"
+neochumbyd uninstall weather
+neochumbyd catalog log             # every install, update and removal
+neochumbyd catalog auto-update off # or on, the default
+```
+
+`install` names a version, always. It fetches and checks the crate and
+its modules, then shows the title, the publisher on crates.io, its
+downloads, whether its build is verified, the access it asks for, its
+companion's hosts, and whether it will run compiled or interpreted, and
+asks y/N. Without a terminal it needs `--yes --access WORDS`, WORDS naming
+exactly what it asks, its access words and its companion's hosts
+(`--access fb,touch,api.open-meteo.com`). The app goes in the tree as
+`apps/<name>/`. GITHUB_TOKEN, if set, raises GitHub's limit for
+discovery.
+
+Installing and removing are the owner's: the command line does them
+through the admin socket's protocol (`install`, `uninstall`), with the
+owner's token from the state directory, as a page given the socket does
+with the token its owner types.
+
+**Updates.** Installing a newer version is an update. After each refresh,
+an installed app whose listing has a newer version is updated by itself
+if that version asks for nothing it didn't have: no new access word and
+no new host. One that asks for more waits for the owner, who installs it
+as above (or approves it from a Chumby's GET APPS). Every update is
+checked as an install is, and logged in `<state>/catalog.log`.
+`neochumbyd catalog auto-update off` stops updates by themselves; then
+each one waits for the owner.
+
+**"Verified build"** means one of GitHub's artifact attestations for the
+app's `.wasm` verified on the server: a Sigstore bundle signed by a
+certificate from Sigstore's Fulcio for a GitHub Actions run of a workflow
+in the crate's own repository, logged in Sigstore's Rekor, for that very
+file. It is a label, never a requirement. Anything else is **unverified**,
+and `install`, the log and GET APPS say so, and why.
+
+With a wamrc built by `tools/wamrc` (`--wamrc`, or NEOCHUMBY_WAMRC, on
+`install` and `serve`), the app is compiled for the Chumby, sandboxed, and
+compiled again when neochumbyd starts with a wamrc for another WAMR.
+Without one it runs on the interpreter, which is slow. SECURITY has what
+is checked.
+
 ### Delivery: NFS or sync
 
 Each paired Chumby gets its tree one of two ways, chosen on the server:
