@@ -254,6 +254,10 @@ jobs:
       - run: cargo clippy --all-targets -p neochumby-sys --features compat26 -- -D warnings
       - run: cargo test -p neochumby-sys --features compat26
       - run: cargo test -p neochumby-logs
+      # The session and its library, on the host: their unit tests (the
+      # Chumby's devices and crash reports are ARM-only, and left out).
+      - run: cargo clippy --all-targets -p neochumby -- -D warnings
+      - run: cargo test -p neochumby
       - run: cargo test -p neochumby-catalog
       # dev/emulate, without firmware or QEMU: the images it makes (through
       # qemu-chumby's chumby_machine) against chumby-image's, and its

@@ -706,8 +706,7 @@ mod tests {
         g.draw(&mut screen).unwrap();
         assert_eq!(first(&screen), to565(Scheme::default().foreground));
         // One of its own.
-        let mut s = Scheme::default();
-        s.cursor = [0x12, 0x34, 0x56];
+        let s = Scheme { cursor: [0x12, 0x34, 0x56], ..Scheme::default() };
         let mut g = Grid::new(320, 240, Font::builtin("spleen-8x16").unwrap(), &s);
         g.draw(&mut screen).unwrap();
         assert_eq!(first(&screen), to565(s.cursor));
