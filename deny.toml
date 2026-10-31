@@ -88,4 +88,6 @@ deny = [{ crate = "asciiquarium-rs", wrappers = ["neochumby-aquarium"] }]
 unknown-registry = "deny"
 unknown-git = "deny"
 allow-registry = ["https://github.com/rust-lang/crates.io-index"]
-allow-git = []
+# wamr-sys, from our fork of wamr-rust-sdk, pinned by commit in
+# crates/neochumby-wamr/Cargo.toml (CONTRIBUTING.md).
+allow-git = ["https://github.com/johnmerchant/wamr-rust-sdk"]
