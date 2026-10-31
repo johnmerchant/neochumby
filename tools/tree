@@ -8,6 +8,13 @@
 #   OUT/userhook2        the boot hook, which pairing installs
 #   OUT/neochumby-boot   what checks a tree over NFS before it runs, which
 #                        pairing and the session install in /psp
+#   OUT/colors           the colour schemes text-mode apps can be drawn in
+#                        (colors=, neochumby::term::colors), made by
+#                        neochumby-colors from ours (crates/neochumby/themes),
+#                        then themes' own repositories
+#                        (crates/neochumby/third_party/themes), then
+#                        iTerm2-Color-Schemes (a submodule, fetched here)
+#   OUT/colors.LICENSE   their licences
 #   OUT/apps/home/       neochumby-home, the app list, always
 #   OUT/apps/<name>/     each APP asked for
 #   OUT/lib/             in a tree for Linux 5.9 and later, the shared
@@ -271,6 +278,27 @@ mkdir -p "$out"
 rm -rf "${out:?}/lib"
 cp "target/$chumby_t/release/neochumby" "target/$chumby_t/release/neochumby-sync" \
   "target/$chumby_t/release/neochumby-boot" boot/userhook2 "$out/"
+# The colour schemes. iTerm2-Color-Schemes is large and only this needs
+# it, so its submodule isn't checked out with the rest (update = none):
+# here, at the commit pinned, without its history.
+schemes=crates/neochumby/third_party/iTerm2-Color-Schemes
+git -C "$root" submodule update --quiet --init --checkout --depth 1 -- "$schemes" >&2
+target/release/neochumby-colors crates/neochumby/themes crates/neochumby/third_party/themes/*/ghostty \
+  "$schemes/ghostty" > "$out/colors"
+{
+  echo "OUT/colors: neochumby's colour schemes, from these sources under these licences."
+  echo
+  echo "== neochumby's own (crates/neochumby/themes; GitHub Dark is GitHub's Primer palette, MIT)"
+  cat crates/neochumby/LICENSE
+  for d in crates/neochumby/third_party/themes/*/; do
+    echo
+    echo "== $(sed -n 1p "$d/SOURCE") at $(sed -n 2p "$d/SOURCE")"
+    cat "$d/LICENSE"
+  done
+  echo
+  echo "== https://github.com/mbadolato/iTerm2-Color-Schemes at $(git -C "$schemes" rev-parse HEAD)"
+  cat "$schemes/LICENSE"
+} > "$out/colors.LICENSE"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
 
