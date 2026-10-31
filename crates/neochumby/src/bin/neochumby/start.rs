@@ -75,6 +75,7 @@ pub mod tests {
             player: false,
             font: None,
             tap: Vec::new(),
+            frontend: None,
         }
     }
 

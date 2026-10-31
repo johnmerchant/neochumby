@@ -171,6 +171,20 @@ pub fn owner(app: &App) -> Option<u32> {
     if jailed(app) { number(app).ok() } else { None }
 }
 
+/// The uid the app named `name` runs as, while jails are on: its own, or
+/// root's for one with `root`. None while they're off, when every app is
+/// the session's user.
+pub fn uid_of(apps: &[App], name: &str) -> Option<u32> {
+    let app = apps.iter().find(|a| a.name == name)?;
+    if JAILS.get().is_none() {
+        None
+    } else if app.access.root {
+        Some(0)
+    } else {
+        number(app).ok()
+    }
+}
+
 /// The uid of `app`, if it runs jailed without `network`: one the session
 /// ends if it finds it with an internet socket.
 pub fn offline(app: &App) -> Option<u32> {
