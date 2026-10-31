@@ -22,6 +22,11 @@
 //! or a PSF file in its directory), and `tap` what a tap types while the
 //! program hasn't asked for the mouse, written to the manifest with
 //! escapes ([`escape`]).
+//!
+//! `wasm` names a binary built for `wasm32-wasip1` in place of an `exec`,
+//! run by the session's wasm runner (docs/proposals/0003-wasm-apps.md); the
+//! tree's manifest names its module, `<binary>.wasm`. Its front runs in
+//! text mode or with `fb`, as an exec's does.
 
 use std::process::ExitCode;
 
@@ -32,6 +37,7 @@ use toml::Value;
 const KEYS: &[&str] = &[
     "title",
     "exec",
+    "wasm",
     "color",
     "service",
     "companion",
@@ -163,6 +169,8 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
             (false, Value::Array(a)) if *key == "access" => access(a)?,
             (false, _) if *key == "access" => return Err("access: not a list of strings".into()),
             (false, Value::String(s)) if *key == "tap" => escape(s),
+            // The binary built for wasm32-wasip1, as tools/tree names it.
+            (false, Value::String(s)) if *key == "wasm" => format!("{s}.wasm"),
             (false, Value::String(s)) => s.clone(),
             (false, _) => return Err(format!("{key}: not a string")),
             (true, Value::Boolean(b)) => b.to_string(),
@@ -204,8 +212,8 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
         if fb {
             return Err(format!("{key}: an app with fb draws the screen itself, and has no terminal"));
         }
-        if !meta.contains_key("exec") {
-            return Err(format!("{key}: only an exec has a terminal"));
+        if !meta.contains_key("exec") && !meta.contains_key("wasm") {
+            return Err(format!("{key}: only an exec (or a wasm module) has a terminal"));
         }
     }
     if let Some(f) = meta.get("font").and_then(Value::as_str) {
@@ -216,6 +224,9 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
                 FONTS.join(", ")
             ));
         }
+    }
+    if meta.contains_key("wasm") && meta.contains_key("exec") {
+        return Err("wasm: an app's front is its exec or its wasm module, not both".into());
     }
     if meta.contains_key("companion") && !meta.contains_key("neochumbyd") {
         return Err(r#"companion: only a neochumbyd runs it; set neochumbyd = "required" or "optional""#.into());
@@ -371,6 +382,17 @@ mod tests {
             "service=neochumby-x\nplayer=false\n"
         );
         assert!(manifest(&wrap("exec = \"neochumby-x\"\nplayer = \"yes\"")).is_err());
+    }
+
+    #[test]
+    fn wasm_names_a_module_in_place_of_exec() {
+        assert_eq!(manifest(&wrap("wasm = \"neochumby-x\"")).unwrap(), "wasm=neochumby-x.wasm\n");
+        assert_eq!(
+            manifest(&wrap("wasm = \"neochumby-x\"\nfont = \"spleen-8x16\"")).unwrap(),
+            "wasm=neochumby-x.wasm\nfont=spleen-8x16\n"
+        );
+        let both = manifest(&wrap("exec = \"neochumby-x\"\nwasm = \"neochumby-x\"")).unwrap_err();
+        assert!(both.starts_with("wasm:"), "{both}");
     }
 
     #[test]

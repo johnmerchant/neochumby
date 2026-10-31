@@ -140,6 +140,22 @@ fn grant_devices(_: &mut Host, manifest: &Manifest) -> Result<(), String> {
     }
 }
 
+/// Local time's offset from UTC now, in seconds, from the C library's zone.
+fn utc_offset_s() -> i32 {
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs() as i64).unwrap_or(0);
+    let l = neochumby_sys::time::local_time_at(now);
+    let local = i64::from(l.hour) * 3600 + i64::from(l.minute) * 60 + i64::from(l.second);
+    // Within a day of UTC's time of day: -12 h to +14 h.
+    let mut d = local - now.rem_euclid(86400);
+    if d > 14 * 3600 {
+        d -= 86400;
+    } else if d < -12 * 3600 {
+        d += 86400;
+    }
+    d as i32
+}
+
 /// The session's request pipe, if it gave one (neochumby::session).
 fn session_pipe() -> Option<Box<dyn Write>> {
     let fd: i32 = std::env::var("NEOCHUMBY_SESSION").ok()?.parse().ok()?;
@@ -198,6 +214,7 @@ fn main() -> ExitCode {
     host.stdin = Some(Box::new(Stdin(std::io::stdin())));
     host.session = session_pipe();
     host.sleep = neochumby_sys::time::sleep_ms;
+    host.utc_offset_s = utc_offset_s();
     if let Err(e) = grant_devices(&mut host, &manifest) {
         return refuse(&name, &e);
     }

@@ -75,7 +75,7 @@ NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree targe
 ```
 
 Without Nix, the tools are: Rust with the
-`armv5te-unknown-linux-musleabi` and `x86_64-unknown-linux-musl` targets
+`armv5te-unknown-linux-musleabi`, `x86_64-unknown-linux-musl` and `wasm32-wasip1` targets
 (`rustup target add ...`), zig 0.17 on PATH (the C compiler, linker and
 musl: https://ziglang.org), CMake 3.21 or later (for fetch and WAMR), libclang (for WAMR's bindings), Python 3.9 or
 later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch

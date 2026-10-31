@@ -13,10 +13,10 @@
 #
 # An app is a crate named neochumby-<name>, whose Cargo.toml has a
 # [package.metadata.neochumby] table naming its binaries (exec and service
-# are built for the Chumby, companion and server for neochumbyd's host);
-# the tree's manifest is made from it (neochumby-manifest). A files/
-# directory beside its Cargo.toml, if it has one, is copied as it is. An
-# APP is one of:
+# are built for the Chumby, wasm for wasm32-wasip1 and compiled for it by
+# tools/wamrc, companion and server for neochumbyd's host); the tree's
+# manifest is made from it (neochumby-manifest). A files/ directory beside
+# its Cargo.toml, if it has one, is copied as it is. An APP is one of:
 #
 #   doom                          apps/doom in this repository
 #   ./path, /path                 a crate on this machine
@@ -100,6 +100,9 @@ export CC_armv5te_unknown_linux_musleabi=$root/tools/zigcc AR_armv5te_unknown_li
 export CMAKE_TOOLCHAIN_FILE_armv5te_unknown_linux_musleabi=$root/tools/armv5te.cmake
 export CC_x86_64_unknown_linux_musl=$root/tools/zigcc-x86_64 AR_x86_64_unknown_linux_musl=$root/tools/zigar
 export CC_aarch64_unknown_linux_musl=$root/tools/zigcc-aarch64 AR_aarch64_unknown_linux_musl=$root/tools/zigar
+# wasm apps: a 1 MiB stack, not the 16 MiB that some runtimes commit up front
+# (docs/proposals/0003-wasm-apps.md).
+export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-zstack-size=1048576"
 
 field() { sed -n "s/^$2=//p" "$1" | head -n 1; }
 
@@ -254,6 +257,23 @@ for app in home "$@"; do
     f=$(field "$manifest" "$key")
     [ -z "$f" ] || cp "$bin/$chumby_t/release/$f" "$dest/"
   done
+  # A wasm app: its module, and its compiled code when tools/wamrc can make
+  # it (LLVM 18: nix develop .#wasm), recorded in its manifest; without,
+  # the runner interprets it. The runner goes in the tree once.
+  w=$(field "$manifest" wasm)
+  if [ -n "$w" ]; then
+    build --target wasm32-wasip1 -p "$crate" --bin "${w%.wasm}"
+    cp "$bin/wasm32-wasip1/release/$w" "$dest/"
+    if aot=$("$root/tools/wamrc" --compile "$dest/$w" "$dest/${w%.wasm}.aot"); then
+      echo "$aot" >> "$manifest"
+    else
+      echo "tools/tree: $name: no compiled code (tools/wamrc failed): the runner interprets it" >&2
+    fi
+    if [ ! -f "$out/neochumby-wasm" ]; then
+      cargo build -q --release --target $chumby_t -p neochumby-wasm
+      cp "target/$chumby_t/release/neochumby-wasm" "$out/"
+    fi
+  fi
   for key in companion server; do
     f=$(field "$manifest" "$key")
     [ -z "$f" ] || {

@@ -66,7 +66,8 @@ emu start "$tree" || exit $?
 emu wait log 'neochumby: opening home' $((300 * slow)) || fail "the session didn't start"
 T=/mnt/usb/neochumby
 # Runs CMD on the console; its output, and its exit as the last line.
-on() { emu exec sh -c "$1; echo exit=\$?" 2>&1 | grep -v '@@'; }
+# The kernel's messages, which the console interleaves, taken out.
+on() { emu exec sh -c "$1; echo exit=\$?" 2>&1 | tr -d '\r' | grep -v '@@' | sed 's/\[ *[0-9]*\.[0-9]*\] .*$//'; }
 wasm() { on "${2:-} NEOCHUMBY_WASM=$T/wasmtest/$1/app.wasm $T/neochumby-wasm"; }
 # expect CASE EXIT TEXT [ENV]: the case ends with EXIT, having said TEXT.
 expect() {
@@ -101,8 +102,10 @@ else
   echo "== compiled: skipped (no tools/wamrc here)"
 fi
 echo "== a runaway loop, killed"
-got=$(on "NEOCHUMBY_WASM=$T/wasmtest/runaway/app.wasm $T/neochumby-wasm & p=\$!; sleep 3; kill -0 \$p && echo looping; kill -9 \$p; wait \$p")
-echo "$got" | grep -q '^looping$' || fail "runaway: it stopped by itself"
+got=$(on "NEOCHUMBY_WASM=$T/wasmtest/runaway/app.wasm $T/neochumby-wasm & p=\$!; sleep 3; kill -0 \$p && echo still-\$((1 + 1)); kill -9 \$p; wait \$p")
+# The word is made as it runs, so the echoed command (and the kernel's
+# messages, which the console interleaves) can't be taken for it.
+echo "$got" | grep -q 'still-2' || fail "runaway: it stopped by itself"
 echo "$got" | grep -q 'exit=137' || fail "runaway: not killed"
 if [ "$seccomp" = yes ]; then
   echo "== seccomp ($kernel)"

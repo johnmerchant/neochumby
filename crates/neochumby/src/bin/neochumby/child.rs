@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
 use std::time::{Duration, Instant};
 
-use neochumby::apps::App;
+use neochumby::apps::{App, WASM_ENV, WASM_TRUSTED_ENV};
 use neochumby::session::{self, Pipe};
 use neochumby_sys::jail::Process;
 use neochumby_sys::process::{Signal, exited, group_alive, kill_group, pass_fds};
@@ -116,6 +116,14 @@ impl<'a> Launch<'a> {
         if let Some(m) = self.player {
             self.env.push((session::PLAYER_ENV.into(), m.into()));
         }
+        // A wasm app's front is the runner, told its module, and whether
+        // the owner trusts it (neochumby_wasm).
+        if let (Some(w), Role::Front) = (&self.app.wasm, self.role) {
+            self.env.push((WASM_ENV.into(), w.to_string_lossy().into_owned()));
+            if self.app.trusted() {
+                self.env.push((WASM_TRUSTED_ENV.into(), "1".into()));
+            }
+        }
         let link = if self.app.companion { Some(companion::relay(&self.app.name)?) } else { None };
         if let Some(l) = &link {
             self.keep.push(l.as_raw_fd());
@@ -131,7 +139,7 @@ impl<'a> Launch<'a> {
             // against too.
             let mut cmd = Command::new(neochumby::verified::exe(self.exe)?);
             cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", self.root).env("HOME", "/tmp");
-            cmd.env_remove(session::PLAYER_ENV);
+            cmd.env_remove(session::PLAYER_ENV).env_remove(WASM_ENV).env_remove(WASM_TRUSTED_ENV);
             cmd.envs(self.env).process_group(0);
             if let Some(t) = &self.terminal {
                 cmd.stdin(t.try_clone()?).stdout(t.try_clone()?);

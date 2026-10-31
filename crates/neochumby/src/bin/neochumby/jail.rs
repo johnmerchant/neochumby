@@ -226,6 +226,12 @@ pub fn start(
 
     let mut j = Jail::new(Path::new(MOUNT_POINT), ROOT_KIB)?;
     j.bind(&app.dir, &dir)?;
+    // A wasm app's front is the tree's runner, outside its directory: bound
+    // in at its own path, read-only (the tree is). In a checked tree, it is
+    // one of `programs`, whose checked copy goes over it.
+    if app.wasm.is_some() && front {
+        j.bind(Path::new(&exe), &exe)?;
+    }
     for (copy, at) in &programs {
         j.bind_over(copy, at)?;
     }
@@ -297,11 +303,14 @@ pub fn start(
     // What the boot hook gave the session for its apps (the server, say),
     // and the time zone.
     for (k, v) in std::env::vars() {
-        // Not NEOCHUMBY_PLAYER: only the session's choice (child.rs).
-        // Nor the checked tree's manifest, which is root's.
+        // Not NEOCHUMBY_PLAYER, nor the wasm runner's module and trust:
+        // only the session's choice (child.rs). Nor the checked tree's
+        // manifest, which is root's.
         let ours = k.starts_with("NEOCHUMBY_")
             && k != OFF_ENV
             && k != neochumby::session::PLAYER_ENV
+            && k != neochumby::apps::WASM_ENV
+            && k != neochumby::apps::WASM_TRUSTED_ENV
             && k != neochumby::verified::ENV;
         if (ours && !env.iter().any(|(e, _)| *e == k)) || k == "TZ" {
             env.push((k, v));
@@ -331,6 +340,18 @@ fn programs(app: &App, exe: &Path) -> io::Result<Vec<(std::path::PathBuf, String
         neochumby_sys::elf::check(&copy)?;
         let at = p.to_str().ok_or_else(|| io::Error::other(format!("{}: not UTF-8", p.display())))?;
         out.push((copy, at.to_string()));
+    }
+    // A wasm app's module, its compiled code and the manifest the runner
+    // reads them by are what it runs: checked copies too.
+    if app.wasm.is_some() {
+        let m = String::from_utf8(neochumby::verified::read(&app.dir.join("manifest"))?).unwrap_or_default();
+        let named = |k: &str| m.lines().filter_map(|l| l.split_once('=')).find(|(key, _)| key.trim() == k);
+        let files = ["wasm", "aot"].into_iter().filter_map(named).map(|(_, f)| app.dir.join(f.trim()));
+        for p in std::iter::once(app.dir.join("manifest")).chain(files) {
+            let copy = neochumby::verified::exe(&p)?;
+            let at = p.to_str().ok_or_else(|| io::Error::other(format!("{}: not UTF-8", p.display())))?;
+            out.push((copy, at.to_string()));
+        }
     }
     Ok(out)
 }

@@ -1678,6 +1678,8 @@ mod tests {
             player: false,
             font: None,
             tap: Vec::new(),
+            wasm: None,
+            catalog: false,
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");
