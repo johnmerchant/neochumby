@@ -32,9 +32,14 @@ neochumbyd delivered.
   can take another's name, and a frontend takes only a socket the
   session made. With jails off (the emulator) every app is one user, and
   nothing tells them apart.
-- **The jail refuses page-zero ELFs.** A static ARM ELF with a `PT_LOAD`
+- **The jail refuses page-zero ELFs.** An ARM ELF with a `PT_LOAD`
   below `0x1000`, or one that needs an interpreter, is refused, as is one
-  hidden among the app directory's executable files. An app's `/tmp` and
+  hidden among the app directory's executable files. On Linux 5.9 and
+  later one interpreter is allowed: the tree's own musl, which the jail
+  of an app that names it binds at `/lib/ld-musl-arm.so.1` with the
+  tree's other libraries (`lib/`). They are files of the tree like any
+  other: in its manifest, and in a checked tree each is bound from its
+  checked copy. An app's `/tmp` and
   the speaker handover are `noexec`. That closes one NULL-pointer family
   (the ARM ELF loader can map page zero even though `mmap` refuses it); it
   does not fix the 2.6.16 kernel.

@@ -33,7 +33,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, over TCP or a serial line | MIT |
 | `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
-| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses | MIT, and ncurses' own X11-style licence |
+| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses (or, for Linux 5.9 and later, the same built shared, by `tools/linux-libs`) | MIT, and ncurses' own X11-style licence |
 | `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves | MIT |
 | `apps/home` | neochumby-home, the app list, in text mode: the installed apps, pairing, the time, and CHUMBY MODE on the stock 2.6 kernel (the dist's Linux has no stock software to go back to) | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker, with a now-playing screen in text mode; and `neochumby-airplay-proto`, its messages, for frontends of other apps | MIT |
@@ -240,6 +240,7 @@ apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.tx
 apps/htop/                 neochumby-htop, manifest
 apps/top/                  neochumby-top, manifest
 apps/cmatrix/              neochumby-cmatrix, manifest (and so on for clock, bonsai, pipes, aquarium, genact)
+lib/                       for Linux 5.9 and later: ld-musl-arm.so.1, libncursesw.so.6, libpanelw.so.6
 ```
 
 `tools/tree OUT [-d DATA] [--pinned] [APP ...]` builds that tree. It always includes
@@ -264,6 +265,12 @@ Each app's binaries are built for the Chumby, and its companion and server
 program for the server, with the toolchain above. Its manifest is made from its
 `Cargo.toml`, and its `files/` directory, if it has one, is copied as it
 is. Game data is added from `DATA`, your own copies laid out the same way.
+Every binary is static, but in a tree for the dist's Linux (`--linux 5.9`
+and later) the apps that use curses (htop, top, cmatrix, clock, bonsai)
+link musl and ncurses dynamically, from the tree's `lib/`
+(`tools/linux-libs` builds them, with zig, and `pkg-config` finds them).
+The jail puts those at `/lib` for such an app; the dist's image itself
+stays static, and a tree for the stock 2.6 has no `lib/`.
 The tree can come from a stick or from a server.
 
 ### From a stick

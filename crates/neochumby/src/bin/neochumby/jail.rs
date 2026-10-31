@@ -36,6 +36,18 @@
 //!             plain files, none setuid or setgid, readable as their
 //!             modes say (the session's log is root's, 0644)
 //!
+//! On Linux 5.9 and later, an app may be linked dynamically, against the
+//! tree's own shared libraries (tools/tree --linux and tools/linux-libs:
+//! musl and ncurses, in the tree's lib/). Its executables may name musl's
+//! loader, LOADER, and no other, as their interpreter; then its jail has
+//! /lib, holding each of the tree's lib/ files bound at /lib/<name>, read-
+//! only to it (they are root's), and nothing else of the tree's beyond its
+//! own directory. The libraries come from where the tree is, so they map
+//! executable as its programs do: a stick's tree isn't `noexec`, and in a
+//! checked one each is bound from its checked copy, as a program is. The
+//! Chumby's initramfs has no /lib of its own: the image is static. On the
+//! stock 2.6 every executable must be static, as before.
+//!
 //! Each app runs as its own uid (from FIRST_UID, in the tree's name order:
 //! an app's exec and its service share one), with a group of the same id
 //! and, if it lists `speaker`, SPEAKER_GID beside it. Its devices are made
@@ -78,11 +90,55 @@ pub const OFF_ENV: &str = "NEOCHUMBY_JAIL";
 /// What looking hosts up needs, for `network`: copies, as the app starts.
 const NAMES: [&str; 2] = ["/etc/resolv.conf", "/etc/hosts"];
 
+/// The interpreter a dynamically linked app may name: musl's libc.so, which
+/// is its own loader, from the tree's [`LIB`].
+const LOADER: &str = "/lib/ld-musl-arm.so.1";
+/// Where a tree keeps its shared libraries, relative to its root; the jail
+/// has them at /lib.
+const LIB: &str = "lib";
+
 const PROCESSES: u32 = 64;
 const FILES: u32 = 256;
 /// The jail's root and the app's /tmp, in KiB.
 const ROOT_KIB: u32 = 256;
 const TMP_KIB: u32 = 4096;
+
+/// Whether `release`, the kernel's (/proc/sys/kernel/osrelease: "5.9.16",
+/// "7.2.13-rc1"), is Linux 5.9 or later.
+fn at_least_5_9(release: &str) -> bool {
+    let mut n = release.split(|c: char| !c.is_ascii_digit()).map(|s| s.parse::<u32>().ok());
+    match (n.next().flatten(), n.next().flatten()) {
+        (Some(major), Some(minor)) => (major, minor) >= (5, 9),
+        _ => false,
+    }
+}
+
+/// The interpreter an app's executables may name, with the tree at `root`:
+/// [`LOADER`] on Linux 5.9 and later, if the tree has it; else none, and
+/// every executable must be static.
+fn loader(root: &Path) -> Option<&'static str> {
+    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").unwrap_or_default();
+    let name = Path::new(LOADER).file_name()?;
+    (at_least_5_9(release.trim()) && root.join(LIB).join(name).is_file()).then_some(LOADER)
+}
+
+/// The tree's shared libraries, for a dynamically linked app's jail: each
+/// plain file in `root`/[`LIB`] (from its checked copy, in a checked
+/// tree), with its path in the jail, /lib/<name>.
+fn libraries(root: &Path) -> io::Result<Vec<(std::path::PathBuf, String)>> {
+    let mut found = Vec::new();
+    for e in std::fs::read_dir(root.join(LIB))? {
+        let p = e?.path();
+        // symlink_metadata: a link is no library of the tree's.
+        if !std::fs::symlink_metadata(&p)?.is_file() {
+            continue;
+        }
+        let Some(name) = p.file_name().and_then(OsStr::to_str) else { continue };
+        found.push((p.clone(), format!("/lib/{name}")));
+    }
+    found.sort();
+    found.into_iter().map(|(p, at)| Ok((neochumby::verified::exe(&p)?, at))).collect()
+}
 
 /// What an app is started as: its exec, in front, or its service.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -226,9 +282,13 @@ pub fn start(
     // The ELF loader maps a PT_LOAD at vaddr 0 even though the ARM mmap
     // path refuses MAP_FIXED below PAGE_SIZE. Refuse such a file before
     // exec, wherever it hides in the app's directory.
-    neochumby_sys::elf::check(exe)?;
-    neochumby_sys::elf::check_app_dir(&app.dir)?;
-    let programs = programs(app, exe)?;
+    // And one that names an interpreter but the tree's musl, or names one
+    // at all on the stock 2.6.
+    let loader = loader(root);
+    let dynamic = neochumby_sys::elf::check(exe, loader)?.is_some();
+    neochumby_sys::elf::check_app_dir(&app.dir, loader)?;
+    let programs = programs(app, exe, loader)?;
+    let libraries = if dynamic { libraries(root)? } else { Vec::new() };
     let uid = number(app)?;
     let a = app.access;
     let front = role == Role::Front;
@@ -242,6 +302,9 @@ pub fn start(
     j.bind(&app.dir, &dir)?;
     for (copy, at) in &programs {
         j.bind_over(copy, at)?;
+    }
+    for (from, at) in &libraries {
+        j.bind(from, at)?;
     }
     j.tmpfs("/tmp", TMP_KIB, 0o700, uid, uid)?;
     for d in ["null", "zero", "random", "urandom"] {
@@ -330,8 +393,9 @@ pub fn start(
 /// ELF or script in its directory, each with its checked copy (refused if
 /// it isn't the file the signed manifest names). None otherwise. The tree
 /// is mounted `noexec`, so a file not among them can't run, whatever it
-/// is by the time it would; each copy is checked as `exe` is.
-fn programs(app: &App, exe: &Path) -> io::Result<Vec<(std::path::PathBuf, String)>> {
+/// is by the time it would; each copy is checked as `exe` is, with
+/// `loader` the interpreter it may name.
+fn programs(app: &App, exe: &Path, loader: Option<&str>) -> io::Result<Vec<(std::path::PathBuf, String)>> {
     if !neochumby::verified::on() {
         return Ok(Vec::new());
     }
@@ -342,7 +406,7 @@ fn programs(app: &App, exe: &Path) -> io::Result<Vec<(std::path::PathBuf, String
     let mut out = Vec::with_capacity(found.len());
     for p in found {
         let copy = neochumby::verified::exe(&p)?;
-        neochumby_sys::elf::check(&copy)?;
+        neochumby_sys::elf::check(&copy, loader)?;
         let at = p.to_str().ok_or_else(|| io::Error::other(format!("{}: not UTF-8", p.display())))?;
         out.push((copy, at.to_string()));
     }
@@ -374,4 +438,35 @@ fn runnable(p: &Path) -> bool {
     let mut h = Vec::new();
     let _ = std::fs::File::open(p).and_then(|f| f.take(20).read_to_end(&mut h));
     h.starts_with(b"#!") || (h.len() == 20 && h.starts_with(b"\x7fELF\x01\x01") && h[18..20] == [40, 0])
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_linux_5_9_and_later_takes_a_loader() {
+        for new in ["5.9.16", "5.10.0", "6.1.2", "7.2.13", "7.4.0-rc3", "10.0"] {
+            assert!(at_least_5_9(new), "{new}");
+        }
+        for old in ["2.6.16-chumby-1.6.0", "5.8.18", "4.19.0", "", "x", "5"] {
+            assert!(!at_least_5_9(old), "{old}");
+        }
+    }
+
+    #[test]
+    fn the_libraries_are_the_trees_plain_files() {
+        let root = std::env::temp_dir().join(format!("neochumby-jail-libs-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let lib = root.join(LIB);
+        std::fs::create_dir_all(lib.join("sub")).unwrap();
+        std::fs::write(lib.join("ld-musl-arm.so.1"), b"musl").unwrap();
+        std::fs::write(lib.join("libncursesw.so.6"), b"ncurses").unwrap();
+        std::os::unix::fs::symlink("/etc/passwd", lib.join("libevil.so")).unwrap();
+        let got = libraries(&root).unwrap();
+        let at: Vec<&str> = got.iter().map(|(_, at)| at.as_str()).collect();
+        assert_eq!(at, ["/lib/ld-musl-arm.so.1", "/lib/libncursesw.so.6"]);
+        assert_eq!(got[0].0, lib.join("ld-musl-arm.so.1"));
+        std::fs::remove_dir_all(&root).unwrap();
+    }
 }

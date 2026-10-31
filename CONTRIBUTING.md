@@ -638,10 +638,14 @@ CHUMBY MODE. From any other app it's refused and logged.
 In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
 `Pipe::brightness(n)`.
 
-**Your binaries.** Each `exec` and `service` must be a static ARM ELF.
-Before it starts one, the session refuses a file with a `PT_LOAD` below
-`0x1000` (page zero), a `PT_INTERP`, or a non-ARM ELF, and it checks every
-executable file in your app's directory the same way. Page zero is where
+**Your binaries.** Each `exec` and `service` must be a static ARM ELF,
+but in a tree for Linux 5.9 and later: there, if your crate links
+neochumby-ncurses, `tools/tree` links it dynamically against the tree's
+own musl and ncurses (in its `lib/`, from `tools/linux-libs`), and its
+jail has them at `/lib`. Before it starts one, the session refuses a file
+with a `PT_LOAD` below `0x1000` (page zero), a `PT_INTERP` (on 5.9 and
+later, any but `/lib/ld-musl-arm.so.1`), or a non-ARM ELF, and it checks
+every executable file in your app's directory the same way. Page zero is where
 the ARM `mmap` check doesn't reach the ELF loader. Put helper programs in
 the app's directory, not in `/tmp`: `/tmp` and the speaker handover are
 `noexec`.

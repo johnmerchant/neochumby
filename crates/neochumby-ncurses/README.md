@@ -14,6 +14,13 @@ finds the headers in `DEP_NCURSESW_INCLUDE`. It knows two terminals,
 `linux` (what neochumby's terminal is) and xterm-256color, compiled in:
 there is no terminfo database on the Chumby.
 
+With `NEOCHUMBY_NCURSES=system` it builds nothing, and links a shared
+libncursesw and libpanelw instead, which `pkg-config` finds (in the
+sysroot `PKG_CONFIG_SYSROOT_DIR` and `PKG_CONFIG_LIBDIR` name). neochumby's
+`tools/tree` does so for a tree for Linux 5.9 and later: the same ncurses,
+configured the same way, shared, and carried in the tree's `lib/`
+(`tools/linux-libs`).
+
 ## Building
 
 The build needs `sh` and `make`, and a C compiler for the host as well as

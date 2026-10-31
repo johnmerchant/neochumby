@@ -321,7 +321,29 @@ jobs:
           tools/tree "$RUNNER_TEMP/tree" --linux 2.6 doom quake airplay fetch htop top \
             cmatrix clock bonsai pipes aquarium genact classic logs
           find "$RUNNER_TEMP/tree" -type f | sort
+          # Static, every one of the Chumby's binaries: 2.6.16 stays stock.
+          [ ! -e "$RUNNER_TEMP/tree/lib" ]
+          for f in $(find "$RUNNER_TEMP/tree" -type f -perm -u+x); do
+            if readelf -lW "$f" 2>/dev/null | grep -q 'program interpreter'; then
+              echo "$f: dynamically linked, in a tree for 2.6" >&2
+              exit 1
+            fi
+          done
           cp target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/tree.neochumbyd"
+      # For the dist's Linux, the apps that use curses linked against the
+      # tree's own shared musl and ncurses (tools/linux-libs), and nothing
+      # else.
+      - name: A tree for Linux 5.9, with its shared libraries
+        run: |
+          tools/tree "$RUNNER_TEMP/tree-5.9" --linux 5.9 htop top cmatrix clock bonsai pipes
+          ls -l "$RUNNER_TEMP/tree-5.9/lib"
+          interp() { readelf -lW "$1" | sed -n 's/.*program interpreter: \(.*\)]$/\1/p'; }
+          for a in htop top cmatrix clock bonsai; do
+            [ "$(interp "$RUNNER_TEMP/tree-5.9/apps/$a/neochumby-$a")" = /lib/ld-musl-arm.so.1 ]
+          done
+          for f in neochumby neochumby-sync neochumby-boot apps/home/neochumby-home apps/pipes/neochumby-pipes; do
+            [ -z "$(interp "$RUNNER_TEMP/tree-5.9/$f")" ]
+          done
       # AirPlay's receiver for the emulator, which has no network.
       - name: The AirPlay stand-in
         run: |
