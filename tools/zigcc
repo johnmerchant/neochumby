@@ -5,7 +5,9 @@
 # targets link their own crt and libc unless told not to
 # (link-self-contained=no, in .cargo/config.toml); zig supplies them
 # instead, and its libunwind for std's unwinder. Drops the arguments zig has
-# no use for.
+# no use for, among them the linker's -stats (and the -lc zig adds anyway)
+# that ncurses' configure puts after a shared library's soname
+# (tools/linux-libs).
 ZIG=${ZIG:-zig}
 case "${ZIGCC_TARGET:=arm-linux-musleabi}" in
   arm-*) cpu=-mcpu=arm926ej_s ;;
@@ -13,6 +15,9 @@ case "${ZIGCC_TARGET:=arm-linux-musleabi}" in
 esac
 args=
 for a in "$@"; do
+  case "$a" in
+    -Wl,*,-stats,-lc) a=${a%,-stats,-lc} ;;
+  esac
   case "$a" in
     -lgcc_s) args="$args -lunwind" ;;
     -lgcc | --target=* | -Wl,--eh-frame-hdr | -Wl,-O1) ;;
