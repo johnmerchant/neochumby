@@ -13,6 +13,11 @@
 //!   made or removed) are on the stick only once that directory is
 //!   fsynced, or after a sync(). Each one not yet there may be lost or
 //!   kept, independently and in any order.
+//! - A file renamed has a new directory entry, and on FAT a file's length
+//!   lives in its entry: 2.6.16's vfat makes the new one with length 0 and
+//!   fills it in only when the file's inode is next written, by an fsync of
+//!   that file or a sync(). An fsync of the directory doesn't. Until then,
+//!   across a cut, the file comes back empty.
 //! - A rename isn't atomic: across a cut, the old name, the new name, or
 //!   both may be left. Both names then share one chain of clusters, and FAT
 //!   has no link count: removing either name, or renaming over it, frees
@@ -54,6 +59,8 @@ struct Inode {
     durable: Vec<u8>,
     /// Written since it was last on the stick.
     dirty: bool,
+    /// Renamed since its inode was last written: its entry says length 0.
+    entry_stale: bool,
 }
 
 /// A change to the names, made but perhaps not on the stick yet.
@@ -192,9 +199,12 @@ impl Fs {
         }
         self.pending = keep;
         if dir.is_none() {
-            for i in self.inodes.values_mut().filter(|i| i.dirty) {
-                i.durable = i.data.clone();
-                i.dirty = false;
+            for i in self.inodes.values_mut() {
+                if i.dirty {
+                    i.durable = i.data.clone();
+                    i.dirty = false;
+                }
+                i.entry_stale = false;
             }
         }
     }
@@ -241,7 +251,9 @@ impl Fs {
             names.values().filter_map(|n| if let Node::File(i) = n { Some(*i) } else { None }).collect();
         let mut inodes = HashMap::new();
         for (i, ino) in self.inodes.iter().filter(|(i, _)| used.contains(i)) {
-            let data = if !ino.dirty {
+            let data = if ino.entry_stale {
+                Vec::new()
+            } else if !ino.dirty {
                 ino.data.clone()
             } else {
                 match pick(4) {
@@ -255,7 +267,7 @@ impl Fs {
                     _ => ino.data.clone(),
                 }
             };
-            inodes.insert(*i, Inode { data: data.clone(), durable: data, dirty: false });
+            inodes.insert(*i, Inode { data: data.clone(), durable: data, dirty: false, entry_stale: false });
         }
         Fs { names: names.clone(), durable: names, pending: Vec::new(), inodes, next: self.next, ..Fs::default() }
     }
@@ -287,6 +299,7 @@ impl Output for ModelOutput {
         let i = fs.inodes.get_mut(&self.ino).expect("an inode");
         i.durable = i.data.clone();
         i.dirty = false;
+        i.entry_stale = false;
         fs.tick();
         Ok(())
     }
@@ -383,6 +396,7 @@ impl Disk for Model {
         // If `from` and `to` shared clusters, `to` was just freed under it.
         fs.names.insert(t.clone(), Node::File(ino));
         fs.pending.push(Change::Rename(f, t));
+        fs.inodes.get_mut(&ino).expect("an inode").entry_stale = true;
         fs.tick();
         Ok(())
     }
@@ -635,9 +649,16 @@ fn every_cut(name: &str, start: &Fs, cut: Act, may_boot: &[&Tree], goal: &Tree, 
             let mut fs = start.clone();
             fs.cut_after = Some(n);
             let m = Model::new(fs);
-            let _ = act(&m, cut);
+            let finished = act(&m, cut).is_ok();
             let after = Model::new(m.fs().crash(seed));
             let at = format!("{name}: cut after operation {n} of {whole}, seed {seed}");
+
+            // A round that said its set is live, cut the moment after: the
+            // boot runs that set.
+            if let (true, Act::Sync(t)) = (finished, cut) {
+                let set = hook_choice(&after).unwrap_or_else(|| panic!("{at}: nothing to boot after a round"));
+                assert_eq!(content(&after, set), t.content, "{at}: the round's set isn't what boots");
+            }
 
             // The boot: a complete set of a tree it may run, and the same
             // set the receiver takes for live.

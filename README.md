@@ -579,7 +579,8 @@ rules (it opens no app). Once a minute, it:
    in the set's journal only after it is on the stick;
 4. hashes any file kept from a round that was cut short, then writes the
    set's completion marker (`a.complete`, carrying its manifest) last, and
-   rewrites `current` to make it live from the next boot.
+   rewrites `current` to make it live from the next boot. Both are synced
+   to the stick before the round says so.
 
 Files arrive only over the paired session, from the pinned neochumbyd key,
 never SSH. Writes stay inside the stick's `neochumby/`, and happen only

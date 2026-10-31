@@ -115,7 +115,10 @@ neochumbyd delivered.
   Unix socket, and each connection on the line is handled as one over TCP:
   the same handshake, keys and pairing. The line only carries bytes, so
   anyone who can connect to that socket can ask to pair, as anyone on the
-  network can: keep it in a directory only you can reach.
+  network can: keep it in a directory only you can reach. An emulated
+  2.6.16 Chumby's keys are weak (dev/emulate-userhook2 lowers
+  /dev/random's threshold, as it gathers almost no entropy): pair with it
+  for testing only.
 - **A Chumby pairing trusts whoever answers.** It can't tell neochumbyd's
   approval from an impostor's, so someone in the middle while it pairs
   can have it pin their key, even though neochumbyd never approves them.

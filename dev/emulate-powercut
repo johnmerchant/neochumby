@@ -68,8 +68,12 @@ slim() {
 }
 
 # A big file, so that the second round takes long enough to cut.
+# Over the emulated Chumby's serial line (about 100 KB/s) 8 MB is over a
+# minute of writing; a real Chumby's network wants more.
+big=8
+[ "$backend" = device ] && big=24
 grow() {
-  head -c $((24 << 20)) /dev/urandom > "$1/apps/home/powercut.bin"
+  head -c $((big << 20)) /dev/urandom > "$1/apps/home/powercut.bin"
 }
 
 if [ "$backend" = device ]; then
@@ -109,10 +113,10 @@ until [ -S "$sock" ]; do
   sleep 0.1
 done
 nd() { "$neochumbyd" "$@" --state "$ndstate"; }
-# A clean stop: what the Chumby wrote to its stick flushed first (from its
-# console where it has one, else by its kernel within half a minute).
+# A clean stop. What the round made live is on the stick already
+# (neochumby-sync syncs it before it says so), and the pairing the Chumby
+# keeps is synced as the emulator's hook copies it there.
 stopped() {
-  emu exec sync >/dev/null 2>&1 || sleep $((35 * slow))
   emu stop
   sync
   sleep 1
@@ -121,7 +125,7 @@ stopped() {
 step "pair through neochumby-home"
 # The tree, both sets, the big file and room to spare.
 size=$(du -sm "$work" | cut -f1)
-emu start --psp "$out/psp0" --size $((size * 3 + 24 + 64)) --server "$sock" "$work"
+emu start --psp "$out/psp0" --size $((size * 3 + big + 64)) --server "$sock" "$work"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
 emu wait log "neochumby-home: showing" $((30 * slow)) || fail "home didn't draw"

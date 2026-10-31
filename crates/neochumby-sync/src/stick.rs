@@ -535,8 +535,15 @@ fn real_dir(disk: &dyn Disk, p: &Path) -> io::Result<()> {
     }
 }
 
-/// Writes `name` in `dir` whole or not at all: `name.new`, fsynced, then
-/// renamed over it, then the directory fsynced.
+/// Writes `name` in `dir` whole or not at all, and on the stick before it
+/// returns: `name.new`, fsynced, then renamed over it, then a whole sync()
+/// (and the directory fsynced, which then has nothing left to write, but
+/// says if the stick has gone). Not the directory's fsync alone: on FAT a file's length is in its
+/// directory entry, and 2.6.16's vfat makes a renamed file's new entry with
+/// length 0 and fills it in only when the file's inode is next written (an
+/// fsync of the file, or a sync()), so a power cut after a directory fsync
+/// still found `current` and the set's marker empty, and the boot ran the
+/// old set. On that kernel an fsync costs a whole sync anyway.
 fn write_whole(disk: &dyn Disk, dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
     let tmp = dir.join(format!("{name}.new"));
     remove_if_there(disk, &tmp)?;
@@ -545,6 +552,7 @@ fn write_whole(disk: &dyn Disk, dir: &Path, name: &str, data: &[u8]) -> io::Resu
     f.sync()?;
     drop(f);
     disk.rename(&tmp, &dir.join(name))?;
+    disk.sync();
     disk.sync_dir(dir)
 }
 
