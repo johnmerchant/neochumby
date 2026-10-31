@@ -14,6 +14,7 @@ members = [
     "crates/neochumby-sys",
     "crates/neochumbyd",
     "apps/airplay",
+    "apps/airplay/proto",
     "apps/bonsai",
     "apps/aquarium",
     "apps/home",
@@ -51,6 +52,9 @@ neochumby-softfloat = { path = "crates/neochumby-softfloat", version = "0.0.1" }
 neochumby-proto = { path = "crates/neochumby-proto", version = "0.0.1" }
 neochumby-sync = { path = "crates/neochumby-sync", version = "0.0.1" }
 neochumby-sys = { path = "crates/neochumby-sys", version = "0.0.1" }
+# AirPlay's messages: for its halves, and for frontends in other
+# repositories (not published yet).
+neochumby-airplay-proto = { path = "apps/airplay/proto" }
 # What an app and its companion send each other (neochumby_proto::channel).
 postcard = { version = "1.1", default-features = false, features = ["alloc"] }
 serde = { version = "1", features = ["derive"] }

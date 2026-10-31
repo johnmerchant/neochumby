@@ -20,6 +20,9 @@ pub mod key {
     pub const DELIVERY: &str = "delivery";
     /// Taps and button presses from neochumbyd (crate::dev): `on` or `off`.
     pub const DEV: &str = "dev";
+    /// `frontend_<app>=<frontend>`: the owner approves an app as `<app>`'s
+    /// frontend ([`frontend`](super::frontend)).
+    pub const FRONTEND: &str = "frontend_";
 }
 
 /// How the apps reach the Chumby (`delivery=`).
@@ -163,9 +166,19 @@ impl Settings {
             }
             key::DELIVERY if Delivery::parse(value).is_none() => Err(format!("{key} is nfs or sync")),
             key::DEV if value != ON && value != OFF => Err(format!("{key} is {ON} or {OFF}")),
+            _ if key.starts_with(key::FRONTEND) && !crate::valid_name(value) => {
+                Err(format!("{key} names an app: 1-32 of a-z, 0-9, _ and -"))
+            }
             _ => Ok(()),
         }
     }
+}
+
+/// The key that approves a frontend for `app` (`frontend_airplay`): `app`
+/// with `-` written `_`, as keys have no `-`. The frontend's own manifest
+/// names the app exactly (`frontend = "airplay"`).
+pub fn frontend(app: &str) -> String {
+    format!("{}{}", key::FRONTEND, app.replace('-', "_"))
 }
 
 /// A pair a Chumby keeps: a short lower-case key, and a value of the
@@ -241,6 +254,9 @@ mod tests {
         assert!(Settings::check("dev", "off").is_ok());
         assert!(Settings::check("dev", "On").is_err());
         assert!(Settings::check("theme", "dark").is_ok());
+        assert!(Settings::check("frontend_airplay", "nowplaying").is_ok());
+        assert!(Settings::check("frontend_airplay", "Now:Playing").is_err());
+        assert_eq!(frontend("my-radio"), "frontend_my_radio");
         assert!(Settings::check("Home", "wx").is_err());
         assert!(Settings::check("theme", "a\nb=c").is_err());
         assert!(Settings::check("proto.version", "2").is_err(), "the protocol's own key");

@@ -24,6 +24,14 @@ neochumbyd delivered.
   on processes and open files. Its companion is opened for it by the
   session, so it reaches only its own. `home` alone runs as root, as it
   pairs the Chumby.
+- **An app reaches another app's service only as a frontend its owner
+  approved** (`frontend_<app>=` in the Chumby's settings). The service
+  takes connections from its own app's uid and its approved frontends'
+  only, as the kernel reports them. The session binds every service's
+  socket before it runs any app and hands it to the service, so no app
+  can take another's name, and a frontend takes only a socket the
+  session made. With jails off (the emulator) every app is one user, and
+  nothing tells them apart.
 - **The jail refuses page-zero ELFs.** A static ARM ELF with a `PT_LOAD`
   below `0x1000`, or one that needs an interpreter, is refused, as is one
   hidden among the app directory's executable files. An app's `/tmp` and
