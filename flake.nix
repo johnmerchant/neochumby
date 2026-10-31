@@ -60,6 +60,8 @@
             # libclang; nixpkgs' doesn't find its own builtin headers.
             LIBCLANG_PATH = "${pkgs.llvmPackages_18.libclang.lib}/lib";
             BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.llvmPackages_18.libclang.lib}/lib/clang/18/include";
+            # The Chumby's: clang's own headers only (.cargo/config.toml).
+            BINDGEN_EXTRA_CLANG_ARGS_armv5te_unknown_linux_musleabi = "-nostdlibinc -isystem ${pkgs.llvmPackages_18.libclang.lib}/lib/clang/18/include";
             # tools/zigcc and its siblings call zig by name; the macOS SDK
             # Nix's stdenv puts in the environment would steer zig's own
             # cross compilation, so leave zig to find what it needs.
