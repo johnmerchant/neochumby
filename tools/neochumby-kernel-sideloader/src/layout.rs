@@ -8,16 +8,19 @@
 
 pub(crate) const SRC_PHYS: u32 = 0xc200_0000;
 pub(crate) const SRC_VA: u32 = 0x0200_0000;
-// Matches mkpayload.py's LIMIT: the container's room to grow before it
-// nears ATAGS at 0xc3f00000.
-pub(crate) const SRC_MAP_LEN: u32 = 0x0070_0000;
+// Matches mkpayload.py's LIMIT: the container and the kernel copied out of
+// it get 16 MiB, from 0xc2000000 to 0xc3000000.  The initramfs mapping
+// starts there, so it never overlaps the source mapping (which would make
+// MAP_FIXED replace part of it).
+pub(crate) const SRC_MAP_LEN: u32 = 0x0100_0000;
 
 pub(crate) const KERNEL_DST_VA: u32 = 0x0200_0000;
-pub(crate) const KERNEL_MAP_LEN: u32 = 0x0070_0000;
+pub(crate) const KERNEL_MAP_LEN: u32 = 0x0100_0000;
 
-pub(crate) const INITRD_DST_PHYS: u32 = 0xc280_0000;
-pub(crate) const INITRD_DST_VA: u32 = 0x0280_0000;
-pub(crate) const INITRD_MAP_LEN: u32 = 0x0020_0000;
+// The 15 MiB between the kernel window and ATAGS at 0xc3f00000.
+pub(crate) const INITRD_DST_PHYS: u32 = 0xc300_0000;
+pub(crate) const INITRD_DST_VA: u32 = 0x0300_0000;
+pub(crate) const INITRD_MAP_LEN: u32 = 0x00f0_0000;
 
 // The earlier C chainload's ATAGS/stub addresses.  The stock kernel's direct
 // map covers all 64 MiB, so the stub executes here with the MMU on and

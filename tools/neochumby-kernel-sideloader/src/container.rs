@@ -6,6 +6,7 @@
 //! that is safe because the header has been parsed and the destination is
 //! below the source.
 
+use crate::layout::INITRD_MAP_LEN;
 use crate::raw::Mem;
 use crate::sys::{print_dec, print_str};
 
@@ -36,7 +37,10 @@ pub(crate) fn load_container(src: &Mem, initrd: &Mem) -> Option<(u32, u32)> {
     if kernel_size == 0
         || kernel_off < header_size
         || kernel_off.checked_add(kernel_size)? > src.len()
-        || (initrd_size != 0 && (initrd_off < header_size || initrd_off.checked_add(initrd_size)? > src.len()))
+        || (initrd_size != 0
+            && (initrd_size > INITRD_MAP_LEN
+                || initrd_off < header_size
+                || initrd_off.checked_add(initrd_size)? > src.len()))
     {
         return None;
     }

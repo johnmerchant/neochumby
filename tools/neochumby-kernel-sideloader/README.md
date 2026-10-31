@@ -1,15 +1,16 @@
-# neochumby-kernel-sideloader: stock 2.6.16 -> sideload Linux 5.9.16
+# neochumby-kernel-sideloader: stock 2.6.16 -> sideload Linux 5.9.16 or 7.x
 
 `neochumby-kernel-sideloader` is a static ARM EABI binary that runs on the
 stock Chumby Linux 2.6.16.  It uses **CVE-2009-2698** (the NULL `struct
 rtable` page-zero ELF route) to obtain uid 0 and all capabilities, maps
-`/dev/mem`, stages a Linux **5.9.16** zImage and an initramfs **outside
-NAND**, and hands off with the MMU off.
+`/dev/mem`, stages a Linux **5.9.16** or **7.x** zImage and an initramfs
+**outside NAND**, and hands off with the MMU off.  The 7.x image is the
+`dist/` stable or mainline build: its DTB and initramfs are inside the
+zImage.
 
 The image is **sideload**: the kernel has no NAND driver built in.  The NAND
-drivers are modules in the initramfs, and `/init` loads them only when the
-kernel was booted without the sideloader's `neochumby.sideloaded=1` marker
-— that is, when the image was flashed instead of handed off.  A normal
+drivers are modules in the initramfs, and nothing loads them but root
+(`modprobe mxc_nand`): `/init` never does, flashed or handed off.  A normal
 sideload never loads them, so `/proc/mtd`, `/dev/mtd*`, `/sys/class/mtd` and
 NAND in dmesg stay absent.
 
@@ -47,26 +48,26 @@ MMU off — but it can keep the unsafe surface small and reviewable.
 - **The sideloader writes no NAND.**  The only device node it opens is
   `/dev/mem` (`O_RDWR`); the writes through it are to RAM (zImage, initrd,
   ATAGS and the handoff stub).  Those mappings are SDRAM addresses
-  (`0xc2000000`, `0xc2800000`, `0xc3f00000`, `0xc3f80000`), not the NAND
+  (`0xc2000000`, `0xc3000000`, `0xc3f00000`, `0xc3f80000`), not the NAND
   controller.  It reads the QEMU loader container, or in hardware mode
   user-supplied kernel/initramfs files read-only.  It never opens
   `/dev/mtd*`, never calls an MTD `ioctl`, and never creates MTD device nodes.
   The executable contains no `/dev/mtd`, `mtdblock`, `flash_erase`,
   `flashcp` or `nandwrite` strings;
   `run-demo.py` checks the binary before boot and fails if one appears.
-- **5.9.16 is sideload by default.**  The kernel has no NAND driver built in;
-  the NAND drivers are modules in the initramfs, which only root loads
-  (`modprobe mxc_nand`); `/init` never does.  So there is no `/proc/mtd`,
-  no `/dev/mtd*`, no `/sys/class/mtd`, and no NAND in dmesg until root
-  asks.
+- **The sideload image is NAND-less by default.**  No NAND driver is built
+  in.  In the `dist/` image the NAND drivers are modules in the initramfs,
+  which only root loads (`modprobe mxc_nand`); `/init` never does.  So there
+  is no `/proc/mtd`, no `/dev/mtd*`, no `/sys/class/mtd`, and no NAND in
+  dmesg until root asks.  (The 5.9.16 sideload-only build has no MTD at all.)
 - **The demo has one host-side NAND-image preparation step.**  `mk_psp_nand.py`
   copies the sanitized original into a separate `nand-scratch.img` and writes
   the PSP partition in that copy, so the stock boot can find the sideloader in
   `/psp/rfs1/rcS`.  It is not a guest/MTD/device write, it never opens the
   original for writing, and the original SHA-256 is checked before and after.
   If host image preparation itself is out of scope, use a pre-made scratch
-  image or a real USB stick; the runtime path (the sideloader and 5.9.16)
-  still performs zero NAND writes.
+  image or a real USB stick; the runtime path (the sideloader and the
+  sideload kernel) still performs zero NAND writes.
 - The stock rcS has later `flash_eraseall`/`nandwrite` lines, but the
   `/psp/rfs1/rcS` hook exits before them; QEMU snapshots any incidental stock
   writes.
@@ -118,6 +119,13 @@ NAND_GREP_RC=1
 SIDELOADER_SHELL_OK
 ```
 
+The same path boots `dist/`'s 7.3.1 stable and 7.3.0 mainline images (8.3 MB
+zImages with their DTB and initramfs appended): `Linux (none)
+7.3.1-mx21-sideload ... armv5tejl GNU/Linux` and `Linux (none)
+7.3.0-mx21-sideload ... armv5tejl GNU/Linux`, with `/proc/mtd`, `/dev/mtd*`,
+`/sys/class/mtd` and the NAND-module checks all still absent/unloaded.  Those
+images are why the container window is 16 MiB.
+
 `evidence/run-demo.out` also records the NAND hashes before/after:
 
 ```text
@@ -134,23 +142,29 @@ started by QEMU in the normal way (`-kernel stock-zImage`) and still reads the
 stock NAND to mount its root disk.  That first stage is unavoidable: the
 stock boot loader/root disk has no other boot path.
 
-The 5.9.16 payload is placed by QEMU, not NAND:
+The sideload payload is placed by QEMU, not NAND:
 
 | item | physical | how |
 | --- | --- | --- |
 | stock 2.6.16 zImage | QEMU load address | `-kernel`; stock kernel reads NAND |
 | loader container | `0xc2000000` | `-device loader,file=sideload-payload.bin,addr=0xc2000000` |
-| 5.9.16 zImage | `0xc2000000` | copied forward over the container header; source is byte-offset `+0x1000` |
-| initramfs | `0xc2800000` | copied from the container |
+| sideload zImage | `0xc2000000` | copied forward over the container header; source is byte-offset `+0x1000` |
+| initramfs | `0xc3000000` | copied from the container |
 | ATAGS | `0xc3f00000` | built by the sideloader (same address as the earlier C chainload) |
 | handoff stub | `0xc3f80000` | copied by the sideloader (same address as the earlier C chainload) |
 
+The container/kernel window is 16 MiB, `0xc2000000`-`0xc3000000`; the
+initramfs window is the 15 MiB from `0xc3000000` to ATAGS.  The two do not
+overlap, so mapping the initramfs cannot replace part of the source mapping,
+and a kernel as large as the 7.3.1 image (8.3 MB) fits.
+
 The container at `0xc2000000` is still free when stock `/psp/rfs1/rcS` runs;
 this was checked by loading the full container before boot and reading it
-back from rcS, both with the demo's 5.2 MB container and with a 6.4 MB
-`dist/`-built one.  It is inside the stock kernel's 64 MiB direct map, so the
-stub at `0xc3f80000` executes with the MMU on and continues at the same
-physical address after the MMU is disabled.
+back from rcS, and by the 8.3 MB 7.3.1 container and a 9.0 MB 5.9.16
+container with a separate initramfs both reaching the handoff.  It is inside
+the stock kernel's 64 MiB direct map, so the stub at `0xc3f80000` executes
+with the MMU on and continues at the same physical address after the MMU is
+disabled.
 
 The stock kernel does **not** see the container as NAND or as an initramfs; it
 is just RAM written by QEMU's loader.  The sideloader does not open `/dev/mtd*`
@@ -177,11 +191,11 @@ Differences are deliberate and limited to the NAND-less requirement:
 
 - The zImage comes from a QEMU loader container at `0xc2000000` (or USB files),
   not from `/dev/mtdblock6`.
-- The initramfs is a separate file at `0xc2800000`, so `ATAG_INITRD2` is added
+- The initramfs is a separate file at `0xc3000000`, so `ATAG_INITRD2` is added
   and the cache flush covers it.
 - ATAGS and stub use the earlier C chainload's addresses
   `0xc3f00000`/`0xc3f80000`.
-- The command line has no `mtdparts=`, because the 5.9.16 kernel has no MTD.
+- The command line has no `mtdparts=`; the sideloaded path does not use MTD.
 
 ## Build
 
@@ -244,9 +258,10 @@ python3 mkpayload.py --no-initramfs build/sideload-zImage build/sideload-payload
 ```
 
 The `--no-initramfs` container tells the sideloader to use the zImage's
-built-in initramfs; the zImage plus the external cpio would not fit the
-7 MiB container window.  `sideload-rootfs.cpio.gz` is for userhook2 and
-other boot paths that take an initramfs separately.
+built-in initramfs.  With the 16 MiB window the zImage plus the external
+cpio also fits; the built-in one is simply the image's own boot path.
+`sideload-rootfs.cpio.gz` is for userhook2 and other boot paths that take
+an initramfs separately.
 
 `dist/`'s kernel config sets the NAND drivers as modules and
 `CONFIG_LOCALVERSION="-mx21-sideload"` (see
@@ -272,7 +287,7 @@ and shell markers, checks the sideloader binary for MTD device paths and
 write tools, checks that the sideload marker is present and the NAND modules
 are not loaded, fails if `/proc/mtd`, `/dev/mtd*`, `/sys/class/mtd` or NAND
 in dmesg appears, and fails if either the original or the scratch image hash
-changes.
+changes.  It takes either the 5.9.16 image or a 7.x `dist/` image.
 
 ```sh
 STOCK_ZIMAGE=/path/to/stock/zImage \
@@ -297,7 +312,7 @@ qemu-system-arm -M chumby-classic \
 ```
 
 The stock kernel's command line is unchanged except that it still gets its
-normal `console=ttyS0,38400` and NAND root.  The 5.9.16 kernel gets its own
+normal `console=ttyS0,38400` and NAND root.  The sideload kernel gets its own
 ATAGS command line from the sideloader:
 `console=ttymxc0,115200 rdinit=/init neochumby.sideloaded=1`.
 
@@ -378,16 +393,17 @@ uses `--source 0xc2000000`, the loader container.
 ## Limitations / notes
 
 - **Stock 2.6.16 first stage reads NAND.**  The stock kernel and root disk are
-  on NAND and that is the only boot path QEMU/the device has.  The 5.9.16
-  image is sideload by default: no NAND driver is built in, and the recovery
-  modules are not loaded in the sideloaded path.
+  on NAND and that is the only boot path QEMU/the device has.  The sideload
+  image is NAND-less by default: no NAND driver is built in, and the
+  recovery modules are not loaded in the sideloaded path.
 - **QEMU only.**  The hardware-oriented `--kernel FILE --initramfs FILE`
   mode is implemented, but the demo uses the QEMU loader container.  A real
   Chumby needs the files on a USB stick and the stock USB storage driver,
   as the emulated one now has.
-- **5.9.16 is EOL.**  i.MX21 was removed in 5.10; 5.9.16 is the last mainline
-  with it.  The kernel is a local 5.9.16 build with the sideload config
-  (NAND drivers as modules, not built in), not a vendor kernel.
+- **5.9.16 is EOL; 7.x is the dist's track.**  i.MX21 was removed in 5.10,
+  so `dist/`'s stable and mainline tracks carry a patch series that brings
+  it back as a device-tree platform.  Both the 5.9.16 sideload-only build
+  and the 7.x image are local builds, not vendor kernels.
 - **The recovery modules are a deliberate trade-off.**  The image carries the
   NAND drivers in the initramfs so a mistaken flash is recoverable.  `/init`
   does not load them when `neochumby.sideloaded=1` is present, but root can
@@ -395,9 +411,10 @@ uses `--source 0xc2000000`, the loader container.
 - The loader region at `0xc2000000` is free at rcS for this stock image.  A
   different stock userland could allocate it before rcS; the QEMU demo checks
   this by loading the full container and reading it back.  `SRC_MAP_LEN`
-  (the window the sideloader reads the container through) is `0x700000`, matching
-  `mkpayload.py`'s own `LIMIT`; a container that fits under `LIMIT` always
-  fits the read.
+  (the window the sideloader reads the container through) is `0x1000000`,
+  matching `mkpayload.py`'s own `LIMIT`; a container that fits under `LIMIT`
+  always fits the read.  The initramfs destination starts at `0xc3000000`,
+  so its mapping is outside that window.
 - The page-zero ELF route is intentional and only works on the vulnerable
   stock 2.6.16.  If the sideloader is run inside the neochumby jail, the
   `jail/refuse-page-zero-elfs` policy may refuse the ELF; it is meant to run
