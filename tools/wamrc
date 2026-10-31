@@ -1,0 +1,100 @@
+#!/bin/sh
+# wamrc, WAMR's AOT compiler, built from the WAMR that neochumby-wamr's
+# wamr-sys builds the runtime from (the WAMR in cargo's checkout of our
+# wamr-rust-sdk fork, as `cargo metadata` finds it), so that what it
+# compiles is what the Chumby's runner loads. Built once per pin of the
+# fork, into the cache, against LLVM 18 (WAMR's pin), with CMake and Ninja:
+# LLVM_DIR names LLVM's CMake directory, else llvm-config on PATH says
+# where it is (nix develop .#wasm has both).
+#
+# It is built without WAMR's own WASI and threads: knowing their
+# signatures, wamrc would compile calls to them in a convention the
+# runner's host API doesn't use (neochumby_wasm::aot::FLAGS says why). So
+# every import the runner provides is called the one way it provides. Its
+# builtin libc stays, as 2.4.5's wamrc doesn't build without any native
+# library: those are all `env` functions, which the runner never provides
+# and refuses a module for importing.
+#
+#   tools/wamrc            prints wamrc's path, building it first if need be;
+#                          wamrc.id beside it says what it compiles for
+#   tools/wamrc --id       prints what its .aot files are compiled for, WAMR's
+#                          release and commit (2.4.5-25bd7eb63e82), as the
+#                          runner's own
+#                          (neochumby_wamr::VERSION)
+#   tools/wamrc --compile IN.wasm OUT.aot
+#                          compiles IN for the Chumby (neochumby_wasm::aot's
+#                          flags: ARMv5TE, the ARM926EJ-S, bounds checks on,
+#                          no natives)
+#                          and prints the manifest lines recording it
+#
+# .aot files are only ever made here or by neochumbyd, never taken from an
+# app's author: they are native code (docs/proposals/0003-wasm-apps.md).
+set -eu
+root=$(cd "$(dirname "$0")/.." && pwd)
+# wamr-sys's manifest, and its pin (the package id names the commit).
+meta=$(cd "$root" && cargo metadata --format-version 1 --manifest-path crates/neochumby-wamr/Cargo.toml)
+sys=$(printf %s "$meta" | python3 -I -c 'import json, sys
+m = json.load(sys.stdin)
+p = next(p for p in m["packages"] if p["name"] == "wamr-sys")
+print(p["manifest_path"].rsplit("/", 1)[0], p["id"].rsplit("#", 1)[-1][:12])')
+src=${sys% *}/wasm-micro-runtime
+pin=${sys##* }
+release=$(for p in MAJOR MINOR PATCH; do sed -n "s/^#define WAMR_VERSION_$p //p" "$src/core/version.h"; done | paste -sd. -)
+# The commit as well: an AOT file's format can change within a release.
+commit=$(git -C "$src" rev-parse --short=12 HEAD)
+id=$release-$commit
+cache=${XDG_CACHE_HOME:-$HOME/.cache}/neochumby/wamrc/$release-$pin-nonatives
+wamrc=$cache/wamrc
+
+build() {
+  llvm=${LLVM_DIR:-}
+  if [ -z "$llvm" ] && command -v llvm-config >/dev/null 2>&1; then
+    llvm=$(llvm-config --cmakedir)
+  fi
+  [ -n "$llvm" ] || {
+    echo "tools/wamrc: needs LLVM 18's development files: LLVM_DIR, or llvm-config on PATH (nix develop .#wasm)" >&2
+    exit 1
+  }
+  work=$cache.build
+  rm -rf "$work"
+  mkdir -p "$work"
+  echo "tools/wamrc: building wamrc $id against $llvm" >&2
+  cmake -S "$src/wamr-compiler" -B "$work" -G Ninja -DCMAKE_BUILD_TYPE=Release \
+    -DWAMR_BUILD_WITH_CUSTOM_LLVM=1 -DLLVM_DIR="$llvm" \
+    -DWAMR_BUILD_LIBC_WASI=0 -DWAMR_BUILD_LIBC_UVWASI=0 -DWAMR_BUILD_LIBC_BUILTIN=1 \
+    -DWAMR_BUILD_LIB_PTHREAD=0 -DWAMR_BUILD_LIB_WASI_THREADS=0 >&2
+  ninja -C "$work" >&2
+  mkdir -p "$cache"
+  cp "$work/wamrc" "$wamrc.tmp"
+  # Beside it, what it compiles for, for neochumbyd (--wamrc PATH).
+  echo "$id" > "$cache/wamrc.id"
+  mv "$wamrc.tmp" "$wamrc"
+  rm -rf "$work"
+}
+
+case ${1:-} in
+  --id)
+    echo "$id"
+    exit 0
+    ;;
+esac
+[ -x "$wamrc" ] || build
+case ${1:-} in
+  "") echo "$wamrc" ;;
+  --compile)
+    in=${2:?usage: tools/wamrc --compile IN.wasm OUT.aot}
+    out=${3:?usage: tools/wamrc --compile IN.wasm OUT.aot}
+    # The same flags as neochumby_wasm::aot::WAMRC_ARGS.
+    "$wamrc" --target=armv5te --target-abi=eabi --cpu=arm926ej-s --bounds-checks=1 -o "$out" "$in" >&2
+    sum() {
+      if command -v sha256sum >/dev/null 2>&1; then sha256sum "$1"; else shasum -a 256 "$1"; fi | cut -d' ' -f1
+    }
+    echo "aot=$(basename "$out")"
+    echo "aot-key=sha256:$(sum "$in")/wamr:$id/armv5te-eabi-arm926ej-s-bounds-nonatives"
+    echo "aot-sha256=$(sum "$out")"
+    ;;
+  *)
+    echo "usage: tools/wamrc [--id | --compile IN.wasm OUT.aot]" >&2
+    exit 2
+    ;;
+esac

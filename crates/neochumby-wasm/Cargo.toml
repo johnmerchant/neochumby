@@ -1,0 +1,24 @@
+[package]
+name = "neochumby-wasm"
+description = "The runner for apps built as WebAssembly: WAMR, in the app's jail, with a host API that grants only what its manifest lists"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+repository.workspace = true
+
+[dependencies]
+neochumby-sys.workspace = true
+neochumby-wamr = { path = "../neochumby-wamr" }
+sha2 = "0.10"
+
+# The screen and the touchscreen: the device library builds only for the
+# Chumby. Elsewhere the runner's host API is tested through its traits.
+[target.'cfg(target_arch = "arm")'.dependencies]
+neochumby.workspace = true
+
+[dev-dependencies]
+wat = "1"
+
+[lints]
+workspace = true

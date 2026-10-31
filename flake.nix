@@ -8,9 +8,10 @@
   # targets, and wasm32-wasip1), zig 0.17 (the C compiler, linker and musl,
   # as CI pins it), CMake (for fetch and WAMR), libclang (WAMR's bindings),
   # Python 3 (dev/emulate and friends), gh (dist/fetch verifies the prebuilt
-  # images' attestations with it) and jq. QEMU and the Chumby's Linux images
-  # aren't built: dev/emulate fetches qemu-chumby's prebuilt QEMU and CI's
-  # images, verified. Without Nix, CONTRIBUTING.md lists the same tools, and
+  # images' attestations with it) and jq; `nix develop .#wasm` adds LLVM 18
+  # and Ninja, for tools/wamrc. QEMU and the Chumby's Linux images aren't
+  # built: dev/emulate fetches qemu-chumby's prebuilt QEMU and CI's images,
+  # verified. Without Nix, CONTRIBUTING.md lists the same tools, and
   # dev/setup says which are missing.
   description = "neochumby: a developer shell";
 
@@ -43,35 +44,43 @@
               "wasm32-wasip1"
             ];
           };
-        in
-        {
-          default = pkgs.mkShell {
-            packages = [
-              rust
-              pkgs.zig_0_17
-              pkgs.cmake
-              # neochumby-ncurses finds the shared ncurses with it, in a
-              # tree for Linux 5.9 and later (tools/tree, tools/linux-libs).
-              pkgs.pkg-config
-              pkgs.python3
-              pkgs.gh
-              pkgs.jq
-              pkgs.xz
-              pkgs.git
-            ];
-            # wamr-sys generates WAMR's bindings with bindgen, which loads
-            # libclang; nixpkgs' doesn't find its own builtin headers.
+          packages = [
+            rust
+            pkgs.zig_0_17
+            pkgs.cmake
+            # neochumby-ncurses finds the shared ncurses with it, in a
+            # tree for Linux 5.9 and later (tools/tree, tools/linux-libs).
+            pkgs.pkg-config
+            pkgs.python3
+            pkgs.gh
+            pkgs.jq
+            pkgs.xz
+            pkgs.git
+          ];
+          # tools/zigcc and its siblings call zig by name; the macOS SDK
+          # Nix's stdenv puts in the environment would steer zig's own
+          # cross compilation, so leave zig to find what it needs.
+          shellHook = ''
+            unset SDKROOT DEVELOPER_DIR
+          '';
+          # wamr-sys generates WAMR's bindings with bindgen, which loads
+          # libclang; nixpkgs' doesn't find its own builtin headers.
+          env = {
             LIBCLANG_PATH = "${pkgs.llvmPackages_18.libclang.lib}/lib";
             BINDGEN_EXTRA_CLANG_ARGS = "-isystem ${pkgs.llvmPackages_18.libclang.lib}/lib/clang/18/include";
             # The Chumby's: clang's own headers only (.cargo/config.toml).
             BINDGEN_EXTRA_CLANG_ARGS_armv5te_unknown_linux_musleabi = "-nostdlibinc -isystem ${pkgs.llvmPackages_18.libclang.lib}/lib/clang/18/include";
-            # tools/zigcc and its siblings call zig by name; the macOS SDK
-            # Nix's stdenv puts in the environment would steer zig's own
-            # cross compilation, so leave zig to find what it needs.
-            shellHook = ''
-              unset SDKROOT DEVELOPER_DIR
-            '';
           };
+        in
+        {
+          default = pkgs.mkShell (env // { inherit packages shellHook; });
+          # nix develop .#wasm: the same, and what tools/wamrc builds WAMR's
+          # AOT compiler with (LLVM 18, WAMR's pin, and Ninja); apart, as
+          # LLVM is large and only .aot files need it.
+          wasm = pkgs.mkShell (env // {
+            inherit shellHook;
+            packages = packages ++ [ pkgs.ninja pkgs.llvmPackages_18.llvm.dev ];
+          });
         });
     };
 }

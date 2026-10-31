@@ -90,6 +90,24 @@ pub fn redirect(which: Stdio, to: BorrowedFd<'_>) -> io::Result<()> {
     if unsafe { libc::dup2(to.as_raw_fd(), which as RawFd) } < 0 { Err(io::Error::last_os_error()) } else { Ok(()) }
 }
 
+/// Waits up to `timeout_ms` milliseconds (forever if negative) for `fd` to
+/// have something to read, or its other end to close: whether it has.
+pub fn readable(fd: BorrowedFd<'_>, timeout_ms: i32) -> io::Result<bool> {
+    let mut p = libc::pollfd { fd: fd.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+    loop {
+        // SAFETY: poll(2) reads and writes one pollfd, `p`, live through
+        // the call; the descriptor is open while it's borrowed.
+        let n = unsafe { libc::poll(&mut p, 1, timeout_ms) };
+        if n >= 0 {
+            return Ok(n > 0);
+        }
+        let e = io::Error::last_os_error();
+        if e.kind() != io::ErrorKind::Interrupted {
+            return Err(e);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;

@@ -94,7 +94,13 @@ mod tests {
         let second = File::open(&d).unwrap();
         assert!(!try_lock(&second).unwrap());
         drop(first);
-        assert!(try_lock(&second).unwrap());
+        // Free once every copy of the descriptor is closed: a child another
+        // test forks (lockdown.rs's, which don't exec) may hold one a moment.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !try_lock(&second).unwrap() {
+            assert!(std::time::Instant::now() < deadline, "still locked");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
         drop(second);
         // rmdir(2): std's remove_dir_all uses calls 2.6.16 hasn't got on ARM.
         std::fs::remove_dir(d).unwrap();
