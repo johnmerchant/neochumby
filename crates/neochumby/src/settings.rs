@@ -56,8 +56,31 @@ pub fn connect(p: &Paired) -> io::Result<(Session, Settings)> {
     let mut s = Session::connect(stream, &me, &server_key)?;
     // A neochumbyd from before Msg::Config sends nothing after Welcome:
     // that times out, and the kept settings are used.
-    let settings = version::hello(&mut s, conf::name(), ANSWER)?;
+    let (settings, clock) = version::hello_clock(&mut s, conf::name(), ANSWER)?;
+    if let Some(t) = clock {
+        set_clock(t);
+    }
     Ok((s, settings))
+}
+
+/// How far the Chumby's clock may be from neochumbyd's before the session
+/// sets it: more than the time a Config takes to arrive.
+const CLOCK_SLACK: i64 = 30;
+
+/// The Chumby's clock from neochumbyd's (`t`, seconds since the epoch), when
+/// it is off by more than [`CLOCK_SLACK`]: a Chumby Classic keeps no time
+/// while off, and the stock 2.6.16 and the dist's 5.9.16 find no RTC, so
+/// they boot at 1970. Only as root (the session); anyone else leaves it.
+fn set_clock(t: i64) {
+    let now = neochumby_sys::time::wall_clock();
+    if (now - t).abs() <= CLOCK_SLACK {
+        return;
+    }
+    match neochumby_sys::time::set_wall_clock(t) {
+        Ok(()) => eprintln!("neochumby: the clock, from neochumbyd's: {t} (it was {now})"),
+        Err(e) if e.kind() == io::ErrorKind::PermissionDenied => {}
+        Err(e) => eprintln!("neochumby: setting the clock from neochumbyd's: {e}"),
+    }
 }
 
 /// Writes SETTINGS only when they changed: /psp is a small flash.
