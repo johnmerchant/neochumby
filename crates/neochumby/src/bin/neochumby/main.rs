@@ -67,10 +67,8 @@ mod start;
 mod storage;
 mod terminal;
 
-use std::fs::{File, OpenOptions};
-use std::io::Read;
+use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
-use std::os::unix::fs::OpenOptionsExt;
 use std::os::unix::process::CommandExt;
 use std::path::Path;
 use std::process::{Command, Stdio};
@@ -154,18 +152,22 @@ fn watch_escape(flag: Arc<AtomicBool>) {
     });
 }
 
-/// How often the session tries /dev/switch again while it hasn't got it
+/// How often the session tries the top button again while it hasn't got it
 /// (another process had it at boot, say).
 const BUTTON_RETRY: Duration = Duration::from_secs(5);
 
-/// The top button, opened once for the whole session (button.rs); `again`
-/// when retrying, which logs only success.
+/// The top button, opened once for the whole session (button.rs): the
+/// stock kernel's /dev/switch, or the dist kernels' input device for it
+/// (input::open_button). `again` when retrying, which logs only success.
 fn open_button(again: bool) -> Option<File> {
-    let open = OpenOptions::new().read(true).custom_flags(libc::O_NONBLOCK).open("/dev/switch");
     // Passed on only to an app with `button = true`.
-    match open.and_then(|f| neochumby_sys::fd::set_cloexec(f.as_fd(), true).map(|()| f)) {
-        Ok(f) => {
-            if again {
+    let open =
+        input::open_button().and_then(|(f, path)| neochumby_sys::fd::set_cloexec(f.as_fd(), true).map(|()| (f, path)));
+    match open {
+        Ok((f, path)) => {
+            if path != input::SWITCH {
+                eprintln!("neochumby: top button at {path}");
+            } else if again {
                 eprintln!("neochumby: /dev/switch: open now");
             }
             Some(f)
@@ -321,11 +323,7 @@ impl run::Device for Chumby {
             self.button = open_button(true);
             self.button_tried = Some(Instant::now());
         }
-        let mut b = [0u8; 1];
-        let real = match self.button.as_mut().map(|f| f.read(&mut b)) {
-            Some(Ok(1)) => Some(b[0] != 0),
-            _ => None,
-        };
+        let real = self.button.as_mut().and_then(input::button_level);
         // Read only while the app in front hasn't the button (run.rs), so
         // a press from neochumbyd can reach it.
         let remote = self.remote.as_ref().map(|r| {
