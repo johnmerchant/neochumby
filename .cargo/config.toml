@@ -30,6 +30,13 @@ rustflags = ["-C", "linker-flavor=ld.lld", "-C", "link-self-contained=yes"]
 [env]
 CC_armv5te_unknown_linux_musleabi = { value = "tools/zigcc", relative = true }
 AR_armv5te_unknown_linux_musleabi = { value = "tools/zigar", relative = true }
+# C built by CMake from a build script (wamr-sys builds WAMR so).
+CMAKE_TOOLCHAIN_FILE_armv5te_unknown_linux_musleabi = { value = "tools/armv5te.cmake", relative = true }
+# wamr-sys's bindings (bindgen), for the Chumby: for a musl target clang
+# searches the system's headers before its own, so a host's glibc
+# stdint.h (/usr/include) would win over clang's freestanding one. Only
+# clang's own, then.
+BINDGEN_EXTRA_CLANG_ARGS_armv5te_unknown_linux_musleabi = "-nostdlibinc"
 CC_x86_64_unknown_linux_musl = { value = "tools/zigcc-x86_64", relative = true }
 AR_x86_64_unknown_linux_musl = { value = "tools/zigar", relative = true }
 CC_aarch64_unknown_linux_musl = { value = "tools/zigcc-aarch64", relative = true }

@@ -12,6 +12,7 @@ members = [
     "crates/neochumby-softfloat",
     "crates/neochumby-sync",
     "crates/neochumby-sys",
+    "crates/neochumby-wamr",
     "crates/neochumbyd",
     "apps/airplay",
     "apps/airplay/proto",

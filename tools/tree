@@ -132,6 +132,7 @@ export CARGO_TARGET_X86_64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C link-self-contained=
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_LINKER=rust-lld
 export CARGO_TARGET_AARCH64_UNKNOWN_LINUX_MUSL_RUSTFLAGS="-C linker-flavor=ld.lld -C link-self-contained=yes"
 export CC_armv5te_unknown_linux_musleabi=$root/tools/zigcc AR_armv5te_unknown_linux_musleabi=$root/tools/zigar
+export CMAKE_TOOLCHAIN_FILE_armv5te_unknown_linux_musleabi=$root/tools/armv5te.cmake
 export CC_x86_64_unknown_linux_musl=$root/tools/zigcc-x86_64 AR_x86_64_unknown_linux_musl=$root/tools/zigar
 export CC_aarch64_unknown_linux_musl=$root/tools/zigcc-aarch64 AR_aarch64_unknown_linux_musl=$root/tools/zigar
 
