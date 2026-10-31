@@ -49,7 +49,7 @@ its boot loader passes ATAGs only. The toolchain is the same (headers at
 | Track | What it follows | Downloaded as |
 | --- | --- | --- |
 | `5.9.16` | itself: the last release with the i.MX21's board files | kernel.org's tarball |
-| `stable` | the newest of kernel.org's releases with moniker `stable` (7.2.13) | kernel.org's tarball, `linux-VERSION.tar.xz` |
+| `stable` | the newest of kernel.org's releases with moniker `stable` (7.3.1) | kernel.org's tarball, `linux-VERSION.tar.xz` |
 | `mainline` | kernel.org's `mainline`: Linus's newest tag, a release (7.3) or an -rc (7.4-rc3) | Buildroot's archive of the git tag, `linux-vVERSION-git4.tar.gz` |
 
 Each track is pinned to one exact version, in one place:

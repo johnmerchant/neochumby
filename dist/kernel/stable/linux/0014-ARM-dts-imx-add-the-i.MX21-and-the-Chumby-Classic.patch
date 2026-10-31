@@ -16,7 +16,7 @@ Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5Ee1gRFAS7tp8oLbvQ
 ---
 diff --git a/Documentation/devicetree/bindings/arm/fsl.yaml b/Documentation/devicetree/bindings/arm/fsl.yaml
-index 86876311e..4939f1cee 100644
+index 656f2596e..0b28c5abd 100644
 --- a/Documentation/devicetree/bindings/arm/fsl.yaml
 +++ b/Documentation/devicetree/bindings/arm/fsl.yaml
 @@ -21,6 +21,12 @@ properties:

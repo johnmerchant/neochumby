@@ -76,10 +76,10 @@ index 000000000..e973c59f6
 +        speaker-gpios = <&kpp_gpio 12 GPIO_ACTIVE_LOW>;
 +    };
 diff --git a/Documentation/devicetree/bindings/vendor-prefixes.yaml b/Documentation/devicetree/bindings/vendor-prefixes.yaml
-index 396044f36..7c17fc277 100644
+index ba2002969..654a27318 100644
 --- a/Documentation/devicetree/bindings/vendor-prefixes.yaml
 +++ b/Documentation/devicetree/bindings/vendor-prefixes.yaml
-@@ -327,6 +327,8 @@ patternProperties:
+@@ -333,6 +333,8 @@ patternProperties:
      description: Chrontel, Inc.
    "^chrp,.*":
      description: Common Hardware Reference Platform
@@ -89,10 +89,10 @@ index 396044f36..7c17fc277 100644
      description: Chunghwa Picture Tubes Ltd.
    "^chuwi,.*":
 diff --git a/sound/soc/codecs/Kconfig b/sound/soc/codecs/Kconfig
-index e4d139108..702c7b9d6 100644
+index 8e251e1d8..2b0195d30 100644
 --- a/sound/soc/codecs/Kconfig
 +++ b/sound/soc/codecs/Kconfig
-@@ -297,6 +297,7 @@ config SND_SOC_ALL_CODECS
+@@ -298,6 +298,7 @@ config SND_SOC_ALL_CODECS
  	imply SND_SOC_TSCS42XX
  	imply SND_SOC_TSCS454
  	imply SND_SOC_TS3A227E
@@ -100,7 +100,7 @@ index e4d139108..702c7b9d6 100644
  	imply SND_SOC_TWL4030
  	imply SND_SOC_TWL6040
  	imply SND_SOC_UDA1334
-@@ -2370,6 +2371,14 @@ config SND_SOC_TS3A227E
+@@ -2385,6 +2386,14 @@ config SND_SOC_TS3A227E
  	tristate "TI Headset/Mic detect and keypress chip"
  	depends on I2C
  
@@ -116,10 +116,10 @@ index e4d139108..702c7b9d6 100644
  	tristate "Tempo Semiconductor TSCS42xx CODEC"
  	depends on I2C
 diff --git a/sound/soc/codecs/Makefile b/sound/soc/codecs/Makefile
-index aa0396e5b..391147fb2 100644
+index 3d122ace7..7cfb46836 100644
 --- a/sound/soc/codecs/Makefile
 +++ b/sound/soc/codecs/Makefile
-@@ -345,6 +345,7 @@ snd-soc-tlv320aic3x-i2c-y := tlv320aic3x-i2c.o
+@@ -347,6 +347,7 @@ snd-soc-tlv320aic3x-i2c-y := tlv320aic3x-i2c.o
  snd-soc-tlv320aic3x-spi-y := tlv320aic3x-spi.o
  snd-soc-tlv320dac33-y := tlv320dac33.o
  snd-soc-tlv320adcx140-y := tlv320adcx140.o
@@ -127,7 +127,7 @@ index aa0396e5b..391147fb2 100644
  snd-soc-tscs42xx-y := tscs42xx.o
  snd-soc-tscs454-y := tscs454.o
  snd-soc-ts3a227e-y := ts3a227e.o
-@@ -786,6 +787,7 @@ obj-$(CONFIG_SND_SOC_TLV320AIC3X_I2C)	+= snd-soc-tlv320aic3x-i2c.o
+@@ -791,6 +792,7 @@ obj-$(CONFIG_SND_SOC_TLV320AIC3X_I2C)	+= snd-soc-tlv320aic3x-i2c.o
  obj-$(CONFIG_SND_SOC_TLV320AIC3X_SPI)	+= snd-soc-tlv320aic3x-spi.o
  obj-$(CONFIG_SND_SOC_TLV320DAC33)	+= snd-soc-tlv320dac33.o
  obj-$(CONFIG_SND_SOC_TLV320ADCX140)	+= snd-soc-tlv320adcx140.o
