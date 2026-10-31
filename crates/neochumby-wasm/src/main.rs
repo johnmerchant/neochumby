@@ -59,7 +59,7 @@ impl Read for Stdin {
 
 impl Input for Stdin {
     fn ready(&mut self, timeout_ms: i32) -> bool {
-        neochumby_sys::fd::readable(self.0.as_fd(), timeout_ms).unwrap_or(true)
+        neochumby_sys::fd::readable(&[self.0.as_fd()], timeout_ms).map(|r| r[0]).unwrap_or(true)
     }
 }
 
