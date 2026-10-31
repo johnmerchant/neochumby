@@ -316,6 +316,10 @@ fn mount_kernel_fs() {
         kmsg(&format!("/dev/pts: {e}"));
         ok = false;
     }
+    // The kernel drops what userspace writes to /dev/kmsg past a few lines
+    // a second (printk_devkmsg=ratelimit, its default), which a boot's
+    // burst of module loads passes: the log is init's, so keep all of it.
+    let _ = fs::write("/proc/sys/kernel/printk_devkmsg", "on\n");
     // Only now: the screen's console is in /dev, devtmpfs.
     screen_step("Mounting /proc, /sys and /dev", if ok { Status::Ok } else { Status::Failed });
     for dir in ["/tmp", "/mnt"] {
