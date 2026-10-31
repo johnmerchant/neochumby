@@ -1,0 +1,29 @@
+#!/bin/sh
+# tools/zigcc for C programs linked without rustc: zig's compiler-rt for
+# arm-linux-musleabi (ARMv5TE) has no __sync_* (there is no ldrex; Linux's
+# kuser helpers are the way) and only the __aeabi_* names for soft float,
+# while WAMR's AOT relocator maps the libgcc names (__addsf3, ...). Rust's
+# compiler_builtins for the target has both, so it is linked in, with the
+# one symbol its unwind tables name and nothing calls.
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$here/../../.." && pwd)
+# Static, not static-pie, as the Rust binaries are.
+link=1
+for a in "$@"; do
+  shift
+  case "$a" in
+    -pie | -fPIE | -fpie) continue ;;
+    -c | -S | -E | -M | -MM) link= ;;
+  esac
+  set -- "$@" "$a"
+done
+if [ -z "$link" ]; then
+  exec "$root/tools/zigcc" "$@"
+fi
+cb=$(ls "$(rustc --print sysroot)"/lib/rustlib/armv5te-unknown-linux-musleabi/lib/libcompiler_builtins-*.rlib | head -n 1)
+shim=$here/../build/eh-shim.o
+if [ ! -f "$shim" ]; then
+  mkdir -p "$(dirname "$shim")"
+  echo 'void rust_eh_personality(void) {}' | "$root/tools/zigcc" -x c -O2 -c -o "$shim" -
+fi
+exec "$root/tools/zigcc" "$@" "$cb" "$shim"
