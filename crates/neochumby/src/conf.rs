@@ -17,7 +17,7 @@ pub const CONF: &str = "/psp/neochumby.conf";
 pub const KEY: &str = "/psp/neochumby.key";
 pub const HOOK: &str = "/psp/rfs1/userhook2";
 /// A stick's own tree, made by hand (tools/stick).
-const STICK_TREE: &str = "/mnt/usb/neochumby";
+pub const STICK_TREE: &str = "/mnt/usb/neochumby";
 
 /// What a value may hold: what an address, port, path or hex key needs.
 pub fn valid_value(s: &str) -> bool {
@@ -74,7 +74,7 @@ pub fn refresh_hook(root: &Path) -> io::Result<bool> {
     if root == Path::new(STICK_TREE) || !hook.is_file() {
         return Ok(false);
     }
-    let new = std::fs::read(root.join("userhook2"))?;
+    let new = crate::verified::read(&root.join("userhook2"))?;
     if new.len() > 64 << 10 || !new.starts_with(b"#!/bin/sh\n") {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "the tree's userhook2 is not a hook"));
     }

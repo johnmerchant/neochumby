@@ -39,3 +39,6 @@
 	url = https://github.com/johnmerchant/chumby-linux-2.6.16
 	update = none
 	shallow = true
+[submodule "dev/wasmbench/third_party/coremark"]
+	path = dev/wasmbench/third_party/coremark
+	url = https://github.com/eembc/coremark
