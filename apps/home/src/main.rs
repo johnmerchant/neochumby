@@ -37,6 +37,9 @@ const ROW: Rgb = (28, 28, 48);
 const PRESSED: Rgb = (230, 230, 230);
 const DARK: Rgb = (0, 0, 0);
 
+/// `12:00pm`.
+const CLOCK_WIDTH: usize = 7;
+
 /// How often the network's line is read again.
 const NETWORK_EVERY: Duration = Duration::from_secs(5);
 
@@ -123,7 +126,17 @@ impl Screen {
 
 fn clock() -> String {
     let t = neochumby_sys::time::local_time();
-    format!("{:02}:{:02}", t.hour, t.minute)
+    twelve_hour(t.hour, t.minute)
+}
+
+/// As `2:32pm`, always [`CLOCK_WIDTH`] wide, so that it overwrites the last.
+fn twelve_hour(hour: u8, minute: u8) -> String {
+    let h = match hour % 12 {
+        0 => 12,
+        h => h,
+    };
+    let m = if hour < 12 { "am" } else { "pm" };
+    format!("{:>w$}", format!("{h}:{minute:02}{m}"), w = CLOCK_WIDTH)
 }
 
 /// How the Chumby is connected, under the title: on the row that parts the
@@ -145,8 +158,8 @@ fn paint_clock(p: &mut Paint, l: &Layout) {
 fn draw(t: &mut Term, all: &[App], s: &Screen, pressed: Option<Hit>) {
     let l = s.layout(t.cols, t.rows);
     let mut p = Paint::cleared();
-    // Leaves the clock its room: "HH:MM", and a column each side.
-    let room = t.cols.saturating_sub(5 + 3);
+    // Leaves the clock its room, and a column each side.
+    let room = t.cols.saturating_sub(CLOCK_WIDTH + 3);
     p.at(1, 0).text(&fit(&s.title, room), TITLE, None, true);
     paint_clock(&mut p, &l);
     paint_network(&mut p, &l, &s.network);
@@ -292,6 +305,15 @@ mod tests {
 
     fn screen(apps: usize) -> Screen {
         Screen { listed: (0..apps).collect(), page: 0, network: String::new(), title: String::new() }
+    }
+
+    #[test]
+    fn the_clock_is_twelve_hour() {
+        assert_eq!(twelve_hour(0, 5), "12:05am");
+        assert_eq!(twelve_hour(9, 30), " 9:30am");
+        assert_eq!(twelve_hour(12, 0), "12:00pm");
+        assert_eq!(twelve_hour(14, 32), " 2:32pm");
+        assert_eq!(twelve_hour(23, 59), "11:59pm");
     }
 
     #[test]
