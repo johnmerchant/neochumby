@@ -1,13 +1,13 @@
 #!/bin/sh
-# Builds the sideload userspace a Chumby runs on mainline Linux, with
-# Buildroot: a zImage with the initramfs built in, and the same initramfs
-# beside it for userhook2 to kexec, written to OUT:
+# Builds the image a Chumby runs on Linux 7, with Buildroot: a zImage, and the
+# initramfs beside it, which the stock boot hook hands over with the sideload
+# module (boot/userhook2, tools/neochumby-kernel-sideloader), written to OUT:
 #
 #   OUT/sideload-zImage
 #   OUT/sideload-rootfs.cpio.gz
 #
-# The NAND drivers are modules in the initramfs; /init loads them only when
-# the kernel was booted without the sideloader's marker (i.e. when flashed).
+# Nothing in the image can reach the Chumby's flash: its kernel has no NAND
+# driver, and the build fails if a NAND module is in the initramfs.
 #
 # Buildroot needs Linux, so this runs it in a container (dist/Containerfile)
 # with Apple's container, docker or podman (NEOCHUMBY_DIST_RUNTIME picks).
@@ -24,16 +24,14 @@
 #                                   build does, and prints its SHA-256 line
 #                                   for linux.hash (dist/kernel-sync)
 #
-# NEOCHUMBY_DIST_KERNEL picks the kernel, one of three tracks:
+# NEOCHUMBY_DIST_KERNEL picks the kernel, one of two tracks:
 #
-#   5.9.16    (the default) the last release with the i.MX21's board files
-#             (configs/chumby_classic_defconfig, patches/linux/5.9.16)
-#   stable    kernel.org's newest stable release
+#   stable    (the default) kernel.org's newest stable release
 #             (configs/chumby_classic_stable_defconfig, kernel/stable/)
 #   mainline  kernel.org's mainline: Linus's newest tag, a release or an -rc
 #             (configs/chumby_classic_mainline_defconfig, kernel/mainline/)
 #
-# stable and mainline bring the i.MX21 back as a device-tree platform. Each
+# Both bring the i.MX21 back as a device-tree platform. Each
 # pins one version in its defconfig, with its hash (and for mainline, the
 # tag's commit) in kernel/TRACK/linux/linux.hash; CI's kernel-sync job
 # moves them as kernel.org does (dist/kernel-sync). Switching kernels, or
@@ -43,16 +41,10 @@ VERSION=2026.02.3
 SHA256=5a59e7501b0b4ec52c41f4bfa79412320e0b37eae5f719605a258e8d0c6fc7fb
 
 # What each kernel is built from: defconfig, fragment (the kernel options
-# dist/build checks took), hashfile (the pin's hash, for a track) and
+# dist/build checks took), hashfile (the pin's hash) and
 # zimage (what Buildroot names the kernel it makes).
 track() {
-  hashfile=
   case $1 in
-  5.9.16)
-    defconfig=chumby_classic_defconfig
-    fragment=board/chumby-classic/linux.fragment
-    zimage=zImage
-    ;;
   stable | mainline)
     defconfig=chumby_classic_$1_defconfig
     fragment=kernel/$1/linux.fragment
@@ -61,7 +53,7 @@ track() {
     zimage=zImage.imx21-chumby-classic
     ;;
   *)
-    echo "dist/build: NEOCHUMBY_DIST_KERNEL is 5.9.16, stable or mainline, not $1" >&2
+    echo "dist/build: NEOCHUMBY_DIST_KERNEL is stable or mainline, not $1" >&2
     exit 2
     ;;
   esac
@@ -77,10 +69,6 @@ pin() {
   get() { sed -n "s/^$1=\"\\(.*\\)\"\$/\\1/p" "$dc"; }
   tag='' url='' commit=''
   case $2 in
-  5.9.16)
-    linux=$(get BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)
-    source=linux-$linux.tar.xz
-    ;;
   stable)
     linux=$(get BR2_LINUX_KERNEL_CUSTOM_VERSION_VALUE)
     source=linux-$linux.tar.xz
@@ -102,7 +90,7 @@ pin() {
     exit 1
     ;;
   esac
-  [ -n "$hashfile" ] && [ "${3:-}" != version ] || return 0
+  [ "${3:-}" != version ] || return 0
   h=$1/dist/$hashfile
   if [ "$2" = mainline ]; then
     commit=$(sed -n 's/^# commit \([0-9a-f]\{40\}\)$/\1/p' "$h")
@@ -173,7 +161,7 @@ archive() {
 
 # Outside any container: the pinned version.
 if [ "${1:-}" = --linux-version ]; then
-  kernel=${NEOCHUMBY_DIST_KERNEL:-5.9.16}
+  kernel=${NEOCHUMBY_DIST_KERNEL:-stable}
   track "$kernel"
   pin "$(cd "$(dirname "$0")" && git rev-parse --show-toplevel)" "$kernel" version
   echo "$linux"
@@ -186,7 +174,7 @@ if [ "${1:-}" = --inside ]; then
   out=$3
   br=/work/buildroot-$VERSION
   o=/work/output
-  kernel=${4:-5.9.16}
+  kernel=${4:-stable}
   mode=${5:-build}
   track "$kernel"
   if [ "$mode" = archive ]; then
@@ -260,7 +248,7 @@ if [ "${1:-}" = --inside ]; then
     exit 1
   }
   # Nothing in the image may reach the Chumby's flash.
-  if [ "$kernel" != 5.9.16 ] && find $o/target/lib/modules -name 'mtd*.ko' -o -name 'nand*.ko' -o -name 'mxc_nand.ko' | grep -q .; then
+  if find $o/target/lib/modules -name 'mtd*.ko' -o -name 'nand*.ko' -o -name 'mxc_nand.ko' | grep -q .; then
     echo "dist/build: a NAND module in the sideload initramfs" >&2
     exit 1
   fi
@@ -268,8 +256,8 @@ if [ "${1:-}" = --inside ]; then
   cp "$o/images/$zimage" "$out/sideload-zImage"
   cp $o/images/rootfs.cpio.gz "$out/sideload-rootfs.cpio.gz"
   [ "$missing" = 0 ] || exit 1
-  echo "sideload: $out/sideload-zImage (initramfs built in)"
-  echo "sideload: $out/sideload-rootfs.cpio.gz (external initramfs)"
+  echo "sideload: $out/sideload-zImage"
+  echo "sideload: $out/sideload-rootfs.cpio.gz"
   exit 0
 fi
 
@@ -320,4 +308,4 @@ dns=
 [ -n "${NEOCHUMBY_DIST_DNS:-}" ] && dns="--dns $NEOCHUMBY_DIST_DNS"
 # shellcheck disable=SC2086
 exec "$runtime" run --rm $size $dns $work_mount -v "$root:$root" -v "$out:$out" \
-  neochumby-dist sh "$root/dist/build" --inside "$root" "$out" "${NEOCHUMBY_DIST_KERNEL:-5.9.16}" "$mode"
+  neochumby-dist sh "$root/dist/build" --inside "$root" "$out" "${NEOCHUMBY_DIST_KERNEL:-stable}" "$mode"

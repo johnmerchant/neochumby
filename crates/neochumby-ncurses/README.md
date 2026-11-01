@@ -17,7 +17,7 @@ there is no terminfo database on the Chumby.
 With `NEOCHUMBY_NCURSES=system` it builds nothing, and links a shared
 libncursesw and libpanelw instead, which `pkg-config` finds (in the
 sysroot `PKG_CONFIG_SYSROOT_DIR` and `PKG_CONFIG_LIBDIR` name). neochumby's
-`tools/tree` does so for a tree for Linux 5.9 and later: the same ncurses,
+`tools/tree` does so: the same ncurses,
 configured the same way, shared, and carried in the tree's `lib/`
 (`tools/linux-libs`).
 

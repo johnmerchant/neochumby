@@ -14,8 +14,7 @@ neochumby-sys.workspace = true
 nfsserve = "0.11"
 png = "0.18"
 # openat, to walk the tree's paths without following links (nfs.rs). Only on
-# the server, never the Chumby: rustix needs Linux 3.2, and the Chumby runs
-# 2.6.16.
+# the server.
 rustix = { version = "1", features = ["fs"] }
 serde.workspace = true
 serde_json = "1"

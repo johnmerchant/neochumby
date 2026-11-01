@@ -28,6 +28,12 @@
 //! The session installs neochumby-boot in /psp from a tree it can trust
 //! ([`install_boot`]), as it does the boot hook. Until one is there, as on
 //! a Chumby paired before this, the tree is mounted and run unchecked.
+//!
+//! On the stock firmware, neochumby-boot does the same for what the boot hook
+//! sideloads ([`sideload`]): the module, the kernel, the initramfs and the
+//! program that hands them over are checked copies in [`RUN`], or the hook
+//! doesn't go on. It keeps itself and the hook in /psp up to date from the
+//! tree there ([`update`]), since Linux 7 can't reach them.
 
 use std::convert::Infallible;
 use std::fs;
@@ -64,6 +70,11 @@ const BOOT_MAX: u64 = 768 << 10;
 /// How often neochumby-boot tries the manifest: neochumbyd may be making
 /// it anew just as the tree changes.
 const TRIES: u32 = 3;
+/// The directory of a tree that holds what the boot hook sideloads, and of
+/// [`RUN`] that holds its checked copies.
+const SIDELOAD: &str = "sideload";
+/// What's in it.
+const SIDELOAD_FILES: [&str; 4] = ["sideload.ko", "zImage", "initramfs.cpio.gz", "neochumby-handoff"];
 
 /// The checked tree: its root, the key that signs its manifest, and the
 /// manifest as last checked.
@@ -180,6 +191,60 @@ fn prepare_run() -> io::Result<()> {
         neochumby_sys::jail::mount_tmpfs(run, RUN_KIB, 0o700, 0, 0, false)?;
     }
     fs::set_permissions(run, fs::Permissions::from_mode(0o700))
+}
+
+/// neochumby-boot's work on stock, for the boot hook: copies `files`, of
+/// [`SIDELOAD_FILES`], from the tree at `root` to `RUN/sideload/`, each checked
+/// against the tree's signed manifest. Fails having left no unchecked file.
+pub fn sideload(root: &Path, files: &[String]) -> io::Result<()> {
+    if files.is_empty() {
+        return Err(io::Error::other("no files named"));
+    }
+    if let Some(f) = files.iter().find(|f| !SIDELOAD_FILES.contains(&f.as_str())) {
+        return Err(io::Error::other(format!("{f}: not one of the sideload's files")));
+    }
+    let key = paired_key()?;
+    let mut tries = 0;
+    let v = loop {
+        tries += 1;
+        match signed::load(root, &key) {
+            Ok(v) => break v,
+            Err(e) if tries >= TRIES => return Err(e),
+            Err(_) => crate::sleep_ms(1000),
+        }
+    };
+    prepare_run()?;
+    let dir = Path::new(RUN).join(SIDELOAD);
+    fs::create_dir_all(&dir)?;
+    for f in files {
+        let rel = format!("{SIDELOAD}/{f}");
+        let to = dir.join(f);
+        if f.ends_with(".ko") {
+            // A relocatable ELF: all of it is used, none of it "loaded".
+            conf::write_atomic(&to, &v.read(root, &rel)?, 0o600)?;
+        } else {
+            v.copy(root, &rel, &to, 0o700)?;
+        }
+    }
+    Ok(())
+}
+
+/// neochumby-boot's other work on stock: the hook and neochumby-boot in /psp
+/// brought up to date from the tree at `root`, as the session does on a kernel
+/// that can write them. Over NFS, only as its signed manifest has them.
+pub fn update(root: &Path) -> io::Result<()> {
+    if root == Path::new(MNT) {
+        let new = signed::load(root, &paired_key()?)?.read(root, "userhook2")?;
+        if conf::install_hook(&new)? {
+            eprintln!("neochumby-boot: {} brought up to date from the tree", conf::HOOK);
+        }
+    } else if conf::refresh_hook(root)? {
+        eprintln!("neochumby-boot: {} brought up to date from the tree", conf::HOOK);
+    }
+    if install_boot(root)? {
+        eprintln!("neochumby-boot: {BOOT} brought up to date from the tree");
+    }
+    Ok(())
 }
 
 /// neochumby-boot's work, and the session's on a restart: checks the tree

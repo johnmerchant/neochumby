@@ -1,0 +1,134 @@
+#!/bin/sh
+# Builds sideload.ko from a clean checkout, written to OUT/sideload.ko:
+# module/ against Chumby's own Linux 2.6.16 (the linux submodule, the GPL
+# source of the stock firmware's kernel), configured as the stock kernel, with
+# the compiler the stock kernel was built with, CodeSourcery's 2008q3
+# (gcc 4.3.2), pinned by its hash. Nothing else of that kernel is used.
+#
+# That compiler's programs are 32-bit x86 Linux binaries: they run natively on
+# x86_64 and under qemu-i386 elsewhere (an arm64 Mac), which needs a container
+# allowed to register a binfmt handler.
+#
+# Runs in a container (Containerfile here) with Apple's container, docker or
+# podman (NEOCHUMBY_SIDELOAD_RUNTIME picks). The work (the toolchain, the
+# kernel tree) stays in a volume, neochumby-sideload, on the container's own
+# disk: the kernel's tree has files whose names differ only by case, which
+# macOS's disk can't hold, so it is taken from the submodule's git objects,
+# never from its checkout. NEOCHUMBY_SIDELOAD_WORK=DIR keeps it in DIR instead.
+#
+#   tools/neochumby-kernel-sideloader/build OUT
+set -eu
+# Chumby's toolchain, from files.chumby.com/toolchain/, which refuses
+# GitHub's runners (403): our mirror of it, the same file.
+TOOLCHAIN_URL=https://github.com/johnmerchant/chumby-toolchain/raw/main/arm-2008q3-72-arm-none-linux-gnueabi-i686-pc-linux-gnu.tar.bz2
+TOOLCHAIN_SHA256=d09f1580a9179a3c8346bde44d6c7d828937d7afcab0ec41207f24e65aa71dca
+SUBMODULE=tools/neochumby-kernel-sideloader/linux
+
+if [ "${1:-}" = --inside ]; then
+  root=$2
+  out=$3
+  here=$root/tools/neochumby-kernel-sideloader
+  jobs=$(nproc)
+
+  # The toolchain's programs are i686 binaries.
+  case $(uname -m) in
+  x86_64 | i?86) ;;
+  *)
+    export QEMU_LD_PREFIX=/usr/i686-linux-gnu
+    [ -e /proc/sys/fs/binfmt_misc/register ] ||
+      mount -t binfmt_misc binfmt_misc /proc/sys/fs/binfmt_misc
+    [ -e /proc/sys/fs/binfmt_misc/qemu-i386 ] ||
+      printf '%s' ':qemu-i386:M::\x7fELF\x01\x01\x01\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x03\x00:\xff\xff\xff\xff\xff\xfe\xfe\x00\xff\xff\xff\xff\xff\xff\xff\xff\xfe\xff\xff\xff:/usr/bin/qemu-i386-static:F' \
+        >/proc/sys/fs/binfmt_misc/register
+    ;;
+  esac
+  tc=/work/arm-2008q3
+  if [ ! -x "$tc/bin/arm-none-linux-gnueabi-gcc" ]; then
+    mkdir -p /work/dl
+    f=/work/dl/arm-2008q3.tar.bz2
+    if ! { [ -f "$f" ] && echo "$TOOLCHAIN_SHA256  $f" | sha256sum -c - >/dev/null 2>&1; }; then
+      wget -nv -O "$f.part" "$TOOLCHAIN_URL"
+      echo "$TOOLCHAIN_SHA256  $f.part" | sha256sum -c -
+      mv "$f.part" "$f"
+    fi
+    tar xjf "$f" -C /work
+  fi
+  export PATH="$tc/bin:$PATH"
+  cross=arm-none-linux-gnueabi-
+  "${cross}gcc" --version | head -n 1
+
+  # The kernel: the commit this repository pins, from the submodule's
+  # objects, whatever its checkout holds. Prepared once: a module needs only
+  # its configuration, headers and build tools.
+  git config --global --add safe.directory '*'
+  rev=$(git -C "$root" ls-files -s "$SUBMODULE" | awk '{print $2}')
+  k=/work/linux
+  stamp=$rev-$(cat "$here"/patches/*.patch | sha256sum | cut -c1-16)
+  if [ "$(cat "$k/.neochumby-source" 2>/dev/null)" != "$stamp" ]; then
+    rm -rf "$k"
+    mkdir -p "$k"
+    git -C "$root/$SUBMODULE" archive "$rev" | tar x -C "$k"
+    for p in "$here"/patches/*.patch; do
+      patch -d "$k" -p1 --no-backup-if-mismatch <"$p"
+    done
+    # The stock kernel's .config, which its source carries.
+    yes '' | make -C "$k" ARCH=arm CROSS_COMPILE=$cross oldconfig >/dev/null
+    make -C "$k" -j"$jobs" ARCH=arm CROSS_COMPILE=$cross modules_prepare
+    echo "$stamp" >"$k/.neochumby-source"
+  fi
+
+  # A copy of module/: kbuild writes its objects beside the source.
+  m=/work/module
+  rm -rf "$m"
+  cp -R "$here/module" "$m"
+  KDIR=$k CROSS_COMPILE=$cross JOBS=$jobs sh "$m/build.sh"
+  mkdir -p "$out"
+  cp "$m/sideload.ko" "$out/sideload.ko"
+  exit 0
+fi
+
+out=${1:?usage: tools/neochumby-kernel-sideloader/build OUT}
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$here" && git rev-parse --show-toplevel)
+runtime=${NEOCHUMBY_SIDELOAD_RUNTIME:-}
+if [ -z "$runtime" ]; then
+  for r in container docker podman; do
+    command -v "$r" >/dev/null && {
+      runtime=$r
+      break
+    }
+  done
+fi
+[ -n "$runtime" ] || {
+  echo "tools/neochumby-kernel-sideloader/build: needs Apple's container, docker or podman" >&2
+  exit 2
+}
+# The kernel's source, the submodule (`update = none` in .gitmodules, so a
+# plain `git submodule update` leaves it out): fetched at the pinned commit
+# only, if it isn't here yet.
+rev=$(git -C "$root" ls-files -s "$SUBMODULE" | awk '{print $2}')
+git -C "$root/$SUBMODULE" cat-file -e "$rev^{commit}" 2>/dev/null ||
+  git -C "$root" submodule update --init --checkout --depth 1 "$SUBMODULE"
+mkdir -p "$out"
+out=$(cd "$out" && pwd)
+"$runtime" build -t neochumby-sideload -f "$here/Containerfile" "$here"
+work=${NEOCHUMBY_SIDELOAD_WORK:-}
+if [ -n "$work" ]; then
+  mkdir -p "$work"
+  work=$(cd "$work" && pwd)
+  work_mount="-v $work:/work"
+else
+  "$runtime" volume inspect neochumby-sideload >/dev/null 2>&1 ||
+    "$runtime" volume create neochumby-sideload >/dev/null
+  work_mount="-v neochumby-sideload:/work"
+fi
+opts=
+# Off x86, the toolchain runs under qemu-i386, whose binfmt handler the
+# container registers: that needs privileges.
+case $(uname -m) in
+x86_64 | i?86) ;;
+*) if [ "$runtime" = container ]; then opts="--cap-add ALL"; else opts="--privileged"; fi ;;
+esac
+# shellcheck disable=SC2086
+exec "$runtime" run --rm $opts $work_mount -v "$root:$root" -v "$out:$out" \
+  neochumby-sideload sh "$root/tools/neochumby-kernel-sideloader/build" --inside "$root" "$out"

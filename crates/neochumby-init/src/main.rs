@@ -5,8 +5,7 @@
 //! stick's or the image's own, and keeps a shell on the console and one on the screen. Throughout, it
 //! loads the module for each device the kernel announces (its modalias,
 //! matched against depmod's modules.alias), for the devices there at boot
-//! too, except the NAND's drivers, which only root loads (modprobe), and
-//! reaps every process the kernel hands it.
+//! too, and reaps every process the kernel hands it.
 //!
 //! Process 1 must not exit: the kernel panics when it does. Nothing here
 //! unwraps; what fails is logged and skipped. A panic all the same, or the
@@ -52,11 +51,6 @@ const IMAGE_HOOK: &str = "/etc/neochumby/userhook2";
 const RESPAWN_GAP: Duration = Duration::from_secs(1);
 /// How long the loop waits for an event before reaping.
 const TICK_MS: u16 = 500;
-/// The NAND's drivers, which ncinit never loads, whatever device asks for
-/// them, flashed or sideloaded: writing the flash is root's deliberate act
-/// (modprobe mxc_nand), never the boot's. Sideloaded, the flash is the
-/// stock firmware's.
-const NAND_DRIVERS: &str = "kernel/drivers/mtd/";
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
@@ -69,8 +63,6 @@ fn main() {
 
 /// What ncinit keeps track of.
 struct Init {
-    /// Handed off from the stock 2.6.16 by the sideloader, not flashed.
-    sideloaded: bool,
     db: Db,
     loaded: HashSet<String>,
     events: Option<OwnedFd>,
@@ -102,11 +94,8 @@ impl Init {
                 None
             }
         };
-        let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
-        let sideloaded = cmdline.split_whitespace().any(|w| w == "neochumby.sideloaded=1");
-        let mut init = Init { sideloaded, db, loaded, events, shells: Vec::new(), hook: None };
+        let mut init = Init { db, loaded, events, shells: Vec::new(), hook: None };
 
-        init.nand();
         // The devices already there, whose announcements nobody heard.
         init.coldplug();
         let stick_hook = init.stick();
@@ -153,18 +142,6 @@ impl Init {
                     }
                 }
             }
-        }
-    }
-
-    /// Says how the kernel was started: sideloaded (the sideloader's
-    /// marker) or flashed. Either way the NAND's drivers stay unloaded until
-    /// root loads them.
-    fn nand(&mut self) {
-        if self.sideloaded {
-            log("sideloaded; NAND modules stay unloaded");
-        } else {
-            log("no sideload marker; this kernel was flashed");
-            log("NAND modules stay unloaded; root loads them (modprobe mxc_nand)");
         }
     }
 
@@ -234,7 +211,9 @@ impl Init {
             return;
         }
         run_quietly(Command::new("/bin/ifconfig").args(["lo", "127.0.0.1", "up"]).env("PATH", PATH));
-        if config.wireless && let Err(e) = start_wpa_supplicant(&config, interface) {
+        if config.wireless
+            && let Err(e) = start_wpa_supplicant(&config, interface)
+        {
             network_failed(&e);
             return;
         }
@@ -306,11 +285,6 @@ impl Init {
     fn load(&mut self, name: &str, why: Option<&str>) {
         for m in self.db.load_order(name, &self.loaded) {
             let Some(path) = self.db.module(&m).map(|m| m.path.clone()) else { continue };
-            if path.starts_with(NAND_DRIVERS) {
-                step(&format!("Loading {m}"), Status::Skipped, &format!("{m} stays unloaded: root loads NAND drivers"));
-                self.loaded.insert(m);
-                continue;
-            }
             let result = File::open(Path::new(&modules_dir()).join(&path)).and_then(|f| boot::load_module(&f));
             let what = format!("Loading {m}");
             match result {
@@ -458,7 +432,9 @@ fn configure_address(address: &network::Address, interface: &str) -> Result<(), 
         if status.success() { Ok(()) } else { Err(format!("{program}: {status}")) }
     };
     match address {
-        network::Address::Dhcp => run("/sbin/udhcpc", &["-b", "-i", interface, "-s", "/usr/share/udhcpc/default.script"]),
+        network::Address::Dhcp => {
+            run("/sbin/udhcpc", &["-b", "-i", interface, "-s", "/usr/share/udhcpc/default.script"])
+        }
         network::Address::Static { ip, netmask, gateway, nameservers } => {
             run("/bin/ifconfig", &[interface, ip, "netmask", netmask, "up"])?;
             if !gateway.is_empty() {

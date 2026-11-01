@@ -74,15 +74,24 @@ pub fn refresh_hook(root: &Path) -> io::Result<bool> {
     if root == Path::new(STICK_TREE) || !hook.is_file() {
         return Ok(false);
     }
-    let new = crate::verified::read(&root.join("userhook2"))?;
+    install_hook(&crate::verified::read(&root.join("userhook2"))?)
+}
+
+/// Replaces the hook pairing installed with `new`, if that is a hook of a
+/// higher version. True if it was replaced.
+pub fn install_hook(new: &[u8]) -> io::Result<bool> {
+    let hook = Path::new(HOOK);
+    if !hook.is_file() {
+        return Ok(false);
+    }
     if new.len() > 64 << 10 || !new.starts_with(b"#!/bin/sh\n") {
         return Err(io::Error::new(io::ErrorKind::InvalidData, "the tree's userhook2 is not a hook"));
     }
     let old = std::fs::read(hook).unwrap_or_default();
-    if hook_version(&new) <= hook_version(&old) {
+    if hook_version(new) <= hook_version(&old) {
         return Ok(false);
     }
-    write_atomic(hook, &new, 0o755)?;
+    write_atomic(hook, new, 0o755)?;
     Ok(true)
 }
 

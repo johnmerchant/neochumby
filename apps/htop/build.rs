@@ -3,7 +3,6 @@
 // write, and HTOP are the sources its Makefile.am builds for Linux, less
 // those for the optional libraries (libnl, libunwind). main() is
 // htop_main, which src/main.rs calls. curses is neochumby-ncurses'.
-// linux/LinuxProcessTable.c is built with PATCH applied.
 const HTOP: &[&str] = &[
     "htop",
     "Action",
@@ -82,6 +81,7 @@ const HTOP: &[&str] = &[
     "linux/LibSensors",
     "linux/LinuxMachine",
     "linux/LinuxProcess",
+    "linux/LinuxProcessTable",
     "linux/OpenRCMeter",
     "linux/Platform",
     "linux/PressureStallMeter",
@@ -92,25 +92,6 @@ const HTOP: &[&str] = &[
     "zfs/ZfsArcMeter",
     "zfs/ZfsCompressedArcMeter",
 ];
-
-// When htop shows threads, it reads a process's main thread's
-// /proc/PID/task/PID/stat, and skips the process if it can't. The Chumby's
-// 2.6.16 kernel denies task/ (EACCES) to a reader chrooted away from the
-// process's root, as an app's jail is, so the patch falls back to the
-// process's own /proc/PID/stat, which it can read.
-const PATCH: (&str, &str) = (
-    "   ssize_t r = Compat_readfileat(procFd, path, buf, sizeof(buf));
-   if (r < 0)
-      return false;
-",
-    "   ssize_t r = Compat_readfileat(procFd, path, buf, sizeof(buf));
-   /* neochumby: build.rs's PATCH. */
-   if (r < 0 && scanMainThread)
-      r = Compat_readfileat(procFd, \"stat\", buf, sizeof(buf));
-   if (r < 0)
-      return false;
-",
-);
 
 fn main() {
     let dir = "third_party/htop";
@@ -127,12 +108,6 @@ fn main() {
     for f in HTOP {
         build.file(format!("{dir}/{f}.c"));
     }
-    let table = format!("{dir}/linux/LinuxProcessTable.c");
-    let source = std::fs::read_to_string(&table).unwrap();
-    assert_eq!(source.matches(PATCH.0).count(), 1, "PATCH doesn't apply to {table}");
-    let patched = std::path::Path::new(&std::env::var("OUT_DIR").unwrap()).join("LinuxProcessTable.c");
-    std::fs::write(&patched, source.replace(PATCH.0, PATCH.1)).unwrap();
-    build.file(patched);
     build
         .include("csrc")
         .include(dir)

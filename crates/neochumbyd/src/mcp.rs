@@ -97,7 +97,7 @@ fn tools() -> Value {
         },
         {
             "name": "restart",
-            "description": "Ends a paired Chumby's apps and services, as CHUMBY MODE does, and starts its session again from the tree: how a newly deployed tree is picked up. Fails if the Chumby isn't connected",
+            "description": "Ends a paired Chumby's apps and services, and starts its session again from the tree: how a newly deployed tree is picked up. Fails if the Chumby isn't connected",
             "inputSchema": {"type": "object", "properties": {"name": name}, "required": ["name"]},
             "annotations": {"destructiveHint": true, "idempotentHint": false},
         },

@@ -29,8 +29,6 @@
 //!   frontend=airplay           it shows another app (its service), in its
 //!                              place, once the owner approves
 //!                              (neochumby::service)
-//!   linux=5.9                  the oldest Linux it runs on, which tools/tree
-//!                              reads: a tree for an older one leaves it out
 //!   wasm=neochumby-x.wasm      in place of exec: a WebAssembly module, run
 //!                              in front by the tree's neochumby-wasm, with
 //!                              aot=, aot-key= and aot-sha256= for its
@@ -182,7 +180,7 @@ impl App {
     /// Whether this Chumby's owner trusts it: named in `trusted`, app names
     /// separated by `:`, in its settings from neochumbyd (`neochumbyd set
     /// NAME trusted=clock:weather`), else in /psp/neochumby.conf. On a
-    /// kernel without seccomp (2.6.16), the runner runs a catalog app only
+    /// kernel without seccomp, the runner runs a catalog app only
     /// if it is trusted.
     pub fn trusted(&self) -> bool {
         let list = conf::get(crate::settings::SETTINGS, "trusted").or_else(|| conf::get(conf::CONF, "trusted"));

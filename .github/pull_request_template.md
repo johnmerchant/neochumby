@@ -10,7 +10,7 @@ an emulated one, and show it". Delete what doesn't apply.
 -->
 
 - [ ] The emulator, dist profile (`dev/e2e`, as CI runs it)
-- [ ] The emulator, stock profile (`NEOCHUMBY_EMU_PROFILE=stock`, from my own device's images)
+- [ ] The emulator, the sideload from stock (`NEOCHUMBY_EMU_PROFILE=stock E2E_SCENARIOS=stock`, from my own device's images)
 - [ ] A real Chumby
 - [ ] Not needed: nothing here runs on the Chumby
 - [ ] Couldn't test: (what, and why)

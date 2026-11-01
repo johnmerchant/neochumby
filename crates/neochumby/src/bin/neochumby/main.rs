@@ -3,9 +3,7 @@
 //! when they exit (services.rs), and runs one app at a time in front,
 //! full-screen: first the start app (start.rs), then whatever the apps ask
 //! for over their request pipe (neochumby::session), going back to the
-//! start app whenever one exits (run.rs). On CHUMBY MODE it stops the
-//! services and exits, and the boot carries on with the Chumby's own
-//! software.
+//! start app whenever one exits (run.rs).
 //!
 //! A Chumby whose server is `serial` (an emulated one, with no network)
 //! reaches its neochumbyd over its serial line, which the session shares
@@ -14,7 +12,7 @@
 //! On a paired Chumby, its output also goes to its neochumbyd, which can
 //! ask it to restart, or for its screen, and, once its owner allows it,
 //! tap its screen and press its top button (devlink.rs). A restart stops
-//! everything as CHUMBY MODE does, then runs the tree's `neochumby` in
+//! everything, then runs the tree's `neochumby` in
 //! this process's place: the newest tree, deployed since boot.
 //!
 //! Holding the top-left corner of the screen for three seconds, whatever
@@ -51,7 +49,6 @@
 //! (player.rs), and so are the frontends the owner
 //! approved (frontend.rs).
 
-mod backlight;
 mod button;
 mod child;
 mod companion;
@@ -78,6 +75,7 @@ use std::time::{Duration, Instant};
 
 use neochumby::apps::{self, App, Needs};
 use neochumby::audio;
+use neochumby::backlight;
 use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
@@ -156,25 +154,20 @@ fn watch_escape(flag: Arc<AtomicBool>) {
 /// (another process had it at boot, say).
 const BUTTON_RETRY: Duration = Duration::from_secs(5);
 
-/// The top button, opened once for the whole session (button.rs): the
-/// stock kernel's /dev/switch, or the dist kernels' input device for it
-/// (input::open_button). `again` when retrying, which logs only success.
+/// The top button, opened once for the whole session (button.rs): its input
+/// device (input::open_button). `again` when retrying, which logs only success.
 fn open_button(again: bool) -> Option<File> {
     // Passed on only to an app with `button = true`.
     let open =
         input::open_button().and_then(|(f, path)| neochumby_sys::fd::set_cloexec(f.as_fd(), true).map(|()| (f, path)));
     match open {
         Ok((f, path)) => {
-            if path != input::SWITCH {
-                eprintln!("neochumby: top button at {path}");
-            } else if again {
-                eprintln!("neochumby: /dev/switch: open now");
-            }
+            eprintln!("neochumby: top button at {path}");
             Some(f)
         }
         Err(e) => {
             if !again {
-                eprintln!("neochumby: /dev/switch: {e}; trying again every {} s", BUTTON_RETRY.as_secs());
+                eprintln!("neochumby: the top button: {e}; trying again every {} s", BUTTON_RETRY.as_secs());
             }
             None
         }
@@ -202,9 +195,8 @@ impl Speaker {
 }
 
 /// What the volume thread is asked for and has done, as [`Speaker::word`]s.
-/// audio::set_volume runs the stock chumby_set_volume, which the loop
+/// audio::set_volume runs chumby_set_volume, which the loop
 /// mustn't wait on, and one thread applying the latest keeps the order.
-/// (Atomics, not a Mutex: std's waits on futex flags 2.6.16 lacks.)
 struct Volumes {
     want: AtomicU32,
     done: AtomicU32,
@@ -246,11 +238,11 @@ impl Volumes {
     }
 }
 
-/// The Chumby's own stream player, which hands a URL to its daemon
-/// (btplayd), as the stock software and classic's wxshow run it.
+/// A stream player, which hands a URL to its daemon (btplayd), where there
+/// is one: the image has none yet, and the attempt is logged.
 const BTPLAY: &str = "/usr/bin/btplay";
 
-/// Runs the stock player with `args`: no shell, so a URL is one argument
+/// Runs the player with `args`: no shell, so a URL is one argument
 /// and nothing else. It may not return soon, so a thread waits for it: the
 /// loop never does. Its daemon outlives it, by design; it stays out of the
 /// apps' process groups and holds none of the session's descriptors
@@ -293,7 +285,7 @@ impl run::Device for Chumby {
         self.escape.swap(false, Ordering::SeqCst)
     }
 
-    /// Mutes at once (a write to /proc); the volume thread puts the boot's
+    /// Mutes at once; the volume thread puts the boot's
     /// volume back. As the session ends, it waits for that, up to `wait`.
     fn reset_speaker(&mut self, wait: Duration) {
         if let Err(e) = audio::mute(true) {
@@ -351,7 +343,7 @@ impl run::Device for Chumby {
         self.restart.as_ref().is_some_and(|r| r.swap(false, Ordering::SeqCst))
     }
 
-    /// One write to /proc or /sys, so the loop does it.
+    /// One write to /sys, so the loop does it.
     fn brightness(&mut self, level: Option<u32>) {
         let Some(v) = level.or(self.boot_brightness) else { return };
         let Some(b) = &self.backlight else {
@@ -448,12 +440,12 @@ fn session() {
     let ended = match start::choose(&all, choice) {
         None => {
             eprintln!("neochumby: no start app (not even {})", start::HOME);
-            run::Ended::ChumbyMode
+            run::Ended::GaveUp
         }
         Some(first) => {
             let backlight = backlight::Backlight::find();
             if backlight.is_none() {
-                eprintln!("neochumby: no backlight (/proc/sys/sense1/brightness or /sys/class/backlight)");
+                eprintln!("neochumby: no backlight (/sys/class/backlight)");
             }
             let chumby = Chumby {
                 escape,
@@ -490,7 +482,7 @@ fn session() {
             eprintln!("neochumby: restart: {}: {e}", exe.display());
             neochumby::sleep_ms(1000);
         }
-        eprintln!("neochumby: restart failed; back to the Chumby");
+        eprintln!("neochumby: restart failed");
     }
     if let Ok(mut fb) = Fb::open() {
         fb.clear(rgb(0, 0, 0));

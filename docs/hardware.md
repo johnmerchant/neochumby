@@ -1,6 +1,6 @@
 # The Chumby Classic: measured notes and traps
 
-What was found on a Chumby Classic (firmware 1.7.2, Linux 2.6.16, BusyBox
+What was found on a Chumby Classic, on its stock firmware (1.7.2, Linux 2.6.16, BusyBox
 1.6.1) while building a replacement UI for it. Everything here was measured
 or seen on a real device; where something wasn't investigated, it says so.
 
@@ -27,10 +27,6 @@ or seen on a real device; where something wasn't investigated, it says so.
   touches `fb1`'s pixels or position, and none waits for vsync. **Trap:**
   setting `fb0`'s mode (`FBIOPUT_VSCREENINFO`) writes the overlay's control
   register to 0: off, alpha 0, no key.
-- The sideload kernel (Linux 5.9.16, `dist/`) has the same `fb1` and
-  `/proc/driver/imxfb/` files, which read and write the same way, with the
-  same boot defaults (`CONFIG_FB_IMX_GRAPHIC_WINDOW`). Setting `fb0`'s mode
-  there leaves the overlay alone.
 - **The LCD controller's registers can't be reached from user space.** Mapping
   them through `/dev/mem` (0x10021000) succeeds, but the first read is a bus
   error: the i.MX21's peripheral bridge restricts them to supervisor mode.
@@ -69,9 +65,8 @@ or seen on a real device; where something wasn't investigated, it says so.
   **opened exclusively** ("Resource busy").
 - **Backlight:** `/proc/sys/sense1/brightness`, 0-65535. 9000 makes a
   pleasant night level. The `dimlevel` file next to it does nothing visible.
-  On the dist kernels it's a backlight class device, 0-100:
-  `/sys/class/backlight/pwm-backlight` on 5.9.16, `.../backlight` on the
-  device-tree kernels.
+  On Linux 7 it's a backlight class device, 0-100:
+  `/sys/class/backlight/backlight`.
 
 ## Storage
 

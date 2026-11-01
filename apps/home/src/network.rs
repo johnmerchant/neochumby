@@ -24,9 +24,7 @@ pub struct Status {
 
 impl Status {
     pub fn read() -> Status {
-        let up = |i: &str| {
-            fs::read_to_string(format!("/sys/class/net/{i}/operstate")).is_ok_and(|s| s.trim() == "up")
-        };
+        let up = |i: &str| fs::read_to_string(format!("/sys/class/net/{i}/operstate")).is_ok_and(|s| s.trim() == "up");
         let (wifi, wired) = (up("wlan0"), up("eth0"));
         let config = fs::read_to_string("/psp/network_config").unwrap_or_default();
         Status {
@@ -65,7 +63,12 @@ impl Status {
 fn ssid(config: &str) -> Option<String> {
     let rest = &config[config.find(" ssid=\"")? + 7..];
     let value = &rest[..rest.find('"')?];
-    let value = value.replace("&lt;", "<").replace("&gt;", ">").replace("&quot;", "\"").replace("&apos;", "'").replace("&amp;", "&");
+    let value = value
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&amp;", "&");
     let clean: String = value.chars().map(|c| if c.is_control() { '?' } else { c }).collect();
     (!clean.is_empty()).then_some(clean)
 }
@@ -89,7 +92,8 @@ fn signal(wireless: &str) -> Option<i32> {
 mod tests {
     use super::*;
 
-    const STOCK: &str = r#"<configuration gateway="" key="secret" auth="WPA2PSK" type="wlan" ssid="Packets-2G" allocation="dhcp" />"#;
+    const STOCK: &str =
+        r#"<configuration gateway="" key="secret" auth="WPA2PSK" type="wlan" ssid="Packets-2G" allocation="dhcp" />"#;
 
     #[test]
     fn the_name_and_never_the_key() {
@@ -107,7 +111,8 @@ mod tests {
 
     #[test]
     fn the_signal_from_procfs() {
-        let w = "Inter-| sta-|   Quality\n face | status | link level noise\n wlan0: 0000   54.  -56.  -256 0 0 0 0 0 0\n";
+        let w =
+            "Inter-| sta-|   Quality\n face | status | link level noise\n wlan0: 0000   54.  -56.  -256 0 0 0 0 0 0\n";
         assert_eq!(signal(w), Some(-56));
         assert_eq!(signal("Inter-|\n face |\n"), None);
         assert_eq!(signal(" wlan0: 0000 0 0 0"), None);

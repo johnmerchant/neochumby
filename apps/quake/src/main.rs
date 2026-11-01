@@ -174,7 +174,7 @@ fn main() {
     // Host_Init, and then Host_Frame below, are called from this thread only.
     unsafe {
         engine::COM_InitArgv(args.len() as c_int, argv.as_mut_ptr());
-        // Most of the RAM left once the stock UI is gone; -mem <MB> overrides.
+        // Most of the RAM left; -mem <MB> overrides.
         let mut memsize = 10 * 1024 * 1024;
         let p = engine::COM_CheckParm(c"-mem".as_ptr());
         if p != 0 && p + 1 < engine::com_argc {

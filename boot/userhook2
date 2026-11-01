@@ -1,25 +1,29 @@
 #!/bin/sh
-# neochumby-hook-version=5
+# neochumby-hook-version=6
 # (Raise it with every change: the session replaces an installed hook only
 # with a higher version, so a rollback to an older set never downgrades it.)
-# neochumby's boot hook. The same script goes in two places, and the stock
-# boot (/etc/init.d/rcS) runs both, in this order, once the network is up
-# and before the Chumby's own software starts:
+# neochumby's boot hook. The same script runs on the stock firmware and in
+# neochumby's image. The stock boot (/etc/init.d/rcS) runs it from two places,
+# in this order, once the network is up and before the Chumby's own software
+# starts:
 #
 #   /mnt/usb/userhook2     on a neochumby stick: nothing on the Chumby changes
 #   /psp/rfs1/userhook2    on a paired Chumby (pairing writes it)
 #
-# The first to run starts neochumby; the other sees that and returns. Apps
-# come from a set synced to the stick (delivery=sync, below) if there is a
+# The first to run starts neochumby; the other sees that and returns. On stock
+# (Linux 2.6.16) it finds a tree, loads sideload.ko from it, hands over the
+# tree's zImage and initramfs, with /psp (neochumby-handoff), and jumps to
+# Linux 7. In the image, ncinit runs it again, from the stick or its own copy,
+# and it runs the session from a tree. The tree comes from a set synced to the stick (delivery=sync, below) if there is a
 # complete one, else from the stick's neochumby/ tree if it has one,
 # otherwise from the paired neochumbyd over NFS. NFS is unauthenticated,
 # so once pairing or the session has installed /psp/neochumby-boot, the
 # tree is mounted noexec and that runs it instead: it checks the tree
-# against the manifest neochumbyd signed, and runs only what checks. The
-# neochumbyd (the stick's neochumby.conf,
-# else /psp/neochumby.conf) is passed on to the apps either way, for its
-# services. CHUMBY MODE, or any failure, returns and the stock boot carries
-# on.
+# against the manifest neochumbyd signed, and runs only what checks. Without
+# it, stock doesn't sideload from NFS at all. The neochumbyd (the stick's
+# neochumby.conf, else /psp/neochumby.conf) is passed on to the apps either
+# way, for its services. On stock, any failure returns and the stock boot
+# carries on; a reboot, from Linux 7, is the way back to it.
 #
 # Never blocks for long: a hook that hangs stops the boot. Skipped if
 # /psp/neochumby-off exists, or the stick holds neochumby-off.
@@ -84,6 +88,61 @@ if [ -n "$conf" ]; then
   api_port=$(conf_get "$conf" api_port)
   echo "neochumbyd: ${server:-none} (from $conf)"
 fi
+
+# The tree's programs, for stock's sideload: checked copies from a tree over
+# NFS, which is noexec; on a stick, where they are.
+RUN=/tmp/neochumby-run
+stage() {
+  [ "$root" = "$MNT" ] || return 0
+  deadline 120 /psp/neochumby-boot --sideload "$MNT" "$@"
+}
+
+# Stock's way on: never returns if all goes well. What is checked comes first,
+# as far as it can before the Flash UI goes; the rest once the module has its
+# memory, as tmpfs's pages would break up the blocks it needs. Stock has no
+# printf or cpio, and its BusyBox is 1.6.1.
+sideload() {
+  if [ "$root" = "$MNT" ]; then
+    [ -x /psp/neochumby-boot ] || {
+      echo "no /psp/neochumby-boot to check the tree with: not sideloading from NFS"
+      return 1
+    }
+    dir=$RUN/sideload
+    deadline 60 /psp/neochumby-boot --update "$MNT" || echo "keeping the hook and neochumby-boot as they are"
+  else
+    dir=$root/sideload
+    # A stick's tree, on a paired Chumby without one: what checks a tree later.
+    [ -f /psp/neochumby.conf ] && [ -x "$root/neochumby-boot" ] && {
+      deadline 60 "$root/neochumby-boot" --update "$root" || echo "keeping the hook and neochumby-boot as they are"
+    }
+    for f in sideload.ko zImage initramfs.cpio.gz neochumby-handoff; do
+      [ -f "$dir/$f" ] || {
+        echo "the tree has no sideload/$f"
+        return 1
+      }
+    done
+  fi
+  stage sideload.ko neochumby-handoff || return 1
+  # The module needs memory the Flash UI holds.
+  [ -x /usr/chumby/scripts/stop_control_panel ] && /usr/chumby/scripts/stop_control_panel
+  killall chumbhowld btplayd chumbalarmd crond 2>/dev/null
+  sleep 2
+  sync
+  echo 3 >/proc/sys/vm/drop_caches
+  deadline 20 insmod "$dir/sideload.ko" || return 1
+  [ -e /proc/sideload-go ] || {
+    echo "the module loaded, but no /proc/sideload-go"
+    return 1
+  }
+  stage zImage initramfs.cpio.gz || return 1
+  deadline 30 sh -c 'cat "$1" >/proc/sideload-kernel' sh "$dir/zImage" || return 1
+  deadline 30 sh -c '"$1/neochumby-handoff" "$1/initramfs.cpio.gz" /psp >/proc/sideload-initrd' sh "$dir" || return 1
+  sync
+  echo "sideload: jumping to Linux 7"
+  echo 1 >/proc/sideload-go
+  echo "sideload: still here"
+  return 1
+}
 
 # delivery=sync (neochumby-sync): the stick's neochumby/ holds two whole
 # trees, a/ and b/, and `current` names the live one. Each set's marker,
@@ -170,6 +229,17 @@ else
 fi
 
 touch "$RAN"
+case $(uname -r) in
+2.6.*)
+  sideload
+  echo "sideload failed: on with the stock boot"
+  rmmod sideload 2>/dev/null
+  umount "$RUN" 2>/dev/null
+  cd /
+  [ "$root" = "$MNT" ] && umount "$MNT"
+  exit 0
+  ;;
+esac
 # The launcher owns the screen and inputs until it exits.
 if [ "$root" = "$MNT" ] && [ -x /psp/neochumby-boot ]; then
   NEOCHUMBY_SERVER=$server NEOCHUMBY_API_PORT=$api_port /psp/neochumby-boot "$MNT"

@@ -1,7 +1,5 @@
-//! The kernel's log ring, as dmesg prints it: syslog(2)'s READ_ALL, which
-//! the Chumby's 2.6.16 kernel allows any user (only clearing the ring, or
-//! reading it destructively, takes root), so a jailed app can read it
-//! without /proc or a dmesg binary.
+//! The kernel's log ring, as dmesg prints it: syslog(2)'s READ_ALL, so a jailed
+//! app can read it without /proc or a dmesg binary.
 
 use std::io;
 

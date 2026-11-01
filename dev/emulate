@@ -12,8 +12,7 @@ the settings.
                                   mkstick, or a powercut), written as the
                                   Chumby writes it
          [--psp DIR]              DIR's files added to the settings (/psp)
-         [--bind DIR:PATH]        DIR, on the stick, linked at PATH (e.g.
-                                  pictures at /tmp/classic)
+         [--bind DIR:PATH]        DIR, on the stick, linked at PATH
          [--size MB]              the stick start makes, this size
          [--server SOCK]          the Chumby's neochumbyd is the one
                                   listening on SOCK (neochumbyd serve
@@ -54,13 +53,13 @@ the settings.
                                   it stands, QEMU killed; boot OUT next.
                                   With --device, a prompt to pull the plug
   dev/emulate exec [--for SECS] CMD [ARG ...]   runs CMD on the Chumby's
-                                  console (dist and classic, whose console
-                                  has a shell while the session runs)
+                                  console (dist's, which has a shell while
+                                  the session runs)
   dev/emulate mkstick IMG [--size MB] [--force] [TREE]
                                   a stick image as start makes one
   dev/emulate kept                the pairing the Chumby keeps (--server),
                                   as it stands: its files, in DIR/psp
-  dev/emulate backend             the profile: stock, dist, classic or device
+  dev/emulate backend             the profile: dist, stock or device
   dev/emulate scale               how much longer than a Chumby's its waits
                                   are (NEOCHUMBY_EMU_SLOW overrides)
   dev/emulate prompt TEXT         with --device, a step for the person there
@@ -71,41 +70,35 @@ the settings.
 emulated Chumby boots. Each is a kernel, an optional NAND image or initrd,
 a command line, and where the settings go:
 
-  stock    the Chumby's own Linux 2.6.16 firmware, from your own device's
-           flash backup (emu/qemu/qemu-chumby's README, "Images"): --kernel
-           ZIMAGE, --nand NAND and --factory-psp DIR, or NEOCHUMBY_EMU_KERNEL,
-           _NAND and _PSP. The stock boot mounts the stick on /mnt/usb and
-           runs its userhook2. The settings are a copy of the NAND with its
-           settings partition rewritten. Local only: never in CI
-           (docs/legal.md)
-  dist     neochumby's Linux 5.9.16: --kernel, or NEOCHUMBY_EMU_DIST_KERNEL,
+  dist     neochumby's Linux 7: --kernel, or NEOCHUMBY_EMU_DIST_KERNEL,
            else build/sideload-dist/sideload-zImage, fetched or built
-           (below). NEOCHUMBY_DIST_KERNEL=stable or mainline (as
-           dist/build takes it) boots that kernel track instead, from
-           build/sideload-dist-stable or -mainline (CI builds mainline
-           weekly: fetched, it's the newest build, which may be older
-           than the checkout). Its /init
-           mounts the stick and runs its userhook2. No proprietary
-           firmware: CI runs it
-  classic  Linux 2.6.16 from Chumby's GPL source with a busybox initramfs
-           (NEOCHUMBY_EMU_CLASSIC_KERNEL, else build/classic/classic-zImage,
-           fetched or built), which runs the stick's hook as the stock boot
-           does
+           (below). NEOCHUMBY_DIST_KERNEL=mainline (as dist/build takes it)
+           boots that kernel track instead, from build/sideload-dist-mainline
+           (CI builds mainline weekly: fetched, it's the newest build, which
+           may be older than the checkout). Its /init mounts the stick and
+           runs its userhook2. No proprietary firmware: CI runs it
+  stock    the Chumby's own firmware, from your own device's flash backup
+           (emu/qemu/qemu-chumby's README, "Images"): --kernel ZIMAGE, --nand
+           NAND and --factory-psp DIR, or NEOCHUMBY_EMU_KERNEL, _NAND and
+           _PSP. Only for what the sideload does there (dev/emulate-stock):
+           the stock boot mounts the stick on /mnt/usb and runs its userhook2,
+           which hands over to Linux 7. The settings are a copy of the NAND
+           with its settings partition rewritten. Local only: never in CI
+           (docs/legal.md)
 
 Each of a profile's images is a flag (--kernel, --nand, --factory-psp,
 --initrd, --append) or a variable: NEOCHUMBY_EMU_DIST_KERNEL, _INITRD and
-_APPEND for dist, likewise _CLASSIC_ for classic, and for stock
-NEOCHUMBY_EMU_KERNEL, _NAND, _PSP and _APPEND. A new profile is an entry in
-PROFILES below. For dist and classic the settings go on the stick, and the
-hook copies them into /psp.
+_APPEND for dist, and for stock NEOCHUMBY_EMU_KERNEL, _NAND, _PSP and _APPEND.
+A new profile is an entry in PROFILES below. For dist the settings go on the
+stick, and the hook copies them into /psp.
 
 QEMU (emu/qemu/out/obj/qemu-system-arm, unless --qemu or $QEMU) and the
-dist and classic images (unless given) are made ready at start, as
+dist image (unless given) are made ready at start, as
 dev/prebuilt.py describes: used as they are while they match their inputs
 (the qemu-chumby commit pinned here; the image's inputs commit, kernel and
 any local changes to them), else fetched prebuilt and verified
-(emu/qemu/fetch, dist/fetch, classic/fetch), else, with a line saying why,
-built from source (emu/qemu/build, dist/build, classic/build). One made
+(emu/qemu/fetch, dist/fetch), else, with a line saying why,
+built from source (emu/qemu/build, dist/build). One made
 some other way (by hand, or CI's) is used as it is. The stock profile's
 images are your own and never fetched. Without a profile's images or QEMU,
 when neither fetching nor building can make them here, start exits 77:
@@ -119,8 +112,7 @@ the console, and runs the tree's own userhook2, unchanged. The session's
 end is that hook's "neochumby exited: N" on the console.
 
 The emulated Chumby has no network (QEMU runs with -nic none). With
---server SOCK, its second UART (ttyS1 on 2.6.16, ttymxc1 on dist's
-kernels) is joined to the unix socket SOCK, where neochumbyd listens
+--server SOCK, its second UART (ttymxc1) is joined to the unix socket SOCK, where neochumbyd listens
 (serve --listen-unix SOCK), and to nothing else: the stick's
 neochumby.conf says server=serial, and the session carries its
 connections to neochumbyd over that line, the same TLS sessions as over
@@ -207,20 +199,11 @@ PROFILES = {
         "psp": "stick",
         "needs": "the dist image (dist/fetch, else dist/build)",
     },
-    "classic": {
-        "kernel": ("NEOCHUMBY_EMU_CLASSIC_KERNEL", "build/classic/classic-zImage"),
-        "nand": None,
-        "factory_psp": None,
-        "initrd": ("NEOCHUMBY_EMU_CLASSIC_INITRD", None),
-        "append": ("NEOCHUMBY_EMU_CLASSIC_APPEND", "console=ttyS0,38400"),
-        "psp": "stick",
-        "needs": "the classic image (classic/fetch, else classic/build)",
-    },
 }
 DEFAULT_PROFILE = "dist"
 # How much longer than a Chumby's each backend's waits are: QEMU emulates
 # the ARM926 at about a real one's pace, with the boot before the session.
-SCALE = {"stock": 3, "dist": 3, "classic": 3, device.MACHINE: 5}
+SCALE = {"stock": 3, "dist": 3, device.MACHINE: 5}
 
 
 def skip(why):
@@ -317,9 +300,7 @@ def prebuilt_image(profile):
     """The image dev/emulate fetches or builds for PROFILE: None for stock,
     whose images are your own."""
     if profile == "dist":
-        return prebuilt.Image(REPO, "dist", os.environ.get("NEOCHUMBY_DIST_KERNEL") or None)
-    if profile == "classic":
-        return prebuilt.Image(REPO, "classic")
+        return prebuilt.Image(REPO, os.environ.get("NEOCHUMBY_DIST_KERNEL") or None)
     return None
 
 
@@ -444,6 +425,11 @@ def ready(profile, opts):
             skip(f"the {profile} profile needs {p['needs']}: {e} (or --kernel or {p['kernel'][0]})")
         except prebuilt.Failed as e:
             sys.exit(f"dev/emulate: {e}")
+    # dist's zImage has no initramfs built in: it is the file beside it.
+    if profile == "dist" and not images["initrd"]:
+        beside = os.path.join(os.path.dirname(images["kernel"]), "sideload-rootfs.cpio.gz")
+        if os.path.exists(beside):
+            images["initrd"] = beside
     return images, qemu
 
 
@@ -636,12 +622,12 @@ def cmd_log(state, follow):
 
 
 def button_open(log):
-    """Whether the session holds /dev/switch, as it says: it logs a failure
-    to open it, and an open that succeeds later."""
+    """Whether the session holds the top button, as it says: it logs a
+    failure to open it, and an open that succeeds later."""
     if "neochumby: opening" not in log:
         return False
-    failed = log.rfind("neochumby: /dev/switch: ")
-    return failed < 0 or log.find("neochumby: /dev/switch: open now", failed) >= 0
+    failed = log.rfind("neochumby: the top button: ")
+    return failed < 0 or log.find("neochumby: top button at ", failed) >= 0
 
 
 def cmd_status(state):

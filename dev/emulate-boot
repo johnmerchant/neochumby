@@ -5,9 +5,7 @@
 #   - the boot mounts the stick and runs its hook (dev/emulate's, which
 #     runs the tree's own userhook2);
 #   - the hook runs the session from the stick, and the session opens home;
-#   - home draws: it says so, and on the stock 2.6 kernel (classic, stock)
-#     its CHUMBY MODE bar is light blue along the bottom. The dist's Linux
-#     has no stock software to go back to, and home no bar there.
+#   - home draws: it says so, and the screen settles.
 # The screenshot and the console go in OUT.
 #
 #   dev/emulate-boot TREE OUT     (TREE from tools/tree)
@@ -44,27 +42,7 @@ emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the session didn'
 
 step "home draws"
 emu wait log 'neochumby-home: showing' $((30 * slow)) || fail "home didn't draw"
-if [ "$backend" = dist ]; then
-  emu wait screen $((30 * slow)) || fail "home's screen didn't settle"
-  emu shot "$out/home.png"
-  emu log > "$out/console.txt"
-  emu stop
-  echo "dev/emulate-boot: all passed ($backend)"
-  exit 0
-fi
-# Light blue: blue well over red, and bright.
-light_blue() {
-  p=$(emu pixel 160 228) || return 1
-  r=$(printf %d "0x$(echo "$p" | cut -c2-3)")
-  b=$(printf %d "0x$(echo "$p" | cut -c6-7)")
-  [ "$b" -gt 200 ] && [ "$b" -gt $((r + 40)) ]
-}
-i=0
-until light_blue; do
-  i=$((i + 1))
-  [ "$i" -lt $((20 * slow)) ] || fail "home's CHUMBY MODE bar isn't on the screen: $(emu pixel 160 228)"
-  sleep 1
-done
+emu wait screen $((30 * slow)) || fail "home's screen didn't settle"
 emu shot "$out/home.png"
 emu log > "$out/console.txt"
 emu stop

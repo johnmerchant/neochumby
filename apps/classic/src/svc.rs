@@ -12,9 +12,8 @@
 //!   when another app asks for it (a game's sound), the music stops and the
 //!   speaker is given up; it starts again once the speaker is free.
 //!
-//! **Nothing is left behind.** On SIGTERM (CHUMBY MODE, or the session
-//! stopping it) the service first puts the backlight at its day level (one
-//! /proc write, before anything slow), then stops the stream and gives the
+//! **Nothing is left behind.** On SIGTERM (the session stopping it) the service first puts the backlight at its day level (one
+//! /sys write, before anything slow), then stops the stream and gives the
 //! speaker back. A kill it can't catch is cleaned up when it next starts:
 //! while btplay plays for it, a record in the run directory
 //! (`service-playing`, with the volume from before) says so, and a new run
@@ -304,7 +303,7 @@ pub mod device {
 
     use super::{Effects, Feed, POLL_MS, Player, Take, Wants, recover, wants};
 
-    /// /proc/sys/sense1/brightness, 0..65535 (as the app sets it).
+    /// 0..65535 (as the app sets it).
     const NIGHT_BRIGHTNESS: u32 = 9000;
 
     /// Runs a command line through sh, its arguments as $1...: a URL from
@@ -322,7 +321,9 @@ pub mod device {
     impl Effects for Device {
         fn backlight(&mut self, night: bool) {
             let v = if night { NIGHT_BRIGHTNESS } else { 65535 };
-            let _ = std::fs::write("/proc/sys/sense1/brightness", format!("{v}\n"));
+            if let Some(b) = neochumby::backlight::Backlight::find() {
+                let _ = b.set(v);
+            }
         }
         fn start_player(&mut self, url: &str) {
             // The stock player's daemon, as the C engine started it.

@@ -20,9 +20,15 @@ pub struct Config {
 pub enum Security {
     Open,
     /// WPA or WPA2 with a key: a passphrase, or 64 hexadecimal digits.
-    Psk { key: String, hex: bool },
+    Psk {
+        key: String,
+        hex: bool,
+    },
     /// WEP's key: 5 or 13 characters, or 10 or 26 hexadecimal digits.
-    Wep { key: String, hex: bool },
+    Wep {
+        key: String,
+        hex: bool,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -77,10 +83,8 @@ impl Config {
         };
         let address = if get("allocation") == "static" {
             let (ip, netmask, gateway) = (get("ip"), get("netmask"), get("gateway"));
-            let nameservers: Vec<String> = [get("nameserver1"), get("nameserver2")]
-                .into_iter()
-                .filter(|n| !n.is_empty())
-                .collect();
+            let nameservers: Vec<String> =
+                [get("nameserver1"), get("nameserver2")].into_iter().filter(|n| !n.is_empty()).collect();
             if ![&ip, &netmask].into_iter().all(|a| is_address(a))
                 || !(gateway.is_empty() || is_address(&gateway))
                 || !nameservers.iter().all(|n| is_address(n))
@@ -105,7 +109,11 @@ impl Config {
             }
         };
         let hexed = |what: &str, s: &str| {
-            if s.bytes().all(|b| b.is_ascii_hexdigit()) { Ok(s.to_owned()) } else { Err(format!("{what} isn't hexadecimal")) }
+            if s.bytes().all(|b| b.is_ascii_hexdigit()) {
+                Ok(s.to_owned())
+            } else {
+                Err(format!("{what} isn't hexadecimal"))
+            }
         };
         let mut c = format!("network={{\n\tssid={}\n\tscan_ssid=1\n", quoted("ssid", &self.ssid)?);
         match &self.security {
@@ -161,13 +169,21 @@ mod tests {
     fn open_wep_static_and_wired() {
         let open = Config::parse(r#"<configuration type="wlan" ssid="x" auth="OPEN" encryption="NONE" />"#).unwrap();
         assert_eq!(open.security, Security::Open);
-        let wep = Config::parse(r#"<configuration type="wlan" ssid="x" auth="WEPAUTO" encryption="WEP" key="0011223344" encoding="hex" />"#).unwrap();
+        let wep = Config::parse(
+            r#"<configuration type="wlan" ssid="x" auth="WEPAUTO" encryption="WEP" key="0011223344" encoding="hex" />"#,
+        )
+        .unwrap();
         assert!(wep.wpa_conf().unwrap().contains("wep_key0=0011223344"));
         let wired = Config::parse(r#"<configuration type="lan" allocation="static" ip="10.0.0.2" netmask="255.0.0.0" gateway="10.0.0.1" nameserver1="10.0.0.1" nameserver2="" />"#).unwrap();
         assert!(!wired.wireless);
         assert_eq!(
             wired.address,
-            Address::Static { ip: "10.0.0.2".into(), netmask: "255.0.0.0".into(), gateway: "10.0.0.1".into(), nameservers: vec!["10.0.0.1".into()] }
+            Address::Static {
+                ip: "10.0.0.2".into(),
+                netmask: "255.0.0.0".into(),
+                gateway: "10.0.0.1".into(),
+                nameservers: vec!["10.0.0.1".into()]
+            }
         );
     }
 
@@ -176,6 +192,11 @@ mod tests {
         assert!(Config::parse("").is_err());
         assert!(Config::parse(r#"<configuration type="wlan" />"#).is_err());
         assert!(Config::parse(r#"<configuration type="wlan" ssid="x" auth="WPA2EAP" />"#).is_err());
-        assert!(Config::parse(r#"<configuration type="lan" allocation="static" ip="1.1.1.1; reboot" netmask="255.0.0.0" />"#).is_err());
+        assert!(
+            Config::parse(
+                r#"<configuration type="lan" allocation="static" ip="1.1.1.1; reboot" netmask="255.0.0.0" />"#
+            )
+            .is_err()
+        );
     }
 }

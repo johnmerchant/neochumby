@@ -1,12 +1,11 @@
 //! The session's loop: one app in front at a time, full-screen.
 //!
 //! It opens the start app (start.rs). When the app in front asks, over its
-//! request pipe, for another app or for CHUMBY MODE, and exits, the session
-//! does that next. When it exits without asking, the session goes back to
+//! request pipe, for another app, and exits, the session does that next. When it exits without asking, the session goes back to
 //! the start app. The start app is meant to keep running: if it exits
 //! without asking five times within a minute, `home` becomes the start app
-//! instead, and if that's `home` already, the Chumby goes back to its own
-//! software. An app with a frontend the owner approved is opened as that
+//! instead, and if that's `home` already, the session ends: a reboot is the way
+//! on from there. An app with a frontend the owner approved is opened as that
 //! frontend, whoever asks for it (frontend.rs).
 //!
 //! The escape hatch (a touch held in the top-left corner) ends whatever is
@@ -17,7 +16,6 @@
 //! the app in front first, so the session takes it only:
 //! - over the start app from any service, but over any other app only from
 //!   the start app's service, so services don't fight over the screen;
-//!   CHUMBY MODE only from the start app's service;
 //! - when the app in front doesn't say `interrupt = false` (games);
 //! - not after the escape hatch, until an app is opened by hand (asked for
 //!   by the app in front), so a service can't trap the Chumby in an app
@@ -51,9 +49,9 @@
 //!   session plays the stream with the Chumby's own player, as root, and
 //!   stops it when that app's exec or service (whichever asked) ends, when
 //!   another process takes the speaker (the handover: the newest player
-//!   wins), when another app plays, and at CHUMBY MODE;
+//!   wins), when another app plays, and as the session ends;
 //! - `brightness <n>`, from the start app or its service: the backlight.
-//!   The session puts back the boot's level at CHUMBY MODE.
+//!   The session puts back the boot's level as it ends.
 //!
 //! An app with `storage` gets its directory in /psp (storage.rs). One whose
 //! directory has grown over its limit is ended, as the network check ends
@@ -61,7 +59,7 @@
 //!
 //! A restart asked by neochumbyd (devlink.rs) ends whatever is in front as
 //! the escape hatch does, closes the button, stops the services and puts
-//! the speaker back as CHUMBY MODE does, and the loop returns for the
+//! the speaker back, and the loop returns for the
 //! session to start again.
 
 use std::os::fd::RawFd;
@@ -103,7 +101,7 @@ pub trait Device {
     fn button(&mut self) -> Option<bool>;
     /// The top button's open file, to hand to an app with `button = true`.
     fn button_fd(&self) -> Option<RawFd>;
-    /// Closes the top button, for the Chumby's own software.
+    /// Closes the top button, as the session ends.
     fn close_button(&mut self);
 
     /// A terminal for `app`, which runs in text mode: its helper, and the
@@ -136,7 +134,8 @@ pub trait Device {
 /// Why the loop ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Ended {
-    ChumbyMode,
+    /// Nothing is left to run: `home` keeps failing.
+    GaveUp,
     Restart,
 }
 
@@ -187,7 +186,7 @@ const LOGGED_UNKNOWN: u32 = 3;
 enum Next<'a> {
     /// Opens the app, telling it why (NEOCHUMBY_REASON) if there's a reason.
     Open(&'a App, Option<&'static str>),
-    ChumbyMode,
+    GiveUp,
     Restart,
 }
 
@@ -290,17 +289,17 @@ impl<'a, D: Device> Session<'a, D> {
         }
     }
 
-    /// Runs apps, and the services, until CHUMBY MODE or a restart. Either
-    /// way, the button is closed, the services stopped and the speaker put
+    /// Runs apps, and the services, until a restart, or `home` keeps
+    /// failing. Either way, the button is closed, the services stopped and the speaker put
     /// back first.
     pub fn run(mut self) -> Ended {
         let mut next = Next::Open(self.start, None);
         loop {
             let (app, reason) = match next {
                 Next::Open(app, reason) => (app, reason),
-                Next::ChumbyMode => {
-                    eprintln!("neochumby: CHUMBY MODE");
-                    return self.end(Ended::ChumbyMode);
+                Next::GiveUp => {
+                    eprintln!("neochumby: the session ends");
+                    return self.end(Ended::GaveUp);
                 }
                 Next::Restart => {
                     eprintln!("neochumby: restarting");
@@ -339,13 +338,12 @@ impl<'a, D: Device> Session<'a, D> {
     }
 
     /// Closes the button, stops the services and, everything that could
-    /// play having stopped, puts the speaker back: before the Chumby's own
-    /// software runs, or before the session starts again.
+    /// play having stopped, puts the speaker back, before the session
+    /// exits or starts again.
     fn end(mut self, why: Ended) -> Ended {
         // Every way out of watch() has ended the app in front and its whole
         // process group (child::end), so no copy of the button is left.
-        // Closed for the Chumby's own software, or before the session
-        // replaces itself and opens it again.
+        // Closed before the session replaces itself and opens it again.
         self.device.close_button();
         self.services.stop(self.timing.service_patience);
         self.stop_playing("the session is ending");
@@ -617,7 +615,6 @@ impl<'a, D: Device> Session<'a, D> {
                     self.player(&f.app.name, f.app, what);
                     continue;
                 }
-                Some(Request::ChumbyMode) => Next::ChumbyMode,
                 Some(Request::Open(name)) => match self.openable(&name) {
                     Ok(app) => {
                         // Opened by hand.
@@ -650,14 +647,6 @@ impl<'a, D: Device> Session<'a, D> {
     /// front, if it may.
     fn interrupting(&self, f: &Front<'a>, from: &App, req: Request) -> Option<Next<'a>> {
         let next = match &req {
-            Request::ChumbyMode if from.name != self.start.name => {
-                eprintln!(
-                    "neochumby: service {} asks for CHUMBY MODE; refused: only the start app's service may",
-                    from.name
-                );
-                return None;
-            }
-            Request::ChumbyMode => Next::ChumbyMode,
             // Taken in before it gets here (watch).
             Request::Speaker(_) | Request::Play(_) | Request::Brightness(_) | Request::Player(_) => return None,
             Request::Open(name) => match self.openable(name) {
@@ -750,8 +739,8 @@ impl<'a, D: Device> Session<'a, D> {
                     self.failures.clear();
                 }
                 _ => {
-                    eprintln!("neochumby: {} keeps failing; back to the Chumby", self.start.name);
-                    return Next::ChumbyMode;
+                    eprintln!("neochumby: {} keeps failing", self.start.name);
+                    return Next::GiveUp;
                 }
             }
         }
@@ -794,6 +783,8 @@ mod tests {
         /// Who the speaker's holder is said to be.
         holder: Option<u32>,
         restart: Arc<AtomicBool>,
+        /// The tree, where a script's `end` leaves a file: a restart.
+        root: Option<PathBuf>,
         /// The backlight levels set, in order (None: the boot's).
         lit: Arc<Mutex<Vec<Option<u32>>>>,
         /// The streams played, in order (None: stopped).
@@ -823,6 +814,7 @@ mod tests {
 
         fn restart(&mut self) -> bool {
             self.restart.swap(false, Ordering::SeqCst)
+                || self.root.as_ref().is_some_and(|r| std::fs::remove_file(r.join("end")).is_ok())
         }
 
         fn brightness(&mut self, level: Option<u32>) {
@@ -898,11 +890,13 @@ mod tests {
 
     /// Writes an executable script that logs `{tag} $NEOCHUMBY_REASON` as it
     /// starts, then runs `body` with $runs (how many times `tag` has
-    /// started, this one included) and `ask` (writes a line to the pipe).
+    /// started, this one included), `ask` (writes a line to the pipe) and
+    /// `end` (ends the session, as a restart does, and waits for that).
     fn script(path: &Path, tag: &str, body: &str) {
         let script = format!(
             "#!/bin/sh\nlog=\"$NEOCHUMBY_ROOT/log\"\necho \"{tag} $NEOCHUMBY_REASON\" >> \"$log\"\n\
-             runs=$(grep -c '^{tag} ' \"$log\")\nask() {{ echo \"$1\" >&\"$NEOCHUMBY_SESSION\"; }}\n{body}\n"
+             runs=$(grep -c '^{tag} ' \"$log\")\nask() {{ echo \"$1\" >&\"$NEOCHUMBY_SESSION\"; }}\n\
+             end() {{ touch \"$NEOCHUMBY_ROOT/end\"; exec sleep 30; }}\n{body}\n"
         );
         std::fs::write(path, script).unwrap();
         std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -954,7 +948,7 @@ mod tests {
         let all = apps::all(root);
         let start = start::choose(&all, choices.first().copied()).expect("a start app");
         let player = crate::player::choose(&all, None);
-        Session::new(&all, &[], root, start, player, fake, timing).run()
+        Session::new(&all, &[], root, start, player, Fake { root: Some(root.to_path_buf()), ..fake }, timing).run()
     }
 
     /// Waits for the process whose pid is in `pid_file` to be gone.
@@ -984,7 +978,7 @@ mod tests {
         let root = tree(
             "group",
             &[
-                ("home", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open game'"),
+                ("home", "start=true\n", "[ $runs = 1 ] || { end; exit 0; }\nask 'open game'"),
                 // A helper left behind as it exits.
                 ("game", "", &format!("sleep 30 &\necho $! > {pid}.new\nmv {pid}.new {pid}")),
             ],
@@ -1001,7 +995,7 @@ mod tests {
         let root = tree(
             "spin",
             &[
-                ("home", "start=true\n", &format!("[ -f {stop} ] && {{ ask chumby-mode; exit 0; }}\nask 'open game'")),
+                ("home", "start=true\n", &format!("[ -f {stop} ] && {{ end; exit 0; }}\nask 'open game'")),
                 ("game", "", "exit 0"),
             ],
         );
@@ -1024,11 +1018,7 @@ mod tests {
         let root = tree(
             "play",
             &[
-                (
-                    "home",
-                    "start=true\n",
-                    "case $runs in 1) ask 'open quiet' ;; 2) ask 'open radio' ;; *) ask chumby-mode ;; esac",
-                ),
+                ("home", "start=true\n", "case $runs in 1) ask 'open quiet' ;; 2) ask 'open radio' ;; *) end ;; esac"),
                 // Not allowed, and not a URL play takes: nothing happens.
                 ("quiet", "", "ask 'play http://h/quiet'; ask 'play https://h/s'; sleep 0.2"),
                 (
@@ -1048,7 +1038,7 @@ mod tests {
     }
 
     /// A service's stream stops when another process takes the speaker
-    /// (the handover), and at CHUMBY MODE.
+    /// (the handover), and at the end.
     #[test]
     fn a_services_stream_stops_for_a_newer_player_and_at_the_end() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
@@ -1056,7 +1046,7 @@ mod tests {
         let root = tree_with(
             "handover",
             &[
-                ("home", "start=true\n", &format!("until [ -f {stop} ]; do sleep 0.02; done\nask chumby-mode")),
+                ("home", "start=true\n", &format!("until [ -f {stop} ]; do sleep 0.02; done\nend")),
                 ("radio", "access=speaker\n", "exit 0"),
             ],
             &[(
@@ -1091,7 +1081,7 @@ mod tests {
     }
 
     /// `brightness` from the start app and its service; not from another
-    /// app. The boot's level comes back at CHUMBY MODE.
+    /// app. The boot's level comes back at the end.
     #[test]
     fn brightness_is_the_start_apps() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
@@ -1102,7 +1092,7 @@ mod tests {
                     "home",
                     "start=true\n",
                     "if [ $runs = 1 ]; then ask 'brightness 9000'; ask 'open other'; exit 0; fi\n\
-                     until grep -q '^home lit' \"$log\"; do sleep 0.02; done\nsleep 0.2\nask chumby-mode",
+                     until grep -q '^home lit' \"$log\"; do sleep 0.02; done\nsleep 0.2\nend",
                 ),
                 ("other", "", "ask 'brightness 1'; sleep 0.2"),
             ],
@@ -1134,7 +1124,7 @@ mod tests {
                     "home",
                     "start=true\n",
                     "echo \"home-env [$NEOCHUMBY_NAME] [$NEOCHUMBY_STORAGE]\" >> \"$log\"\n\
-                     until grep -q '^keeper tidied' \"$log\"; do sleep 0.05; done\nask chumby-mode",
+                     until grep -q '^keeper tidied' \"$log\"; do sleep 0.05; done\nend",
                 ),
                 ("keeper", "access=storage\n", "exit 0"),
             ],
@@ -1171,7 +1161,7 @@ mod tests {
         let root = tree(
             "speaker",
             &[
-                ("home", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open quiet'"),
+                ("home", "start=true\n", "[ $runs = 1 ] || { end; exit 0; }\nask 'open quiet'"),
                 // Not allowed: nothing happens.
                 ("quiet", "", "ask 'speaker 90'; sleep 0.3; ask 'open loud'"),
                 // Unmuted at one volume, then another; its going, without
@@ -1197,12 +1187,12 @@ mod tests {
                 (
                     "home",
                     "start=true\n",
-                    "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nprintf 'hello\\nopen nosuch\\nopen Bad\\n' >&\"$NEOCHUMBY_SESSION\"\nask 'open game'",
+                    "[ $runs = 1 ] || { end; exit 0; }\nprintf 'hello\\nopen nosuch\\nopen Bad\\n' >&\"$NEOCHUMBY_SESSION\"\nask 'open game'",
                 ),
                 // Exits without asking: back to the start app.
                 ("game", "title=GAME\n", "exit 3"),
                 // Can't be the start app: no start=true.
-                ("wx", "", "ask chumby-mode"),
+                ("wx", "", "end"),
             ],
         );
         run(&root, &[("settings", "wx")], Arc::default());
@@ -1212,16 +1202,16 @@ mod tests {
     #[test]
     fn a_failing_start_app_falls_back_to_home() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
-        let root = tree("fail", &[("home", "start=true\n", "ask chumby-mode"), ("wx", "start=true\n", "exit 1")]);
+        let root = tree("fail", &[("home", "start=true\n", "end"), ("wx", "start=true\n", "exit 1")]);
         run(&root, &[("settings", "wx")], Arc::default());
         assert_eq!(log(&root), ["wx", "wx", "wx", "wx", "wx", "home"]);
     }
 
     #[test]
-    fn home_failing_hands_back_to_the_chumby() {
+    fn home_failing_ends_the_session() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
         let root = tree("homefail", &[("home", "start=true\n", "exit 0")]);
-        run(&root, &[], Arc::default());
+        assert_eq!(run_timed(&root, &[], Fake::default(), timing()), Ended::GaveUp);
         assert_eq!(log(&root).len(), FAILURES);
     }
 
@@ -1231,11 +1221,7 @@ mod tests {
         let root = tree(
             "grace",
             &[
-                (
-                    "home",
-                    "start=true\n",
-                    "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open game'\nexec sleep 30",
-                ),
+                ("home", "start=true\n", "[ $runs = 1 ] || { end; exit 0; }\nask 'open game'\nexec sleep 30"),
                 ("game", "", "exit 0"),
             ],
         );
@@ -1251,7 +1237,7 @@ mod tests {
         let root = tree(
             "escape",
             &[
-                ("home", "start=true\n", "ask chumby-mode"),
+                ("home", "start=true\n", "end"),
                 // It and what it started: both should go.
                 ("wx", "start=true\n", "sleep 30 &\necho $! > \"$NEOCHUMBY_ROOT/pid\"\nwait"),
             ],
@@ -1289,7 +1275,7 @@ mod tests {
                 "wx",
                 "start=true\n",
                 "while read -r line <&\"$NEOCHUMBY_SESSION\"; do\n  echo \"wx heard $line\" >> \"$log\"\n  \
-                 [ \"$line\" = button ] && { ask chumby-mode; exit 0; }\ndone",
+                 [ \"$line\" = button ] && { end; exit 0; }\ndone",
             )],
         );
         let fake = with_button();
@@ -1302,7 +1288,7 @@ mod tests {
     #[test]
     fn a_start_app_that_ignores_the_line_stays() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
-        let root = tree("buttonignored", &[("wx", "start=true\n", "sleep 1\nask chumby-mode")]);
+        let root = tree("buttonignored", &[("wx", "start=true\n", "sleep 1\nend")]);
         let fake = with_button();
         press_after(&fake, &root, "wx");
         run_on(&root, &[("settings", "wx")], fake);
@@ -1318,7 +1304,7 @@ mod tests {
                 "wx",
                 "start=true\n",
                 // Closes its pipe, so the line can't be written.
-                "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\neval \"exec $NEOCHUMBY_SESSION>&-\"\nexec sleep 30",
+                "[ $runs = 1 ] || { end; exit 0; }\neval \"exec $NEOCHUMBY_SESSION>&-\"\nexec sleep 30",
             )],
         );
         let fake = with_button();
@@ -1335,12 +1321,8 @@ mod tests {
             "buttonhelper",
             &[
                 ("wx", "start=true\n", "ask 'open game'"),
-                // A helper, holding a copy of the button, and CHUMBY MODE.
-                (
-                    "game",
-                    "button=true\n",
-                    &format!("sleep 30 &\necho $! > {pid}.new\nmv {pid}.new {pid}\nask chumby-mode"),
-                ),
+                // A helper, holding a copy of the button, and the end.
+                ("game", "button=true\n", &format!("sleep 30 &\necho $! > {pid}.new\nmv {pid}.new {pid}\nend")),
             ],
         );
         let fake = Fake { gone_at_close: Some(root.join("pid")), ..with_button() };
@@ -1356,7 +1338,7 @@ mod tests {
         let root = tree(
             "button",
             &[
-                ("wx", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open game'"),
+                ("wx", "start=true\n", "[ $runs = 1 ] || { end; exit 0; }\nask 'open game'"),
                 ("game", "", "exec sleep 30"),
             ],
         );
@@ -1375,7 +1357,7 @@ mod tests {
         });
         run_on(&root, &[("settings", "wx")], fake);
         assert_eq!(log(&root), ["wx", "game", "wx button"]);
-        assert!(closed.load(Ordering::SeqCst), "the button wasn't closed at CHUMBY MODE");
+        assert!(closed.load(Ordering::SeqCst), "the button wasn't closed at the end");
     }
 
     #[test]
@@ -1392,11 +1374,7 @@ mod tests {
         let root = tree(
             "handover",
             &[
-                (
-                    "wx",
-                    "start=true\n",
-                    &format!("{check}\n[ $runs = 1 ] || {{ ask chumby-mode; exit 0; }}\nask 'open game'"),
-                ),
+                ("wx", "start=true\n", &format!("{check}\n[ $runs = 1 ] || {{ end; exit 0; }}\nask 'open game'")),
                 ("game", "button=true\n", &format!("{check}\nsleep 1\necho 'game done' >> \"$log\"")),
             ],
         );
@@ -1442,7 +1420,7 @@ mod tests {
         let root = tree_with(
             "service",
             &[
-                ("wx", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nexec sleep 30"),
+                ("wx", "start=true\n", "[ $runs = 1 ] || { end; exit 0; }\nexec sleep 30"),
                 ("game", "", "exec sleep 30"),
             ],
             &[(
@@ -1465,7 +1443,7 @@ mod tests {
         let root = tree_with(
             "nointerrupt",
             &[
-                ("wx", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nask 'open game'"),
+                ("wx", "start=true\n", "[ $runs = 1 ] || { end; exit 0; }\nask 'open game'"),
                 ("game", "interrupt=false\n", "sleep 1\necho 'game done' >> \"$log\""),
                 ("radio", "", "exit 0"),
             ],
@@ -1473,7 +1451,7 @@ mod tests {
                 // On the game in front: refused, as it says interrupt=false.
                 ("wx", &listen("    'front game') ask 'open wx' ;;")),
                 // Refused: not the start app's service.
-                ("radio", &listen("    'front game') ask 'open radio' ;;\n    'front wx') ask chumby-mode ;;")),
+                ("radio", &listen("    'front game') ask 'open radio' ;;")),
             ],
         );
         run(&root, &[("settings", "wx")], Arc::default());
@@ -1487,7 +1465,7 @@ mod tests {
         let root = tree_with(
             "anyservice",
             &[
-                ("wx", "start=true\n", "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\nexec sleep 30"),
+                ("wx", "start=true\n", "[ $runs = 1 ] || { end; exit 0; }\nexec sleep 30"),
                 // Opened over wx by its own service; opens the game by hand.
                 ("alarm", "", "ask 'open game'"),
                 ("game", "", "sleep 1\necho 'game done' >> \"$log\""),
@@ -1511,8 +1489,9 @@ mod tests {
         let root = tree_with(
             "frontwins",
             &[
-                // Asks for CHUMBY MODE, then takes its time to exit.
-                ("wx", "start=true\n", "ask chumby-mode\necho 'wx asked' >> \"$log\"\nexec sleep 30"),
+                // Asks for an app, then takes its time to exit.
+                ("wx", "start=true\n", "ask 'open other'\necho 'wx asked' >> \"$log\"\nexec sleep 30"),
+                ("other", "", "end"),
                 ("game", "", "exit 0"),
             ],
             &[(
@@ -1524,7 +1503,7 @@ mod tests {
             )],
         );
         run(&root, &[("settings", "wx")], Arc::default());
-        assert_eq!(apps_log(&root), ["wx", "wx asked"]);
+        assert_eq!(apps_log(&root), ["wx", "wx asked", "other"]);
     }
 
     #[test]
@@ -1536,7 +1515,7 @@ mod tests {
                 (
                     "wx",
                     "start=true\n",
-                    "[ $runs = 1 ] || { ask chumby-mode; exit 0; }\necho $$ > \"$NEOCHUMBY_ROOT/pid\"\nexec sleep 30",
+                    "[ $runs = 1 ] || { end; exit 0; }\necho $$ > \"$NEOCHUMBY_ROOT/pid\"\nexec sleep 30",
                 ),
                 // Opened by the escape hatch: wx's service can't replace it,
                 // until it opens the game by hand.
@@ -1584,7 +1563,7 @@ mod tests {
                          fi\n\
                          ask 'player toggle'; ask 'player toggle'; ask 'player resume'\n\
                          until [ $(grep -c '^radio-heard [pr]' \"$log\") -ge 4 ]; do sleep 0.02; done\n\
-                         touch {heard}; ask chumby-mode"
+                         touch {heard}; end"
                     ),
                 ),
                 // Not the start app, nor its service: refused.
@@ -1634,7 +1613,7 @@ mod tests {
                 "home",
                 "start=true\n",
                 "echo \"home-env [$NEOCHUMBY_PLAYER]\" >> \"$log\"\nask 'player toggle'\nsleep 0.5\n\
-                 echo 'home stayed' >> \"$log\"\nask chumby-mode",
+                 echo 'home stayed' >> \"$log\"\nend",
             )],
         );
         run(&root, &[], Arc::default());
@@ -1644,7 +1623,7 @@ mod tests {
     #[test]
     fn services_restart_and_the_speaker_is_reset() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
-        let root = tree_with("restart", &[("wx", "start=true\n", "sleep 1\nask chumby-mode")], &[("wx", "exit 1")]);
+        let root = tree_with("restart", &[("wx", "start=true\n", "sleep 1\nend")], &[("wx", "exit 1")]);
         let fake = Fake::default();
         let resets = fake.resets.clone();
         run_on(&root, &[("settings", "wx")], fake);
@@ -1660,11 +1639,11 @@ mod tests {
     #[test]
     fn a_core_service_is_restarted_and_never_heard() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
-        let root = tree("core", &[("wx", "start=true\n", "sleep 1\nask chumby-mode"), ("game", "", "exit 0")]);
+        let root = tree("core", &[("wx", "start=true\n", "sleep 1\nend"), ("game", "", "exit 0")]);
         script(
             &root.join("core"),
             "core",
-            "if [ $runs = 1 ]; then ask 'open game'; ask chumby-mode; exit 1; fi\n\
+            "if [ $runs = 1 ]; then ask 'open game'; exit 1; fi\n\
              while read -r line <&\"$NEOCHUMBY_SESSION\"; do echo \"core-heard $line\" >> \"$log\"; done",
         );
         let core = [App {
@@ -1689,7 +1668,8 @@ mod tests {
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");
-        Session::new(&all, &core, &root, start, None, Fake::default(), timing()).run();
+        let fake = Fake { root: Some(root.clone()), ..Fake::default() };
+        Session::new(&all, &core, &root, start, None, fake, timing()).run();
         assert_eq!(apps_log(&root).into_iter().filter(|l| !l.starts_with("core")).collect::<Vec<_>>(), ["wx"]);
         assert!(log(&root).iter().filter(|l| *l == "core").count() >= 2, "restarted: {:?}", log(&root));
         assert!(!log(&root).iter().any(|l| l.starts_with("core-heard")), "told: {:?}", log(&root));
@@ -1698,7 +1678,7 @@ mod tests {
     #[test]
     fn a_dead_service_leaves_another_player_alone() {
         let _one = ONE.lock().unwrap_or_else(|e| e.into_inner());
-        let root = tree_with("holder", &[("wx", "start=true\n", "sleep 1\nask chumby-mode")], &[("wx", "exit 1")]);
+        let root = tree_with("holder", &[("wx", "start=true\n", "sleep 1\nend")], &[("wx", "exit 1")]);
         let fake = Fake { holder: Some(1), ..Fake::default() };
         let resets = fake.resets.clone();
         run_on(&root, &[("settings", "wx")], fake);
@@ -1713,7 +1693,7 @@ mod tests {
         let pid = "\"$NEOCHUMBY_ROOT/pid\"";
         let root = tree_with(
             "stop",
-            &[("wx", "start=true\n", &format!("while [ ! -f {pid} ]; do sleep 0.05; done\nask chumby-mode"))],
+            &[("wx", "start=true\n", &format!("while [ ! -f {pid} ]; do sleep 0.05; done\nend"))],
             // It and what it started.
             &[("wx", &format!("sleep 30 &\necho $! > {pid}.new\nmv {pid}.new {pid}\nwait"))],
         );
@@ -1730,7 +1710,7 @@ mod tests {
             &[("home", "sleep 30 &\necho $! > \"$NEOCHUMBY_ROOT/svc-pid\"\nwait")],
         );
         // The button is held by the session: closed as the loop ends, once
-        // what the app started is gone, as for CHUMBY MODE.
+        // what the app started is gone.
         let fake = Fake { gone_at_close: Some(root.join("pid")), ..with_button() };
         let (flag, resets, closed) = (fake.restart.clone(), fake.resets.clone(), fake.closed.clone());
         let (pid_file, svc_pid) = (root.join("pid"), root.join("svc-pid"));
@@ -1743,7 +1723,7 @@ mod tests {
         assert_eq!(run_timed(&root, &[], fake, timing()), Ended::Restart);
         assert_eq!(apps_log(&root), ["home"]);
         // The app, its service, and what each started: all gone, the button
-        // closed, and the speaker put back, as for CHUMBY MODE.
+        // closed, and the speaker put back.
         gone(&root.join("pid"));
         gone(&root.join("svc-pid"));
         assert!(closed.load(Ordering::SeqCst), "the button wasn't closed at the restart");

@@ -24,7 +24,7 @@
 //!   so every reader, the app in front and the escape hatch included, sees
 //!   a touch; it's let go after its hold, or at once if the link fails,
 //!   and then answered. `Msg::Button` sets a level the session reads
-//!   alongside /dev/switch ([`Remote`]), so a press goes where a real one
+//!   alongside the button ([`Remote`]), so a press goes where a real one
 //!   would, except to an app with `button = true`, which reads the switch
 //!   itself: that is refused, and said so. The level goes back up if the
 //!   link fails. Without `dev=on`, both are refused, and the first logged.

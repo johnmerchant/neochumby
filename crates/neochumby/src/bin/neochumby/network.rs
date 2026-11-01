@@ -1,7 +1,7 @@
 //! Apps without `network` in their `access`, kept off the network as well
-//! as the stock kernel allows.
+//! as the session can.
 //!
-//! It has no network namespaces and no netfilter, so a jailed app can open
+//! It uses no network namespaces, and the kernel has no netfilter, so a jailed app can open
 //! a socket whatever its manifest says. What it can't do is hide it: the
 //! kernel lists every internet socket, with its owner's uid, in /proc/net.
 //! The session looks there every CHECK and ends an app that lists no
