@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// Reserve a contiguous kernel block and hand off to a 5.9 zImage without
-// CVE-2009-2698.  Loaded on the stock 2.6.16, this module owns the pages;
-// root writes the images through /proc and writes /proc/sideload-go to jump.
+// Reserve contiguous blocks and hand off to a Linux 7 zImage.  Loaded on the
+// stock 2.6.16, this module owns the pages; root writes the images through
+// /proc and writes /proc/sideload-go to jump.
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -16,7 +16,19 @@
 
 #define KERNEL_ORDER 10
 #define INITRD_ORDER 10
-#define BLOCKS 4
+#define BLOCKS 2
+#define MAX_BLOCKS 16
+/*
+ * The zImage's block must be above the kernel it unpacks, or it moves itself
+ * out of the way, over who knows what. Linux 7 unpacks to under 11 MiB.
+ */
+#define KERNEL_MIN 0xc0b00000UL
+/*
+ * Where the stub puts the initrd, with the MMU off and nothing else running:
+ * a block as high as this is rarely free to reserve, and after the jump
+ * nothing on the stock system matters. Below the ATAGS and the stub.
+ */
+#define INITRD_DEST 0xc3000000UL
 #define KERNEL_SIZE (1UL << (KERNEL_ORDER + PAGE_SHIFT))
 #define INITRD_SIZE (1UL << (INITRD_ORDER + PAGE_SHIFT))
 #define ATAGS_PHYS 0xc3f00000UL
@@ -27,15 +39,49 @@
 extern char sideload_stub_start[], sideload_stub_end[];
 extern void sideload_flush_cache(void);
 
-static unsigned long kva, iva, guard;
+static unsigned long kva, iva;
 static unsigned long blocks[BLOCKS];
 static unsigned long kphys, iphys;
 static unsigned long koff, ioff;
-static struct proc_dir_entry *reserve_entry, *kernel_entry, *initrd_entry, *go_entry;
+static struct proc_dir_entry *reserve_entry, *regs_entry, *kernel_entry, *initrd_entry, *go_entry;
 
 static int reserve_read(char *page, char **start, off_t off, int count, int *eof, void *data)
 {
 	return sprintf(page, "%lx %lx\n", kphys, iphys);
+}
+
+/*
+ * What the running stock system left in the hardware it set up, read only, to
+ * compare with what Linux 7 programs: the blocks' offsets from 0x10000000, the
+ * kernel's fixed mapping of them being 0xe0000000.
+ */
+static int regs_read(char *page, char **start, off_t off, int count, int *eof, void *data)
+{
+	static const struct { unsigned long base, len; const char *name; } r[] = {
+		{ 0x24000, 0x20, "usbotg" },
+		{ 0x24080, 0x20, "usbh" },
+		{ 0x240e8, 0x20, "usbh-roothub" },
+		{ 0x24600, 0x04, "usbctrl" },
+		{ 0x24840, 0x04, "misc" },
+		{ 0x27000, 0x28, "ccm" },
+		{ 0x15100, 0x44, "gpio-b" },
+		{ 0x15300, 0x40, "gpio-d" },
+		{ 0x15220, 0x10, "gpio-c" },
+		{ 0x15400, 0x44, "gpio-e" },
+		{ 0x17000, 0x20, "cspi3" },
+		{ 0x21000, 0x70, "lcdc" },
+	};
+	int n = 0, i;
+	unsigned long o;
+
+	for (i = 0; i < ARRAY_SIZE(r); i++) {
+		n += sprintf(page + n, "%s %08lx:", r[i].name, 0x10000000UL + r[i].base);
+		for (o = 0; o < r[i].len; o += 4)
+			n += sprintf(page + n, " %08x", __raw_readl((void __iomem *)(0xe0000000UL + r[i].base + o)));
+		n += sprintf(page + n, "\n");
+	}
+	*eof = 1;
+	return n;
 }
 
 static int kernel_write(struct file *file, const char __user *buffer, unsigned long count, void *data)
@@ -98,9 +144,15 @@ static void handoff(void)
 			w[i] = atags;
 		if (w[i] == 0xfeedface)
 			w[i] = kphys;
+		if (w[i] == 0xcafe0001)
+			w[i] = iphys;
+		if (w[i] == 0xcafe0002)
+			w[i] = INITRD_DEST;
+		if (w[i] == 0xcafe0003)
+			w[i] = (ioff + 3) & ~3UL;
 	}
 
-	build_atags(atags, iphys, ioff);
+	build_atags(atags, INITRD_DEST, ioff);
 	local_irq_disable();
 	__raw_writew(0x7F34, (void __iomem *)0xe0002000);
 	__raw_writew(0x5555, (void __iomem *)0xe0002002);
@@ -117,40 +169,56 @@ static int go_write(struct file *file, const char __user *buffer, unsigned long 
 
 static int __init sideload_init(void)
 {
-	int i, j;
+	unsigned long got[MAX_BLOCKS];
+	int n = 0, i, j, keep;
 	unsigned long t;
 
-	for (i = 0; i < BLOCKS; i++) {
-		blocks[i] = __get_free_pages(GFP_KERNEL, KERNEL_ORDER);
-		if (!blocks[i]) {
-			for (j = 0; j < i; j++)
-				free_pages(blocks[j], KERNEL_ORDER);
-			printk(KERN_ERR "sideload: no contiguous pages\n");
-			return -ENOMEM;
-		}
+	/* Every block there is: only the highest are any use. */
+	while (n < MAX_BLOCKS) {
+		got[n] = __get_free_pages(GFP_KERNEL | __GFP_NOWARN, KERNEL_ORDER);
+		if (!got[n])
+			break;
+		n++;
 	}
-	for (i = 0; i < BLOCKS; i++)
-		for (j = i + 1; j < BLOCKS; j++)
-			if (blocks[j] < blocks[i]) {
-				t = blocks[i]; blocks[i] = blocks[j]; blocks[j] = t;
+	for (i = 0; i < n; i++)
+		for (j = i + 1; j < n; j++)
+			if (got[j] < got[i]) {
+				t = got[i]; got[i] = got[j]; got[j] = t;
 			}
-	guard = blocks[0];
-	/* The zImage stays above the decompressed Image; the initrd is the
-	 * highest block, out of its way.  blocks[1] is unused. */
-	kva = blocks[BLOCKS - 2];
-	iva = blocks[BLOCKS - 1];
+	/* The highest clear of where the stub writes. */
+	keep = n - 1;
+	while (keep >= 0 && got[keep] + KERNEL_SIZE > INITRD_DEST)
+		keep--;
+	if (keep < 1 || got[keep] < KERNEL_MIN) {
+		printk(KERN_ERR "sideload: %d blocks, none high enough:", n);
+		for (i = 0; i < n; i++)
+			printk(" %lx", got[i]);
+		printk("\n");
+		for (i = 0; i < n; i++)
+			free_pages(got[i], KERNEL_ORDER);
+		return -ENOMEM;
+	}
+	kva = got[keep];
+	iva = got[keep - 1];
+	blocks[0] = kva;
+	blocks[1] = iva;
+	for (i = 0; i < n; i++)
+		if (got[i] != kva && got[i] != iva)
+			free_pages(got[i], KERNEL_ORDER);
 	kphys = __pa(kva);
 	iphys = __pa(iva);
 	koff = ioff = 0;
-	printk(KERN_INFO "sideload: guard=%lx\n", __pa(guard));
 
 	reserve_entry = create_proc_entry("sideload-reserve", 0444, NULL);
+	regs_entry = create_proc_entry("sideload-regs", 0444, NULL);
 	kernel_entry = create_proc_entry("sideload-kernel", 0200, NULL);
 	initrd_entry = create_proc_entry("sideload-initrd", 0200, NULL);
 	go_entry = create_proc_entry("sideload-go", 0200, NULL);
-	if (!reserve_entry || !kernel_entry || !initrd_entry || !go_entry)
+	if (!reserve_entry || !regs_entry || !kernel_entry || !initrd_entry || !go_entry)
 		return -ENOMEM;
 	reserve_entry->read_proc = reserve_read;
+	regs_entry->read_proc = regs_read;
+	regs_entry->owner = THIS_MODULE;
 	kernel_entry->write_proc = kernel_write;
 	initrd_entry->write_proc = initrd_write;
 	go_entry->write_proc = go_write;
@@ -164,6 +232,7 @@ static void __exit sideload_exit(void)
 {
 	int i;
 	remove_proc_entry("sideload-reserve", NULL);
+	remove_proc_entry("sideload-regs", NULL);
 	remove_proc_entry("sideload-kernel", NULL);
 	remove_proc_entry("sideload-initrd", NULL);
 	remove_proc_entry("sideload-go", NULL);

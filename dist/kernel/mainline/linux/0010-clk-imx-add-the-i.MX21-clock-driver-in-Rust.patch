@@ -30,7 +30,7 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
  obj-$(CONFIG_CLK_IMX35)  += clk-imx35.o
 --- /dev/null
 +++ b/drivers/clk/imx/clk_imx21.rs
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,103 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +//! The i.MX21's clocks.
@@ -50,7 +50,9 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +const CCM_PCCR1: usize = 0x24;
 +
 +const LREF: u32 = 32768;
-+const HREF: u32 = 26000000;
++// The Chumby's oscillator, not the 26 MHz of i.MX21 reference boards: at this
++// the stock boot's SPLL is 288 MHz and its USB divider gives 48 MHz.
++const HREF: u32 = 16000000;
 +
 +fn init(np: &OfNode) -> Result {
 +    let mut ccm = Ccm::new(np, b::IMX21_CLK_MAX as usize)?;

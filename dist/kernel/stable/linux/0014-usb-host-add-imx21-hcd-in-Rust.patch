@@ -150,7 +150,7 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +obj-$(CONFIG_USB_IMX21_HCD)	+= imx21_hcd.o
 --- /dev/null
 +++ b/drivers/usb/host/imx21_hcd.rs
-@@ -0,0 +1,1724 @@
+@@ -0,0 +1,1727 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +//! USB Host Controller Driver for the i.MX21.
@@ -242,7 +242,6 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +
 +const USB_ETDDMAEN: usize = 0x820;
 +const USB_MISCCONTROL: usize = 0x840;
-+const USB_MISCCONTROL_SKPRTRY: u32 = 1 << 2;
 +const USB_MISCCONTROL_ARBMODE: u32 = 1 << 1;
 +const USB_ETDDMACHANLCLR: usize = 0x848;
 +const fn usb_etdsmsa(x: usize) -> usize {
@@ -1555,8 +1554,9 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +        Self::locked(hcd, |cx| {
 +            regs.write(USBOTG_CLK_CTRL, USBOTG_CLK_CTRL_HST | USBOTG_CLK_CTRL_MAIN);
 +            regs.write(USBOTG_HWMODE, hw_mode);
-+            regs.write(USBCTRL, usb_control);
-+            regs.write(USB_MISCCONTROL, USB_MISCCONTROL_SKPRTRY | USB_MISCCONTROL_ARBMODE);
++            // Over what's there: the bits above these are the boot's.
++            regs.write(USBCTRL, regs.read(USBCTRL) | usb_control);
++            regs.write(USB_MISCCONTROL, USB_MISCCONTROL_ARBMODE);
 +
 +            // Clear the ETDs.
 +            for i in 0..USB_NUM_ETD {
@@ -1838,12 +1838,15 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +            }
 +        };
 +
-+        if let Err(e) = usb_hcd::clk_set_nearest_rate(&clk, 48000000).and_then(|()| clk.prepare_enable()) {
++        // The USB clock as the boot left it: its divider of the system PLL is
++        // right for this board, and its rate is only reported.
++        if let Err(e) = clk.prepare_enable() {
 +            clk_ahb.disable_unprepare();
 +            return Err(e);
 +        }
 +
 +        dev_info!(dev, "Hardware HC revision: 0x{:02X}\n", (regs.read(USBOTG_HWMODE) >> 16) & 0xff);
++        dev_info!(dev, "USB clock: {} Hz\n", clk.rate().as_hz());
 +
 +        // Past here the clocks are `Imx21`'s to turn off: it goes with the registration.
 +        let probe_regs = regs.mapping_info();
@@ -1875,3 +1878,14 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +    description: "i.MX21 USB Host controller",
 +    license: "GPL",
 +}
+diff --git a/drivers/usb/Makefile b/drivers/usb/Makefile
+--- a/drivers/usb/Makefile
++++ b/drivers/usb/Makefile
+@@ -22,6 +22,7 @@
+ 
+ obj-$(CONFIG_USB_PCI)		+= host/
+ obj-$(CONFIG_USB_EHCI_HCD)	+= host/
++obj-$(CONFIG_USB_IMX21_HCD)	+= host/
+ obj-$(CONFIG_USB_ISP116X_HCD)	+= host/
+ obj-$(CONFIG_USB_OHCI_HCD)	+= host/
+ obj-$(CONFIG_USB_UHCI_HCD)	+= host/

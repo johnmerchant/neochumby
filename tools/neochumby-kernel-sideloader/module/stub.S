@@ -2,8 +2,11 @@
  *
  * Position-independent handoff stub, copied into the reserved kernel block.
  * The module has already cleaned/invalidated the caches with the ARM926
- * sequence; this only disables the MMU and jumps.  Literals 0xdeadbeef
- * (ATAGS physical) and 0xfeedface (kernel physical) are replaced first.
+ * sequence; this disables the MMU, puts the initrd where the module chose
+ * and jumps.  Physical addresses equal virtual ones in the kernel's mapping
+ * of RAM here.  Literals 0xdeadbeef (ATAGS physical), 0xfeedface (kernel
+ * physical) and 0xcafe000[123] (the initrd's source, destination and length
+ * in bytes, a multiple of 4) are replaced first.
  */
 	.section .text
 	.global sideload_stub_start
@@ -30,6 +33,13 @@ sideload_stub_start:
 	nop
 	nop
 	nop
+	ldr	r4, =0xcafe0001
+	ldr	r5, =0xcafe0002
+	ldr	r6, =0xcafe0003
+1:	ldr	r7, [r4], #4
+	str	r7, [r5], #4
+	subs	r6, r6, #4
+	bgt	1b
 	ldr	r0, =0
 	ldr	r1, =851
 	ldr	r2, =0xdeadbeef

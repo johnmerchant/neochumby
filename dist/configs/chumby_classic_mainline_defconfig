@@ -61,6 +61,7 @@ BR2_LINUX_KERNEL_USE_DEFCONFIG=y
 BR2_LINUX_KERNEL_DEFCONFIG="imx_v4_v5"
 BR2_LINUX_KERNEL_CONFIG_FRAGMENT_FILES="$(BR2_EXTERNAL_NEOCHUMBY_PATH)/kernel/mainline/linux.fragment"
 BR2_LINUX_KERNEL_APPENDED_ZIMAGE=y
+BR2_LINUX_KERNEL_XZ=y
 BR2_LINUX_KERNEL_DTS_SUPPORT=y
 BR2_LINUX_KERNEL_INTREE_DTS_NAME="nxp/imx/imx21-chumby-classic"
 # scripts/extract-cert links OpenSSL: Buildroot's, not the host's.
@@ -71,16 +72,12 @@ BR2_INIT_NONE=y
 BR2_ROOTFS_DEVICE_CREATION_DYNAMIC_DEVTMPFS=y
 
 # Wi-Fi: the Chumby's adapter is an rt73 (rt73usb, with its firmware).
+BR2_PACKAGE_DROPBEAR=y
 BR2_PACKAGE_WPA_SUPPLICANT=y
 BR2_PACKAGE_WPA_SUPPLICANT_NL80211=y
 BR2_PACKAGE_WPA_SUPPLICANT_PASSPHRASE=y
 BR2_PACKAGE_LINUX_FIRMWARE=y
 BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT73=y
-
-# sideload: the initramfs is built into the kernel as well as shipped
-# beside it.  A flashed zImage therefore still boots, and /init can load the
-# NAND recovery modules when the sideload marker is absent.
-BR2_TARGET_ROOTFS_INITRAMFS=y
 
 # /init: ncinit (crates/neochumby-init), which loads the NAND recovery
 # modules (only when flashed) and every other module as its device appears.

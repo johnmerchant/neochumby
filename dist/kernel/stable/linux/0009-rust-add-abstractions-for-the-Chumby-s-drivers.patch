@@ -1857,7 +1857,7 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +}
 --- /dev/null
 +++ b/rust/kernel/mfd.rs
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,124 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +//! Multi-function devices, and the registers of the one we have.
@@ -1966,8 +1966,10 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +    pub const fn status_pintdav(mode: u32) -> u32 {
 +        mode << 14
 +    }
-+    /// PINTDAV signals the pen alone.
-+    pub const PINTDAV_PEN: u32 = 2;
++    /// PINTDAV signals the pen alone (SLAS378, table 2). The chip's reset
++    /// value, 2, signals conversions too, and holds the line low after a pen
++    /// lifts until one finishes.
++    pub const PINTDAV_PEN: u32 = 0;
 +    /// X is done.
 +    pub const STATUS_XSTAT: u32 = 1 << 10;
 +    /// Y is done.

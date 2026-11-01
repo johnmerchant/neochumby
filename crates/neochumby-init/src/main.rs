@@ -1,7 +1,8 @@
 //! ncinit: the dist image's /init, process 1.
 //!
-//! It mounts the kernel's file systems, runs a neochumby stick's boot hook,
-//! and keeps a shell on the console and one on the screen. Throughout, it
+//! It mounts the kernel's file systems, joins the network the stock software
+//! was on (handed over in /psp: network.rs), runs the boot hook, a neochumby
+//! stick's or the image's own, and keeps a shell on the console and one on the screen. Throughout, it
 //! loads the module for each device the kernel announces (its modalias,
 //! matched against depmod's modules.alias), for the devices there at boot
 //! too, except the NAND's drivers, which only root loads (modprobe), and
@@ -15,6 +16,7 @@
 
 mod logo;
 mod modules;
+mod network;
 mod status;
 mod uevent;
 
@@ -37,6 +39,14 @@ const PATH: &str = "/bin:/sbin:/usr/bin:/usr/sbin";
 /// How long the stick gets to show up: several seconds, more when a
 /// control transfer times out and the hub tries it again.
 const STICK_WAIT: Duration = Duration::from_secs(15);
+/// How long the network adapter gets to show up, once it has a stick's
+/// wait behind it.
+const ADAPTER_WAIT: Duration = Duration::from_secs(20);
+/// The stock software's network, as the sideload handed it over.
+const NETWORK_CONFIG: &str = "/psp/network_config";
+/// The image's copy of the boot hook, for a Chumby with no stick of its own:
+/// it mounts the tree from the neochumbyd in /psp/neochumby.conf.
+const IMAGE_HOOK: &str = "/etc/neochumby/userhook2";
 /// A shell that exits sooner than this after it started is restarted only
 /// once this has passed, not in a loop.
 const RESPAWN_GAP: Duration = Duration::from_secs(1);
@@ -99,7 +109,15 @@ impl Init {
         init.nand();
         // The devices already there, whose announcements nobody heard.
         init.coldplug();
-        init.stick();
+        let stick_hook = init.stick();
+        init.network();
+        match stick_hook {
+            Some(hook) => init.hook("the stick's userhook2", hook),
+            None if is_executable(IMAGE_HOOK) && Path::new("/psp/neochumby.conf").exists() => {
+                init.hook("userhook2", IMAGE_HOOK);
+            }
+            None => {}
+        }
 
         // A shell on the console the kernel was given, the serial port,
         // and one on the screen (a USB keyboard types into it), unless a
@@ -124,6 +142,10 @@ impl Init {
                 if self.hook == Some(pid) {
                     log("userhook2 exited");
                     self.hook = None;
+                    // The screen is free again: a shell on it, for a keyboard.
+                    if is_char_device("/dev/tty1") && !self.shells.iter().any(|s| s.tty == "/dev/tty1") {
+                        self.shells.push(Shell::new("/dev/tty1"));
+                    }
                 }
                 for shell in &mut self.shells {
                     if shell.pid == Some(pid) {
@@ -165,37 +187,80 @@ impl Init {
         self.service(0);
     }
 
-    /// A neochumby stick, as the stock boot runs one: its first partition
-    /// on /mnt/usb, and its boot hook, userhook2, beside the shells.
-    fn stick(&mut self) {
+    /// A neochumby stick, as the stock boot has one: its first partition on
+    /// /mnt/usb. Its boot hook, if it has one.
+    fn stick(&mut self) -> Option<&'static str> {
         let until = Instant::now() + STICK_WAIT;
         while !is_block_device("/dev/sda1") && Instant::now() < until {
             self.service(TICK_MS);
         }
         if !is_block_device("/dev/sda1") {
             screen_step("Looking for a neochumby stick", Status::Skipped);
-            return;
+            return None;
         }
         let _ = fs::create_dir_all("/mnt/usb");
         if let Err(e) = boot::mount("/dev/sda1", Path::new("/mnt/usb"), "vfat", MountFlags::default()) {
             step("Mounting the stick on /mnt/usb", Status::Failed, &format!("/dev/sda1: {e}"));
-            return;
+            return None;
         }
         step("Mounting the stick on /mnt/usb", Status::Ok, "stick mounted on /mnt/usb");
-        if !is_executable("/mnt/usb/userhook2") {
+        is_executable("/mnt/usb/userhook2").then_some("/mnt/usb/userhook2")
+    }
+
+    /// Joins the network the stock software was on. Doesn't wait for an
+    /// address: the hook does, with a deadline, and the shells needn't.
+    fn network(&mut self) {
+        const WHAT: &str = "Joining the network";
+        let Ok(text) = fs::read_to_string(NETWORK_CONFIG) else {
+            screen_step(WHAT, Status::Skipped);
+            return;
+        };
+        // Never logs the configuration or wpa_supplicant's, which hold the key.
+        let config = match network::Config::parse(&text) {
+            Ok(c) => c,
+            Err(e) => {
+                step(WHAT, Status::Failed, &format!("{NETWORK_CONFIG}: {e}"));
+                return;
+            }
+        };
+        let interface = if config.wireless { "wlan0" } else { "eth0" };
+        let until = Instant::now() + ADAPTER_WAIT;
+        let present = |i: &str| Path::new("/sys/class/net").join(i).exists();
+        while !present(interface) && Instant::now() < until {
+            self.service(TICK_MS);
+        }
+        if !present(interface) {
+            network_failed(&format!("no {interface}"));
             return;
         }
-        let mut hook = Command::new("/mnt/usb/userhook2");
+        run_quietly(Command::new("/bin/ifconfig").args(["lo", "127.0.0.1", "up"]).env("PATH", PATH));
+        if config.wireless && let Err(e) = start_wpa_supplicant(&config, interface) {
+            network_failed(&e);
+            return;
+        }
+        match configure_address(&config.address, interface) {
+            Ok(()) => {
+                step(WHAT, Status::Ok, &format!("network: {interface}, {}", config.ssid));
+                start_ssh();
+            }
+            Err(e) => network_failed(&e),
+        }
+    }
+
+    /// Runs a boot hook beside the shells, as the stock boot runs one.
+    fn hook(&mut self, what: &str, path: &str) {
+        let mut hook = Command::new(path);
         hook.env("PATH", PATH).stdin(Stdio::null());
         if let Some((out, err)) = terminal("/dev/console").and_then(|f| Some((f.try_clone().ok()?, f))) {
             hook.stdout(out).stderr(err);
         }
+        let label = format!("Running {what}");
         match hook.spawn() {
             Ok(child) => {
-                step("Running the stick's userhook2", Status::Ok, "running /mnt/usb/userhook2");
+                step(&label, Status::Ok, &format!("running {path}"));
                 self.hook = Some(child.id());
             }
-            Err(e) => step("Running the stick's userhook2", Status::Failed, &format!("userhook2: {e}")),
+            Err(e) => step(&label, Status::Failed, &format!("{path}: {e}")),
         }
     }
 
@@ -286,6 +351,121 @@ impl Shell {
                 Status::Failed,
                 &format!("{}: /bin/sh: {e}", self.tty),
             ),
+        }
+    }
+}
+
+/// The network failed: why, on the screen, where a Chumby with no serial
+/// line can show it, with what the kernel said of the USB bus and the adapter.
+fn network_failed(why: &str) {
+    step("Joining the network", Status::Failed, &format!("network: {why}"));
+    screen(&format!("{why}\n"));
+    let Ok(out) = Command::new("/bin/dmesg").env("PATH", PATH).stdin(Stdio::null()).output() else { return };
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in network_lines(&text) {
+        screen(&format!("{line}\n"));
+    }
+}
+
+/// The last of the kernel's lines about USB and the adapter, without their
+/// times, which a screen of 64 columns has no room for.
+fn network_lines(dmesg: &str) -> Vec<&str> {
+    const WORDS: [&str; 7] = ["usb", "rt73", "rt2x00", "wlan", "firmware", "imx21", "hub"];
+    let lines: Vec<&str> = dmesg
+        .lines()
+        .filter(|l| WORDS.iter().any(|w| l.to_ascii_lowercase().contains(w)))
+        .map(|l| l.split_once("] ").map_or(l, |(_, rest)| rest))
+        .collect();
+    let from = lines.len().saturating_sub(12);
+    lines[from..].to_vec()
+}
+
+/// An SSH server, only if the owner asked for one: /psp/neochumby-ssh there,
+/// and keys to let in at /psp/.ssh/authorized_keys. No password logs in. The
+/// host key is made anew each boot, there being nowhere to keep it.
+fn start_ssh() {
+    use std::os::unix::fs::PermissionsExt;
+    const WHAT: &str = "Starting the SSH server";
+    if !Path::new("/psp/neochumby-ssh").exists() {
+        return;
+    }
+    let Ok(keys) = fs::read("/psp/.ssh/authorized_keys") else {
+        step(WHAT, Status::Failed, "ssh: no /psp/.ssh/authorized_keys");
+        return;
+    };
+    let installed = fs::create_dir_all("/root/.ssh")
+        .and_then(|()| fs::set_permissions("/root", fs::Permissions::from_mode(0o700)))
+        .and_then(|()| fs::set_permissions("/root/.ssh", fs::Permissions::from_mode(0o700)))
+        .and_then(|()| fs::write("/root/.ssh/authorized_keys", keys))
+        .and_then(|()| fs::set_permissions("/root/.ssh/authorized_keys", fs::Permissions::from_mode(0o600)))
+        // Where Buildroot's /etc/dropbear, a link, points.
+        .and_then(|()| fs::create_dir_all("/var/run/dropbear"));
+    if let Err(e) = installed {
+        step(WHAT, Status::Failed, &format!("ssh: {e}"));
+        screen(&format!("ssh: {e}\n"));
+        return;
+    }
+    let started = Command::new("/usr/sbin/dropbear")
+        .args(["-R", "-s", "-g"])
+        .env("PATH", PATH)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match started {
+        Ok(s) if s.success() => step(WHAT, Status::Ok, "ssh: dropbear started"),
+        Ok(s) => step(WHAT, Status::Failed, &format!("ssh: dropbear: {s}")),
+        Err(e) => step(WHAT, Status::Failed, &format!("ssh: dropbear: {e}")),
+    }
+}
+
+/// wpa_supplicant, in the background, from a file only root can read.
+fn start_wpa_supplicant(config: &network::Config, interface: &str) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    const CONF: &str = "/tmp/wpa_supplicant.conf";
+    let conf = config.wpa_conf().map_err(|e| format!("{NETWORK_CONFIG}: {e}"))?;
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(CONF)
+        .and_then(|mut f| f.write_all(conf.as_bytes()))
+        .map_err(|e| format!("{CONF}: {e}"))?;
+    let status = Command::new("/usr/sbin/wpa_supplicant")
+        .args(["-B", "-D", "nl80211", "-i", interface, "-c", CONF])
+        .env("PATH", PATH)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("wpa_supplicant: {e}"))?;
+    if status.success() { Ok(()) } else { Err(format!("wpa_supplicant: {status}")) }
+}
+
+/// The interface's address: DHCP, in the background until it has a lease
+/// and keeping it after, or the stock configuration's static one.
+fn configure_address(address: &network::Address, interface: &str) -> Result<(), String> {
+    let run = |program: &str, args: &[&str]| -> Result<(), String> {
+        let status = Command::new(program)
+            .args(args)
+            .env("PATH", PATH)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| format!("{program}: {e}"))?;
+        if status.success() { Ok(()) } else { Err(format!("{program}: {status}")) }
+    };
+    match address {
+        network::Address::Dhcp => run("/sbin/udhcpc", &["-b", "-i", interface, "-s", "/usr/share/udhcpc/default.script"]),
+        network::Address::Static { ip, netmask, gateway, nameservers } => {
+            run("/bin/ifconfig", &[interface, ip, "netmask", netmask, "up"])?;
+            if !gateway.is_empty() {
+                run("/sbin/route", &["add", "default", "gw", gateway])?;
+            }
+            let resolv: String = nameservers.iter().map(|n| format!("nameserver {n}\n")).collect();
+            fs::write("/etc/resolv.conf", resolv).map_err(|e| format!("/etc/resolv.conf: {e}"))
         }
     }
 }
@@ -426,5 +606,19 @@ fn rescue() -> ! {
     }
     loop {
         std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn network_lines_are_the_relevant_last_few() {
+        let dmesg = "[ 1.0] Booting\n[ 2.0] usb 1-1: new full-speed\n[ 3.0] other\n[ 4.0] phy0: rt2x00 failed\n";
+        assert_eq!(network_lines(dmesg), ["usb 1-1: new full-speed", "phy0: rt2x00 failed"]);
+        let many: String = (0..20).map(|i| format!("[ 1.0] usb {i}\n")).collect();
+        let last = network_lines(&many);
+        assert_eq!((last.len(), last[0], last[11]), (12, "usb 8", "usb 19"));
     }
 }

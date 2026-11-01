@@ -259,10 +259,11 @@ if [ "${1:-}" = --inside ]; then
     echo "dist/build: /init missing from the sideload rootfs" >&2
     exit 1
   }
-  find $o/target/lib/modules -name mxc_nand.ko | grep -q . || {
-    echo "dist/build: mxc_nand.ko missing from the sideload initramfs" >&2
+  # Nothing in the image may reach the Chumby's flash.
+  if [ "$kernel" != 5.9.16 ] && find $o/target/lib/modules -name 'mtd*.ko' -o -name 'nand*.ko' -o -name 'mxc_nand.ko' | grep -q .; then
+    echo "dist/build: a NAND module in the sideload initramfs" >&2
     exit 1
-  }
+  fi
   mkdir -p "$out"
   cp "$o/images/$zimage" "$out/sideload-zImage"
   cp $o/images/rootfs.cpio.gz "$out/sideload-rootfs.cpio.gz"

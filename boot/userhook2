@@ -1,5 +1,5 @@
 #!/bin/sh
-# neochumby-hook-version=3
+# neochumby-hook-version=4
 # (Raise it with every change: the session replaces an installed hook only
 # with a higher version, so a rollback to an older set never downgrades it.)
 # neochumby's boot hook. The same script goes in two places, and the stock
@@ -153,6 +153,9 @@ elif [ -n "$server" ]; then
   # nosuid,nodev: nothing in the tree hands out another uid, or a device.
   # With neochumby-boot, noexec too: nothing on it runs but checked copies.
   opts="ro,nosuid,nodev,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0"
+  # BusyBox's mount here passes these to the kernel as they are, and a kernel
+  # given options as text is told the address, not left to look it up.
+  [ -e /etc/neochumby/userhook2 ] && opts="$opts,addr=$server,mountaddr=$server,mountproto=tcp"
   [ -x /psp/neochumby-boot ] && opts="$opts,noexec"
   deadline 15 mount -t nfs -o "$opts" \
     "$server:${path:-/}" "$MNT" || {

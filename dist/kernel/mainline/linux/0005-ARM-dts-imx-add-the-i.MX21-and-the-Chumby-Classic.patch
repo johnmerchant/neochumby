@@ -50,7 +50,7 @@ new file mode 100644
 index 000000000..3e59f3afc
 --- /dev/null
 +++ b/arch/arm/boot/dts/nxp/imx/imx21-chumby-classic.dts
-@@ -0,0 +1,377 @@
+@@ -0,0 +1,379 @@
 +// SPDX-License-Identifier: GPL-2.0-or-later
 +/*
 + * Chumby Classic (hardware 3.8): a Freescale i.MX21 with 64 MiB of SDRAM,
@@ -329,11 +329,11 @@ index 000000000..3e59f3afc
 +		pinctrl_usbh: usbhgrp {
 +			fsl,pins = <
 +				0x37 0x000 0x0	/* PB23_PF_USB_PWR */
-+				0x39 0x000 0x1	/* PB25_PF_USBH1_ON */
-+				0x3a 0x000 0x0	/* PB26_PF_USBH1_FS */
-+				0x3b 0x000 0x1	/* PB27_PF_USBH1_OE */
-+				0x3c 0x000 0x1	/* PB28_PF_USBH1_TXDM */
-+				0x3d 0x000 0x1	/* PB29_PF_USBH1_TXDP */
++				0x39 0x004 0x1	/* PB25_PF_USBH1_ON */
++				0x3a 0x004 0x0	/* PB26_PF_USBH1_FS */
++				0x3b 0x004 0x1	/* PB27_PF_USBH1_OE */
++				0x3c 0x004 0x1	/* PB28_PF_USBH1_TXDM */
++				0x3d 0x004 0x1	/* PB29_PF_USBH1_TXDP */
 +				0x3e 0x000 0x1	/* PB30_PF_USBH1_RXDM */
 +				0x3f 0x000 0x1	/* PB31_PF_USBH1_RXDP */
 +				0x73 0x002 0x1	/* PD19_AOUT_USBH2_RXDM */
@@ -426,6 +426,8 @@ index 000000000..3e59f3afc
 +&usbh {
 +	pinctrl-names = "default";
 +	pinctrl-0 = <&pinctrl_usbh>;
++	/* As the stock driver sets it for every transfer. */
++	fsl,host1-txen-oe;
 +	status = "okay";
 +};
 diff --git a/arch/arm/boot/dts/nxp/imx/imx21.dtsi b/arch/arm/boot/dts/nxp/imx/imx21.dtsi

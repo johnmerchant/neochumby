@@ -1,6 +1,6 @@
 //! neochumby-home, the app list: the installed apps, tap one to open it;
 //! PAIR when booted with a neochumbyd this Chumby is not paired with; the
-//! time; and, on the stock 2.6 kernel, CHUMBY MODE, which hands the Chumby
+//! time; how it's connected (network.rs), which only looks; and, on the stock 2.6 kernel, CHUMBY MODE, which hands the Chumby
 //! back to its own software. (On the dist's Linux, 5.9 and later, there is
 //! no stock software to go back to, and no CHUMBY MODE.) It's an ordinary
 //! app that may be the start app (`start = true`), and the start app when
@@ -24,6 +24,7 @@
 //! An app that needs a neochumbyd this Chumby has not got is listed, greyed,
 //! and does not open.
 
+mod network;
 mod pair;
 mod term;
 
@@ -42,6 +43,9 @@ const PRESSED: Rgb = (230, 230, 230);
 const DARK: Rgb = (0, 0, 0);
 const BLUE: Rgb = (120, 200, 255);
 const GREEN: Rgb = (120, 220, 120);
+
+/// How often the network's line is read again.
+const NETWORK_EVERY: Duration = Duration::from_secs(5);
 
 /// Apps to a page: four, or three and MORE.
 const ROWS: usize = 4;
@@ -100,6 +104,8 @@ struct Screen {
     pairing: Option<(String, u16)>,
     /// Whether CHUMBY MODE is offered: on the stock 2.6 kernel only.
     chumby_mode: bool,
+    /// How the Chumby is connected, a line to show.
+    network: String,
 }
 
 impl Screen {
@@ -159,6 +165,17 @@ fn clock() -> String {
     format!("{:02}:{:02}", t.hour, t.minute)
 }
 
+/// How the Chumby is connected, under the title: on the row that parts the
+/// first app from it, where a tap does nothing. A layout too small for that
+/// row goes without. Padded, to overwrite a longer line.
+fn paint_network(p: &mut Paint, l: &Layout, line: &str) {
+    if l.entry - l.filled() == 0 {
+        return;
+    }
+    let w = l.cols.saturating_sub(2);
+    p.at(1, 1).text(&format!("{:<w$}", fit(line, w)), GREY, None, false);
+}
+
 fn paint_clock(p: &mut Paint, l: &Layout) {
     let t = clock();
     p.at(l.cols.saturating_sub(t.len() + 1), 0).text(&t, TEXT, None, true);
@@ -177,6 +194,7 @@ fn draw(t: &mut Term, all: &[App], s: &Screen, pressed: Option<Hit>) {
     let mut p = Paint::cleared();
     p.at(1, 0).text("neochumby", TITLE, None, true);
     paint_clock(&mut p, &l);
+    paint_network(&mut p, &l, &s.network);
 
     if s.listed.is_empty() {
         p.at(1, 2).text("no apps installed", GREY, None, false);
@@ -284,9 +302,11 @@ fn main() {
         page: 0,
         pairing: pairing_offer(),
         chumby_mode: stock_kernel(release.as_deref()),
+        network: network::Status::read().line(),
     };
     let mut pressed: Option<Hit> = None;
     let mut last_clock = Instant::now();
+    let mut last_network = Instant::now();
     draw(&mut t, &all, &screen, None);
     // For the scenarios, which wait for it.
     eprintln!("neochumby-home: showing {} apps on {}x{}", screen.listed.len(), t.cols, t.rows);
@@ -338,6 +358,16 @@ fn main() {
             t.show(&p.0);
             last_clock = Instant::now();
         }
+        if last_network.elapsed() >= NETWORK_EVERY {
+            let line = network::Status::read().line();
+            if line != screen.network {
+                let mut p = Paint::default();
+                paint_network(&mut p, &screen.layout(t.cols, t.rows), &line);
+                t.show(&p.0);
+                screen.network = line;
+            }
+            last_network = Instant::now();
+        }
     }
 }
 
@@ -346,7 +376,7 @@ mod tests {
     use super::*;
 
     fn screen(apps: usize, pairing: bool, chumby_mode: bool) -> Screen {
-        Screen { listed: (0..apps).collect(), page: 0, pairing: pairing.then(|| ("s".into(), 1)), chumby_mode }
+        Screen { listed: (0..apps).collect(), page: 0, pairing: pairing.then(|| ("s".into(), 1)), chumby_mode, network: String::new() }
     }
 
     #[test]
