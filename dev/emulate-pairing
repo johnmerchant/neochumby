@@ -98,6 +98,8 @@ emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen d
 until_ok 60 logged 'neochumby: opening home' || fail "neochumbyd has no log from the paired Chumby"
 [ "$(keys)" = "$first" ] || fail "not one Chumby registered: $(keys)"
 
+# The receiver's own first round may be running already. Then this sync waits
+# for it, and the round after finds the set up to date.
 step "it syncs, and the power is cut as the set goes live"
 nd sync chumby > "$out/sync.txt" || fail "neochumbyd sync failed: $(cat "$out/sync.txt")"
 emu wait log 'neochumby-sync: set a is live from the next restart' $((60 * slow)) || fail "the set didn't go live"

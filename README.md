@@ -599,7 +599,9 @@ A restart (`neochumbyd restart NAME`) runs the live set: the session finds it
 as the hook does, and runs that set's `neochumby` in its own place. A new kernel
 or initramfs in the set takes a reboot. While a Chumby is running the set the
 next round would write (it has made another live, and not restarted),
-`neochumbyd sync` exits 3 and says to restart first.
+`neochumbyd sync` exits 3 and says to restart first. Asked while a round is
+running, it waits for the round after: the one running may have scanned an older
+tree.
 
 On the Chumby (with SSH enabled by its owner):
 

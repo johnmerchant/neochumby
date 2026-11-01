@@ -90,6 +90,8 @@ until_ok 30 grep -q 'serial line .* connected' "$out/neochumbyd.log" || fail "th
 until_ok 120 logged 'neochumby: opening home' || fail "neochumbyd has no log from the Chumby"
 nd shot "$name" "$out/screen.png" || fail "neochumbyd got no screenshot over the line"
 
+# The receiver's own first round may be running already. Then this sync waits
+# for it, and the round after finds the set up to date.
 step "its first round, by neochumbyd sync"
 t0=$(date +%s)
 nd sync "$name" || fail "the first round failed"
