@@ -146,21 +146,21 @@ class Images(unittest.TestCase):
             extra = os.path.join(t, "extra")
             os.makedirs(extra)
             with open(os.path.join(extra, "neochumby.conf"), "w") as f:
-                f.write("start=classic\n")
+                f.write("start=wx\n")
             pictures = os.path.join(t, "pictures")
             os.makedirs(pictures)
             with open(os.path.join(pictures, "manifest.txt"), "w") as f:
                 f.write("page 1\n")
             img = os.path.join(t, "stick.img")
-            emulate.make_stick(img, tree, "dist", extra, [(pictures, "/tmp/classic")])
+            emulate.make_stick(img, tree, "dist", extra, [(pictures, "/tmp/pictures")])
             files = cm.fat_files(img)
         with open(emulate.HOOK, "rb") as f:
             self.assertEqual(files["userhook2"], f.read())
         self.assertEqual(files["neochumby/neochumby"], b"#!/bin/sh\n")
         self.assertIn("neochumby/apps/home/neochumby-home", files)
-        self.assertEqual(files["emulate/psp/neochumby.conf"], b"start=classic\n")
+        self.assertEqual(files["emulate/psp/neochumby.conf"], b"start=wx\n")
         self.assertEqual(files["emulate/psp/ts_settings"], emulate.NEUTRAL_CALIBRATION.encode() + b"\n")
-        self.assertEqual(files["emulate/binds"], b"0 /tmp/classic\n")
+        self.assertEqual(files["emulate/binds"], b"0 /tmp/pictures\n")
         self.assertEqual(files["emulate/bind/0/manifest.txt"], b"page 1\n")
 
     def test_stock_stick_has_no_settings(self):
@@ -237,7 +237,7 @@ STUB = textwrap.dedent(r'''
                         events.write(json.dumps(e) + "\n")
                     events.flush()
                     if args["events"][-1] == {"type": "btn", "data": {"button": "left", "down": False}}:
-                        log.write(b"neochumby: home asks: chumby-mode\nneochumby exited: 0\n")
+                        log.write(b"neochumby: the session ends\nneochumby exited: 0\n")
                 elif cmd == "qom-set":
                     events.write(json.dumps({"qom-set": [args["property"], args["value"]]}) + "\n")
                     events.flush()
@@ -376,7 +376,7 @@ class Machine(unittest.TestCase):
         extra = os.path.join(self.t, "extra")
         os.makedirs(extra)
         with open(os.path.join(extra, "neochumby.conf"), "w") as f:
-            f.write("start=classic\n")
+            f.write("start=wx\n")
         r = self.emu("start", self.tree, "--kernel", self.kernel, "--nand", self.nand, "--factory-psp", self.psp,
                      "--qemu", self.stub, "--psp", extra, profile="stock")
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
@@ -459,8 +459,7 @@ FAKE_NEOCHUMBYD = textwrap.dedent(r'''
         with open(os.path.join(state, "fake-input"), "a") as f:
             f.write(" ".join(a) + "\n")
         if a[:4] == ["tap", "kitchen", "160", "220"]:
-            say("neochumby: home asks: chumby-mode")
-            say("neochumby: CHUMBY MODE")
+            say("neochumby: the session ends")
     else:
         usage()
 ''').lstrip()
@@ -474,10 +473,9 @@ FAKE_NEOCHUMBYD = textwrap.dedent(r'''
 # commit that changed the image's directory.
 STUBS = {
     "dist/fetch": r'''
-        image=dist kernel=5.9.16 mode=fetch out=
+        image=dist kernel=stable mode=fetch out=
         while [ $# -gt 0 ]; do
           case $1 in
-          --classic) image=classic kernel=2.6.16 ;;
           --kernel) kernel=$2; shift ;;
           --inputs) mode=inputs ;;
           --pathspecs) mode=pathspecs ;;
@@ -493,35 +491,20 @@ STUBS = {
         echo "fetch $image $kernel ${out#"$PWD/"}" >>"$STUB_LOG"
         [ "$STUB_FETCH" = ok ] || { echo "fetch: $STUB_FETCH" >&2; exit 1; }
         files="sideload-zImage sideload-rootfs.cpio.gz"
-        [ "$image" = dist ] || files="classic-zImage classic-rootfs.cpio.gz classic-config"
         mkdir -p "$out"
         for f in $files; do echo "fetched $kernel" >"$out/$f"; done
         echo "fetched the $image image"
     ''',
-    "classic/fetch": r'''
-        exec "$(dirname "$0")/../dist/fetch" --classic "$@"
-    ''',
     "dist/build": r'''
         cd "$(dirname "$0")/.."
-        echo "build dist ${NEOCHUMBY_DIST_KERNEL:-5.9.16} ${1#"$PWD/"}" >>"$STUB_LOG"
+        echo "build dist ${NEOCHUMBY_DIST_KERNEL:-stable} ${1#"$PWD/"}" >>"$STUB_LOG"
         case $STUB_BUILD in
         ok) ;;
         noruntime) echo "dist/build: needs Apple's container, docker or podman" >&2; exit 2 ;;
         *) exit 1 ;;
         esac
         mkdir -p "$1"
-        for f in sideload-zImage sideload-rootfs.cpio.gz; do echo "built ${NEOCHUMBY_DIST_KERNEL:-5.9.16}" >"$1/$f"; done
-    ''',
-    "classic/build": r'''
-        cd "$(dirname "$0")/.."
-        echo "build classic 2.6.16 ${1#"$PWD/"}" >>"$STUB_LOG"
-        case $STUB_BUILD in
-        ok) ;;
-        noruntime) echo "classic/build: needs Apple's container, docker or podman" >&2; exit 2 ;;
-        *) exit 1 ;;
-        esac
-        mkdir -p "$1"
-        for f in classic-zImage classic-rootfs.cpio.gz classic-config; do echo built >"$1/$f"; done
+        for f in sideload-zImage sideload-rootfs.cpio.gz; do echo "built ${NEOCHUMBY_DIST_KERNEL:-stable}" >"$1/$f"; done
     ''',
     "emu/qemu/fetch": r'''
         here=$(cd "$(dirname "$0")" && pwd)
@@ -577,7 +560,6 @@ class Prebuilt(unittest.TestCase):
         for path, body in STUBS.items():
             self.write(path, "#!/bin/sh\n" + textwrap.dedent(body).lstrip(), 0o755)
         self.write("dist/Config.in", "one\n")
-        self.write("classic/linux.fragment", "one\n")
         self.git("init", "-q")
         self.git("add", "-A")
         self.git("update-index", "--add", "--cacheinfo", f"160000,{self.PIN},emu/qemu/qemu-chumby")
@@ -625,8 +607,8 @@ class Prebuilt(unittest.TestCase):
 
     def test_fetches_then_uses_what_it_fetched(self):
         r = self.prepare()
-        self.assertEqual(self.asked(), ["fetch qemu", "fetch dist 5.9.16 build/sideload-dist"])
-        self.assertEqual(self.read("build/sideload-dist/sideload-zImage"), "fetched 5.9.16\n")
+        self.assertEqual(self.asked(), ["fetch qemu", "fetch dist stable build/sideload-dist"])
+        self.assertEqual(self.read("build/sideload-dist/sideload-zImage"), "fetched stable\n")
         self.assertIn("ready: dist boots", r.stdout)
         # Current: nothing fetched or built again.
         r = self.prepare()
@@ -634,15 +616,15 @@ class Prebuilt(unittest.TestCase):
         self.assertNotIn("fetching", r.stderr)
 
     def test_falls_back_to_building(self):
-        self.env["STUB_FETCH"] = "no prebuilt dist image for inputs 123 (5.9.16): CI publishes"
+        self.env["STUB_FETCH"] = "no prebuilt dist image for inputs 123 (stable): CI publishes"
         self.env["STUB_QEMU_FETCH"] = "the prebuilt QEMU doesn't run here:"
         r = self.prepare()
         self.assertEqual(self.asked(), ["fetch qemu", "build qemu",
-                                        "fetch dist 5.9.16 build/sideload-dist", "build dist 5.9.16 build/sideload-dist"])
+                                        "fetch dist stable build/sideload-dist", "build dist stable build/sideload-dist"])
         self.assertIn("QEMU: the prebuilt binary doesn't run here; building from source (emu/qemu/build)", r.stderr)
-        self.assertIn("the dist image (5.9.16): no prebuilt for these inputs (or no network); "
+        self.assertIn("the dist image (stable): no prebuilt for these inputs (or no network); "
                       "building from source (dist/build build/sideload-dist)", r.stderr)
-        self.assertEqual(self.read("build/sideload-dist/sideload-zImage"), "built 5.9.16\n")
+        self.assertEqual(self.read("build/sideload-dist/sideload-zImage"), "built stable\n")
         self.prepare()
         self.assertEqual(self.asked(), [], "what it built is current")
 
@@ -651,7 +633,7 @@ class Prebuilt(unittest.TestCase):
         self.asked()
         self.commit("dist/Config.in", "two\n")
         self.prepare()
-        self.assertEqual(self.asked(), ["fetch dist 5.9.16 build/sideload-dist"])
+        self.assertEqual(self.asked(), ["fetch dist stable build/sideload-dist"])
         # A new qemu-chumby pinned.
         self.git("update-index", "--cacheinfo", f"160000,{'1' * 40},emu/qemu/qemu-chumby")
         self.git("commit", "-qm", "qemu-chumby")
@@ -667,26 +649,26 @@ class Prebuilt(unittest.TestCase):
         self.asked()
         self.write("dist/Config.in", "mine\n")
         r = self.prepare()
-        self.assertEqual(self.asked(), ["build dist 5.9.16 build/sideload-dist"], "no prebuilt matches them")
+        self.assertEqual(self.asked(), ["build dist stable build/sideload-dist"], "no prebuilt matches them")
         self.assertIn("its inputs have local changes; building from source", r.stderr)
         self.prepare()
         self.assertEqual(self.asked(), [], "built from these changes already")
         self.write("dist/new-package", "new\n")
         self.prepare()
-        self.assertEqual(self.asked(), ["build dist 5.9.16 build/sideload-dist"], "a new file is a change")
+        self.assertEqual(self.asked(), ["build dist stable build/sideload-dist"], "a new file is a change")
         self.write("dist/new-package", "newer\n")
         self.prepare()
-        self.assertEqual(self.asked(), ["build dist 5.9.16 build/sideload-dist"])
+        self.assertEqual(self.asked(), ["build dist stable build/sideload-dist"])
         os.unlink(os.path.join(self.repo, "dist/new-package"))
         self.write("dist/Config.in", "one\n")
         self.prepare()
-        self.assertEqual(self.asked(), ["fetch dist 5.9.16 build/sideload-dist"], "the committed inputs again")
+        self.assertEqual(self.asked(), ["fetch dist stable build/sideload-dist"], "the committed inputs again")
 
     def test_build_and_no_fetch(self):
         self.prepare()
         self.asked()
         r = self.prepare("--build")
-        self.assertEqual(self.asked(), ["build qemu", "build dist 5.9.16 build/sideload-dist"],
+        self.assertEqual(self.asked(), ["build qemu", "build dist stable build/sideload-dist"],
                          "what was fetched is built")
         self.assertIn("QEMU: --build; building from source", r.stderr)
         self.prepare("--build")
@@ -696,19 +678,19 @@ class Prebuilt(unittest.TestCase):
         self.commit("dist/Config.in", "two\n")
         self.env["NEOCHUMBY_NO_FETCH"] = "1"
         self.prepare()
-        self.assertEqual(self.asked(), ["build dist 5.9.16 build/sideload-dist"])
+        self.assertEqual(self.asked(), ["build dist stable build/sideload-dist"])
         del self.env["NEOCHUMBY_NO_FETCH"]
         self.commit("dist/Config.in", "three\n")
         self.env["NEOCHUMBY_BUILD"] = "1"
         self.prepare()
-        self.assertEqual(self.asked(), ["build dist 5.9.16 build/sideload-dist"])
+        self.assertEqual(self.asked(), ["build dist stable build/sideload-dist"])
 
     def test_skipped_when_it_cant_be_built(self):
         self.env.update(STUB_FETCH="gh isn't logged in, which verifying the prebuilt image's attestation needs:",
                         STUB_BUILD="noruntime")
         r = self.prepare(want=77)
         self.assertIn("skipped: the dist profile needs the dist image (dist/fetch, else dist/build): "
-                      "the dist image (5.9.16): not fetched (gh isn't logged in, which verifying the "
+                      "the dist image (stable): not fetched (gh isn't logged in, which verifying the "
                       "prebuilt needs), and it can't be built here", r.stdout)
         self.assertIn("dist/build: needs Apple's container", r.stderr)
         self.assertFalse(os.path.exists(os.path.join(self.repo, "build/sideload-dist/.neochumby-inputs")))
@@ -745,14 +727,14 @@ class Prebuilt(unittest.TestCase):
         # Rebuilt by hand after dev/emulate fetched it: by hand again.
         os.unlink(os.path.join(self.repo, "build/sideload-dist/sideload-zImage"))
         self.prepare()
-        self.assertEqual(self.asked(), ["fetch dist 5.9.16 build/sideload-dist"])
+        self.assertEqual(self.asked(), ["fetch dist stable build/sideload-dist"])
         self.write("build/sideload-dist/sideload-zImage", "mine, longer\n")
         self.prepare()
         self.assertEqual(self.asked(), [])
         self.assertEqual(self.read("build/sideload-dist/sideload-zImage"), "mine, longer\n")
         # Unless building is asked for.
         self.prepare("--build")
-        self.assertEqual(self.asked(), ["build qemu", "build dist 5.9.16 build/sideload-dist"],
+        self.assertEqual(self.asked(), ["build qemu", "build dist stable build/sideload-dist"],
                          "QEMU was fetched, too")
 
     def test_given_images_and_qemu_are_never_made(self):
@@ -769,19 +751,13 @@ class Prebuilt(unittest.TestCase):
         self.assertIn("needs your own firmware", r.stdout)
         self.assertEqual(self.asked(), [])
 
-    def test_kernel_and_classic(self):
-        self.env["NEOCHUMBY_DIST_KERNEL"] = "stable"
+    def test_kernel(self):
+        self.env["NEOCHUMBY_DIST_KERNEL"] = "mainline"
         self.env["STUB_FETCH"] = "no prebuilt"
         self.prepare()
-        self.assertEqual(self.asked(), ["fetch qemu", "fetch dist stable build/sideload-dist-stable",
-                                        "build dist stable build/sideload-dist-stable"])
-        self.assertEqual(self.read("build/sideload-dist-stable/sideload-zImage"), "built stable\n")
-        self.env["STUB_FETCH"] = "ok"
-        self.prepare(profile="classic")
-        self.assertEqual(self.asked(), ["fetch classic 2.6.16 build/classic"])
-        self.commit("dist/Config.in", "two\n")
-        self.prepare(profile="classic")
-        self.assertEqual(self.asked(), [], "dist's inputs aren't classic's")
+        self.assertEqual(self.asked(), ["fetch qemu", "fetch dist mainline build/sideload-dist-mainline",
+                                        "build dist mainline build/sideload-dist-mainline"])
+        self.assertEqual(self.read("build/sideload-dist-mainline/sideload-zImage"), "built mainline\n")
 
     def test_prepared(self):
         """After dev/e2e's prepare, start neither fetches nor builds."""
@@ -799,7 +775,7 @@ class Prebuilt(unittest.TestCase):
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
         with open(os.path.join(self.state, "argv.json")) as f:
             a = json.load(f)
-        self.assertEqual(self.asked(), ["fetch qemu", "fetch dist 5.9.16 build/sideload-dist"])
+        self.assertEqual(self.asked(), ["fetch qemu", "fetch dist stable build/sideload-dist"])
         self.assertEqual(a[a.index("-kernel") + 1], os.path.join(self.repo, "build/sideload-dist/sideload-zImage"))
 
     def test_e2e_prepares_once(self):
@@ -809,7 +785,7 @@ class Prebuilt(unittest.TestCase):
                             os.path.join(self.t, "e2e")], env=self.env, capture_output=True, text=True,
                            timeout=60)
         self.assertEqual(r.returncode, 0, r.stdout + r.stderr)
-        self.assertEqual(self.asked(), ["build qemu", "build dist 5.9.16 build/sideload-dist"])
+        self.assertEqual(self.asked(), ["build qemu", "build dist stable build/sideload-dist"])
         self.env.update(STUB_FETCH="no prebuilt", STUB_BUILD="fail")
         self.commit("dist/Config.in", "two\n")
         r = subprocess.run([os.path.join(self.repo, "dev", "e2e"), tree, tree, os.path.join(self.t, "e2e")],
@@ -1022,7 +998,7 @@ class Device(unittest.TestCase):
             f.write(FAKE_NEOCHUMBYD)
         os.chmod(exe, 0o755)
         with open(os.path.join(self.nd, "fake-log"), "w") as f:
-            f.write("neochumby: opening home\nneochumby: CHUMBY MODE\n")
+            f.write("neochumby: opening home\nneochumby: the session ends\n")
         self.tree = os.path.join(self.t, "tree")
         os.makedirs(self.tree)
         with open(os.path.join(self.tree, "neochumby"), "w") as f:
@@ -1046,7 +1022,7 @@ class Device(unittest.TestCase):
         emulated = {k: v for k, v in self.env.items() if k != "NEOCHUMBY_EMU_DEVICE"}
         self.assertEqual(self.emu("backend", env=emulated).stdout.strip(), "dist")
         self.assertEqual(self.emu("prompt", "pull the power", env=emulated).returncode, 77)
-        for profile in ("stock", "dist", "classic"):
+        for profile in ("stock", "dist"):
             env = dict(emulated, NEOCHUMBY_EMU_PROFILE=profile)
             self.assertEqual(self.emu("backend", env=env).stdout.strip(), profile)
             self.assertEqual(self.emu("scale", env=env).stdout.strip(), str(emulate.SCALE[profile]))

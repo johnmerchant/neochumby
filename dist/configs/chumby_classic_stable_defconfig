@@ -72,7 +72,7 @@ BR2_PACKAGE_LINUX_FIRMWARE_RALINK_RT73=y
 # modules (only when flashed) and every other module as its device appears.
 BR2_PACKAGE_NEOCHUMBY_INIT=y
 
-# The initramfs userhook2 kexecs with, beside the zImage.
+# The initramfs the boot hook hands over, beside the zImage.
 BR2_TARGET_ROOTFS_CPIO=y
 BR2_TARGET_ROOTFS_CPIO_GZIP=y
 # BR2_TARGET_ROOTFS_TAR is not set

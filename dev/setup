@@ -89,9 +89,9 @@ else
     bad "CMake 3.21 or later (for the fetch app)" "$(how cmake cmake cmake cmake)"
 fi
 if command -v pkg-config >/dev/null 2>&1; then
-    ok "pkg-config (for a tree for Linux 5.9 and later)"
+    ok "pkg-config (for tools/tree)"
 else
-    bad "pkg-config (for a tree for Linux 5.9 and later)" "$(how pkg-config pkg-config pkgconf-pkg-config pkgconf)"
+    bad "pkg-config (for tools/tree)" "$(how pkg-config pkg-config pkgconf-pkg-config pkgconf)"
 fi
 for t in git curl tar; do
     if command -v "$t" >/dev/null 2>&1; then
@@ -106,7 +106,7 @@ if tar --version 2>/dev/null | grep -q bsdtar || command -v xz >/dev/null 2>&1; 
 else
     bad "xz (for the prebuilt tarballs)" "$(how xz xz-utils xz xz)"
 fi
-# dist/fetch and classic/fetch verify CI's images' attestations with gh;
+# dist/fetch verifies CI's images' attestations with gh;
 # without it, they're built from source (in a container) instead.
 if ! command -v gh >/dev/null 2>&1; then
     bad "gh, logged in (verifies the prebuilt images)" "$(how gh gh gh github-cli), then: gh auth login"
@@ -118,9 +118,9 @@ fi
 
 echo "Submodules"
 # The apps' third-party C, and qemu-chumby (its chumby-machine drives the
-# emulator). classic/linux, the 2.6.16 kernel, is left out (update = none):
-# classic/build fetches it only when it builds from source.
-if git submodule status | grep -v " classic/linux" | grep -q "^-"; then
+# emulator). The sideloader's 2.6.16 kernel is left out (update = none): its
+# build fetches it.
+if git submodule status | grep -v " tools/neochumby-kernel-sideloader/linux" | grep -q "^-"; then
     if [ -n "$check_only" ]; then
         bad "submodules checked out" "git submodule update --init (or dev/setup)"
     elif git submodule update --init --quiet; then
@@ -136,13 +136,11 @@ echo "The emulator: QEMU and the images, prebuilt"
 if [ -n "$check_only" ]; then
     echo "  (not fetched: --check)"
 elif [ "$missing" = 0 ]; then
-    for profile in dist classic; do
-        if NEOCHUMBY_EMU_PROFILE=$profile dev/emulate prepare; then
-            ok "$profile profile ready"
-        else
-            bad "$profile profile" "see dev/emulate prepare's message above"
-        fi
-    done
+    if dev/emulate prepare; then
+        ok "dist profile ready"
+    else
+        bad "dist profile" "see dev/emulate prepare's message above"
+    fi
 else
     echo "  (after the tools above)"
 fi
@@ -154,6 +152,5 @@ if [ "$missing" = 0 ]; then
     echo "  tools/tree /tmp/tree doom && dev/emulate start /tmp/tree"
     echo "  # the end-to-end scenarios as CI runs them:"
     echo "  E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e"
-    echo "  NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic"
 fi
 exit "$missing"

@@ -218,7 +218,7 @@ mod tests {
     #[test]
     fn each_size_its_own() {
         for (cols, rows, has) in GRIDS {
-            let shown = plain(&render(cols, rows, "5.9.16-mx21-sideload"));
+            let shown = plain(&render(cols, rows, "7.3.1-mx21-sideload"));
             assert!(shown.contains(has), "{cols}x{rows}:\n{shown}");
             for line in shown.lines() {
                 assert!(line.chars().count() <= cols, "{cols}x{rows}: {line:?}");
@@ -266,7 +266,7 @@ mod tests {
 
     #[test]
     fn colours_and_back() {
-        let s = render(64, 30, "5.9.16");
+        let s = render(64, 30, "7.3.1");
         assert!(s.lines().next().is_some_and(|l| l.trim_start().starts_with("\x1b[1;37m__")));
         assert!(s.contains("\x1b[0;33m/_/ /_/"));
         assert!(s.lines().filter(|l| !l.is_empty()).all(|l| l.ends_with("\x1b[0m")));
@@ -274,7 +274,7 @@ mod tests {
 
     #[test]
     fn nothing_on_a_tiny_console() {
-        assert_eq!(render(8, 3, "5.9.16"), "");
-        assert!(!render(64, 0, "5.9.16").is_empty());
+        assert_eq!(render(8, 3, "7.3.1"), "");
+        assert!(!render(64, 0, "7.3.1").is_empty());
     }
 }

@@ -37,9 +37,8 @@ Without new pins, CI builds QEMU from source. The prebuilt Linux binary has no w
 headless only), and needs glib, pixman, libpng and zlib, which a stock
 Ubuntu 24.04 runner has; build it yourself for the desktop.
 
-`dev/emulate` boots a neochumby tree on it in one of three profiles:
-`stock` (the Chumby's own firmware, from your own backup; local only),
-`dist` (neochumby's Linux 5.9.16; CI runs it) and `classic` (Linux 2.6.16
-from Chumby's GPL source). CONTRIBUTING.md, "Testing without a Chumby",
+`dev/emulate` boots a neochumby tree on it in one of two profiles: `dist`
+(neochumby's Linux 7; CI runs it) and `stock` (the Chumby's own firmware,
+from your own backup, for the sideload's handoff; local only). CONTRIBUTING.md, "Testing without a Chumby",
 says how to use it, and `docs/legal.md` what may and may not be done with
 the firmware.

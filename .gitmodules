@@ -34,8 +34,8 @@
 [submodule "emu/qemu/qemu-chumby"]
 	path = emu/qemu/qemu-chumby
 	url = https://github.com/johnmerchant/qemu-chumby
-[submodule "classic/linux"]
-	path = classic/linux
+[submodule "tools/neochumby-kernel-sideloader/linux"]
+	path = tools/neochumby-kernel-sideloader/linux
 	url = https://github.com/johnmerchant/chumby-linux-2.6.16
 	update = none
 	shallow = true
