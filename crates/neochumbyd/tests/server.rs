@@ -1,26 +1,22 @@
-//! neochumbyd end to end, on loopback, with apps' server programs. One,
-//! `web`, is allowed `pairing` by the owner: it approves a Chumby's pairing
-//! and sets its start app through the admin socket, as the household web
-//! page would. The other, `plain`, isn't, and gets no socket. A third,
-//! `echo`, has a companion: the Chumby opens it after its settings, as
-//! every Chumby does, and it answers sandboxed too.
+//! neochumbyd end to end, on loopback, with apps' server programs. A Chumby's
+//! key is registered as a stick's is (`neochumbyd add`), and its settings set
+//! on the command line. Two apps have server programs: `web` is started again
+//! when it exits, and `plain` gets no admin socket or descriptor, as no
+//! program does. A third, `echo`, has a companion: the Chumby opens it after
+//! its settings, as every Chumby does, and it answers sandboxed too.
 //!
-//! Both are this test's own binary, copied into the apps' directories: run
+//! All are this test's own binary, copied into the apps' directories: run
 //! with NEOCHUMBY_STATE set, it plays the app that directory names. Where
 //! this system has a sandbox they run in it, and check that they can't
-//! read neochumbyd's key or the owner's token, or write the tree. `web`'s
-//! first run does the pairing and exits, so neochumbyd starts it again;
-//! the second forgets the Chumby and stays until neochumbyd stops it.
+//! read neochumbyd's key or the owner's token, or write the tree.
 
-use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
-use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Command, ExitCode};
 use std::time::{Duration, Instant};
 
 use neochumby_proto::settings::key::START;
-use neochumby_proto::{Identity, Msg, Session, Unverified};
+use neochumby_proto::{Identity, Msg, Session, hex};
 use neochumby_sys::process::{self, Signal};
 
 fn main() -> ExitCode {
@@ -56,34 +52,6 @@ fn wait_for<T>(secs: u64, what: &str, mut f: impl FnMut() -> Option<T>) -> T {
     }
 }
 
-/// The admin socket, one request at a time.
-struct Admin(BufReader<UnixStream>);
-
-impl Admin {
-    /// The one this program was given, as descriptor 3.
-    fn inherited() -> Admin {
-        assert_eq!(std::env::var("NEOCHUMBY_ADMIN").as_deref(), Ok("3"));
-        let fd = neochumby_sys::fd::handed_over(3).expect("descriptor 3");
-        Admin(BufReader::new(UnixStream::from(fd)))
-    }
-
-    /// Every line of the answer, the last being `ok...` or `error...`.
-    fn ask(&mut self, request: &str) -> Vec<String> {
-        self.0.get_mut().write_all(format!("{request}\n").as_bytes()).unwrap();
-        let mut lines = Vec::new();
-        loop {
-            let mut l = String::new();
-            assert!(self.0.read_line(&mut l).unwrap() > 0, "socket closed");
-            let l = l.trim_end().to_string();
-            let last = l == "ok" || l.starts_with("ok ") || l.starts_with("error");
-            lines.push(l);
-            if last {
-                return lines;
-            }
-        }
-    }
-}
-
 /// What any app's program here should find: its directory, its HOME and
 /// TMPDIR, only the environment it's given, and, sandboxed, no way to
 /// neochumbyd's secrets or into the tree.
@@ -114,54 +82,24 @@ fn checks(home: &PathBuf, server: bool) {
     }
 }
 
-/// The web page's part: pairing, then settings, then forgetting.
+/// A server program: its checks and its port, then it exits, so neochumbyd
+/// starts it again; the second run stays until neochumbyd stops it.
 fn web(home: &PathBuf) {
     let runs = std::fs::read_to_string(home.join("runs")).unwrap_or_default() + "x";
     std::fs::write(home.join("runs"), &runs).unwrap();
     checks(home, true);
-    let mut admin = Admin::inherited();
     if runs.len() > 1 {
-        // Started again: forget the Chumby when told, then stay, until
-        // neochumbyd stops us.
         std::fs::write(home.join("pid"), std::process::id().to_string()).unwrap();
-        wait_for(30, "the word to forget", || home.join("forget-now").exists().then_some(()));
-        let token = std::fs::read_to_string(home.join("typed")).unwrap();
-        assert_eq!(admin.ask("forget kitchen 0123"), ["error wrong token"]);
-        assert_eq!(admin.ask(&format!("forget kitchen {token}")), ["ok"]);
-        assert_eq!(admin.ask("paired"), ["ok"]);
-        std::fs::write(home.join("forgot"), "").unwrap();
         loop {
             std::thread::sleep(Duration::from_secs(60));
         }
     }
     let port = std::env::var("NEOCHUMBY_TEST_LISTED_PORT").unwrap();
     drop(TcpListener::bind(format!("127.0.0.1:{port}")).expect("bind the port it listed"));
-
-    // Someone asks to pair; the page lists the request...
-    let pending = wait_for(20, "a pairing request", || {
-        let a = admin.ask("pending");
-        (a.len() > 1).then(|| a[0].clone())
-    });
-    let w: Vec<&str> = pending.split(' ').collect();
-    assert_eq!((w[0], w[2], w[3]), ("pending", "kitchen", "127.0.0.1"), "{pending}");
-    let code = w[1];
-
-    // ...and approves it only with the owner's token, which the owner types
-    // into the page. Settings need it too.
-    assert_eq!(admin.ask(&format!("approve {code} 0123")), ["error wrong token"]);
-    let token = wait_for(20, "the owner's token", || std::fs::read_to_string(home.join("typed")).ok());
-    assert_eq!(admin.ask(&format!("check {token}")), ["ok"]);
-    assert_eq!(admin.ask(&format!("approve {code} {token}")), ["ok kitchen"]);
-    assert_eq!(admin.ask(&format!("set kitchen {START}=wx 0123")), ["error wrong token"]);
-    assert_eq!(admin.ask(&format!("set kitchen {START}=wx {token}")), ["ok"]);
-    let paired = admin.ask("paired");
-    assert_eq!(paired.len(), 2);
-    assert!(paired[0].starts_with("paired kitchen ") && paired[0].ends_with(&format!(" {START}=wx")), "{paired:?}");
     std::fs::write(home.join("done"), "").unwrap();
 }
 
-/// An app the owner hasn't allowed `pairing`: no admin socket, by name or
-/// by descriptor, and none to find by path.
+/// No admin socket, by name or by descriptor, and none to find by path.
 fn plain(home: &PathBuf) {
     checks(home, true);
     assert!(std::env::var_os("NEOCHUMBY_ADMIN").is_none());
@@ -240,17 +178,10 @@ fn end_to_end() {
         Err(why) if std::env::var_os("CI").is_some() && cfg!(target_os = "linux") => panic!("{why}"),
         Err(why) => eprintln!("no sandbox, so unsandboxed: {why}"),
     }
-    // The owner allows the web page pairing.
-    let ok = Command::new(env!("CARGO_BIN_EXE_neochumbyd"))
-        .args(["allow", "web", "pairing", "--state", state.to_str().unwrap()])
-        .status()
-        .unwrap();
-    assert!(ok.success());
     let api = format!("127.0.0.1:{}", free_port());
-    let nfs = format!("127.0.0.1:{}", free_port());
     let mut cmd = Command::new(env!("CARGO_BIN_EXE_neochumbyd"));
     cmd.args(["serve", "--state", state.to_str().unwrap(), "--tree", tree.to_str().unwrap()])
-        .args(["--api", &api, "--nfs", &nfs])
+        .args(["--api", &api])
         .env("SECRET_IN_NEOCHUMBYDS_SHELL", "x")
         .env("NEOCHUMBY_TEST_PASSED", "yes")
         .env("NEOCHUMBY_TEST_TREE", tree.canonicalize().unwrap())
@@ -265,36 +196,45 @@ fn end_to_end() {
         cmd.env("NEOCHUMBY_TEST_UNLISTED_PORT", free_port().to_string());
     }
     let mut d = Neochumbyd { child: cmd.spawn().unwrap(), dir: dir.clone() };
-    let home = state.join("apps/web");
     wait_for(20, "the owner's token", || state.join("owner-token").exists().then_some(()));
-    let token = std::fs::read_to_string(state.join("owner-token")).unwrap().trim().to_string();
 
-    // A Chumby asks to pair, and waits for the answer.
+    let nd = |args: &[&str]| {
+        let out = Command::new(env!("CARGO_BIN_EXE_neochumbyd"))
+            .args(args)
+            .args(["--state", state.to_str().unwrap()])
+            .output()
+            .unwrap();
+        (out.status.success(), String::from_utf8(out.stdout).unwrap(), String::from_utf8(out.stderr).unwrap())
+    };
     let chumby = Identity::generate().unwrap();
-    let tcp = wait_for(20, "the API", || TcpStream::connect(&api).ok());
-    // Not the ten minutes neochumbyd gives a request, if the page fails.
-    tcp.set_read_timeout(Some(Duration::from_secs(30))).unwrap();
-    let mut s = Unverified::connect(tcp, &chumby).unwrap();
-    let server_key = *s.peer();
-    s.send(&Msg::Pair { name: "kitchen".into() }).unwrap();
-    // The owner, having typed the code from the Chumby's screen, gives the
-    // page the token.
-    wait_for(20, "the web page", || home.exists().then_some(()));
-    std::fs::write(home.join("typed"), &token).unwrap();
-    match s.recv() {
-        Ok(Msg::Paired { nfs_port, .. }) => assert_eq!(nfs_port.to_string(), nfs.rsplit(':').next().unwrap()),
-        r => {
-            done(&home, "done");
-            panic!("not paired: {r:?}");
-        }
-    }
+    let key = hex(&chumby.public());
+
+    // Not registered, it is turned away, and asking gets it nothing.
+    wait_for(20, "the API", || TcpStream::connect(&api).ok());
+    let (_, added, _) = nd(&["add", "kitchen", &key, "--address", "192.0.2.1", "--api", "0.0.0.0:7341"]);
+    let mut lines = added.lines();
+    assert_eq!(lines.next(), Some("server=192.0.2.1"));
+    assert_eq!(lines.next(), Some("api_port=7341"));
+    let server_key = neochumby_proto::unhex_key(lines.next().unwrap().strip_prefix("server_key=").unwrap()).unwrap();
+    let stranger = Identity::generate().unwrap();
+    let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &stranger, &server_key).unwrap();
+    s.send(&Msg::Hello { name: "kitchen".into() }).unwrap();
+    assert_eq!(s.recv().unwrap(), Msg::Unpaired);
     drop(s);
+
+    // Another key under its name only with --replace.
+    let (ok, _, why) = nd(&["add", "kitchen", &hex(&stranger.public())]);
+    assert!(!ok && why.contains("--replace"), "{why}");
+    let (ok, _, why) = nd(&["set", "kitchen", &format!("{START}=wx")]);
+    assert!(ok, "{why}");
+
+    let home = state.join("apps/web");
     done(&home, "done");
     done(&state.join("apps/plain"), "done");
     // Apps find neochumbyd's admin protocol by no path.
     assert!(!state.join("admin.sock").exists());
 
-    // The Chumby, paired, gets the start app the page chose.
+    // The Chumby gets the start app the owner chose.
     let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby, &server_key).unwrap();
     s.send(&Msg::Hello { name: "kitchen".into() }).unwrap();
     assert_eq!(s.recv().unwrap(), Msg::Welcome);
@@ -323,21 +263,21 @@ fn end_to_end() {
     drop(s);
 
     // The command line sees the same.
-    let out = Command::new(env!("CARGO_BIN_EXE_neochumbyd"))
-        .args(["pairing", "--state", state.to_str().unwrap()])
-        .output()
-        .unwrap();
-    let out = String::from_utf8(out.stdout).unwrap();
+    let (_, out, _) = nd(&["list"]);
     let first = out.lines().next().unwrap_or_default();
-    assert!(first.starts_with("paired   kitchen  ") && first.ends_with(&format!("{START}=wx")), "{out}");
+    assert!(first.starts_with("chumby   kitchen  ") && first.ends_with(&format!("{START}=wx")), "{out}");
 
-    // The first run exited; neochumbyd started it again, with a socket of
-    // its own, and it forgets the Chumby.
+    // Forgotten, it is turned away at once.
+    assert!(nd(&["forget", "kitchen"]).0);
+    let mut s = Session::connect(TcpStream::connect(&api).unwrap(), &chumby, &server_key).unwrap();
+    s.send(&Msg::Hello { name: "kitchen".into() }).unwrap();
+    assert_eq!(s.recv().unwrap(), Msg::Unpaired);
+    drop(s);
+
+    // The first run exited; neochumbyd started it again.
     let pid: u32 = wait_for(20, "the web page to start again", || {
         std::fs::read_to_string(home.join("pid")).ok().and_then(|p| p.trim().parse().ok())
     });
-    std::fs::write(home.join("forget-now"), "").unwrap();
-    done(&home, "forgot");
 
     // Stopping neochumbyd stops the server programs.
     process::kill(d.child.id(), Signal::Term).unwrap();

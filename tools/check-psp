@@ -1,0 +1,27 @@
+#!/bin/sh
+# Nothing neochumby ships writes to the Chumby's flash: /psp is read-only
+# input. This fails on any line of the Rust and hook neochumby ships that names
+# /psp, comments aside, unless it is one of the read-only uses listed below. A
+# new one needs looking at, and adding.
+#
+#   tools/check-psp
+set -eu
+cd "$(git rev-parse --show-toplevel)"
+allowed='["/psp/hostname", "/proc/sys/kernel/hostname"]
+pub const CALIBRATION: &str = "/psp/ts_settings";
+const NETWORK_CONFIG: &str = "/psp/network_config";
+if !Path::new("/psp/neochumby-ssh").exists() {
+let Ok(keys) = fs::read("/psp/.ssh/authorized_keys") else {
+step(WHAT, Status::Failed, "ssh: no /psp/.ssh/authorized_keys");
+let config = fs::read_to_string("/psp/network_config").unwrap_or_default();
+/psp network_config ts_settings hostname localtime neochumby-ssh .ssh/authorized_keys >/proc/sideload-initrd'
+found=$( (git ls-files 'crates/*.rs' 'apps/*.rs' | grep -v '/third_party/'; echo boot/userhook2) |
+  xargs grep -I -n -e '/psp' |
+  grep -v -E '^[^:]+:[0-9]+:[[:space:]]*(//|#)' |
+  grep -v -F -e "$allowed" || true)
+if [ -n "$found" ]; then
+  echo "tools/check-psp: nothing may write to /psp, and these aren't known to be reads:" >&2
+  echo "$found" >&2
+  exit 1
+fi
+echo "tools/check-psp: nothing writes to /psp"

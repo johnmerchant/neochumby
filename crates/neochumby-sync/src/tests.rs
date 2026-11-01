@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 use std::time::Instant;
 
-use neochumby_proto::{Identity, Msg, Session, Unverified};
+use neochumby_proto::{Identity, Msg, Session};
 
 use crate::Timing;
 use crate::manifest::tests::entry;
@@ -25,7 +25,8 @@ fn sessions() -> (Session, Session) {
     let server = Identity::generate().unwrap();
     let server_key = server.public();
     let t = std::thread::spawn(move || {
-        Unverified::accept(l.accept().unwrap().0, &server).unwrap().verify(|_| true).unwrap()
+        let by = Instant::now() + std::time::Duration::from_secs(20);
+        Session::accept(l.accept().unwrap().0, &server, by, |_| true).unwrap()
     });
     let c = Session::connect(TcpStream::connect(addr).unwrap(), &Identity::generate().unwrap(), &server_key).unwrap();
     (t.join().unwrap(), c)
@@ -37,9 +38,16 @@ fn server(mut s: Session, dir: PathBuf) -> std::thread::JoinHandle<Vec<Served>> 
     std::thread::spawn(move || {
         let hashes = Hashes::default();
         let mut out = Vec::new();
-        while let Ok(Msg::SyncHave { live }) = s.recv() {
-            let tree = serve::scan(&dir, &hashes).unwrap();
-            out.push(serve::round(&mut s, live, &tree).unwrap());
+        loop {
+            match s.recv() {
+                Ok(Msg::SyncHave { live }) => {
+                    let tree = serve::scan(&dir, &hashes).unwrap();
+                    out.push(serve::round(&mut s, live, &tree).unwrap());
+                }
+                // A round the Chumby can't start says why.
+                Ok(Msg::SyncDone { ok: false, .. }) => {}
+                _ => break,
+            }
         }
         out
     })

@@ -7,7 +7,7 @@
 //!
 //! Two programs: the app (main.rs) and its service (bin/service.rs, svc.rs),
 //! which keeps the backlight and the music going while another app is in
-//! front. They share the settings in /psp (state.rs).
+//! front. They share the settings on the stick (state.rs).
 
 pub mod cache;
 #[cfg(target_arch = "arm")]

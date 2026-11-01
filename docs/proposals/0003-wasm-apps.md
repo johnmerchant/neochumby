@@ -335,8 +335,7 @@ pinned and **never updated by themselves**.
 Installing needs the owner: the request is made on neochumbyd's admin
 socket with the owner's token (#9's admin socket, once #9 is merged; until
 then `neochumbyd install` as the server's admin). A Chumby's own GET APPS
-asks its neochumbyd, which shows a code to type on the server, as pairing
-does.
+asks its neochumbyd, which shows a code to type on the server.
 
 ### Discovery
 

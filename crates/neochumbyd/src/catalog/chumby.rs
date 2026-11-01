@@ -21,7 +21,7 @@
 //!   `<state>/catalog-requests/` under a short code, which the Chumby
 //!   shows. The owner approves it through the admin socket's protocol, with
 //!   the owner's token: `approve CODE TOKEN` (`neochumbyd approve CODE` on
-//!   the command line, as for pairing) lets it go ahead, `refuse CODE
+//!   the command line) lets it go ahead, `refuse CODE
 //!   TOKEN` refuses it, and ten minutes without either withdraws it.
 //!   Nothing is installed on a Chumby's say alone, but an update that asks
 //!   for nothing the installed version wasn't granted, as serve's own
@@ -101,9 +101,6 @@ pub struct Service {
     waiting: Option<Waiting>,
     /// The owner's yes, to act on at the next tick.
     approved: Option<Work>,
-    /// Whether the Chumby is on `delivery=sync`: its stick gets the tree's
-    /// changes at its next round, and its session isn't restarted.
-    pub sync: bool,
     /// Whether the tree has gained or lost an app for it.
     pub changed: bool,
 }
@@ -129,17 +126,7 @@ impl Drop for Service {
 
 impl Service {
     pub fn new(http: Http, state: PathBuf, tree: PathBuf, wamrc: Option<Wamrc>, chumby: &str) -> Service {
-        Service {
-            http,
-            state,
-            tree,
-            wamrc,
-            chumby: chumby.into(),
-            waiting: None,
-            approved: None,
-            sync: false,
-            changed: false,
-        }
+        Service { http, state, tree, wamrc, chumby: chumby.into(), waiting: None, approved: None, changed: false }
     }
 
     /// Answers one of the app's messages.
@@ -351,7 +338,7 @@ impl Service {
                         app: plan.spec.app.clone(),
                         title: plan.meta.title.clone(),
                         home: home_order(&self.tree),
-                        restarts: !self.sync,
+                        restarts: false,
                     });
                 }
                 Err(e) => out.push(Answer::Failed(e)),
@@ -384,26 +371,15 @@ impl Service {
 /// Runs GET APPS for `chumby` until it goes: neochumbyd's built-in
 /// companion (companion.rs).
 ///
-/// A session knows the apps of the tree it started with, so once GET APPS
-/// has installed or removed one and the Chumby has left it, its session
-/// is started again (as `neochumbyd restart` does), unless it is on
-/// `delivery=sync`, whose stick has yet to get the change.
+/// A session knows the apps of the set it started with, and the Chumby's
+/// stick gets a change at its next sync round; the next restart runs it.
 pub fn run(tree: &Path, state: &Path, chumby: &str, mut s: Session) -> io::Result<()> {
     eprintln!("neochumbyd: GET APPS for {chumby}");
     // As every catalog request goes (a debug build's local stand-in and its
     // trusted root included).
     let http = super::http();
     let mut svc = Service::new(http, state.into(), tree.into(), wamrc(), chumby);
-    svc.sync = crate::state::State::open(state.into())
-        .is_ok_and(|st| st.settings(chumby).delivery == Some(neochumby_proto::Delivery::Sync));
-    let r = serve(&mut svc, &mut s);
-    if svc.changed && !svc.sync {
-        eprintln!("neochumbyd: {chumby}'s apps have changed: restarting its session");
-        if let Err(e) = crate::dev::restart(state, chumby, Duration::from_secs(15)) {
-            eprintln!("neochumbyd: {chumby}: {e}");
-        }
-    }
-    r
+    serve(&mut svc, &mut s)
 }
 
 /// Answers the app until it goes.
@@ -644,7 +620,7 @@ fn random_code() -> io::Result<String> {
 }
 
 /// `code` as typed, if it is a request's: case, dashes and spaces don't
-/// matter. A pairing code (32 hex digits) never is one.
+/// matter.
 pub fn parse_code(code: &str) -> Option<String> {
     let l: String = code.chars().filter(|c| !matches!(c, '-' | ' ')).map(|c| c.to_ascii_uppercase()).collect();
     (l.len() == 8 && l.bytes().all(|b| CODE_LETTERS.contains(&b))).then(|| format!("{}-{}", &l[..4], &l[4..]))
@@ -729,7 +705,7 @@ mod tests {
         let c = random_code().unwrap();
         assert_eq!(parse_code(&c.to_lowercase().replace('-', " ")), Some(c));
         assert_eq!(parse_code("abcd-ef01"), None, "0 and 1 aren't letters a code has");
-        assert_eq!(parse_code(&"ab".repeat(16)), None, "a pairing code isn't one");
+        assert_eq!(parse_code(&"ab".repeat(16)), None, "too long");
     }
 
     /// The listing, before and after the app's details are looked up; the
@@ -789,7 +765,7 @@ mod tests {
             app: "weather".into(),
             title: "WEATHER".into(),
             home: vec!["weather".into()],
-            restarts: true,
+            restarts: false,
         };
         assert_eq!(svc.tick(), [installed]);
         assert!(d.join("tree/apps/weather/app.wasm").exists());

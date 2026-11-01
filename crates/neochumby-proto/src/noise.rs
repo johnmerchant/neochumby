@@ -7,7 +7,7 @@
 use std::io::{self, Read, Write};
 use std::time::{Duration, Instant};
 
-use crate::{MAX_MSG, Msg, PublicKey, Stream, hex, invalid, pairing_code, unhex};
+use crate::{MAX_MSG, Msg, PublicKey, Stream, hex, invalid, unhex};
 
 const PARAMS: &str = "Noise_XX_25519_ChaChaPoly_BLAKE2s";
 const PROLOGUE: &[u8] = b"neochumby 1";
@@ -63,7 +63,6 @@ pub struct Session {
     tcp: Box<dyn Stream>,
     noise: snow::TransportState,
     peer: PublicKey,
-    code: String,
     buf: Vec<u8>,
     /// Received and not yet a whole Noise message.
     rbuf: Vec<u8>,
@@ -112,22 +111,13 @@ impl Session {
         }
         tcp.set_read_timeout(was)?;
         let peer = key(hs.get_remote_static().unwrap_or_default())?;
-        let h = hs.get_handshake_hash();
-        // The handshake hash covers both static keys (XX).
-        let code = pairing_code(h[..16].try_into().map_err(invalid)?);
         let noise = hs.into_transport_mode().map_err(invalid)?;
-        Ok(Session { tcp, noise, peer, code, buf, rbuf: Vec::new(), version: 0 })
+        Ok(Session { tcp, noise, peer, buf, rbuf: Vec::new(), version: 0 })
     }
 
     /// The other side's public key, proven in the handshake.
     pub fn peer(&self) -> &PublicKey {
         &self.peer
-    }
-
-    /// The pairing code both sides derive from this handshake
-    /// ([`crate::Unverified::code`]).
-    pub(crate) fn code(&self) -> String {
-        self.code.clone()
     }
 
     /// What the session runs over.

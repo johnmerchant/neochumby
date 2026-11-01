@@ -134,6 +134,12 @@ def start(state, opts, tree, write, read, remove):
                                 os.path.join(server.dir, "tree") + "/"])
         if r.returncode:
             sys.exit("dev/emulate: deploying the tree failed")
+    # The tree reaches it by its stick; a set it is running needs a restart
+    # before it can be replaced (status 3).
+    if subprocess.run(server.argv("sync", name)).returncode == 3:
+        server.run("restart", name)
+        time.sleep(10)
+        server.run("sync", name)
     server.run("restart", name)
     print(f"dev/emulate: {name} restarting (via {server.host or 'this machine'}); its log: dev/emulate log")
 

@@ -8,55 +8,17 @@
 //! [`Settings::other`] and sent on as it came, so a newer neochumbyd's
 //! setting reaches the Chumby even through a build that doesn't know it.
 
-use std::fmt;
-
 /// The keys with fields of their own.
 pub mod key {
     /// The app the session opens first.
     pub const START: &str = "start";
     /// The default player (an app whose manifest says `player = true`).
     pub const PLAYER: &str = "player";
-    /// How the apps reach the Chumby: [`Delivery`](super::Delivery).
-    pub const DELIVERY: &str = "delivery";
     /// Taps and button presses from neochumbyd (crate::dev): `on` or `off`.
     pub const DEV: &str = "dev";
     /// `frontend_<app>=<frontend>`: the owner approves an app as `<app>`'s
     /// frontend ([`frontend`](super::frontend)).
     pub const FRONTEND: &str = "frontend_";
-}
-
-/// How the apps reach the Chumby (`delivery=`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Delivery {
-    /// Run from neochumbyd's tree over NFS: the default.
-    #[default]
-    Nfs,
-    /// Run from a copy on the Chumby's stick, kept in step with the tree
-    /// (neochumby-sync).
-    Sync,
-}
-
-impl Delivery {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Delivery::Nfs => "nfs",
-            Delivery::Sync => "sync",
-        }
-    }
-
-    pub fn parse(s: &str) -> Option<Delivery> {
-        match s {
-            "nfs" => Some(Delivery::Nfs),
-            "sync" => Some(Delivery::Sync),
-            _ => None,
-        }
-    }
-}
-
-impl fmt::Display for Delivery {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
 }
 
 /// `dev=`'s values.
@@ -70,8 +32,6 @@ pub struct Settings {
     pub start: Option<String>,
     /// `player`: the default player, if set; checked like `start`.
     pub player: Option<String>,
-    /// `delivery`, if set; unset is [`Delivery::Nfs`].
-    pub delivery: Option<Delivery>,
     /// `dev=on`: the Chumby takes taps and button presses from its
     /// neochumbyd. Off unless set (crate::dev).
     pub dev: bool,
@@ -90,25 +50,21 @@ impl Settings {
             if !valid(&k, &v) {
                 continue;
             }
-            let known = [key::START, key::PLAYER, key::DELIVERY, key::DEV].into_iter().find(|n| *n == k);
+            let known = [key::START, key::PLAYER, key::DEV].into_iter().find(|n| *n == k);
             // A known key's first value is taken if it is one of its own.
             let took = match known {
                 Some(n) if !seen.contains(&n) => {
                     seen.push(n);
-                    match (n, Delivery::parse(&v)) {
-                        (key::START, _) if crate::valid_name(&v) => {
+                    match n {
+                        key::START if crate::valid_name(&v) => {
                             s.start = Some(v.clone());
                             true
                         }
-                        (key::PLAYER, _) if crate::valid_name(&v) => {
+                        key::PLAYER if crate::valid_name(&v) => {
                             s.player = Some(v.clone());
                             true
                         }
-                        (key::DELIVERY, Some(d)) => {
-                            s.delivery = Some(d);
-                            true
-                        }
-                        (key::DEV, _) if v == ON || v == OFF => {
+                        key::DEV if v == ON || v == OFF => {
                             s.dev = v == ON;
                             true
                         }
@@ -134,9 +90,6 @@ impl Settings {
         }
         if let Some(v) = &self.player {
             put(key::PLAYER, v);
-        }
-        if let Some(d) = self.delivery {
-            put(key::DELIVERY, d.as_str());
         }
         if self.dev {
             put(key::DEV, ON);
@@ -164,7 +117,6 @@ impl Settings {
             key::START | key::PLAYER if !crate::valid_name(value) => {
                 Err(format!("{key} names an app: 1-32 of a-z, 0-9, _ and -"))
             }
-            key::DELIVERY if Delivery::parse(value).is_none() => Err(format!("{key} is nfs or sync")),
             key::DEV if value != ON && value != OFF => Err(format!("{key} is {ON} or {OFF}")),
             _ if key.starts_with(key::FRONTEND) && !crate::valid_name(value) => {
                 Err(format!("{key} names an app: 1-32 of a-z, 0-9, _ and -"))
@@ -182,7 +134,7 @@ pub fn frontend(app: &str) -> String {
 }
 
 /// A pair a Chumby keeps: a short lower-case key, and a value of the
-/// characters its /psp files accept.
+/// characters its conf files accept.
 pub fn valid(key: &str, value: &str) -> bool {
     (1..=32).contains(&key.len())
         && key.bytes().all(|b| b.is_ascii_lowercase() || b == b'_')
@@ -200,22 +152,12 @@ mod tests {
 
     #[test]
     fn typed_fields_and_the_rest() {
-        let s = Settings::from_pairs(pairs(&[
-            ("start", "wx"),
-            ("delivery", "sync"),
-            ("dev", "on"),
-            ("player", "somafm"),
-            ("theme", "dark"),
-        ]));
+        let s = Settings::from_pairs(pairs(&[("start", "wx"), ("dev", "on"), ("player", "somafm"), ("theme", "dark")]));
         assert_eq!(s.start.as_deref(), Some("wx"));
         assert_eq!(s.player.as_deref(), Some("somafm"));
-        assert_eq!(s.delivery, Some(Delivery::Sync));
         assert!(s.dev);
         assert_eq!(s.other, pairs(&[("theme", "dark")]));
-        assert_eq!(
-            s.to_pairs(),
-            pairs(&[("start", "wx"), ("player", "somafm"), ("delivery", "sync"), ("dev", "on"), ("theme", "dark")])
-        );
+        assert_eq!(s.to_pairs(), pairs(&[("start", "wx"), ("player", "somafm"), ("dev", "on"), ("theme", "dark")]));
         assert_eq!(Settings::from_pairs(s.to_pairs()), s);
         assert_eq!(Settings::from_pairs(vec![]), Settings::default());
     }
@@ -224,11 +166,10 @@ mod tests {
     fn nothing_is_lost() {
         // Values a field can't hold, and a second of a key, stay as pairs
         // and go on to the Chumby, which reads the first.
-        let s = Settings::from_pairs(pairs(&[("delivery", "usb"), ("dev", "yes"), ("start", "home"), ("start", "wx")]));
-        assert_eq!(s.delivery, None);
+        let s = Settings::from_pairs(pairs(&[("dev", "yes"), ("start", "home"), ("start", "wx")]));
         assert!(!s.dev);
         assert_eq!(s.start.as_deref(), Some("home"));
-        assert_eq!(s.other, pairs(&[("delivery", "usb"), ("dev", "yes"), ("start", "wx")]));
+        assert_eq!(s.other, pairs(&[("dev", "yes"), ("start", "wx")]));
         assert_eq!(Settings::from_pairs(s.to_pairs()), s);
         // dev=off is the default, so it needs no pair.
         let off = Settings::from_pairs(pairs(&[("dev", "off")]));
@@ -247,9 +188,6 @@ mod tests {
         assert!(Settings::check("start", "wx").is_ok());
         assert!(Settings::check("start", "Wx").is_err());
         assert!(Settings::check("player", "../x").is_err());
-        assert!(Settings::check("delivery", "sync").is_ok());
-        assert!(Settings::check("delivery", "nfs").is_ok());
-        assert!(Settings::check("delivery", "usb").is_err());
         assert!(Settings::check("dev", "on").is_ok());
         assert!(Settings::check("dev", "off").is_ok());
         assert!(Settings::check("dev", "On").is_err());

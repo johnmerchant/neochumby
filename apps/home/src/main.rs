@@ -1,6 +1,5 @@
 //! neochumby-home, the app list: the installed apps, tap one to open it;
-//! PAIR when booted with a neochumbyd this Chumby is not paired with; the
-//! time; and how it's connected (network.rs), which only looks. It's an
+//! the time; and how it's connected (network.rs), which only looks. It's an
 //! ordinary app that may be the start app (`start = true`), and the start app when
 //! no other is chosen. The session also opens it from anything when the
 //! top-left corner is held.
@@ -17,19 +16,17 @@
 //! for, and opens the start app again when that exits. Opened for any
 //! reason (NEOCHUMBY_REASON), it shows its first page. The top button,
 //! pressed with it in front, arrives as a `button` line on its pipe: it
-//! goes back to the first page, leaving pairing if that's showing.
+//! goes back to the first page.
 //!
 //! An app that needs a neochumbyd this Chumby has not got is listed, greyed,
 //! and does not open.
 
 mod network;
-mod pair;
 mod term;
 
 use std::time::{Duration, Instant};
 
 use neochumby::apps::{self, App};
-use neochumby::conf;
 use neochumby::session::{Notice, Pipe};
 use term::{Paint, Rgb, Term, Touch, fit, rgb565};
 
@@ -39,7 +36,6 @@ const TITLE: Rgb = (255, 200, 120);
 const ROW: Rgb = (28, 28, 48);
 const PRESSED: Rgb = (230, 230, 230);
 const DARK: Rgb = (0, 0, 0);
-const GREEN: Rgb = (120, 220, 120);
 
 /// How often the network's line is read again.
 const NETWORK_EVERY: Duration = Duration::from_secs(5);
@@ -51,29 +47,20 @@ const ROWS: usize = 4;
 enum Hit {
     App(usize),
     More,
-    Pair,
 }
 
 /// Where things are on a terminal of `cols` by `rows` cells: the title on
-/// the top row, then [`ROWS`] rows of apps, each `entry` high, and the bar
-/// (PAIR), when it has a button, `bar` high along the bottom.
+/// the top row, then [`ROWS`] rows of apps, each `entry` high.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Layout {
     cols: usize,
-    rows: usize,
     entry: usize,
-    bar: usize,
 }
 
 impl Layout {
-    fn new(cols: usize, rows: usize, bar: bool) -> Layout {
-        let bar = match bar {
-            false => 0,
-            true if rows >= 12 => 2,
-            true => 1,
-        };
-        let entry = (rows.saturating_sub(1 + bar) / ROWS).max(1);
-        Layout { cols, rows, entry, bar }
+    fn new(cols: usize, rows: usize) -> Layout {
+        let entry = (rows.saturating_sub(1) / ROWS).max(1);
+        Layout { cols, entry }
     }
 
     /// How many of an entry's rows it fills: all but the first, which
@@ -86,18 +73,12 @@ impl Layout {
     fn entry_row(&self, i: usize) -> usize {
         1 + i * self.entry + (self.entry - self.filled())
     }
-
-    /// The bar's first row.
-    fn bar_row(&self) -> usize {
-        self.rows - self.bar
-    }
 }
 
 /// What is on screen: the listed apps (by index), a page at a time.
 struct Screen {
     listed: Vec<usize>,
     page: usize,
-    pairing: Option<(String, u16)>,
     /// How the Chumby is connected, a line to show.
     network: String,
 }
@@ -123,25 +104,12 @@ impl Screen {
         r
     }
 
-    /// The bar's buttons, left to right.
-    fn bar(&self) -> Vec<Hit> {
-        let mut b = Vec::new();
-        if self.pairing.is_some() {
-            b.push(Hit::Pair);
-        }
-        b
-    }
-
     fn layout(&self, cols: usize, rows: usize) -> Layout {
-        Layout::new(cols, rows, !self.bar().is_empty())
+        Layout::new(cols, rows)
     }
 
-    /// What is on cell (`col`, `row`).
-    fn hit(&self, l: &Layout, col: usize, row: usize) -> Option<Hit> {
-        if l.bar > 0 && row >= l.bar_row() {
-            let bar = self.bar();
-            return bar.get(col * bar.len() / l.cols.max(1)).copied();
-        }
+    /// What is on row `row`.
+    fn hit(&self, l: &Layout, row: usize) -> Option<Hit> {
         let row = row.checked_sub(1)?;
         // Not on the row that parts an entry from the one above.
         if row % l.entry < l.entry - l.filled() {
@@ -170,14 +138,6 @@ fn paint_network(p: &mut Paint, l: &Layout, line: &str) {
 fn paint_clock(p: &mut Paint, l: &Layout) {
     let t = clock();
     p.at(l.cols.saturating_sub(t.len() + 1), 0).text(&t, TEXT, None, true);
-}
-
-/// A button of the bar, `w` wide from `col`, its label in the middle.
-fn button(p: &mut Paint, l: &Layout, col: usize, w: usize, label: &str, colour: Rgb, pressed: bool) {
-    let bg = if pressed { (255, 255, 255) } else { colour };
-    p.fill(col, l.bar_row(), w, l.bar, bg);
-    let label = fit(label, w);
-    p.at(col + (w - label.len()) / 2, l.bar_row() + (l.bar - 1) / 2).text(&label, DARK, Some(bg), true);
 }
 
 fn draw(t: &mut Term, all: &[App], s: &Screen, pressed: Option<Hit>) {
@@ -222,15 +182,9 @@ fn draw(t: &mut Term, all: &[App], s: &Screen, pressed: Option<Hit>) {
                 let label = format!("MORE  {}/{}", s.page + 1, s.pages());
                 p.at(text_col, label_row).text(&fit(&label, width), if lit { DARK } else { TEXT }, Some(bg), true);
             }
-            _ => {}
         }
     }
 
-    let bar = s.bar();
-    for (i, hit) in bar.iter().enumerate() {
-        let (from, to) = (i * l.cols / bar.len(), (i + 1) * l.cols / bar.len());
-        button(&mut p, &l, from, to - from, "PAIR", GREEN, pressed == Some(*hit));
-    }
     t.show(&p.0);
 }
 
@@ -259,17 +213,6 @@ fn has_button(lines: &[String]) -> bool {
     lines.iter().any(|l| Notice::parse(l) == Some(Notice::Button))
 }
 
-/// A neochumbyd the boot hook found but this Chumby is not paired with.
-fn pairing_offer() -> Option<(String, u16)> {
-    let server = std::env::var("NEOCHUMBY_SERVER").ok().filter(|s| conf::valid_value(s))?;
-    let port =
-        std::env::var("NEOCHUMBY_API_PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(neochumby_proto::API_PORT);
-    match conf::paired() {
-        Some(p) if p.server == server => None,
-        _ => Some((server, port)),
-    }
-}
-
 fn main() {
     neochumby::debug::install("neochumby-home");
     let mut t = Term::open();
@@ -279,7 +222,6 @@ fn main() {
     let mut screen = Screen {
         listed: all.iter().enumerate().filter(|(_, a)| a.title.is_some() && a.exec.is_some()).map(|(i, _)| i).collect(),
         page: 0,
-        pairing: pairing_offer(),
         network: network::Status::read().line(),
     };
     let mut pressed: Option<Hit> = None;
@@ -293,8 +235,8 @@ fn main() {
         for touch in t.poll(30) {
             let l = screen.layout(t.cols, t.rows);
             match touch {
-                Touch::Down { col, row } => {
-                    let hit = screen.hit(&l, col, row);
+                Touch::Down { row, .. } => {
+                    let hit = screen.hit(&l, row);
                     if hit != pressed {
                         pressed = hit;
                         draw(&mut t, &all, &screen, pressed);
@@ -308,15 +250,6 @@ fn main() {
                             }
                         }
                         Some(Hit::More) => screen.page = (screen.page + 1) % screen.pages(),
-                        Some(Hit::Pair) => {
-                            if let Some((server, port)) = screen.pairing.clone()
-                                && pair::run(&mut t, &server, port, &root, || button_pressed(pipe.as_mut()))
-                            {
-                                screen.pairing = None;
-                            }
-                            // Back from pairing, by the button or not: the first page.
-                            screen.page = 0;
-                        }
                         None => {}
                     }
                     t.drain();
@@ -352,18 +285,13 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn screen(apps: usize, pairing: bool) -> Screen {
-        Screen {
-            listed: (0..apps).collect(),
-            page: 0,
-            pairing: pairing.then(|| ("s".into(), 1)),
-            network: String::new(),
-        }
+    fn screen(apps: usize) -> Screen {
+        Screen { listed: (0..apps).collect(), page: 0, network: String::new() }
     }
 
     #[test]
     fn the_button_goes_back_to_the_first_page() {
-        let mut s = screen(10, false);
+        let mut s = screen(10);
         s.page = 2;
         assert!(s.pages() > 2);
         s.button();
@@ -376,16 +304,15 @@ mod tests {
     /// drew before: dev/emulate-smoke taps apps at y = 62, 102, 142 and 182.
     #[test]
     fn rows_fall_where_they_did() {
-        let s = screen(5, true);
+        let s = screen(5);
         let l = s.layout(40, 15);
-        assert_eq!(l, Layout { cols: 40, rows: 15, entry: 3, bar: 2 });
-        let at = |x: usize, y: usize| s.hit(&l, x / 8, y / 16);
+        assert_eq!(l, Layout { cols: 40, entry: 3 });
+        let at = |_x: usize, y: usize| s.hit(&l, y / 16);
         assert_eq!(at(160, 62), Some(Hit::App(0)));
         assert_eq!(at(160, 102), Some(Hit::App(1)));
         assert_eq!(at(160, 142), Some(Hit::App(2)));
         assert_eq!(at(160, 182), Some(Hit::More));
-        assert_eq!(at(160, 220), Some(Hit::Pair));
-        assert_eq!(at(160, 228), Some(Hit::Pair));
+        assert_eq!(at(160, 228), None, "below them");
         // Above the apps, where dev/emulate-smoke taps for `neochumby
         // sensors`, and the row parting the first from the title: nothing.
         assert_eq!(at(160, 8), None);
@@ -393,25 +320,11 @@ mod tests {
     }
 
     #[test]
-    fn the_bar_holds_what_there_is() {
-        // PAIR alone, else no bar.
-        let s = screen(2, true);
-        let l = s.layout(40, 15);
-        assert_eq!(s.hit(&l, 35, 14), Some(Hit::Pair));
-        let s = screen(2, false);
-        let l = s.layout(40, 15);
-        assert_eq!(l.bar, 0);
-        assert_eq!(s.hit(&l, 20, 14), None);
-        assert_eq!(s.hit(&l, 20, 2), Some(Hit::App(0)));
-    }
-
-    #[test]
     fn another_font_scales_the_layout() {
         // Spleen 5x8: 64 by 30.
-        let s = screen(3, true);
+        let s = screen(3);
         let l = s.layout(64, 30);
-        assert_eq!((l.entry, l.bar), (6, 2));
-        assert_eq!(s.hit(&l, 10, 8), Some(Hit::App(1)));
-        assert_eq!(s.hit(&l, 10, 29), Some(Hit::Pair));
+        assert_eq!(l.entry, 7);
+        assert_eq!(s.hit(&l, 9), Some(Hit::App(1)));
     }
 }

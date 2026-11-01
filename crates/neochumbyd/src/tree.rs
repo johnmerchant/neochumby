@@ -2,7 +2,7 @@
 //! manifest says `start=true` and has an `exec`, and doesn't take the top
 //! button (`button=true`). A Chumby refuses any
 //! other name as its `start` setting and opens `home` instead, so the
-//! settings suggest these (`neochumbyd set`, `neochumbyd pairing`).
+//! settings suggest these (`neochumbyd set`, `neochumbyd list`).
 //!
 //! Likewise its players, for the `player` setting: those whose manifest
 //! says `player=true` and has an `exec`. A Chumby refuses any other name,

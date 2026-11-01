@@ -20,16 +20,14 @@ CONFIG_DEVTMPFS=y
 CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_TMPFS=y
 
-# The stick and NFS, where the tree comes from.
+# The stick, where everything comes from.
 CONFIG_USB=y
 CONFIG_USB_IMX21_HCD=y
 CONFIG_USB_STORAGE=y
 CONFIG_VFAT_FS=y
 CONFIG_NLS_CODEPAGE_437=y
 CONFIG_NLS_ISO8859_1=y
-CONFIG_NETWORK_FILESYSTEMS=y
-CONFIG_NFS_FS=y
-CONFIG_NFS_V3=y
+# CONFIG_NETWORK_FILESYSTEMS is not set
 
 # Wi-Fi: rt73usb, its firmware loaded by the kernel from /lib/firmware.
 CONFIG_CFG80211=y
@@ -140,6 +138,5 @@ CONFIG_CC_OPTIMIZE_FOR_SIZE=y
 # CONFIG_MFD_MC13XXX_SPI is not set
 # CONFIG_NETFILTER is not set
 # CONFIG_IP_PNP is not set
-# CONFIG_NFS_V4 is not set
 # CONFIG_FTRACE is not set
 # CONFIG_PROFILING is not set

@@ -157,9 +157,10 @@ the image is missing or its inputs have changed:
 Before its shell, `/init` runs a neochumby stick as the stock boot does: it
 waits up to 15 seconds for `/dev/sda1`, mounts it (FAT) on `/mnt/usb`,
 and runs the stick's `userhook2` in the background, its output on the
-console. Without a stick, with `/psp/neochumby.conf` handed over, it runs its
-own copy of the hook, which mounts the tree from the paired neochumbyd. The
-tree is the session and the apps.
+console: the hook is the stick's, as the image holds none. Without a stick there
+is nothing to run but its shells (a reboot without one boots the stock firmware,
+as rcS runs a hook only from a stick). The tree is the session and the apps, and
+nothing in the image touches the Chumby's flash.
 
 ## Emulated, and CI
 

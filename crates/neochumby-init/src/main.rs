@@ -1,8 +1,9 @@
 //! ncinit: the dist image's /init, process 1.
 //!
 //! It mounts the kernel's file systems, joins the network the stock software
-//! was on (handed over in /psp: network.rs), runs the boot hook, a neochumby
-//! stick's or the image's own, and keeps a shell on the console and one on the screen. Throughout, it
+//! was on (handed over at /psp, in RAM: network.rs), runs the stick's boot
+//! hook, the one hook there is, and keeps a shell on the console and one on
+//! the screen. With no stick there is nothing to run but the shells. Throughout, it
 //! loads the module for each device the kernel announces (its modalias,
 //! matched against depmod's modules.alias), for the devices there at boot
 //! too, and reaps every process the kernel hands it.
@@ -41,15 +42,8 @@ const STICK_WAIT: Duration = Duration::from_secs(15);
 /// How long the network adapter gets to show up, once it has a stick's
 /// wait behind it.
 const ADAPTER_WAIT: Duration = Duration::from_secs(20);
-/// The zone, as the sideload handed it over.
-const LOCALTIME: &str = "/psp/localtime";
-/// Where the time comes from.
-const NTP_SERVER: &str = "pool.ntp.org";
 /// The stock software's network, as the sideload handed it over.
 const NETWORK_CONFIG: &str = "/psp/network_config";
-/// The image's copy of the boot hook, for a Chumby with no stick of its own:
-/// it mounts the tree from the neochumbyd in /psp/neochumby.conf.
-const IMAGE_HOOK: &str = "/etc/neochumby/userhook2";
 /// A shell that exits sooner than this after it started is restarted only
 /// once this has passed, not in a loop.
 const RESPAWN_GAP: Duration = Duration::from_secs(1);
@@ -103,14 +97,10 @@ impl Init {
         // The devices already there, whose announcements nobody heard.
         init.coldplug();
         let stick_hook = init.stick();
-        install_timezone();
         init.network();
         match stick_hook {
             Some(hook) => init.hook("the stick's userhook2", hook),
-            None if is_executable(IMAGE_HOOK) && Path::new("/psp/neochumby.conf").exists() => {
-                init.hook("userhook2", IMAGE_HOOK);
-            }
-            None => {}
+            None => log("no neochumby stick: nothing to run. A reboot without one is the stock firmware's"),
         }
 
         // A shell on the console the kernel was given, the serial port,
@@ -169,8 +159,9 @@ impl Init {
         self.service(0);
     }
 
-    /// A neochumby stick, as the stock boot has one: its first partition on
-    /// /mnt/usb. Its boot hook, if it has one.
+    /// The neochumby stick, as the stock boot has one: its first partition on
+    /// /mnt/usb, read-write, for what the Chumby keeps there. Its boot hook,
+    /// if it has one.
     fn stick(&mut self) -> Option<&'static str> {
         let until = Instant::now() + STICK_WAIT;
         while !is_block_device("/dev/sda1") && Instant::now() < until {
@@ -225,7 +216,6 @@ impl Init {
         match configure_address(&config.address, interface) {
             Ok(()) => {
                 step(WHAT, Status::Ok, &format!("network: {interface}, {}", config.ssid));
-                start_ntp();
                 start_ssh();
             }
             Err(e) => network_failed(&e),
@@ -358,36 +348,6 @@ fn network_lines(dmesg: &str) -> Vec<&str> {
         .collect();
     let from = lines.len().saturating_sub(12);
     lines[from..].to_vec()
-}
-
-/// The zone the stock software was set to, where the C library looks.
-/// Without it, local time is UTC.
-fn install_timezone() {
-    if let Err(e) = fs::copy(LOCALTIME, "/etc/localtime")
-        && e.kind() != io::ErrorKind::NotFound
-    {
-        kmsg(&format!("timezone: {e}"));
-    }
-}
-
-/// The time, from the network, kept in step: there's no clock that runs while
-/// the Chumby is off. It looks the servers up itself, as often as it takes, so
-/// it needn't wait for an address. Unauthenticated, as NTP is here: nothing
-/// that protects the Chumby depends on the time, its connections being to
-/// pinned keys.
-fn start_ntp() {
-    let started = Command::new("/usr/sbin/ntpd")
-        .args(["-p", NTP_SERVER])
-        .env("PATH", PATH)
-        .stdin(Stdio::null())
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .status();
-    match started {
-        Ok(s) if s.success() => kmsg("ntp: ntpd started"),
-        Ok(s) => step("Starting the clock's sync", Status::Failed, &format!("ntp: ntpd: {s}")),
-        Err(e) => step("Starting the clock's sync", Status::Failed, &format!("ntp: ntpd: {e}")),
-    }
 }
 
 /// An SSH server, only if the owner asked for one: /psp/neochumby-ssh there,

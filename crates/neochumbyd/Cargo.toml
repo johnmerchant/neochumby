@@ -1,28 +1,22 @@
 [package]
 name = "neochumbyd"
-description = "What a Chumby pairs with: its apps over NFS or synced to its stick, and their server halves"
+description = "What a Chumby pairs with: its apps synced to its stick, and their server halves"
 license = "MIT"
 version.workspace = true
 edition.workspace = true
 publish.workspace = true
 
 [dependencies]
-async-trait = "0.1"
 neochumby-proto.workspace = true
 neochumby-sync.workspace = true
 neochumby-sys.workspace = true
-nfsserve = "0.11"
 png = "0.18"
-# openat, to walk the tree's paths without following links (nfs.rs). Only on
-# the server.
-rustix = { version = "1", features = ["fs"] }
 serde.workspace = true
 serde_json = "1"
 sha2 = "0.10"
 # The catalog's .crate files (tar.gz).
 flate2 = "1"
 tar = { version = "0.4", default-features = false }
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "signal"] }
 toml.workspace = true
 # The catalog's HTTPS: pure Rust, rustls on ring (as neochumby-proto's TLS)
 # with Mozilla's roots built in, so a static musl binary needs no system

@@ -3,7 +3,7 @@
 # every profile, and what CI checks on dist while the smoke test can't pass
 # there yet. It checks that
 #   - the boot mounts the stick and runs its hook (dev/emulate's, which
-#     runs the tree's own userhook2);
+#     runs boot/userhook2's Linux 7 half);
 #   - the hook runs the session from the stick, and the session opens home;
 #   - home draws: it says so, and the screen settles.
 # The screenshot and the console go in OUT.

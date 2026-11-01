@@ -27,10 +27,8 @@ control panel are proprietary. This project ships none of it, in any form:
   proportions), not pinned pictures;
 - no code copied from the stock software.
 
-neochumby itself leaves the stock firmware as it is: the boot hook and what
-pairing keeps in the settings partition are its only writes to the device's
-flash, and a reboot without them, or without the stick, runs the stock
-software.
+neochumby itself leaves the stock firmware as it is: it never writes to the
+device's flash, and a reboot without the stick runs the stock software.
 
 ## The emulator
 

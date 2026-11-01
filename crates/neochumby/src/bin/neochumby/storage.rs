@@ -1,18 +1,23 @@
 //! `access = ["storage"]`: a directory of the app's own that lasts across
-//! boots, /psp/apps/<name>/, shared by its exec and its service.
+//! boots, shared by its exec and its service.
 //!
-//! The session makes it as it starts either, owned by the app's uid (every
-//! file in it too: an app's uid follows its place in the tree, so it can
-//! change between boots), mode 0700, and binds it into the jail at the same
-//! path. NEOCHUMBY_STORAGE names it, jailed or not.
+//! FAT has no owners, so a directory on the stick can't be one app's. So the
+//! app's directory is in RAM, [`BASE`]/<name>/: the session makes it as it
+//! starts either, owned by the app's uid (every file in it too: an app's uid
+//! follows its place in the tree, so it can change between boots), mode 0700,
+//! binds it into the jail at the same path, and fills it from the stick on the
+//! first start of a boot. NEOCHUMBY_STORAGE names it, jailed or not. Every
+//! [`KEEP_EVERY`], and as the session ends, what changed is copied back to
+//! [`KEEP`]/<name>/ on the stick (write_durable), so a power cut can lose the
+//! last half minute, and never a file half written. Names FAT can't hold
+//! aren't kept, and say so.
 //!
-//! /psp is the Chumby's settings flash, 2 MB in all, so each app may use
-//! [`CAP`]. The kernel has no quotas, and a bind mount can't be limited, so
-//! the session measures: every [`CHECK`] it adds up each running app's
-//! directory and ends an app over its limit (its exec, or its service, as
-//! the network check does). An app's limit is [`CAP`], or what it already
-//! used as the session started if that was more, so an app left over the
-//! cap can still run, and tidy up, but not grow. Like the network check,
+//! Each app may use [`CAP`]. The kernel has no quotas, and a bind mount can't
+//! be limited, so the session measures: every [`CHECK`] it adds up each
+//! running app's directory and ends an app over its limit (its exec, or its
+//! service, as the network check does). An app's limit is [`CAP`], or what it
+//! already used as the session started if that was more, so an app left over
+//! the cap can still run, and tidy up, but not grow. Like the network check,
 //! this finds an app over its limit; it doesn't stop the writes that put it
 //! there.
 //!
@@ -29,8 +34,12 @@ use std::time::{Duration, Instant};
 
 use neochumby::apps::App;
 
-/// Where the apps' directories are.
-pub const BASE: &str = "/psp/apps";
+/// Where the apps' directories are, in RAM.
+pub const BASE: &str = "/run/neochumby-storage";
+/// Where they are kept, on the stick.
+pub const KEEP: &str = "/mnt/usb/neochumby/state/apps";
+/// How often what changed is copied there.
+const KEEP_EVERY: Duration = Duration::from_secs(30);
 /// What each app may use, in bytes.
 pub const CAP: u64 = 64 * 1024;
 /// How often the session measures.
@@ -63,12 +72,60 @@ fn chown_all(dir: &Path, uid: u32) -> io::Result<()> {
     Ok(())
 }
 
+/// Makes `to`, on the stick, hold what `from` holds: only what differs is
+/// written, each file whole and synced; what's gone from `from` is removed.
+fn mirror(from: &Path, to: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    let mut names = std::collections::HashSet::new();
+    for e in std::fs::read_dir(from)?.flatten() {
+        let (name, path) = (e.file_name(), e.path());
+        names.insert(name.clone());
+        let m = path.symlink_metadata()?;
+        let there = to.join(&name);
+        if m.is_dir() {
+            mirror(&path, &there)?;
+        } else if m.is_file() {
+            let new = std::fs::read(&path)?;
+            if std::fs::read(&there).ok().as_ref() != Some(&new) {
+                let Some(n) = name.to_str() else { continue };
+                neochumby::conf::write_durable(to, n, &new)?;
+            }
+        }
+    }
+    for e in std::fs::read_dir(to)?.flatten() {
+        if !names.contains(&e.file_name()) {
+            let p = e.path();
+            if p.symlink_metadata()?.is_dir() { std::fs::remove_dir_all(p)? } else { std::fs::remove_file(p)? }
+        }
+    }
+    Ok(())
+}
+
+/// Fills `to`, in RAM, from `from` on the stick, if it has anything.
+fn restore(from: &Path, to: &Path) -> io::Result<()> {
+    let Ok(rd) = std::fs::read_dir(from) else { return Ok(()) };
+    for e in rd.flatten() {
+        let (path, there) = (e.path(), to.join(e.file_name()));
+        if path.symlink_metadata()?.is_dir() {
+            std::fs::create_dir_all(&there)?;
+            restore(&path, &there)?;
+        } else {
+            std::fs::copy(&path, &there)?;
+            std::fs::set_permissions(&there, std::fs::Permissions::from_mode(0o600))?;
+        }
+    }
+    Ok(())
+}
+
 /// The apps' directories, and their limits.
 pub struct Storage {
     base: PathBuf,
     /// Each app with `storage`, and the most it may use.
     limits: Vec<(String, u64)>,
     due: Instant,
+    /// Where they are kept, and when next.
+    keep: Option<PathBuf>,
+    keep_due: Instant,
 }
 
 impl Storage {
@@ -86,7 +143,35 @@ impl Storage {
                 (a.name.clone(), used.max(CAP))
             })
             .collect();
-        Storage { base, limits, due: Instant::now() + CHECK }
+        Storage { base, limits, due: Instant::now() + CHECK, keep: None, keep_due: Instant::now() + KEEP_EVERY }
+    }
+
+    /// Keeps the directories under `keep`: fills them from there as they are
+    /// made, and copies them back.
+    pub fn keep_in(&mut self, keep: Option<PathBuf>) {
+        self.keep = keep;
+    }
+
+    /// Copies what changed back to the stick, if it's time.
+    pub fn keep_if_due(&mut self) {
+        if Instant::now() >= self.keep_due {
+            self.keep_due = Instant::now() + KEEP_EVERY;
+            self.keep_now();
+        }
+    }
+
+    /// Copies what changed back to the stick. An app's directory that was
+    /// never made this boot is left as the stick has it.
+    pub fn keep_now(&self) {
+        let Some(keep) = &self.keep else { return };
+        for (name, _) in &self.limits {
+            let (from, to) = (self.base.join(name), keep.join(name));
+            if from.is_dir()
+                && let Err(e) = mirror(&from, &to)
+            {
+                eprintln!("neochumby: keeping {name}'s storage: {e}");
+            }
+        }
     }
 
     /// `app`'s directory, made and owned by `owner` (its uid, when it runs
@@ -102,7 +187,12 @@ impl Storage {
             match dir.symlink_metadata() {
                 Ok(m) if !m.is_dir() => return Err(io::Error::other("not a directory")),
                 Ok(_) => {}
-                Err(_) => std::fs::create_dir(&dir)?,
+                Err(_) => {
+                    std::fs::create_dir(&dir)?;
+                    if let Some(keep) = &self.keep {
+                        restore(&keep.join(&app.name), &dir)?;
+                    }
+                }
             }
             if let Some(uid) = owner {
                 chown_all(&dir, uid)?;
@@ -144,6 +234,38 @@ mod tests {
         let mut a = app(name, false);
         a.access.storage = true;
         a
+    }
+
+    /// What an app wrote comes back after a reboot (RAM gone, the stick not);
+    /// what it removed stays gone; nothing unchanged is written again.
+    #[test]
+    fn kept_on_the_stick() {
+        let root = std::env::temp_dir().join(format!("neochumby-storage-keep-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let (ram, stick) = (root.join("ram"), root.join("stick"));
+        let apps = [with_storage("radio")];
+        let mut s = Storage::new(ram.clone(), &apps);
+        s.keep_in(Some(stick.clone()));
+        let dir = s.dir(&apps[0], None).unwrap();
+        std::fs::write(dir.join("station"), b"3").unwrap();
+        std::fs::create_dir(dir.join("d")).unwrap();
+        std::fs::write(dir.join("d/x"), b"y").unwrap();
+        s.keep_now();
+        assert_eq!(std::fs::read(stick.join("radio/d/x")).unwrap(), b"y");
+        let written = stick.join("radio/station").metadata().unwrap().modified().unwrap();
+        std::thread::sleep(Duration::from_millis(20));
+        s.keep_now();
+        assert_eq!(stick.join("radio/station").metadata().unwrap().modified().unwrap(), written, "not again");
+        std::fs::remove_file(dir.join("d/x")).unwrap();
+        s.keep_now();
+        assert!(!stick.join("radio/d/x").exists());
+
+        std::fs::remove_dir_all(&ram).unwrap();
+        let mut s = Storage::new(ram.clone(), &apps);
+        s.keep_in(Some(stick.clone()));
+        let dir = s.dir(&apps[0], None).unwrap();
+        assert_eq!(std::fs::read(dir.join("station")).unwrap(), b"3");
+        std::fs::remove_dir_all(&root).unwrap();
     }
 
     #[test]

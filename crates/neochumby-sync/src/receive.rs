@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::io;
 
 use neochumby_proto::Msg;
+use neochumby_proto::dev::NEEDS_RESTART;
 
 use crate::stick::{Set, Stick};
 use crate::{Clock, Entry, Link, Timing, invalid, manifest, next, recv_manifest, unexpected};
@@ -18,8 +19,6 @@ pub enum Outcome {
     WaitingForRestart(Set),
     /// The live set is the tree.
     UpToDate,
-    /// neochumbyd does not sync this Chumby (its delivery is not sync).
-    Refused,
     /// The standby set was brought up to the tree and made live: `received`
     /// of its `files` were sent, `bytes` in all.
     Flipped { to: Set, files: usize, received: usize, bytes: u64 },
@@ -40,6 +39,8 @@ pub fn round(s: &mut dyn Link, stick: &Stick, t: Timing) -> io::Result<Outcome> 
 
 fn run(s: &mut dyn Link, stick: &Stick, wait: &Clock) -> io::Result<Outcome> {
     if stick.held() {
+        // Told, for a `neochumbyd sync` that may be waiting.
+        s.send(&Msg::SyncDone { ok: false, detail: "rolled back: held until `neochumby-sync resume`".into() })?;
         return Ok(Outcome::Held);
     }
     stick.mounted()?;
@@ -49,13 +50,14 @@ fn run(s: &mut dyn Link, stick: &Stick, wait: &Clock) -> io::Result<Outcome> {
         None => stick.current().map_or(Set::A, Set::other),
     };
     if stick.running == Some(target) {
+        let detail = format!("{NEEDS_RESTART}set {} is running, and is the one to write", target.name());
+        s.send(&Msg::SyncDone { ok: false, detail })?;
         return Ok(Outcome::WaitingForRestart(target));
     }
     let digest = live.as_ref().map_or([0; 32], |(_, m)| manifest::digest(m));
     s.send(&Msg::SyncHave { live: digest })?;
     match next(s, wait)? {
         Msg::SyncUpToDate => return Ok(Outcome::UpToDate),
-        Msg::Refused => return Ok(Outcome::Refused),
         Msg::SyncWant => {}
         Msg::SyncDone { detail, .. } => return Err(invalid(format!("neochumbyd will not send its tree: {detail}"))),
         m => return Err(unexpected(&m)),

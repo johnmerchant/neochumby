@@ -1,6 +1,6 @@
 [package]
 name = "neochumby-sync"
-description = "delivery=sync: a Chumby's tree on its stick, kept in step with its neochumbyd"
+description = "A Chumby's tree on its stick, kept in step with its neochumbyd"
 license = "MIT"
 # Its own semver, not the workspace's: published on crates.io (see
 # CONTRIBUTING.md).

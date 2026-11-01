@@ -71,9 +71,8 @@ pub enum Answer {
     Progress(String),
     /// Installed: in the tree as apps/<app>. `home` is the order the
     /// app list shows the tree's apps in (by directory), for saying where.
-    /// `restarts`: the Chumby's session is started again once it leaves
-    /// GET APPS, so that it knows the app; else (`delivery=sync`) its
-    /// next sync brings it.
+    /// `restarts`: always false now: its next sync brings the app, which
+    /// the next restart runs. Kept so that the message's shape doesn't change.
     Installed { app: String, title: String, home: Vec<String>, restarts: bool },
     /// Removed from the tree.
     Removed { app: String },

@@ -11,7 +11,10 @@ the settings.
          [--stick IMG]            or boots this stick image as it is (from
                                   mkstick, or a powercut), written as the
                                   Chumby writes it
-         [--psp DIR]              DIR's files added to the settings (/psp)
+         [--psp DIR]              DIR's files added to the settings (/psp),
+                                  but its neochumby.conf, .key and .settings
+                                  go in the stick's neochumby/state, as
+                                  tools/stick puts them; it starts afresh
          [--bind DIR:PATH]        DIR, on the stick, linked at PATH
          [--size MB]              the stick start makes, this size
          [--server SOCK]          the Chumby's neochumbyd is the one
@@ -57,8 +60,8 @@ the settings.
                                   the session runs)
   dev/emulate mkstick IMG [--size MB] [--force] [TREE]
                                   a stick image as start makes one
-  dev/emulate kept                the pairing the Chumby keeps (--server),
-                                  as it stands: its files, in DIR/psp
+  dev/emulate kept                what the stick keeps of its pairing, as it
+                                  stands: its files, in DIR/psp
   dev/emulate backend             the profile: dist, stock or device
   dev/emulate scale               how much longer than a Chumby's its waits
                                   are (NEOCHUMBY_EMU_SLOW overrides)
@@ -89,8 +92,10 @@ a command line, and where the settings go:
 Each of a profile's images is a flag (--kernel, --nand, --factory-psp,
 --initrd, --append) or a variable: NEOCHUMBY_EMU_DIST_KERNEL, _INITRD and
 _APPEND for dist, and for stock NEOCHUMBY_EMU_KERNEL, _NAND, _PSP and _APPEND.
-A new profile is an entry in PROFILES below. For dist the settings go on the
-stick, and the hook copies them into /psp.
+A new profile is an entry in PROFILES below. For dist, which boots the image
+directly with no stock stage, the settings go on the stick, and the hook copies
+them into /psp, standing in for what the stock half of the real hook hands over.
+So dist exercises the Linux 7 half of boot/userhook2 and not its stock half.
 
 QEMU (emu/qemu/out/obj/qemu-system-arm, unless --qemu or $QEMU) and the
 dist image (unless given) are made ready at start, as
@@ -108,21 +113,18 @@ sets NEOCHUMBY_EMU_PREPARED=1, with which start neither fetches nor builds.)
 The stick is a FAT image laid out as tools/stick lays one out, the tree as
 neochumby/, except that its userhook2 is dev/emulate-userhook2: it puts
 the settings and --bind directories in place, copies the session's log to
-the console, and runs the tree's own userhook2, unchanged. The session's
-end is that hook's "neochumby exited: N" on the console.
+the console, and runs boot/userhook2, unchanged, from emulate/userhook2. The
+session's end is that hook's "neochumby exited: N" on the console.
 
 The emulated Chumby has no network (QEMU runs with -nic none). With
 --server SOCK, its second UART (ttymxc1) is joined to the unix socket SOCK, where neochumbyd listens
-(serve --listen-unix SOCK), and to nothing else: the stick's
-neochumby.conf says server=serial, and the session carries its
-connections to neochumbyd over that line, the same TLS sessions as over
-TCP. So PAIR pairs it (neochumbyd pairing, approve), and then `neochumbyd
-set chumby delivery=sync` and `neochumbyd restart chumby` sync the tree to
-its stick (NFS can't run over the line). What the Chumby keeps of its
-pairing (/psp's neochumby.conf, .key and .settings) is copied to the
-stick as it changes and put back in /psp at the next start, so it stays
-paired from one start to the next; --psp starts it afresh with that
-directory's files instead. dev/emulate kept copies it to DIR/psp.
+(serve --listen-unix SOCK), and to nothing else. Given a conf saying
+server=serial with --psp, as tools/stick would write it, with its key (`neochumbyd
+keygen`, `neochumbyd add`), the session carries its connections to neochumbyd
+over that line, the same TLS sessions as over TCP, and syncs the tree to its
+stick. A stick's state outlasts a stop (`start TREE` makes the stick anew, with
+the state the last one kept; `start --stick` boots a stick as it is). dev/emulate
+kept copies it to DIR/psp.
 
 --device NAME (or NEOCHUMBY_EMU_DEVICE) drives a real Chumby instead: one
 paired with a neochumbyd and set `dev=on` (`neochumbyd set NAME dev=on`),
@@ -173,6 +175,10 @@ W, H = 320, 240
 # calibration maps onto the screen (qemu-chumby's README).
 NEUTRAL_CALIBRATION = "0,4095,4095,-4095,0"
 HOOK = os.path.join(DEV, "emulate-userhook2")
+REAL_HOOK = os.path.join(REPO, "boot", "userhook2")
+# What the stick keeps of its pairing, in neochumby/state (crates/neochumby's
+# conf.rs).
+KEPT = ("neochumby.conf", "neochumby.key", "neochumby.settings")
 # The boot hook's line when the session returns (boot/userhook2).
 EXITED = re.compile(r"neochumby exited: (\d+)")
 
@@ -309,25 +315,35 @@ def prebuilt_image(profile):
 
 def stick_layout(work, tree, profile, extra_psp, binds, kept=None):
     """The stick's files, in WORK: as tools/stick lays them out, but with
-    dev/emulate's hook as userhook2 (the tree's own is neochumby/userhook2),
+    dev/emulate's hook as userhook2 (the real one is emulate/userhook2),
     and under emulate/ the settings and --bind directories. Links, which
-    the stick image follows. With KEPT (a directory: --server), the stick's
-    neochumby.conf says server=serial, and emulate/kept holds the pairing
-    to put back."""
+    the stick image follows. neochumby/state holds what the stick keeps of
+    its pairing: --psp's, else KEPT's (a directory)."""
     os.makedirs(os.path.join(work, "emulate"))
     os.symlink(HOOK, os.path.join(work, "userhook2"))
-    if kept is not None:
-        with open(os.path.join(work, "neochumby.conf"), "w") as f:
-            f.write("server=serial\n")
-        shutil.copytree(kept, os.path.join(work, "emulate", "kept"))
+    os.symlink(REAL_HOOK, os.path.join(work, "emulate", "userhook2"))
+    state = {}
+    for source in (kept, extra_psp):
+        if source:
+            state.update({n: os.path.join(source, n) for n in KEPT if os.path.exists(os.path.join(source, n))})
+    if tree or state:
+        os.makedirs(os.path.join(work, "neochumby"))
     if tree:
-        os.symlink(os.path.abspath(tree), os.path.join(work, "neochumby"))
+        tree = os.path.abspath(tree)
+        for n in os.listdir(tree):
+            os.symlink(os.path.join(tree, n), os.path.join(work, "neochumby", n))
+    if state:
+        os.makedirs(os.path.join(work, "neochumby", "state"))
+        for n, path in state.items():
+            shutil.copyfile(path, os.path.join(work, "neochumby", "state", n))
     if profile and PROFILES[profile]["psp"] == "stick":
         psp = os.path.join(work, "emulate", "psp")
+        os.makedirs(psp)
         if extra_psp:
-            shutil.copytree(extra_psp, psp)
-        else:
-            os.makedirs(psp)
+            for n in os.listdir(extra_psp):
+                if n not in KEPT:
+                    src = os.path.join(extra_psp, n)
+                    (shutil.copytree if os.path.isdir(src) else shutil.copyfile)(src, os.path.join(psp, n))
         with open(os.path.join(psp, "ts_settings"), "w") as f:
             f.write(NEUTRAL_CALIBRATION + "\n")
     if binds:
@@ -346,9 +362,6 @@ def make_stick(out, tree, profile, extra_psp, binds, size_mb=None, kept=None):
         cm.mkfat(os.path.join(work, "stick"), out, size_mb, "NEOCHUMBY")
 
 
-# What the Chumby keeps of its pairing, carried from one start to the next
-# on the stick (emulate-userhook2) with --server.
-KEPT = ("neochumby.conf", "neochumby.key", "neochumby.settings")
 
 
 def harvest(state, stick):
@@ -358,7 +371,7 @@ def harvest(state, stick):
         files = cm.fat_files(stick)
     except (OSError, ValueError, IndexError, struct.error):
         return False
-    got = {n: files.get(f"emulate/kept/{n}") for n in KEPT}
+    got = {n: files.get(f"neochumby/state/{n}") for n in KEPT}
     if not any(got.values()):
         return False
     kept = state.at("psp")
@@ -475,13 +488,11 @@ def cmd_start(state, opts, tree):
             sys.exit("dev/emulate: --psp and --bind go on the stick that start makes from a TREE")
     else:
         stick = state.at("stick.img")
-        kept = None
-        if link:
-            # The pairing kept last time, unless --psp starts afresh.
-            kept = state.at("psp")
-            if opts.get("psp") or not (os.path.exists(stick) and harvest(state, stick)):
-                shutil.rmtree(kept, ignore_errors=True)
-                os.makedirs(kept)
+        # The pairing kept last time, unless --psp starts afresh.
+        kept = state.at("psp")
+        if opts.get("psp") or not (os.path.exists(stick) and harvest(state, stick)):
+            shutil.rmtree(kept, ignore_errors=True)
+            os.makedirs(kept)
         make_stick(stick, tree, profile, opts.get("psp"), opts.get("binds"), opts.get("size"), kept=kept)
     props, extra = {}, []
     if opts.get("audio"):

@@ -1,12 +1,14 @@
 #!/bin/sh
 # Builds the tree (tools/tree, with the APPs given) and installs it in a
-# neochumbyd's state directory on HOST, with neochumbyd itself beside it.
-# What is already there and not in this tree (game data, other apps) is
-# left alone. rsync puts each file in under a temporary name and renames
-# them all at the end; a Chumby running a replaced binary is told its file
-# went stale, so stop what it runs first, or restart it: with --restart,
-# each Chumby NAMEd is asked over ssh (`neochumbyd restart NAME` on HOST) to
-# end its apps and start its session again from the new tree. With --tree
+# neochumbyd's state directory on HOST, with neochumbyd itself beside it: the
+# tree its Chumbys' sticks sync from. What is already there and not in this
+# tree (game data, other apps) is left alone. rsync puts each file in under a
+# temporary name and renames them all at the end, so a round that starts after
+# it sees the whole tree. With --restart, each Chumby NAMEd is asked over ssh to
+# sync now and wait for it (`neochumbyd sync NAME`), then to restart, which runs
+# the new set (`neochumbyd restart NAME`); a new kernel or initramfs in the tree
+# needs a reboot too. Without --restart, Chumbys get it at their next round,
+# within the minute, and run it from their next restart or boot. With --tree
 # DIR, a tree tools/tree already built is installed instead (dev/emulate
 # --device does this); its companions must be built for HOST.
 #
@@ -94,7 +96,24 @@ rsync -rlpt --delay-updates "$tmp/tree/" "$host:$dir/tree/"
 rsync -pt --delay-updates "$tmp/neochumbyd" "$host:$dir/neochumbyd"
 
 # A restarted daemon (a new binary) takes a few seconds before each Chumby
-# is back; neochumbyd restart waits for it.
+# is back; neochumbyd sync and restart wait for it. A Chumby still running the
+# set it would write has to restart first (sync says so, with status 3): then
+# it syncs, and restarts again on what that brought.
+remote() { ssh "$host" "'$dir/neochumbyd' $1 $2 --state '$dir'"; }
 for name in $names; do
-  ssh "$host" "'$dir/neochumbyd' restart $name --state '$dir'"
+  r=0
+  remote sync "$name" || r=$?
+  if [ "$r" -eq 3 ]; then
+    remote restart "$name"
+    tries=0
+    until r=0 && remote sync "$name"; do
+      r=$?
+      tries=$((tries + 1))
+      [ "$tries" -lt 5 ] || exit "$r"
+      sleep 5
+    done
+  elif [ "$r" -ne 0 ]; then
+    exit "$r"
+  fi
+  remote restart "$name"
 done

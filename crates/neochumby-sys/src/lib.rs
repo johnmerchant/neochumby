@@ -14,8 +14,8 @@
 //! process, unless it needs a Rust newer than Buildroot's (1.88), which
 //! builds this crate for ncinit: `fs::try_lock` is flock(2) for that.
 //!
-//! Static musl, an ARM926. neochumby-boot, the session's `check-set` and what
-//! they use of this crate still run on the stock firmware's Linux 2.6.16, on
+//! Static musl, an ARM926. The session's `check-set` and what it uses of this
+//! crate still run on the stock firmware's Linux 2.6.16, on
 //! the way to Linux 7, so a new system call in those is asked of the kernel at
 //! run time, as [`lockdown`]'s are. Parts that only the Chumby
 //! needs are built only for Linux (and the crash reports only for ARM);
@@ -36,7 +36,7 @@
 //!
 //! - Its default backend on Linux, linux_raw (ARMv5 included), makes raw
 //!   system calls in place of libc's, and it documents Linux 3.2 as its
-//!   minimum, and neochumby-boot still starts on the stock 2.6.16.
+//!   minimum, and `check-set` still runs on the stock 2.6.16.
 //! - Its `ioctl` and `mmap` are themselves `unsafe fn`, and `sigaction` is
 //!   out of its scope (it needs libc's internals). The OSS ioctls, the
 //!   framebuffer mapping and the signal handlers would still need `unsafe`

@@ -1,5 +1,5 @@
 //! The engine on the Chumby: the screen and touch through the neochumby
-//! crate, the backlight through /sys, settings in /psp, and the session's
+//! crate, the backlight through /sys, settings on the stick, and the session's
 //! pipe (opening apps, the top button). The music plays in the
 //! classic service (service.rs), which follows the settings this app
 //! writes, so it carries on while another app is in front.
@@ -77,7 +77,7 @@ impl Plat for Device {
     fn volume(&mut self, _vol: i32) {}
 
     fn state_path(&self, name: &str) -> PathBuf {
-        Path::new("/psp").join(name)
+        neochumby::conf::state_dir("classic").join(name)
     }
 
     fn now_us(&self) -> i64 {
