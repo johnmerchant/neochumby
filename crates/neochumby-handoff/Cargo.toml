@@ -1,6 +1,6 @@
 [package]
 name = "neochumby-handoff"
-description = "What the stock 2.6.16 hands Linux 7 at a sideload: the initramfs, followed by the Chumby's /psp as a second archive"
+description = "What the stock 2.6.16 hands Linux 7 at a sideload: the initramfs, followed by the settings it needs from /psp as a second archive"
 license = "MIT"
 version = "0.1.0"
 edition = "2024"

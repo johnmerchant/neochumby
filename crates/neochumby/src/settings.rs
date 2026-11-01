@@ -1,20 +1,20 @@
 //! This Chumby's settings as its owner chose them on the neochumbyd it is
-//! paired with (`neochumbyd set NAME start=wx`, later its web page): sent
-//! after `Welcome` as `Msg::Config`. The session asks once as it starts,
-//! and keeps the answer in /psp, so a boot without the server uses the last
-//! settings it had.
+//! paired with (`neochumbyd set NAME start=wx`): sent after `Welcome` as
+//! `Msg::Config`. The session asks once as it starts, and keeps the answer on
+//! the stick, so a boot without the server uses the last settings it had.
 //!
-//!   /psp/neochumby.settings   key=value lines, as neochumbyd last sent them
+//!   /mnt/usb/neochumby/state/neochumby.settings   key=value lines, as
+//!                                                 neochumbyd last sent them
 
 use std::io;
-use std::path::Path;
 use std::time::Duration;
 
 use neochumby_proto::{Identity, Session, Settings, Stream as _, unhex_key, version};
 
 use crate::conf::{self, Paired};
 
-pub const SETTINGS: &str = "/psp/neochumby.settings";
+const FILE: &str = "neochumby.settings";
+pub const SETTINGS: &str = "/mnt/usb/neochumby/state/neochumby.settings";
 
 /// How long the session waits on the server for each step. It waits as the
 /// Chumby boots, so not long: a server that is down costs a few seconds.
@@ -35,7 +35,7 @@ pub fn load() -> Settings {
             Err(e) => eprintln!("neochumby: settings from {}: {e}; using the last ones", p.server),
         }
     }
-    let kept = std::fs::read_to_string(SETTINGS).unwrap_or_default();
+    let kept = conf::read_state(SETTINGS).unwrap_or_default();
     Settings::from_pairs(kept.lines().filter_map(|l| l.split_once('=')).map(|(k, v)| (k.to_string(), v.to_string())))
 }
 
@@ -82,11 +82,12 @@ fn set_clock(t: i64) {
     }
 }
 
-/// Writes SETTINGS only when they changed: /psp is a small flash.
+/// Writes SETTINGS only when they changed: a stick's writes wear it, and each
+/// is synced.
 fn keep(s: &Settings) -> io::Result<()> {
     let body: String = s.to_pairs().iter().map(|(k, v)| format!("{k}={v}\n")).collect();
-    if std::fs::read_to_string(SETTINGS).is_ok_and(|old| old == body) {
+    if conf::read_state(SETTINGS).is_some_and(|old| old == body) {
         return Ok(());
     }
-    conf::write_atomic(Path::new(SETTINGS), body.as_bytes(), 0o644)
+    conf::write_state(FILE, body.as_bytes())
 }

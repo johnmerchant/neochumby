@@ -1,18 +1,8 @@
-//! The admin socket: how an app's server program, such as the household
-//! web page, pairs Chumbys and sets their settings. It does what the
-//! command line does, through the same functions (state.rs).
-//!
-//! It has no path, so no program can find it. Only an app whose owner
-//! allows it `pairing` (`neochumbyd allow <app> pairing`) gets one: a
-//! connected Unix socket, made for each run of its server program and
-//! inherited by it as descriptor 3 (`NEOCHUMBY_ADMIN=3`), with neochumbyd's
-//! end answered by [`serve`] until the program closes it, or the owner
-//! disallows it (`neochumbyd disallow <app> pairing`). The program should
-//! mark descriptor 3 close-on-exec as it starts, so that programs it runs
-//! don't get it. The command line's pairing commands work on the state
-//! directory itself; its catalog commands (`install`, `uninstall`,
-//! `catalog auto-update`) speak this protocol with the owner's token, over
-//! a connected pair of its own ([`local`]).
+//! The admin protocol: how the command line's catalog commands (`install`,
+//! `uninstall`, `catalog auto-update`) and its answers to a Chumby's GET APPS
+//! requests act, with the owner's token, over a connected pair of its own
+//! ([`local`]). Nothing outside this process can reach it: no socket has a
+//! path, and no app is given one.
 //!
 //! The protocol is lines of text. A request is a command and its words,
 //! separated by spaces, ending in a newline, at most 1024 bytes. The answer
@@ -24,14 +14,7 @@
 //!   paired                    paired NAME KEY [K=V ...]   each Chumby
 //!                             ok                          paired, and its
 //!                                                         settings
-//!   pending                   pending CODE NAME ADDRESS KEY
-//!                             ok                          each asking
-//!   approve CODE TOKEN        ok NAME     pairs the Chumby showing CODE
-//!   replace CODE TOKEN        ok NAME     the same, unpairing one already
-//!                                         paired under its name with
-//!                                         another key (`approve --replace`)
-//!   refuse CODE TOKEN         ok
-//!   forget NAME TOKEN         ok          unpairs NAME
+//!   forget NAME TOKEN         ok          revokes NAME
 //!   set NAME KEY=VALUE TOKEN  ok          one of a Chumby's settings;
 //!                                         KEY= removes it
 //!   check TOKEN               ok          whether TOKEN is the owner's,
@@ -56,20 +39,12 @@
 //!   auto-update on|off TOKEN  ok
 //!
 //! TOKEN is the owner's (`neochumbyd token`). Every change needs it; only
-//! reading (`paired`, `pending`, `requests`, `auto-update`) and `check`
-//! don't. Typing the code from
-//! the Chumby's screen is what pairing's security rests on, so the person
-//! approving must be the owner, not just someone on the network who can
-//! reach the web page; and settings include remote input (`dev=on`) and
-//! where a Chumby's apps come from. So nothing depends on the page putting
-//! a change behind its own login. A wrong token is answered after a
-//! second, to slow guessing through the page.
+//! reading (`paired`, `requests`, `auto-update`) and `check` don't. A wrong
+//! token is answered after a second, to slow guessing.
 
 use std::io::{self, BufRead, BufReader, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::time::Duration;
-
-use neochumby_proto::hex;
 
 use crate::state::State;
 
@@ -78,27 +53,8 @@ const MAX_LINE: usize = 1024;
 
 /// The commands that change something, and so need the owner's token
 /// (their last word), with how many words each takes.
-const CHANGES: &[(&str, usize)] = &[
-    ("approve", 3),
-    ("replace", 3),
-    ("refuse", 3),
-    ("forget", 3),
-    ("set", 4),
-    ("install", 4),
-    ("uninstall", 3),
-    ("auto-update", 3),
-];
-
-/// Answers `app`'s requests on `conn` until it closes it, or its owner no
-/// longer allows it `pairing`.
-pub fn serve(state: &State, conn: UnixStream, app: &str) -> io::Result<()> {
-    answer_on(
-        state,
-        conn,
-        || state.allowed(app).iter().any(|w| w == crate::state::PAIRING),
-        &format!("{app} isn't allowed pairing"),
-    )
-}
+const CHANGES: &[(&str, usize)] =
+    &[("approve", 3), ("refuse", 3), ("forget", 3), ("set", 4), ("install", 4), ("uninstall", 3), ("auto-update", 3)];
 
 /// Sends `line` as the command line, over a connected pair whose other end
 /// this process answers: the answer's data lines and the word after `ok`
@@ -107,7 +63,7 @@ pub fn serve(state: &State, conn: UnixStream, app: &str) -> io::Result<()> {
 pub fn local(state: &State, line: &str) -> Result<Vec<String>, String> {
     let (ours, theirs) = UnixStream::pair().map_err(|e| e.to_string())?;
     let st = state.clone();
-    let server = std::thread::spawn(move || answer_on(&st, theirs, || true, ""));
+    let server = std::thread::spawn(move || answer_on(&st, theirs));
     let mut w = ours.try_clone().map_err(|e| e.to_string())?;
     w.write_all(format!("{line}\n").as_bytes()).map_err(|e| e.to_string())?;
     let mut out = Vec::new();
@@ -130,9 +86,8 @@ pub fn local(state: &State, line: &str) -> Result<Vec<String>, String> {
     Err("the admin protocol closed without an answer".into())
 }
 
-/// Answers requests on `conn` while `allowed()` (else says `refused` and
-/// stops), until it closes.
-fn answer_on(state: &State, conn: UnixStream, allowed: impl Fn() -> bool, refused: &str) -> io::Result<()> {
+/// Answers requests on `conn` until it closes.
+fn answer_on(state: &State, conn: UnixStream) -> io::Result<()> {
     let mut out = conn.try_clone()?;
     let mut r = BufReader::new(conn);
     loop {
@@ -143,10 +98,6 @@ fn answer_on(state: &State, conn: UnixStream, allowed: impl Fn() -> bool, refuse
         }
         if !line.ends_with('\n') {
             out.write_all(b"error line too long\n")?;
-            return Ok(());
-        }
-        if !allowed() {
-            out.write_all(format!("error {refused}\n").as_bytes())?;
             return Ok(());
         }
         let answer = request(state, line.trim_end_matches(['\n', '\r']));
@@ -177,13 +128,6 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
                     out.push_str(&format!(" {k}={v}"));
                 }
                 out.push('\n');
-            }
-            Ok(out + "ok\n")
-        }
-        ["pending"] => {
-            let mut out = String::new();
-            for p in state.pending()? {
-                out.push_str(&format!("pending {} {} {} {}\n", p.code, p.name, p.addr, hex(&p.key)));
             }
             Ok(out + "ok\n")
         }
@@ -221,19 +165,6 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             let summary: String = r.summary.lines().map(|l| format!("summary {}\n", l.trim_start())).collect();
             Ok(format!("{summary}ok {}\n", r.chumby))
         }
-        [cmd @ ("approve" | "replace"), code, _] => {
-            let name = state.approve(code, *cmd == "replace")?;
-            eprintln!(
-                "neochumbyd: admin: approved {name} ({code}{})",
-                if *cmd == "replace" { ", replacing" } else { "" }
-            );
-            Ok(format!("ok {name}\n"))
-        }
-        ["refuse", code, _] => {
-            state.refuse(code)?;
-            eprintln!("neochumbyd: admin: refused {code}");
-            Ok("ok\n".into())
-        }
         ["forget", name, _] => {
             state.forget(name)?;
             eprintln!("neochumbyd: admin: forgot {name}");
@@ -263,7 +194,7 @@ fn answer(state: &State, words: &[&str]) -> io::Result<String> {
             eprintln!("neochumbyd: admin: {name}: {key}={value}");
             Ok("ok\n".into())
         }
-        ["paired" | "pending" | "requests" | "check", ..] => Err(bad(&format!("{}: wrong number of words", words[0]))),
+        ["paired" | "requests" | "check", ..] => Err(bad(&format!("{}: wrong number of words", words[0]))),
         _ => Err(bad("unknown command")),
     }
 }
@@ -273,7 +204,8 @@ mod tests {
     use super::*;
     use neochumby_proto::Identity;
 
-    use neochumby_proto::settings::key::{DELIVERY, DEV, START};
+    use neochumby_proto::hex;
+    use neochumby_proto::settings::key::{DEV, START};
 
     fn temp_state(what: &str) -> (std::path::PathBuf, State) {
         let dir = std::env::temp_dir().join(format!("neochumbyd-admin-{what}-{}", std::process::id()));
@@ -286,19 +218,15 @@ mod tests {
         let (dir, st) = temp_state("requests");
         let token = st.owner_token().unwrap();
         let key = Identity::generate().unwrap().public();
-        let code = |n: u8| format!("{n:02x}00-0000-0000-0000-0000-0000-0000-0000");
-        let (c1, c2, c3) = (code(1), code(2), code(3));
-        st.request(&c1, "kitchen", &key, "192.0.2.7").unwrap();
-
-        assert_eq!(request(&st, "paired"), "ok\n");
-        assert_eq!(request(&st, "pending"), format!("pending {c1} kitchen 192.0.2.7 {}\nok\n", hex(&key)));
-        assert_eq!(request(&st, &format!("approve {c1} nope")), "error wrong token\n");
-        assert_eq!(request(&st, &format!("approve {c1}")), "error approve: wrong number of words\n");
+        st.add("kitchen", &key, false).unwrap();
         assert_eq!(request(&st, "check nope"), "error wrong token\n");
         assert_eq!(request(&st, &format!("check {token}")), "ok\n");
-        assert_eq!(request(&st, &format!("approve {c1} {token}")), "ok kitchen\n");
-        assert_eq!(request(&st, &format!("approve {c1} {token}")), "error no Chumby is asking with that code\n");
-        assert_eq!(request(&st, "pending"), "ok\n");
+        // A code for pairing means nothing now, with the token or without.
+        let pairing = "0100-0000-0000-0000-0000-0000-0000-0000";
+        assert!(request(&st, &format!("approve {pairing} {token}")).starts_with("error unknown command"));
+        assert!(request(&st, &format!("refuse {pairing} {token}")).starts_with("error unknown command"));
+        assert_eq!(request(&st, "pending"), "error unknown command\n");
+        assert_eq!(request(&st, &format!("replace {pairing} {token}")), "error unknown command\n");
 
         // Every change needs the token.
         assert_eq!(request(&st, &format!("set kitchen {START}=wx")), "error set: wrong number of words\n");
@@ -306,39 +234,18 @@ mod tests {
         assert_eq!(request(&st, &format!("set kitchen {DEV}=on nope")), "error wrong token\n");
         assert_eq!(request(&st, "paired"), format!("paired kitchen {}\nok\n", hex(&key)));
         assert_eq!(request(&st, &format!("set kitchen {START}=wx {token}")), "ok\n");
-        assert_eq!(request(&st, &format!("set kitchen {DELIVERY}=sync {token}")), "ok\n");
-        assert_eq!(request(&st, "paired"), format!("paired kitchen {} {START}=wx {DELIVERY}=sync\nok\n", hex(&key)));
-        // Main's Settings::check, through State::set.
-        assert!(request(&st, &format!("set kitchen {DELIVERY}=carrier-pigeon {token}")).starts_with("error"));
+        assert_eq!(request(&st, "paired"), format!("paired kitchen {} {START}=wx\nok\n", hex(&key)));
         assert!(
             request(&st, &format!("set kitchen {START}=No.App {token}"))
                 .starts_with(&format!("error {START} names an app"))
         );
-        assert_eq!(request(&st, &format!("set kitchen {DELIVERY}= {token}")), "ok\n");
         assert_eq!(request(&st, &format!("set kitchen {START} {token}")), "error set NAME KEY=VALUE TOKEN\n");
         assert!(request(&st, &format!("set kitchen {START}=a!b {token}")).starts_with("error"));
         assert!(request(&st, &format!("set lounge {START}=wx {token}")).starts_with("error no Chumby"));
 
-        st.request(&c2, "lounge", &key, "192.0.2.8").unwrap();
-        assert_eq!(request(&st, &format!("refuse {c2}")), "error refuse: wrong number of words\n");
-        assert_eq!(request(&st, &format!("refuse {c2} nope")), "error wrong token\n");
-        assert_eq!(request(&st, "pending").lines().count(), 2, "still asking");
-        assert_eq!(request(&st, &format!("refuse {c2} {token}")), "ok\n");
-        assert!(request(&st, &format!("refuse 12 {token}")).starts_with("error not a pairing code"));
-        assert_eq!(request(&st, "pending"), "ok\n");
-
         assert_eq!(request(&st, "forget kitchen"), "error forget: wrong number of words\n");
         assert_eq!(request(&st, "forget kitchen nope"), "error wrong token\n");
         assert!(request(&st, "paired").starts_with("paired kitchen "), "still paired");
-        // Another key under its name replaces it only with `replace`.
-        let other = Identity::generate().unwrap().public();
-        st.request(&c3, "kitchen", &other, "192.0.2.9").unwrap();
-        assert!(request(&st, &format!("approve {c3} {token}")).starts_with("error kitchen is already paired"));
-        assert_eq!(request(&st, &format!("replace {c3} nope")), "error wrong token\n");
-        assert_eq!(request(&st, &format!("replace {c3} {token}")), "ok kitchen\n");
-        assert_eq!(st.paired(&other).as_deref(), Some("kitchen"));
-        assert_eq!(st.paired(&key), None);
-
         assert_eq!(request(&st, &format!("forget kitchen {token}")), "ok\n");
         assert_eq!(request(&st, "paired"), "ok\n");
         assert_eq!(request(&st, "paired x"), "error paired: wrong number of words\n");
@@ -347,42 +254,14 @@ mod tests {
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
-    /// Over a connected pair, as a server program gets it: several requests,
-    /// and a line too long cut off.
+    /// Over the connected pair the command line uses.
     #[test]
-    fn socket() {
-        let (dir, st) = temp_state("socket");
-        let (ours, theirs) = UnixStream::pair().unwrap();
-        st.allow("web", crate::state::PAIRING, true).unwrap();
-        let st2 = st.clone();
-        std::thread::spawn(move || serve(&st2, ours, "web"));
-        let mut r = BufReader::new(theirs.try_clone().unwrap());
-        let mut w = theirs;
-        let mut line = String::new();
-        w.write_all(b"paired\npending\nfrobnicate\n").unwrap();
-        for want in ["ok\n", "ok\n", "error unknown command\n"] {
-            line.clear();
-            r.read_line(&mut line).unwrap();
-            assert_eq!(line, want);
-        }
-        w.write_all(&[b'x'; MAX_LINE + 10]).unwrap();
-        line.clear();
-        r.read_line(&mut line).unwrap();
-        assert_eq!(line, "error line too long\n");
-
-        // Disallowed while connected: the next request ends it.
-        let (ours, theirs) = UnixStream::pair().unwrap();
-        let st2 = st.clone();
-        std::thread::spawn(move || serve(&st2, ours, "web"));
-        let mut r = BufReader::new(theirs.try_clone().unwrap());
-        let mut w = theirs;
-        st.allow("web", crate::state::PAIRING, false).unwrap();
-        w.write_all(b"paired\n").unwrap();
-        line.clear();
-        r.read_line(&mut line).unwrap();
-        assert_eq!(line, "error web isn't allowed pairing\n");
-        line.clear();
-        assert_eq!(r.read_line(&mut line).unwrap(), 0, "closed");
+    fn locally() {
+        let (dir, st) = temp_state("local");
+        let token = st.owner_token().unwrap();
+        assert_eq!(local(&st, "paired").unwrap(), Vec::<String>::new());
+        assert_eq!(local(&st, &format!("check {token}")).unwrap(), Vec::<String>::new());
+        assert_eq!(local(&st, "frobnicate").unwrap_err(), "unknown command");
         std::fs::remove_dir_all(&dir).unwrap();
     }
 }

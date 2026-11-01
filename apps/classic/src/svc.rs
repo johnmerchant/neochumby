@@ -271,7 +271,7 @@ impl Feed {
     }
 }
 
-/// What the settings in `st` (the /psp directory) and the feed ask for at
+/// What the settings in `st` (its directory on the stick) and the feed ask for at
 /// `now`.
 pub fn wants(st: &Path, feed: &Feed, now: i64) -> Wants {
     let mode = read_int(&st.join("wx_nightmode"), 0).clamp(0, 2);
@@ -383,7 +383,8 @@ pub mod device {
             eprintln!("neochumby-classic-service: stopped the stream a killed run left playing");
         }
         let base = crate::picture_dir(None);
-        let st = Path::new("/psp");
+        let st = neochumby::conf::state_dir("classic");
+        let st = st.as_path();
         let mut pipe = Pipe::from_env();
         let mut feed = Feed::default();
         let mut night: Option<bool> = None;

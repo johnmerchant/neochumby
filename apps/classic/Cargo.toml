@@ -31,7 +31,7 @@ exec = "neochumby-classic"
 start = true
 service = "neochumby-classic-service"
 # Unjailed, as home is: the app and its service share /tmp/neochumby-classic,
-# and they set the backlight and the volume and keep state in /psp, which
+# and they set the backlight and the volume and keep state on the stick, which
 # no access word grants yet.
 access = ["root", "fb"]
 

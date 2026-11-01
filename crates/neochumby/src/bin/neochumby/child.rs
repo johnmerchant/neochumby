@@ -7,7 +7,7 @@
 //! (neochumby::companion). It also gets the Chumby's name
 //! (NEOCHUMBY_NAME), the stick's free space as it starts
 //! (NEOCHUMBY_STICK_FREE_KIB, without a stick unset), with `storage` its
-//! directory in /psp (NEOCHUMBY_STORAGE, storage.rs) and, when this Chumby
+//! directory (NEOCHUMBY_STORAGE, storage.rs) and, when this Chumby
 //! has one, its default player (NEOCHUMBY_PLAYER, player.rs). An app
 //! with an approved frontend, and that frontend, also get what lets them
 //! reach each other (frontend.rs). It runs in a
@@ -76,7 +76,7 @@ impl<'a> Launch<'a> {
         self
     }
 
-    /// Gives it `dir`, its directory in /psp (storage.rs): bound into its
+    /// Gives it `dir`, its directory (storage.rs): bound into its
     /// jail at the same path, and named by NEOCHUMBY_STORAGE.
     pub fn storage(&mut self, dir: PathBuf) -> &mut Self {
         self.storage = Some(dir);
@@ -145,10 +145,7 @@ impl<'a> Launch<'a> {
             let given = jail::Given { storage: self.storage.as_deref(), terminal };
             jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep, given)?
         } else {
-            // Root and unjailed: from its checked copy, in a checked tree
-            // (neochumby::verified), which it may check its own reads
-            // against too.
-            let mut cmd = Command::new(neochumby::verified::exe(self.exe)?);
+            let mut cmd = Command::new(self.exe);
             cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", self.root).env("HOME", "/tmp");
             cmd.env_remove(session::PLAYER_ENV).env_remove(WASM_ENV).env_remove(WASM_TRUSTED_ENV);
             cmd.env_remove(service::CLIENTS_ENV).env_remove(service::FRONTEND_ENV).env_remove(service::LISTENER_ENV);

@@ -366,6 +366,14 @@ fn serve(
                 restart.store(true, Ordering::SeqCst);
                 before
             }
+            Ok(Some(Msg::SyncNow)) => {
+                eprintln!("neochumby: neochumbyd asks for a sync round");
+                // Passed on to neochumby-sync. If it fails, its next minute.
+                if let Err(e) = std::fs::write(conf::SYNC_NOW, "") {
+                    eprintln!("neochumby: {}: {e}", conf::SYNC_NOW);
+                }
+                Ok(())
+            }
             Ok(Some(Msg::Shot)) => shot(s),
             Ok(Some(Msg::Config(c))) => {
                 input.on = Settings::from_pairs(c).dev;

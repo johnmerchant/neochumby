@@ -13,6 +13,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 import socket
 import shutil
 import subprocess
@@ -67,7 +68,7 @@ def fake_dir(root):
 
 def fake_tree(root):
     os.makedirs(os.path.join(root, "apps", "home"))
-    for name in ("neochumby", "userhook2", "apps/home/neochumby-home"):
+    for name in ("neochumby", "apps/home/neochumby-home"):
         with open(os.path.join(root, name), "w") as f:
             f.write("#!/bin/sh\n")
     return root
@@ -158,7 +159,10 @@ class Images(unittest.TestCase):
             self.assertEqual(files["userhook2"], f.read())
         self.assertEqual(files["neochumby/neochumby"], b"#!/bin/sh\n")
         self.assertIn("neochumby/apps/home/neochumby-home", files)
-        self.assertEqual(files["emulate/psp/neochumby.conf"], b"start=wx\n")
+        self.assertEqual(files["neochumby/state/neochumby.conf"], b"start=wx\n")
+        self.assertNotIn("emulate/psp/neochumby.conf", files)
+        with open(os.path.join(emulate.REPO, "boot", "userhook2"), "rb") as f:
+            self.assertEqual(files["emulate/userhook2"], f.read())
         self.assertEqual(files["emulate/psp/ts_settings"], emulate.NEUTRAL_CALIBRATION.encode() + b"\n")
         self.assertEqual(files["emulate/binds"], b"0 /tmp/pictures\n")
         self.assertEqual(files["emulate/bind/0/manifest.txt"], b"page 1\n")
@@ -326,8 +330,7 @@ class Machine(unittest.TestCase):
         self.assertIn(f"socket,id=link,path={path},server=off,reconnect-ms=1000", a)
         self.assertEqual(a[len(a) - a[::-1].index("-serial")], "chardev:link")
         files = cm.fat_files(os.path.join(self.state, "stick.img"))
-        self.assertEqual(files["neochumby.conf"], b"server=serial\n")
-        self.assertIn("emulate/kept", files)
+        self.assertIn("emulate/userhook2", files)
         self.emu("stop")
 
     def test_dist(self):
@@ -557,6 +560,8 @@ class Prebuilt(unittest.TestCase):
         # dev/emulate takes its checkout from where it's run from.
         for f in ("emulate", "e2e", "device.py", "prebuilt.py", "emulate-userhook2"):
             os.symlink(os.path.join(HERE, f), os.path.join(self.repo, "dev", f))
+        os.makedirs(os.path.join(self.repo, "boot"))
+        os.symlink(os.path.join(os.path.dirname(HERE), "boot", "userhook2"), os.path.join(self.repo, "boot", "userhook2"))
         for path, body in STUBS.items():
             self.write(path, "#!/bin/sh\n" + textwrap.dedent(body).lstrip(), 0o755)
         self.write("dist/Config.in", "one\n")
@@ -1087,6 +1092,96 @@ class Device(unittest.TestCase):
         # And chumby_machine's PNG reader agrees with device's.
         rgb, w, h = cm.png_rgb(png)
         self.assertEqual(cm.rgb_to_rgb565(rgb), list(memoryview(out).cast("H")))
+
+
+class StockHook(unittest.TestCase):
+    """boot/userhook2's stock half, which no emulator profile here runs without
+    your own firmware: under sh on this machine, its paths moved under a
+    directory, and the stock commands stubs that log themselves. It shows the
+    order of things, not that a Chumby boots."""
+
+    def setUp(self):
+        self.t = tempfile.mkdtemp(prefix="hook.")
+        self.addCleanup(shutil.rmtree, self.t, True)
+        self.stick = os.path.join(self.t, "mnt/usb")
+        os.makedirs(os.path.join(self.stick, "neochumby/sideload"))
+        for f in ("sideload.ko", "zImage", "initramfs.cpio.gz"):
+            self.put(os.path.join(self.stick, "neochumby/sideload", f), "x")
+        self.put(os.path.join(self.stick, "neochumby/neochumby"), "#!/bin/sh\nexit 0\n", 0o755)
+        self.calls = os.path.join(self.t, "calls")
+        self.put(os.path.join(self.stick, "neochumby/sideload/neochumby-handoff"),
+                 f'#!/bin/sh\necho "handoff $*" >> {self.calls}\n', 0o755)
+        os.makedirs(os.path.join(self.t, "proc/sys/vm"))
+        os.makedirs(os.path.join(self.t, "tmp"))
+        os.makedirs(os.path.join(self.t, "usr/chumby/scripts"))
+        self.bin = os.path.join(self.t, "bin")
+        os.makedirs(self.bin)
+        self.put(os.path.join(self.bin, "uname"), "#!/bin/sh\necho 2.6.16-chumby\n", 0o755)
+        go = os.path.join(self.t, "proc/sideload-go")
+        for c in ("killall", "rmmod", "sync"):
+            self.put(os.path.join(self.bin, c), f'#!/bin/sh\necho "{c} $*" >> {self.calls}\n', 0o755)
+        self.put(os.path.join(self.bin, "insmod"), f'#!/bin/sh\necho "insmod $*" >> {self.calls}\n: > {go}\n', 0o755)
+        self.put(os.path.join(self.t, "usr/chumby/scripts/stop_control_panel"),
+                 f"#!/bin/sh\necho stop_control_panel >> {self.calls}\n", 0o755)
+        with open(os.path.join(emulate.REPO, "boot", "userhook2")) as f:
+            hook = f.read()
+        # At once: the directory may itself be under /tmp.
+        hook = re.sub(r"(/mnt/usb|/tmp/|/proc/|/usr/chumby/)", lambda m: self.t + m.group(1), hook)
+        self.hook = os.path.join(self.t, "hook")
+        self.put(self.hook, hook, 0o755)
+
+    def put(self, path, text, mode=0o644):
+        with open(path, "w") as f:
+            f.write(text)
+        os.chmod(path, mode)
+
+    def run_hook(self):
+        env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}")
+        r = subprocess.run(["sh", self.hook], env=env, timeout=60)
+        self.assertEqual(r.returncode, 0)
+        try:
+            with open(self.calls) as f:
+                calls = f.read().splitlines()
+        except FileNotFoundError:
+            calls = []
+        with open(os.path.join(self.t, "tmp/neochumby.log")) as f:
+            return calls, f.read()
+
+    def test_it_sideloads_in_order_and_hands_over_only_what_it_names(self):
+        calls, log = self.run_hook()
+        names = [c.split()[0] for c in calls]
+        self.assertLess(names.index("stop_control_panel"), names.index("insmod"))
+        self.assertLess(names.index("insmod"), names.index("handoff"))
+        handoff = next(c for c in calls if c.startswith("handoff"))
+        self.assertTrue(handoff.endswith("/psp network_config ts_settings hostname localtime "
+                                         "neochumby-ssh .ssh/authorized_keys"), handoff)
+        with open(os.path.join(self.t, "proc/sideload-go")) as f:
+            self.assertEqual(f.read(), "1\n")
+        self.assertIn("sideload: jumping to Linux 7", log)
+
+    def test_a_stick_missing_a_file_leaves_the_flash_ui_running(self):
+        os.unlink(os.path.join(self.stick, "neochumby/sideload/zImage"))
+        calls, log = self.run_hook()
+        self.assertEqual([c for c in calls if not c.startswith("sync")], ["rmmod sideload"])
+        self.assertIn("on with the stock boot", log)
+
+    def test_neochumby_off_on_the_stick_does_nothing(self):
+        self.put(os.path.join(self.stick, "neochumby-off"), "")
+        calls, log = self.run_hook()
+        self.assertEqual(calls, [])
+        self.assertIn("disabled", log)
+
+    def test_a_failed_module_goes_on_with_the_stock_boot(self):
+        self.put(os.path.join(self.bin, "insmod"), "#!/bin/sh\nexit 1\n", 0o755)
+        _, log = self.run_hook()
+        self.assertIn("on with the stock boot", log)
+        self.assertNotIn("jumping", log)
+
+    def test_nothing_in_the_hook_writes_to_psp(self):
+        with open(os.path.join(emulate.REPO, "boot", "userhook2")) as f:
+            for line in f:
+                if "/psp" in line and not line.lstrip().startswith("#"):
+                    self.assertIn("neochumby-handoff", line)
 
 
 if __name__ == "__main__":

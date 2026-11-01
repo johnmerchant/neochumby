@@ -18,12 +18,13 @@ neochumbyd delivered.
   own, chrooted in a private mount namespace that holds its own files, a
   `/tmp` of its own and only the devices its manifest's `access` lists
   ([CONTRIBUTING](CONTRIBUTING.md#the-app-contract) has the list). It
-  can't read the Chumby's key, write to `/psp` (where something would
-  survive a reboot) beyond its own `storage` directory, or signal or trace
-  other apps or root. It has limits
+  can't read the Chumby's key or see its stick (FAT keeps no permissions, so
+  the jail, not the file's mode, is what keeps the key from it), keep
+  anything across a reboot beyond its own `storage` directory, or signal or
+  trace other apps or root. It has limits
   on processes and open files. Its companion is opened for it by the
-  session, so it reaches only its own. `home` alone runs as root, as it
-  pairs the Chumby.
+  session, so it reaches only its own. `home` and neochumby-classic run as root, unjailed, and can read the
+  stick's key: they are as trusted as the session.
 - **An app reaches another app's service only as a frontend its owner
   approved** (`frontend_<app>=` in the Chumby's settings). The service
   takes connections from its own app's uid and its approved frontends'
@@ -37,8 +38,7 @@ neochumbyd delivered.
   hidden among the app directory's executable files. One interpreter is allowed: the tree's own musl, which the jail
   of an app that names it binds at `/lib/ld-musl-arm.so.1` with the
   tree's other libraries (`lib/`). They are files of the tree like any
-  other: in its manifest, and in a checked tree each is bound from its
-  checked copy. An app's `/tmp`, its `storage` and the speaker handover
+  other, in its manifest. An app's `/tmp`, its `storage` and the speaker handover
   are `noexec`. That closes one NULL-pointer family (the ARM ELF loader
   can map page zero even though `mmap` refuses it).
 - **That stops apps that are buggy or careless, not ones written to
@@ -55,9 +55,7 @@ neochumbyd delivered.
   then locks itself down with seccomp (about 25 system calls; anything else
   kills it) and, on the stable and mainline kernels, Landlock (no file
   system, TCP or signals outside). Its compiled code is only ever compiled
-  by `tools/tree` or neochumbyd, never taken from its author, and in a
-  checked tree (`delivery=nfs`) the session gives it checked copies of its
-  module, its compiled code and its manifest. On a kernel without
+  by `tools/tree` or neochumbyd, never taken from its author. On a kernel without
   seccomp a WAMR bug is plausibly root, so an app from the catalog
   (`source=catalog`) runs there only if its owner trusts it
   (`trusted=APP:APP` in its settings); a catalog app is never given
@@ -73,61 +71,69 @@ neochumbyd delivered.
   one argument, never through a shell. `storage` is capped by measuring
   (every 2 seconds), not by the kernel, so an app can overshoot its 64 KiB
   briefly before it's ended. **`storage` is `noexec`, `nosuid` and
-  `nodev`:** it's a bind mount from `/psp`, which the jail remounts so in
-  its own namespace. A kernel that refuses (EINVAL) leaves it as `/psp` is, executable, and the
-  session logs that once; any other failure, and the app doesn't start.
+  `nodev`:** it's a bind mount of a directory in RAM, which the session copies
+  to and from the stick, and which the jail remounts so in its own namespace.
+  A kernel that refuses (EINVAL) leaves it executable, and the session logs
+  that once; any other failure, and the app doesn't start.
 - **The stock firmware runs first.** Linux 2.6.16 gets no fixes, and it has
   local privilege escalations that will never be fixed on it. It runs no app:
-  only the boot hook, which hands over to Linux 7. From NFS the module, kernel,
-  initramfs and handoff program are each checked against the signed manifest
-  by `/psp/neochumby-boot`, or nothing is sideloaded; from a stick they're
-  whatever is on the stick, as a stick's tree always is.
-- **What each delivery guarantees** (README, "Delivery: NFS or sync"):
-  - **`sync`:** every file comes over the pinned session, hashed as it
-    arrives, and the Chumby boots the stick's set without the network. Its
-    integrity rests on the pairing alone.
-  - **`nfs`** (the default): the tree is served read-only over NFSv3,
-    without authentication. Every file is served as root's, without setuid
-    or setgid bits, and the Chumby mounts it `nosuid,nodev`. neochumbyd
-    also serves the tree's manifest, signed with its key. Once
-    `neochumby-boot` is in the Chumby's `/psp` (pairing and the session
-    install it), the tree is mounted `noexec`, and the Chumby runs only
-    copies, in RAM, of programs that match that manifest. It reads the
-    apps' manifests and the boot hook only as checked, too. Someone who
-    can answer for the server can't run code of their own this way. They
-    can still: serve an older tree that neochumbyd once served; feed an
-    app crafted data from its directory, which isn't checked; and, on a
-    Chumby paired before `neochumby-boot` existed, have the one unchecked
-    boot that installs it. Anyone who can reach the NFS port can read the
-    tree (our binaries and your game data). Limit it to the network your
-    Chumbys are on.
-  - **A stick made by hand** (`tools/stick`) runs whatever is on it.
+  only the boot hook, which hands over to Linux 7. The module, kernel, initramfs
+  and handoff program are whatever is on the stick.
+- **Nothing on the Chumby's flash is written.** `/psp` is only read, on stock,
+  and only what Linux 7 needs of it goes over, in RAM: the network's
+  configuration with its Wi-Fi password, the touchscreen's calibration, the
+  Chumby's name and time zone, and the owner's SSH opt-in and keys. Linux 7 has
+  no NAND driver. `tools/check-psp` fails the build on any new use of `/psp`.
+- **The stick is the trust root.** Whoever can alter the stick can run code on
+  the Chumby as root, at the next boot, on the stock firmware as well as Linux
+  7, and thereby read its Wi-Fi password, which the hook hands over; and they can
+  copy its key. There is no signature on the stick: nothing checks the hook, the
+  module, the kernel or the tree on it, and nothing could, as the stock firmware
+  runs the hook as it finds it. Keep the stick as you would a house key.
+- **What a stolen stick gives.** The key on it lets its holder impersonate that
+  one Chumby to the server, from any network that can reach neochumbyd's port:
+  they can receive its synced tree (your game data among it), and have
+  companions run under its name, within the same sandbox as ever, and write
+  to that Chumby's log on the server. It gives them neither the owner's token, nor the server's private key,
+  nor any other Chumby's key or settings. `neochumbyd forget NAME` revokes it at
+  once: every later connection with that key is refused. The stick also holds
+  no Wi-Fi password: that comes from the Chumby's own flash at each boot, and is
+  not written to the stick.
+- **The key is created on the machine making the stick**, by `tools/stick
+  --pair` (`neochumbyd keygen`), which writes it directly to the stick, and
+  nowhere else on that machine's disks (it can still reach swap, as anything in
+  memory can). Only its public half goes to the server. **The stick is the
+  identity, so it moves with the stick:** the server can't tell which Chumby it
+  is in.
+- **Delivery.** Every file of a tree comes over the pinned session, hashed as
+  it arrives, and the Chumby boots the stick's set without the network. Its
+  integrity rests on the pairing, and on the stick. There is no other way for a
+  tree to reach a Chumby: neochumbyd serves no files over any other protocol.
+  Writes stay inside the stick's `neochumby/`, and the set being run or live is
+  never written.
 - **A Chumby and its neochumbyd talk TLS 1.3,** and each side checks the
-  other's pinned key on every connection before it carries anything else.
-  Pairing pins the keys after someone types the code from the Chumby's
-  screen into `neochumbyd approve`. The code is 128 bits from the
-  connection and both keys, too long for anyone in the middle to make both
-  ends show alike. Until a connection is known to be a paired Chumby's,
-  neochumbyd holds it to a 30-second deadline and caps how many it takes
-  (overall, and from one address), and at most eight pairing requests wait
-  at once.
+  other's pinned key on every connection before it carries anything else. Both
+  keys are learnt when the stick is made, over ssh, never over this protocol.
+  **A key neochumbyd doesn't have gets nothing:** anyone who can reach its port
+  can finish the TLS handshake, which shows them the server's public key, and
+  is then told `Unpaired` and hung up on, within two seconds, whatever they say.
+  No request of theirs is kept, and nothing they send reaches any other code.
+  Until a connection is known to be a registered Chumby's, neochumbyd holds it
+  to a 30-second deadline and caps how many it takes (overall, and from one
+  address).
 - **An emulated Chumby's serial line carries the same sessions.** It has
   no network; `neochumbyd serve --listen-unix PATH` takes its line on a
   Unix socket, and each connection on the line is handled as one over TCP:
-  the same handshake, keys and pairing. The line only carries bytes, so
-  anyone who can connect to that socket can ask to pair, as anyone on the
-  network can: keep it in a directory only you can reach.
-- **A Chumby pairing trusts whoever answers.** It can't tell neochumbyd's
-  approval from an impostor's, so someone in the middle while it pairs
-  can have it pin their key, even though neochumbyd never approves them.
-  Pair on a network you trust.
+  the same handshake and keys. The line only carries bytes, so anyone who
+  can connect to that socket reaches what anyone on the network can: keep it
+  in a directory only you can reach.
 - **Apps' programs on the server are sandboxed.** Companions (one per
   Chumby) and server programs (one per server, `server=`) run confined,
   by this system's sandbox (below), by a uid of each app's own
   (`--app-uids`, further below), or both. Under neochumbyd's state directory each
   may only read the tree and read and write its app's own directory
   (`apps/<app>`, which holds its HOME and TMPDIR). It can't read or change
-  neochumbyd's key (`identity`), the pairings, the owner's token or other
+  neochumbyd's key (`identity`), the registered keys, the owner's token or other
   apps' directories. Each also starts in a session of its own with no
   terminal, with only the descriptors it's given, its output through
   neochumbyd's log, and only a short list of neochumbyd's environment
@@ -183,7 +189,7 @@ neochumbyd delivered.
   companions and server program under one uid of the app's own, with no
   other groups and no capabilities, in a directory only that uid can
   write. They can't read neochumbyd's key (`identity`, 0600), its owner
-  token, pairings or settings (closed to other users), change the tree,
+  token, registered keys or settings (closed to other users), change the tree,
   or reach another app's files. On a kernel with Landlock, Landlock
   applies too. Under uids alone, they can still read world-readable files,
   the tree included. The LOGS app's companion, with no other groups, reads
@@ -215,9 +221,8 @@ neochumbyd delivered.
   what the app asks for, and the owner approves exactly that, access words
   and hosts.
 - **Installs, removals and the update setting are the owner's,** through
-  the admin socket's protocol with the owner's token, whether from the
-  command line (which reads the token from the state directory, so is
-  run by the server's admin) or a page given the socket.
+  the admin protocol with the owner's token, from the command line, which
+  reads the token from the state directory, so is run by the server's admin.
 - **Updates that ask for nothing new apply by themselves.** After each
   refresh, a catalog app whose listing has a newer version is updated if
   that version asks for no access word and no host the installed one
@@ -246,9 +251,8 @@ neochumbyd delivered.
   access its owner allowed on its screen; neochumbyd fetches and checks
   the app again, refuses it if it asks for anything else, and installs
   only once the owner approves the code the Chumby shows, through the
-  admin socket's protocol with the owner's token (`neochumbyd approve
-  CODE` on the command line, as the server's admin, or a page given the
-  socket). Removing an app is approved the same way, and so is an update
+  admin protocol with the owner's token (`neochumbyd approve CODE` on the
+  command line, as the server's admin). Removing an app is approved the same way, and so is an update
   that asks for more; one that asks for nothing new needs only the
   Chumby's owner, unless automatic updates are off. The code only names
   the request (the Chumby's connection is already authenticated); it
@@ -260,23 +264,10 @@ neochumbyd delivered.
   GitHub only (a module hosted anywhere else is fetched at install, not to
   show it), kept once looked up, and at most a few a minute for each
   Chumby. A Chumby can't make neochumbyd fetch a URL of its choosing.
-- **The admin socket** pairs Chumbys and changes their settings. It has no
-  path. Only an app whose owner allows it (`neochumbyd allow <app>
-  pairing`; `disallow` takes it back, at once) gets one, as an inherited
-  descriptor, made for each run of its server program. Treat `pairing` as
-  handing that app your neochumbyd: the page sees the owner's token as the
-  person types it, and draws the approval screen itself. The token
-  protects against a page with a bug, not a hostile one. A program given
-  the socket should mark it close-on-exec, so that programs it runs don't
-  get it.
-- **Every change through the admin socket needs the owner's token**
-  (`neochumbyd token`): approving, refusing and forgetting pairings;
-  installing and removing catalog apps, and their update setting; and
-  settings (which include remote input, `dev=on`, and where a Chumby's
-  apps come from). Pairing is only as safe as the person who types the
-  code, so a web page must not approve for anyone who can merely reach
-  it: it asks for the token. A wrong token is answered after a second. If
-  the token may have leaked, `neochumbyd token new` replaces it at once.
+- **The admin protocol has no socket anyone can reach.** It runs over a
+  connected pair inside the command line's own process. No app is given it.
+  It needs the owner's token for every change (`neochumbyd token new` replaces
+  the token at once), and a wrong token is answered after a second.
 - **Who can reach the state directory can do everything neochumbyd
   does.** We suggest a dedicated `neochumbyd` user and group, with the
   people who administer it in that group:
@@ -297,7 +288,8 @@ neochumbyd delivered.
 - **neochumby never starts SSH.** The Chumby's stock SSH, with its
   well-known root password, stays off unless its owner turns it on.
 - **A neochumby stick runs code on any Chumby it's plugged into at boot,**
-  as the stock firmware's USB hooks allow.
+  as the stock firmware's USB hooks allow. Without one, the Chumby boots its
+  stock firmware as it always did.
 
 ## Reporting a vulnerability
 

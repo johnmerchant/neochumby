@@ -21,7 +21,7 @@
 //!
 //! State variables (for panes): music, station, night, nightmode, pin,
 //! page, secs. music, station, night, nightmode, the volume and the
-//! slideshow timing persist (wx_music and so on, in /psp on the Chumby;
+//! slideshow timing persist (wx_music and so on, on the stick on the Chumby;
 //! the names the C engine used, so a Chumby keeps its settings).
 //!
 //! Actions (tap zones): slideshow, screen NAME, music_toggle, station N,

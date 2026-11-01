@@ -14,7 +14,7 @@ neochumby-sys.workspace = true
 [package.metadata.neochumby]
 exec = "neochumby-home"
 start = true
-# It pairs the Chumby (writing /psp) and lists every app in the tree; in
+# It lists every app in the tree and reads the network's name from /psp; in
 # text mode, without fb, as its rows fall where they did on the framebuffer
 # in Spleen 8x16 (src/main.rs).
 access = ["root"]

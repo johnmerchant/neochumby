@@ -219,6 +219,8 @@ jobs:
       # No unsafe code but in the crates on .github/unsafe-allowed, and
       # those deny clippy's lints for documenting it (CONTRIBUTING.md).
       - run: python3 -I tools/check-unsafe
+      # Nothing writes to the Chumby's flash: /psp is only read (SECURITY.md).
+      - run: tools/check-psp
       # Ours, not the third-party crates in submodules that some apps build
       # from (they keep their own formatting).
       - run: cargo fmt --check $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.manifest_path | contains("/third_party/") | not) | "-p " + .name')
@@ -351,7 +353,7 @@ jobs:
             [ "$(interp "$RUNNER_TEMP/tree/apps/$a/neochumby-$a")" = /lib/ld-musl-arm.so.1 ]
           done
           # What runs on the stock kernel, and what runs before /lib is there.
-          for f in neochumby neochumby-sync neochumby-boot sideload/neochumby-handoff apps/home/neochumby-home apps/pipes/neochumby-pipes; do
+          for f in neochumby neochumby-sync sideload/neochumby-handoff apps/home/neochumby-home apps/pipes/neochumby-pipes; do
             [ -z "$(interp "$RUNNER_TEMP/tree/$f")" ]
           done
           cp target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/tree.neochumbyd"
@@ -742,18 +744,18 @@ jobs:
   # emulated Chumby has no network, and reaches a neochumbyd run here over
   # its second UART, which qemu-chumby joins to neochumbyd's --listen-unix
   # socket.
-  #   link      PAIR pairs over the line; the next start has the developer
-  #             link and syncs the tree to its stick (delivery=sync); the
-  #             power is cut the moment the set is live, and the stick as it
-  #             was left boots that set
-  #   pairing   refusal, approval, --replace and forget, over the line
+  #   link      a stick made paired has the developer link and syncs the tree
+  #             to itself; the power is cut the moment the set is live, and the
+  #             stick as it was left boots that set; deploys by sync and restart
+  #   pairing   a stick made paired connects at once, syncs and survives a
+  #             reboot; an unknown key is refused; --replace and forget
   #   powercut  the power cut in the middle of a sync round
   # They sync only the session, its receiver and home, so a round over the line
   # (about 100 KB/s) takes a minute or two; even so the job takes the best
   # part of half an hour, so it runs beside e2e on every push to main, and
   # on a pull request only when it touches what these cover (the changes
   # job's `link`): the protocol, the session's line, neochumbyd's listener,
-  # sync, pairing, the boot hook, dev/emulate and the emulator.
+  # sync, a stick's pairing, the boot hook, dev/emulate and the emulator.
   link:
     name: Serial-line scenarios
     needs: [changes, cross, dist]

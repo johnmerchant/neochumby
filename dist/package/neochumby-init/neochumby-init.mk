@@ -44,8 +44,6 @@ define NEOCHUMBY_INIT_INSTALL_TARGET_CMDS
 	$(INSTALL) -D -m 0755 \
 		$(@D)/target/$(RUSTC_TARGET_NAME)/release/ncinit \
 		$(TARGET_DIR)/init
-	$(INSTALL) -D -m 0755 $(BR2_EXTERNAL_NEOCHUMBY_PATH)/../boot/userhook2 \
-		$(TARGET_DIR)/etc/neochumby/userhook2
 endef
 
 $(eval $(generic-package))

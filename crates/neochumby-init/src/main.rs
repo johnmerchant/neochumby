@@ -1,8 +1,9 @@
 //! ncinit: the dist image's /init, process 1.
 //!
 //! It mounts the kernel's file systems, joins the network the stock software
-//! was on (handed over in /psp: network.rs), runs the boot hook, a neochumby
-//! stick's or the image's own, and keeps a shell on the console and one on the screen. Throughout, it
+//! was on (handed over at /psp, in RAM: network.rs), runs the stick's boot
+//! hook, the one hook there is, and keeps a shell on the console and one on
+//! the screen. With no stick there is nothing to run but the shells. Throughout, it
 //! loads the module for each device the kernel announces (its modalias,
 //! matched against depmod's modules.alias), for the devices there at boot
 //! too, and reaps every process the kernel hands it.
@@ -47,9 +48,6 @@ const LOCALTIME: &str = "/psp/localtime";
 const NTP_SERVER: &str = "pool.ntp.org";
 /// The stock software's network, as the sideload handed it over.
 const NETWORK_CONFIG: &str = "/psp/network_config";
-/// The image's copy of the boot hook, for a Chumby with no stick of its own:
-/// it mounts the tree from the neochumbyd in /psp/neochumby.conf.
-const IMAGE_HOOK: &str = "/etc/neochumby/userhook2";
 /// A shell that exits sooner than this after it started is restarted only
 /// once this has passed, not in a loop.
 const RESPAWN_GAP: Duration = Duration::from_secs(1);
@@ -107,10 +105,7 @@ impl Init {
         init.network();
         match stick_hook {
             Some(hook) => init.hook("the stick's userhook2", hook),
-            None if is_executable(IMAGE_HOOK) && Path::new("/psp/neochumby.conf").exists() => {
-                init.hook("userhook2", IMAGE_HOOK);
-            }
-            None => {}
+            None => log("no neochumby stick: nothing to run. A reboot without one is the stock firmware's"),
         }
 
         // A shell on the console the kernel was given, the serial port,
@@ -169,8 +164,9 @@ impl Init {
         self.service(0);
     }
 
-    /// A neochumby stick, as the stock boot has one: its first partition on
-    /// /mnt/usb. Its boot hook, if it has one.
+    /// The neochumby stick, as the stock boot has one: its first partition on
+    /// /mnt/usb, read-write, for what the Chumby keeps there. Its boot hook,
+    /// if it has one.
     fn stick(&mut self) -> Option<&'static str> {
         let until = Instant::now() + STICK_WAIT;
         while !is_block_device("/dev/sda1") && Instant::now() < until {
@@ -236,6 +232,10 @@ impl Init {
     fn hook(&mut self, what: &str, path: &str) {
         let mut hook = Command::new(path);
         hook.env("PATH", PATH).stdin(Stdio::null());
+        // For the apps: a jail without `system` has no /etc/localtime.
+        if let Some(tz) = fs::read(LOCALTIME).ok().and_then(|z| posix_tz(&z)) {
+            hook.env("TZ", tz);
+        }
         if let Some((out, err)) = terminal("/dev/console").and_then(|f| Some((f.try_clone().ok()?, f))) {
             hook.stdout(out).stderr(err);
         }
@@ -368,6 +368,16 @@ fn install_timezone() {
     {
         kmsg(&format!("timezone: {e}"));
     }
+}
+
+/// The rule a zone file (TZif, version 2 and later) ends with, as `TZ` takes
+/// it: the text between its last two newlines, as in `ACST-9:30ACDT,M10.1.0,M4.1.0/3`.
+fn posix_tz(zone: &[u8]) -> Option<String> {
+    let body = zone.strip_suffix(b"\n")?;
+    let from = body.iter().rposition(|&b| b == b'\n')? + 1;
+    let rule = std::str::from_utf8(&body[from..]).ok()?;
+    let plain = |c: char| c.is_ascii_alphanumeric() || "<>+-:,./".contains(c);
+    (!rule.is_empty() && rule.len() <= 64 && rule.chars().all(plain) && zone.starts_with(b"TZif")).then(|| rule.to_owned())
 }
 
 /// The time, from the network, kept in step: there's no clock that runs while
@@ -624,6 +634,17 @@ fn rescue() -> ! {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_zones_rule_is_its_last_line() {
+        let zone = b"TZif2\0\0\xff\nACST-9:30ACDT,M10.1.0,M4.1.0/3\n";
+        assert_eq!(posix_tz(zone).as_deref(), Some("ACST-9:30ACDT,M10.1.0,M4.1.0/3"));
+        assert_eq!(posix_tz(b"TZif2\n<+0530>-5:30\n").as_deref(), Some("<+0530>-5:30"));
+        // Not a zone file, no rule (version 1), nothing odd for a shell or the C library.
+        assert_eq!(posix_tz(b"nonsense\nUTC0\n"), None);
+        assert_eq!(posix_tz(b"TZif\0\0"), None);
+        assert_eq!(posix_tz(b"TZif2\n$(reboot)\n"), None);
+    }
 
     #[test]
     fn network_lines_are_the_relevant_last_few() {

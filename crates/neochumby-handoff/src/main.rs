@@ -1,18 +1,20 @@
 //! neochumby-handoff: writes what goes in /proc/sideload-initrd.
 //!
 //! ```text
-//! neochumby-handoff INITRAMFS DIR... > /proc/sideload-initrd
+//! neochumby-handoff INITRAMFS DIR FILE... > /proc/sideload-initrd
 //! ```
 //!
-//! Linux 7 has no NAND driver, so it can't read the Chumby's settings
-//! partition: the Wi-Fi network in /psp/network_config, the pairing in
-//! /psp/neochumby.*. So the stock system, which can, hands them over: this
-//! writes INITRAMFS, zeros to a 4-byte boundary, and each DIR's files as one
-//! more archive (cpio's newc format) under `psp/`. The kernel unpacks
-//! concatenated archives, compressed or not, over one another, so they are
-//! at /psp in the root file system, with their modes, when /init starts; a
-//! later DIR's file replaces an earlier one's of the same name. The secrets
-//! stay out of the kernel's command line, which every process can read.
+//! Linux 7 has no NAND driver and never reads flash, so what it needs of the
+//! Chumby's settings comes over from the stock system, which can read them:
+//! this writes INITRAMFS, zeros to a 4-byte boundary, and the FILEs named,
+//! relative to DIR, as one more archive (cpio's newc format) under `psp/`.
+//! The kernel unpacks concatenated archives, compressed or not, over one
+//! another, so they are at /psp in the root file system, in RAM, with their
+//! modes, when /init starts. Only what is named goes: not the whole
+//! partition. A FILE that isn't there is left out, and a link is followed
+//! (a Chumby's /psp/localtime may be one). The secrets stay out of the
+//! kernel's command line, which every process can read. Nothing here writes
+//! to DIR, and nothing on Linux 7 writes back.
 //!
 //! The stock system has no cpio or printf, so this is a static program. It
 //! runs on the stock 2.6.16: std's files and directories, and nothing newer. /proc's
@@ -26,19 +28,17 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Files larger than this aren't settings, and the initrd's room is small:
-/// the largest that belongs is /psp/neochumby-boot, at most 768 KiB, which
-/// goes over so that Linux 7 checks the tree too.
-const MAX_FILE: u64 = 1024 * 1024;
+/// Files larger than this aren't settings, and the initrd's room is small.
+const MAX_FILE: u64 = 64 * 1024;
 const PIECE: usize = 4096;
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
-    let [initramfs, dirs @ ..] = args.as_slice() else {
-        eprintln!("usage: neochumby-handoff INITRAMFS DIR... > /proc/sideload-initrd");
+    let [initramfs, dir, files @ ..] = args.as_slice() else {
+        eprintln!("usage: neochumby-handoff INITRAMFS DIR FILE... > /proc/sideload-initrd");
         return ExitCode::from(2);
     };
-    match run(initramfs, dirs, &mut io::stdout().lock()) {
+    match run(initramfs, dir, files, &mut io::stdout().lock()) {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprintln!("neochumby-handoff: {e}");
@@ -47,11 +47,11 @@ fn main() -> ExitCode {
     }
 }
 
-fn run(initramfs: &str, dirs: &[String], out: &mut impl Write) -> io::Result<()> {
+fn run(initramfs: &str, dir: &str, files: &[String], out: &mut impl Write) -> io::Result<()> {
     let mut archive = newc::Writer::new();
     archive.dir("psp", 0o755);
-    for dir in dirs {
-        pack(Path::new(dir), "psp", &mut archive)?;
+    for file in files {
+        pack(Path::new(dir), file, &mut archive);
     }
     let archive = archive.finish();
 
@@ -75,26 +75,64 @@ fn run(initramfs: &str, dirs: &[String], out: &mut impl Write) -> io::Result<()>
     Ok(())
 }
 
-/// `dir`'s directories and regular files, as `name/...`. What can't be read
-/// is left out with a word on stderr: one bad file doesn't stop a boot.
-fn pack(dir: &Path, name: &str, archive: &mut newc::Writer) -> io::Result<()> {
-    let mut entries: Vec<_> = fs::read_dir(dir)?.flatten().collect();
-    entries.sort_by_key(|e| e.file_name());
-    for entry in entries {
-        let Some(file) = entry.file_name().to_str().map(str::to_owned) else { continue };
-        let path = entry.path();
-        let inner = format!("{name}/{file}");
-        let Ok(meta) = fs::symlink_metadata(&path) else { continue };
-        let mode = meta.mode() & 0o7777;
-        if meta.is_dir() {
-            archive.dir(&inner, mode);
-            pack(&path, &inner, archive)?;
-        } else if meta.is_file() && meta.len() <= MAX_FILE {
-            match fs::read(&path) {
-                Ok(data) => archive.file(&inner, mode, &data),
-                Err(e) => eprintln!("neochumby-handoff: {}: {e}", path.display()),
-            }
-        }
+/// `file`, relative to `dir`, as `psp/file`, with the directories on the way.
+/// What can't be read is left out with a word on stderr: one bad file doesn't
+/// stop a boot, and what isn't there is only an option the owner didn't take.
+fn pack(dir: &Path, file: &str, archive: &mut newc::Writer) {
+    let path = dir.join(file);
+    let meta = match fs::metadata(&path) {
+        Ok(m) => m,
+        Err(e) if e.kind() == io::ErrorKind::NotFound => return,
+        Err(e) => return eprintln!("neochumby-handoff: {}: {e}", path.display()),
+    };
+    if !meta.is_file() || meta.len() > MAX_FILE {
+        return eprintln!("neochumby-handoff: {}: not a settings file", path.display());
     }
-    Ok(())
+    let data = match fs::read(&path) {
+        Ok(d) => d,
+        Err(e) => return eprintln!("neochumby-handoff: {}: {e}", path.display()),
+    };
+    let mut parent = String::from("psp");
+    let mut parts: Vec<&str> = file.split('/').collect();
+    let name = parts.pop().unwrap_or(file);
+    for p in parts {
+        parent = format!("{parent}/{p}");
+        let mode = fs::metadata(dir.join(parent.trim_start_matches("psp/"))).map_or(0o700, |m| m.mode() & 0o7777);
+        archive.dir(&parent, mode);
+    }
+    archive.file(&format!("{parent}/{name}"), meta.mode() & 0o7777, &data);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_what_is_named_goes_over() {
+        let d = std::env::temp_dir().join(format!("neochumby-handoff-{}", std::process::id()));
+        let _ = fs::remove_dir_all(&d);
+        fs::create_dir_all(d.join("psp/.ssh")).unwrap();
+        for (f, body) in [
+            ("psp/network_config", "wifi"),
+            ("psp/.ssh/authorized_keys", "key"),
+            ("psp/neochumby.key", "NOT-THIS"),
+            ("psp/zone", "tz"),
+            ("image", "IMAGE"),
+        ] {
+            fs::write(d.join(f), body).unwrap();
+        }
+        std::os::unix::fs::symlink(d.join("psp/zone"), d.join("psp/localtime")).unwrap();
+        let (psp, image) = (d.join("psp"), d.join("image"));
+        let names: Vec<String> =
+            ["network_config", "localtime", "absent", ".ssh/authorized_keys"].iter().map(|s| s.to_string()).collect();
+        let mut out = Vec::new();
+        run(image.to_str().unwrap(), psp.to_str().unwrap(), &names, &mut out).unwrap();
+        let text = String::from_utf8_lossy(&out);
+        assert!(text.starts_with("IMAGE"));
+        for want in ["psp/network_config", "wifi", "psp/localtime", "tz", "psp/.ssh/authorized_keys", "key"] {
+            assert!(text.contains(want), "{want}");
+        }
+        assert!(!text.contains("NOT-THIS") && !text.contains("absent"), "{text}");
+        fs::remove_dir_all(&d).unwrap();
+    }
 }

@@ -387,7 +387,7 @@ mod tests {
             let home = dir.join("apps").join(app);
             let plan = confine.plan(app).unwrap();
             let mut cmd = plan.command(Path::new("/bin/sh"), &dir, &tree, &home, None).unwrap();
-            plan.prepare(&mut cmd, &home, None).unwrap();
+            plan.prepare(&mut cmd, &home).unwrap();
             cmd.args(["-c", script]);
             cmd
         };

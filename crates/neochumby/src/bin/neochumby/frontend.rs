@@ -2,7 +2,7 @@
 //! app's service (neochumby::service). Its manifest names the app it's for
 //! (`frontend=airplay`), and the owner approves it with the Chumby's
 //! settings (`frontend_airplay=<frontend>`, from neochumbyd or else
-//! /psp/neochumby.conf), read as the session starts. Once approved:
+//! the stick's neochumby.conf), read as the session starts. Once approved:
 //!
 //! - **it's opened in the app's place**, however the app is opened (from
 //!   an app list, a MUSIC button for a player, or the app's own service);

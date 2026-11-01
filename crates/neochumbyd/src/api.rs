@@ -1,11 +1,12 @@
 //! The Chumbys' connections (neochumby-proto), one thread each.
 //!
-//! A paired Chumby says Hello and is welcomed, is sent its settings and
-//! the protocol's version (neochumby_proto::version), then may open an app's
-//! companion (companion.rs), make this its developer link (dev.rs), or ask
-//! for sync rounds (sync.rs). An unknown one may ask to pair: its request
-//! waits in pending/ until approved or refused (`neochumbyd approve|refuse
-//! CODE`), or ten minutes pass.
+//! A Chumby's key is registered when its stick is made (`neochumbyd add`,
+//! state.rs). A key registered here says Hello and is welcomed, is sent its
+//! settings and the protocol's version (neochumby_proto::version), then may
+//! open an app's companion (companion.rs), make this its developer link
+//! (dev.rs), or ask for sync rounds (sync.rs). Any other key finishes the
+//! TLS handshake, hears `Unpaired`, and is hung up on; nothing it says is
+//! acted on.
 //!
 //! Until a connection is known to be a paired Chumby's, it is held to a
 //! deadline for its first words, the handshake among them, and to a share
@@ -19,22 +20,20 @@
 //! (line.rs); from there on, the two are handled alike.
 
 use std::collections::{HashMap, HashSet};
-use std::fmt;
 use std::io;
 use std::net::{IpAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use neochumby_proto::{Identity, Msg, Stream, Unverified, valid_name, version};
+use neochumby_proto::{Identity, Msg, Session, Stream, version};
 
-use crate::state::{PENDING_TTL, State};
+use crate::state::State;
 use crate::{companion, dev, sync};
 
 pub struct Api {
     pub state: State,
     pub identity: Identity,
-    pub nfs_port: u16,
     /// The app tree, for the apps' companions.
     pub tree: PathBuf,
     /// neochumbyd's state directory, where companions keep theirs.
@@ -61,7 +60,7 @@ const MAX_PAIRED_ADDRS: usize = 1024;
 /// The most connections one paired Chumby holds at once.
 const MAX_PER_CHUMBY: usize = 32;
 /// From a connection's start to the end of its first words: the handshake
-/// and Hello, then the message after Config; or a request to pair.
+/// and Hello, then the message after Config.
 #[cfg(not(test))]
 const FIRST_WORDS: Duration = Duration::from_secs(30);
 #[cfg(test)]
@@ -73,16 +72,6 @@ const FIRST_WORDS: Duration = Duration::from_secs(2);
 pub enum Origin {
     Ip(IpAddr),
     Line(u64),
-}
-
-impl fmt::Display for Origin {
-    /// One word, as pending/ keeps it.
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            Origin::Ip(ip) => write!(f, "{ip}"),
-            Origin::Line(n) => write!(f, "serial-line-{n}"),
-        }
-    }
 }
 
 /// The connections held, over TCP and serial lines together.
@@ -195,7 +184,7 @@ pub fn serve_with(listener: TcpListener, api: Arc<Api>, limits: Arc<Limits>) {
         let api = api.clone();
         std::thread::spawn(move || {
             keepalive(&tcp);
-            if let Err(e) = handle(&api, tcp, &Origin::Ip(addr.ip()), &mut slot) {
+            if let Err(e) = handle(&api, tcp, &mut slot) {
                 eprintln!("neochumbyd: {addr}: {e}");
             }
         });
@@ -210,72 +199,39 @@ fn keepalive(tcp: &TcpStream) {
     neochumby_sys::net::keepalive(tcp, 10, 5, 3);
 }
 
-/// One connection, from `origin`, over TCP or a serial line alike.
-pub fn handle(api: &Api, tcp: impl Stream + 'static, origin: &Origin, slot: &mut Slot) -> io::Result<()> {
+/// One connection, over TCP or a serial line alike.
+pub fn handle(api: &Api, tcp: impl Stream + 'static, slot: &mut Slot) -> io::Result<()> {
     // The first words by their deadline, the whole handshake within it
     // however slowly it is sent, or give up on it; and a write the Chumby
     // is not taking for this long means it is gone.
     let deadline = Instant::now() + FIRST_WORDS;
     tcp.set_read_timeout(Some(FIRST_WORDS))?;
     tcp.set_write_timeout(Some(FIRST_WORDS))?;
-    let mut u = Unverified::accept_by(tcp, &api.identity, deadline)?;
-    match u.recv_by(deadline)? {
-        Msg::Hello { .. } => {
-            let Some(name) = api.state.paired(u.peer()) else {
-                return u.send(&Msg::Unpaired);
-            };
-            let mut s = u.verify(|k| api.state.paired(k).as_ref() == Some(&name))?;
-            if !slot.known(&name) {
-                return Err(io::Error::other(format!("{name} has {MAX_PER_CHUMBY} connections already")));
-            }
-            s.send(&Msg::Welcome)?;
-            s.send(&version::config(&api.state.settings(&name)))?;
-            match version::after_config(&mut s, deadline) {
-                Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &api.confine, &name, &app, s),
-                Ok(m @ Msg::SyncHave { .. }) => sync::serve(api, &name, s, m),
-                Ok(Msg::Dev) => dev::run(api, &name, s),
-                // A Chumby that came only for its settings hangs up.
-                Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
-                r => r.map(|_| ()),
-            }
-        }
-        Msg::Pair { name } if valid_name(&name) => {
-            let code = u.code();
-            let id = match api.state.request(&code, &name, u.peer(), &origin.to_string()) {
-                Ok(id) => id,
-                Err(e) => {
-                    let _ = u.send(&Msg::Refused);
-                    return Err(e);
-                }
-            };
-            eprintln!(
-                "neochumbyd: {name} at {origin} asks to pair, showing {code}: if its screen shows the same, run `neochumbyd approve CODE` with the code from its screen"
-            );
-            let deadline = Instant::now() + PENDING_TTL;
-            loop {
-                std::thread::sleep(Duration::from_secs(1));
-                match api.state.decision(&id, u.peer()) {
-                    Some(true) => {
-                        eprintln!("neochumbyd: {name} paired");
-                        return u.send(&Msg::Paired { nfs_port: api.nfs_port, path: "/".into() });
-                    }
-                    Some(false) => return u.send(&Msg::Refused),
-                    None if Instant::now() > deadline => {
-                        api.state.withdraw(&id)?;
-                        return u.send(&Msg::Refused);
-                    }
-                    None => {}
-                }
-            }
-        }
-        _ => u.send(&Msg::Refused),
+    let mut s = Session::accept(tcp, &api.identity, deadline, |k| api.state.paired(k).is_some())?;
+    let Some(name) = api.state.paired(s.peer()) else {
+        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "forgotten as it connected"));
+    };
+    let Msg::Hello { .. } = s.recv_by(deadline)? else {
+        return Err(io::Error::new(io::ErrorKind::InvalidData, "expected Hello"));
+    };
+    if !slot.known(&name) {
+        return Err(io::Error::other(format!("{name} has {MAX_PER_CHUMBY} connections already")));
+    }
+    s.send(&Msg::Welcome)?;
+    s.send(&version::config(&api.state.settings(&name)))?;
+    match version::after_config(&mut s, deadline) {
+        Ok(Msg::Open { app }) => companion::run(&api.tree, &api.state_dir, &api.confine, &name, &app, s),
+        Ok(m @ (Msg::SyncHave { .. } | Msg::SyncDone { .. })) => sync::serve(api, &name, s, m),
+        Ok(Msg::Dev) => dev::run(api, &name, s),
+        // A Chumby that came only for its settings hangs up.
+        Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => Ok(()),
+        r => r.map(|_| ()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use neochumby_proto::Session;
 
     #[test]
     fn limits() {
@@ -292,53 +248,31 @@ mod tests {
         assert_eq!((c.all, c.unknown, c.by_addr.len()), (0, 0, 0));
     }
 
-    /// A Chumby asks to pair over a real connection, and is approved by
-    /// its code.
+    /// A key not registered is told so, whatever it says, and gets nothing
+    /// else; registered, it is welcomed; forgotten, it is turned away again.
     #[test]
-    fn pairing() {
-        let d = std::env::temp_dir().join(format!("neochumbyd-api-pairing-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&d);
-        let state = State::open(d.clone()).unwrap();
-        let identity = state.identity().unwrap();
-        let server_key = identity.public();
-        let api = Arc::new(Api {
-            state,
-            identity,
-            nfs_port: 2049,
-            tree: d.join("tree"),
-            state_dir: d.clone(),
-            hashes: Default::default(),
-            links: Default::default(),
-            confine: crate::confine::Confine::Refused("not needed here".into()),
-        });
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = l.local_addr().unwrap();
-        std::thread::spawn({
-            let api = api.clone();
-            move || serve(l, api)
-        });
-
+    fn only_registered_keys_get_in() {
+        let (api, addr, d) = server("registered");
+        let server_key = api.identity.public();
         let chumby = Identity::generate().unwrap();
-        // Unknown, its Hello is answered Unpaired, and nothing else.
-        let mut u = Unverified::connect(TcpStream::connect(addr).unwrap(), &chumby).unwrap();
-        u.send(&Msg::Hello { name: "den".into() }).unwrap();
-        assert_eq!(u.recv().unwrap(), Msg::Unpaired);
-
-        let mut u = Unverified::connect(TcpStream::connect(addr).unwrap(), &chumby).unwrap();
-        u.send(&Msg::Pair { name: "den".into() }).unwrap();
-        let code = u.code();
-        while api.state.pending().unwrap().is_empty() {
-            std::thread::sleep(Duration::from_millis(20));
+        let connect = || Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &server_key).unwrap();
+        for first in [Msg::Hello { name: "den".into() }, Msg::Dev, Msg::Open { app: "x".into() }] {
+            let mut s = connect();
+            s.send(&first).unwrap();
+            assert_eq!(s.recv().unwrap(), Msg::Unpaired, "{first:?}");
+            assert!(s.recv().is_err(), "and nothing else after {first:?}");
         }
-        assert_eq!(api.state.pending().unwrap()[0].code, code);
-        api.state.approve(&code, false).unwrap();
-        assert_eq!(u.recv().unwrap(), Msg::Paired { nfs_port: 2049, path: "/".into() });
-        assert_eq!(u.peer(), &server_key);
+        assert!(api.state.pairs().unwrap().is_empty(), "asking registers nothing");
 
-        // Paired, it is welcomed.
-        let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &server_key).unwrap();
-        s.send(&Msg::Hello { name: "den".into() }).unwrap();
+        api.state.add("den", &chumby.public(), false).unwrap();
+        let mut s = connect();
+        s.send(&Msg::Hello { name: "any".into() }).unwrap();
         assert_eq!(s.recv().unwrap(), Msg::Welcome);
+
+        api.state.forget("den").unwrap();
+        let mut s = connect();
+        s.send(&Msg::Hello { name: "den".into() }).unwrap();
+        assert_eq!(s.recv().unwrap(), Msg::Unpaired);
         std::fs::remove_dir_all(&d).unwrap();
     }
 
@@ -351,7 +285,6 @@ mod tests {
         let api = Arc::new(Api {
             state,
             identity,
-            nfs_port: 2049,
             tree: d.join("tree"),
             state_dir: d.clone(),
             hashes: Default::default(),
@@ -384,14 +317,14 @@ mod tests {
         panic!("still connected after {limit:?}");
     }
 
-    /// A client that completes the handshake and then says nothing is
-    /// dropped by FIRST_WORDS, not held for ever (#70, finding 2).
+    /// A client not registered that completes the handshake and then says
+    /// nothing isn't held: it is turned away within seconds.
     #[test]
     fn silent_after_the_handshake_is_dropped() {
-        let (_api, addr, d) = server("silent");
+        let (api, addr, d) = server("silent");
         let tcp = TcpStream::connect(addr).unwrap();
         let watch = tcp.try_clone().unwrap();
-        let _u = Unverified::connect(tcp, &Identity::generate().unwrap()).unwrap();
+        let _s = Session::connect(tcp, &Identity::generate().unwrap(), &api.identity.public()).unwrap();
         let took = hung_up(&watch, FIRST_WORDS + Duration::from_secs(10));
         assert!(took <= FIRST_WORDS + Duration::from_secs(2), "{took:?}");
         std::fs::remove_dir_all(&d).unwrap();
@@ -403,9 +336,7 @@ mod tests {
     fn silent_after_config_is_dropped() {
         let (api, addr, d) = server("silent-config");
         let chumby = Identity::generate().unwrap();
-        let code = "0100-0000-0000-0000-0000-0000-0000-0000";
-        api.state.request(code, "den", &chumby.public(), "192.0.2.7").unwrap();
-        api.state.approve(code, false).unwrap();
+        api.state.add("den", &chumby.public(), false).unwrap();
         let tcp = TcpStream::connect(addr).unwrap();
         let watch = tcp.try_clone().unwrap();
         let mut s = Session::connect(tcp, &chumby, &api.identity.public()).unwrap();

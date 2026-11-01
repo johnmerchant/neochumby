@@ -13,6 +13,10 @@
 //!   session or an app writes ever waits on the network.
 //! - **Restart:** neochumbyd sends [`Msg::Restart`](crate::Msg::Restart);
 //!   the session ends the app in front and the services, then runs the tree's session binary again in its place.
+//! - **Sync:** neochumbyd sends [`Msg::SyncNow`](crate::Msg::SyncNow), and
+//!   the session's neochumby-sync starts a round at once. A round that can't
+//!   start because the set it would write is running says
+//!   [`NEEDS_RESTART`] in its `SyncDone`.
 //! - **Screenshot:** neochumbyd sends [`Msg::Shot`](crate::Msg::Shot); the
 //!   session answers [`Msg::Screen`](crate::Msg::Screen), then the
 //!   framebuffer as `Data` of at most [`SHOT_CHUNK`] bytes each.
@@ -29,13 +33,16 @@
 //!   lets its server read the log and the screen, but drives nothing on
 //!   the Chumby unless its owner asks for that.
 //!
-//! neochumbyd accepts this only from a paired Chumby, over the session the
-//! pairing authenticates, and bounds everything that comes: see neochumbyd's
+//! neochumbyd accepts this only from a registered Chumby, over the session
+//! its key authenticates, and bounds everything that comes: see neochumbyd's
 //! dev.rs.
 
 use std::collections::VecDeque;
 use std::time::Duration;
 
+/// What a `SyncDone` starts with when no round can start until the Chumby
+/// restarts: the set it would write is the one running.
+pub const NEEDS_RESTART: &str = "restart first: ";
 /// The longest log line kept, in bytes; longer ones are cut (at a
 /// character boundary) and end in [`CUT`].
 pub const MAX_LINE: usize = 512;

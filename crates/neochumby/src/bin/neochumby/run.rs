@@ -53,7 +53,7 @@
 //! - `brightness <n>`, from the start app or its service: the backlight.
 //!   The session puts back the boot's level as it ends.
 //!
-//! An app with `storage` gets its directory in /psp (storage.rs). One whose
+//! An app with `storage` gets its directory (storage.rs). One whose
 //! directory has grown over its limit is ended, as the network check ends
 //! one.
 //!
@@ -128,6 +128,10 @@ pub trait Device {
     /// Where the apps' directories are (storage.rs).
     fn storage_base(&self) -> PathBuf {
         PathBuf::from(storage::BASE)
+    }
+    /// Where they are kept across boots, if at all.
+    fn storage_keep(&self) -> Option<PathBuf> {
+        neochumby::conf::stick_mounted().then(|| PathBuf::from(storage::KEEP))
     }
 }
 
@@ -261,7 +265,7 @@ impl<'a, D: Device> Session<'a, D> {
         device: D,
         timing: Timing,
     ) -> Session<'a, D> {
-        let services = Services::new(
+        let mut services = Services::new(
             apps,
             core,
             root,
@@ -269,6 +273,7 @@ impl<'a, D: Device> Session<'a, D> {
             player.map(|m| m.name.as_str()),
             timing.service_backoff,
         );
+        services.storage.keep_in(device.storage_keep());
         Session {
             apps,
             root,
@@ -346,6 +351,7 @@ impl<'a, D: Device> Session<'a, D> {
         // Closed before the session replaces itself and opens it again.
         self.device.close_button();
         self.services.stop(self.timing.service_patience);
+        self.services.storage.keep_now();
         self.stop_playing("the session is ending");
         if self.lit {
             self.device.brightness(None);
@@ -476,6 +482,7 @@ impl<'a, D: Device> Session<'a, D> {
             }
             self.handover(&f);
             if self.services.storage.due() {
+                self.services.storage.keep_if_due();
                 self.services.end_over_storage();
                 if let Some(used) = self.services.storage.over(f.app) {
                     eprintln!("neochumby: {}: its storage holds {used} bytes, over its limit; ending it", f.app.name);
@@ -827,6 +834,10 @@ mod tests {
 
         fn speaker_group(&self) -> Option<u32> {
             Some(self.speaker_group.load(Ordering::SeqCst)).filter(|g| *g != 0)
+        }
+
+        fn storage_keep(&self) -> Option<PathBuf> {
+            None
         }
 
         fn storage_base(&self) -> PathBuf {

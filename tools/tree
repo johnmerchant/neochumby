@@ -3,9 +3,8 @@
 # stick and in a neochumbyd's export:
 #
 #   OUT/neochumby        the session
-#   OUT/neochumby-sync   the receiver for delivery=sync (not on a stick made
-#                        by tools/stick)
-#   OUT/userhook2        the boot hook, which pairing installs
+#   OUT/neochumby-sync   the receiver, which keeps a paired stick's sets in
+#                        step with its neochumbyd
 #   OUT/sideload/        what that hook needs on the stock firmware to reach
 #                        Linux 7: neochumby-handoff, always, and with
 #                        --sideload DIR sideload.ko, zImage and
@@ -15,8 +14,6 @@
 #                        (dist/fetch DIR or dist/build DIR). Without them,
 #                        which is enough for an emulated Chumby or one already
 #                        on Linux 7, stock boots as it always did
-#   OUT/neochumby-boot   what checks a tree over NFS before it runs, which
-#                        pairing and the session install in /psp
 #   OUT/colors           the colour schemes text-mode apps can be drawn in
 #                        (colors=, neochumby::term::colors), made by
 #                        neochumby-colors from ours (crates/neochumby/themes),
@@ -274,11 +271,8 @@ tools/linux-libs "$libs"
 # links. musl's libc.so is its own loader, and answers for libc.so.
 mkdir -p "$out/lib"
 cp "$libs/lib/ld-musl-arm.so.1" "$libs/usr/lib/libncursesw.so.6" "$libs/usr/lib/libpanelw.so.6" "$out/lib/"
-cp "target/$chumby_t/release/neochumby" "target/$chumby_t/release/neochumby-sync" \
-  "target/$chumby_t/release/neochumby-boot" boot/userhook2 "$out/"
-# What the boot hook needs on stock, in a workspace of its own. Nothing here
-# is run unchecked: from NFS, the signed manifest covers these as it does the
-# rest of the tree (neochumby::verified::sideload).
+cp "target/$chumby_t/release/neochumby" "target/$chumby_t/release/neochumby-sync" "$out/"
+# What the boot hook needs on stock, in a workspace of its own.
 cargo build -q --release --manifest-path crates/neochumby-handoff/Cargo.toml \
   --target $chumby_t --target-dir target/handoff
 mkdir -p "$out/sideload"

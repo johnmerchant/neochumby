@@ -2,16 +2,16 @@
 //! as a Model Context Protocol server on stdin and stdout. JSON-RPC 2.0, a
 //! message a line. Its tools are the commands a developer runs:
 //!
-//!   chumbys      the paired Chumbys, their settings, those asking to pair
-//!                and the start and players in the tree (`neochumbyd
-//!                pairing`)
+//!   chumbys      the registered Chumbys, their settings, the requests
+//!                waiting and the start and players in the tree (`neochumbyd
+//!                list`)
 //!   log          the end of a Chumby's log (`neochumbyd log`)
-//!   restart      its session starts again from the tree (`neochumbyd restart`)
+//!   sync         a sync round now, waiting for it (`neochumbyd sync`)
+//!   restart      its session starts again from its live set (`neochumbyd restart`)
 //!   screenshot   its screen, as an image (`neochumbyd shot`)
 //!   set          one of its settings (`neochumbyd set`)
 //!
-//! Approving, refusing and forgetting a pairing are left out: approving is a
-//! person comparing the code on two screens. Like the commands, it works
+//! Adding and forgetting a Chumby are left out: those are the owner's. Like the commands, it works
 //! through the state directory, so it runs wherever they do and needs no
 //! port of its own: `ssh HOST neochumbyd mcp` serves a client elsewhere.
 
@@ -97,9 +97,15 @@ fn tools() -> Value {
         },
         {
             "name": "restart",
-            "description": "Ends a paired Chumby's apps and services, and starts its session again from the tree: how a newly deployed tree is picked up. Fails if the Chumby isn't connected",
+            "description": "Ends a Chumby's apps and services, and starts its session again from its stick's live set: how a set a sync made live is picked up. Fails if the Chumby isn't connected",
             "inputSchema": {"type": "object", "properties": {"name": name}, "required": ["name"]},
             "annotations": {"destructiveHint": true, "idempotentHint": false},
+        },
+        {
+            "name": "sync",
+            "description": "Asks a Chumby for a sync round now and waits for it to end, so its stick's live set is the tree: how a newly deployed tree gets there, before a restart. Says if it needs a restart first. Fails if the Chumby isn't connected",
+            "inputSchema": {"type": "object", "properties": {"name": name}, "required": ["name"]},
+            "annotations": {"idempotentHint": true},
         },
         {
             "name": "screenshot",
@@ -109,7 +115,7 @@ fn tools() -> Value {
         },
         {
             "name": "set",
-            "description": "Sets one of a paired Chumby's settings, sent to it when it next connects: `start` (its start app; see chumbys for those in the tree), `player` (its default player, which MUSIC buttons open; likewise) or `delivery` (`nfs` or `sync`). An empty value removes the setting. Not `dev` (remote input), which is the owner's to turn on",
+            "description": "Sets one of a paired Chumby's settings, sent to it when it next connects: `start` (its start app; see chumbys for those in the tree), `player` (its default player, which MUSIC buttons open; likewise) or anything else apps read. An empty value removes the setting. Not `dev` (remote input), which is the owner's to turn on",
             "inputSchema": {
                 "type": "object",
                 "properties": {
@@ -149,7 +155,7 @@ impl Server {
                     "protocolVersion": version,
                     "capabilities": {"tools": {}},
                     "serverInfo": {"name": "neochumbyd", "version": env!("CARGO_PKG_VERSION")},
-                    "instructions": "Develop on the Chumbys paired with this neochumbyd: read a Chumby's log, restart its session on a newly deployed tree, and see its screen. Start with chumbys to learn their names.",
+                    "instructions": "Develop on the Chumbys paired with this neochumbyd: read a Chumby's log, sync a newly deployed tree to its stick and restart it on that, and see its screen. Start with chumbys to learn their names.",
                 })
             }
             "ping" => json!({}),
@@ -183,6 +189,15 @@ impl Server {
                 text(self.paired(name).and_then(|name| {
                     dev::restart(&self.state_dir, &name, self.wait).map_err(|e| e.to_string())?;
                     Ok(format!("{name}: restarting"))
+                }))
+            }
+            "sync" => {
+                let name = arg("name")?;
+                text(self.paired(name).and_then(|name| {
+                    match dev::sync(&self.state_dir, &name, self.wait).map_err(|e| e.to_string())? {
+                        dev::Synced::Done(what) => Ok(format!("{name}: {what}")),
+                        dev::Synced::NeedsRestart(why) => Err(format!("{name} needs a restart first: {why}")),
+                    }
                 }))
             }
             "screenshot" => {
@@ -222,12 +237,6 @@ impl Server {
             for note in notes.into_iter().flatten() {
                 out += &format!("         {note}\n");
             }
-        }
-        for p in self.state.pending().map_err(|e| e.to_string())? {
-            out += &format!(
-                "asking   {}  code {}  from {} (approve it on the server, typing the code from the Chumby's screen)\n",
-                p.name, p.code, p.addr
-            );
         }
         if out.is_empty() {
             out += "no Chumbys paired or asking\n";
@@ -328,7 +337,7 @@ mod tests {
         let r = ask(&s, "tools/list", json!({}));
         let names: Vec<&str> =
             r["result"]["tools"].as_array().unwrap().iter().map(|t| t["name"].as_str().unwrap()).collect();
-        assert_eq!(names, ["chumbys", "log", "restart", "screenshot", "set"]);
+        assert_eq!(names, ["chumbys", "log", "restart", "sync", "screenshot", "set"]);
     }
 
     #[test]
@@ -344,15 +353,15 @@ mod tests {
     fn it_lists_chumbys_and_sets_their_settings() {
         let s = server("set");
         assert!(call(&s, "chumbys", json!({}))["content"][0]["text"].as_str().unwrap().contains("paired   den"));
-        let r = call(&s, "set", json!({"name": "den", "key": "delivery", "value": "sync"}));
+        let r = call(&s, "set", json!({"name": "den", "key": "theme", "value": "dark"}));
         assert_eq!(r["isError"], Value::Null);
-        assert_eq!(s.state.config("den"), [("delivery".to_string(), "sync".to_string())]);
-        let r = call(&s, "set", json!({"name": "attic", "key": "delivery", "value": "sync"}));
+        assert_eq!(s.state.config("den"), [("theme".to_string(), "dark".to_string())]);
+        let r = call(&s, "set", json!({"name": "attic", "key": "theme", "value": "dark"}));
         assert_eq!(r["isError"], true);
         // Remote input stays the owner's to turn on.
         let r = call(&s, "set", json!({"name": "den", "key": key::DEV, "value": "on"}));
         assert_eq!(r["isError"], true);
-        assert_eq!(s.state.config("den"), [("delivery".to_string(), "sync".to_string())]);
+        assert_eq!(s.state.config("den"), [("theme".to_string(), "dark".to_string())]);
     }
 
     #[test]
@@ -375,6 +384,7 @@ mod tests {
         assert_eq!(r["isError"], true);
         assert!(r["content"][0]["text"].as_str().unwrap().contains("isn't connected"));
         assert_eq!(call(&s, "restart", json!({"name": "den"}))["isError"], true);
+        assert_eq!(call(&s, "sync", json!({"name": "den"}))["isError"], true);
     }
 
     #[test]

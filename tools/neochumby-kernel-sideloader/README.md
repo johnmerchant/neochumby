@@ -40,8 +40,8 @@ disables interrupts, flushes the ARM926 caches, and jumps with the MMU off.
 The target kernel's `imx2-wdt` driver then services the watchdog.
 
 Linux 7 can't read the settings partition, so what it needs of `/psp` goes
-with the initramfs: `crates/neochumby-handoff` writes the initramfs, then
-`/psp`'s files as a second archive, to `/proc/sideload-initrd`.
+with the initramfs: `crates/neochumby-handoff` writes the initramfs, then the
+few files named from `/psp` as a second archive, to `/proc/sideload-initrd`.
 
 ## Build
 
@@ -58,12 +58,11 @@ stock kernel's, `2.6.16-csb ARMv5 gcc-4.3`.
 
 ## On the Chumby
 
-`boot/userhook2` does all of this at boot, from a tree whose `sideload/` holds
-`sideload.ko`, `zImage`, `initramfs.cpio.gz` and `neochumby-handoff`
-(`tools/tree --sideload DIR`, `tools/stick`). From NFS, each is a copy
-neochumby-boot checked against the manifest neochumbyd signed; without
-`/psp/neochumby-boot` it doesn't sideload from NFS at all. Stock's own software
-goes first, as it holds the memory the blocks need:
+`boot/userhook2`, from a stick, does all of this at boot, from a tree whose
+`sideload/` holds `sideload.ko`, `zImage`, `initramfs.cpio.gz` and
+`neochumby-handoff` (`tools/stick --sideload DIR`). A device with a hook left in
+`/psp/rfs1/userhook2` from an older neochumby needs it deleted, on stock. Stock's
+own software goes first, as it holds the memory the blocks need:
 
 ```sh
 /usr/chumby/scripts/stop_control_panel
@@ -71,7 +70,7 @@ killall chumbhowld btplayd chumbalarmd crond
 sync; echo 3 > /proc/sys/vm/drop_caches
 insmod sideload.ko
 cat zImage > /proc/sideload-kernel
-neochumby-handoff initramfs.cpio.gz /psp > /proc/sideload-initrd
+neochumby-handoff initramfs.cpio.gz /psp network_config ts_settings hostname localtime neochumby-ssh .ssh/authorized_keys > /proc/sideload-initrd
 echo 1 > /proc/sideload-go
 ```
 

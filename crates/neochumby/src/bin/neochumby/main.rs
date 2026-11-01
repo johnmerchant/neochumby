@@ -31,20 +31,15 @@
 //!
 //! A text-mode app (one whose access doesn't list `fb`) runs on a terminal
 //! the session shows (terminal.rs), in the font and colours the settings
-//! name (`font=`, `colors=`), from the server or else /psp/neochumby.conf.
+//! name (`font=`, `colors=`), from the server or else the stick's neochumby.conf.
 //!
-//! With `delivery=sync` in its settings, the session also runs
-//! neochumby-sync from the tree as a service of its own (restarted like
-//! the apps' services), which keeps a copy of the tree on the stick for the
-//! boot hook to run. A tree made for a stick has no neochumby-sync, and
-//! needs none. The session also keeps the boot hook in
-//! /psp up to date with the tree's (conf::refresh_hook), and neochumby-boot
-//! beside it, which checks a tree over NFS before anything in it runs
-//! (neochumby::verified). Started by neochumby-boot, the session runs from
-//! a checked copy, and checks each program it runs too.
+//! On a paired Chumby the session also runs neochumby-sync from the tree as a
+//! service of its own (restarted like the apps' services), which keeps the
+//! stick's synced sets in step with neochumbyd. A restart runs the stick's
+//! live set (live_set).
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
-//! binary, paged in over NFS only when run. What it runs is described in
+//! binary, paged in from the stick only when run. What it runs is described in
 //! child.rs. The default player is chosen as the session starts
 //! (player.rs), and so are the frontends the owner
 //! approved (frontend.rs).
@@ -67,7 +62,7 @@ mod terminal;
 use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -80,8 +75,6 @@ use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
-use neochumby::verified;
-use neochumby_proto::{Delivery, Settings};
 
 /// The escape hatch: a touch held this long in this corner. The resistive
 /// touchscreen reports brief releases during a steady hold; one shorter
@@ -381,32 +374,13 @@ fn session() {
     let root = apps::root();
     let all = apps::all(&root);
     jail::init(&all);
-    match conf::refresh_hook(&root) {
-        Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
-        Ok(false) => {}
-        Err(e) => eprintln!("neochumby: {}: {e}", conf::HOOK),
-    }
-    // As the hook is, and from the same trees: what checks a tree over NFS
-    // on the next boot.
-    if conf::paired().is_some() && root != Path::new(conf::STICK_TREE) {
-        match verified::install_boot(&root) {
-            Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", verified::BOOT),
-            Ok(false) => {}
-            Err(e) => eprintln!("neochumby: {}: {e}", verified::BOOT),
-        }
-    }
-    if verified::on() {
-        eprintln!("neochumby: the tree is checked against neochumbyd's signed manifest");
-    }
-
-    // The master volume as the boot set it from /psp/volume: nothing has
-    // played yet.
+    // The master volume as the boot left it: nothing has played yet.
     let boot_volume = audio::volume();
 
     // The server's `start` and `player`, else the local ones: names, trusted
     // only as far as the tree goes (start.rs, player.rs).
     let settings = settings::load();
-    let core = core_services(&root, &settings);
+    let core = core_services(&root);
     let (local, local_player) = (conf::get(conf::CONF, "start"), conf::get(conf::CONF, "player"));
     let choice = chosen(settings.start.as_deref(), local.as_deref());
     let player = player::choose(&all, chosen(settings.player.as_deref(), local_player.as_deref()));
@@ -473,12 +447,13 @@ fn session() {
         if let Some(link) = link {
             link.release();
         }
-        // Just after a deploy, the NFS client may still hold the replaced
-        // file's handle: the first try fails as stale, and drops it. A
-        // checked tree is checked again, from its new manifest.
+        // The stick's live set, which a sync since this one started may
+        // have changed.
+        let root = live_set(&root);
         let exe = root.join("neochumby");
+        eprintln!("neochumby: restart: running {}", exe.display());
         for _ in 0..5 {
-            let e = if verified::on() { verified::boot(&root) } else { Command::new(&exe).exec() };
+            let e = Command::new(&exe).env("NEOCHUMBY_ROOT", &root).exec();
             eprintln!("neochumby: restart: {}: {e}", exe.display());
             neochumby::sleep_ms(1000);
         }
@@ -489,7 +464,20 @@ fn session() {
     }
 }
 
-/// A setting from the server, else `local` (from /psp/neochumby.conf), with
+/// The tree a restart runs: on a paired Chumby, the stick's live set, as the
+/// boot hook would choose it, if it has a session; else the one it is in.
+fn live_set(root: &Path) -> PathBuf {
+    if conf::paired().is_none() {
+        return root.to_path_buf();
+    }
+    let stick = neochumby_sync::stick::Stick::new(conf::STICK_TREE, None);
+    match stick.live() {
+        Some((set, _)) if stick.set_dir(set).join("neochumby").is_file() => stick.set_dir(set),
+        _ => root.to_path_buf(),
+    }
+}
+
+/// A setting from the server, else `local` (from the stick's neochumby.conf), with
 /// where it came from.
 fn chosen<'a>(server: Option<&'a str>, local: Option<&'a str>) -> Option<(&'static str, &'a str)> {
     match server {
@@ -499,11 +487,10 @@ fn chosen<'a>(server: Option<&'a str>, local: Option<&'a str>) -> Option<(&'stat
 }
 
 /// The session's own services, supervised like the apps' (services.rs) but
-/// no app's: neochumby-sync, when this Chumby's settings say
-/// `delivery=sync`. It opens no app, so it is never told what is in front
+/// no app's: neochumby-sync, on a paired Chumby. It opens no app, so it is never told what is in front
 /// and nothing it asks for is done.
-fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
-    if settings.delivery != Some(Delivery::Sync) {
+fn core_services(root: &Path) -> Vec<App> {
+    if conf::paired().is_none() || !root.join("neochumby-sync").is_file() {
         return Vec::new();
     }
     vec![App {

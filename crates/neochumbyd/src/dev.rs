@@ -25,12 +25,12 @@
 //! Input goes only to a Chumby whose settings say `dev=on`
 //! (neochumby_proto::Settings::dev), checked by the command, by the
 //! daemon as it takes the request, and by the Chumby, to which the daemon
-//! sends its settings again first. Off by default: pairing a Chumby lets
+//! sends its settings again first. Off by default: registering a Chumby lets
 //! its server see what it does, and drive it only once its owner says so.
 //!
-//! As with pairing, the commands and the daemon share only these files:
+//! The commands and the daemon share only these files:
 //! whoever may write the state directory may use them, and nothing listens
-//! anywhere new. Only a paired Chumby has a link, over the session pairing
+//! anywhere new. Only a registered Chumby has a link, over the session its key
 //! authenticates, and what it sends is bounded: lines are cut to
 //! neochumby_proto::dev::MAX_LINE and cleaned of control characters, a
 //! Chumby's log takes at most [`LOG_RATE`] bytes a second (more is
@@ -319,6 +319,14 @@ pub fn run(api: &Api, name: &str, mut s: Session) -> io::Result<()> {
                 }
             }
         }
+        if take(&asks.join("sync")) {
+            log.append("-- neochumbyd: a sync round asked")?;
+            if Msg::SyncNow.since().is_some_and(|since| s.version() >= since) {
+                s.send(&Msg::SyncNow)?;
+            } else if sync_started(&api.state_dir, name) {
+                sync_answer(&api.state_dir, name, false, "its session is too old to be asked; it syncs each minute");
+            }
+        }
         if take(&asks.join("restart")) {
             log.append("-- neochumbyd: restart asked")?;
             s.send(&Msg::Restart)?;
@@ -348,6 +356,85 @@ pub fn restart(state_dir: &Path, name: &str, wait: Duration) -> io::Result<()> {
         std::thread::sleep(Duration::from_millis(100));
     }
     Ok(())
+}
+
+/// How long `neochumbyd sync` waits for a round to begin, once asked: the
+/// Chumby's receiver looks every second, unless its stick is gone.
+const SYNC_BEGINS: Duration = Duration::from_secs(180);
+/// And for it to end: the longest a round may take.
+const SYNC_ENDS: Duration = Duration::from_secs(3600);
+
+/// What a `neochumbyd sync` found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Synced {
+    /// The live set is the tree: how, in words.
+    Done(String),
+    /// Nothing can be written until the Chumby restarts into its live set.
+    NeedsRestart(String),
+}
+
+/// Asks `name` for a sync round now, through the daemon, and waits for it to
+/// end. Only a round that begins after this asks can answer: one already
+/// running may have scanned an older tree.
+pub fn sync(state_dir: &Path, name: &str, wait: Duration) -> io::Result<Synced> {
+    let asks = requests(state_dir, name);
+    std::fs::create_dir_all(&asks)?;
+    let (ask, begun, answer) = (asks.join("sync"), asks.join("sync.asked"), asks.join("sync.answer"));
+    let _ = std::fs::remove_file(&answer);
+    std::fs::write(&begun, "")?;
+    std::fs::write(&ask, "")?;
+    let give_up = |e: io::Error| {
+        let _ = std::fs::remove_file(&ask);
+        let _ = std::fs::remove_file(&begun);
+        Err(e)
+    };
+    let deadline = Instant::now() + wait;
+    while ask.exists() {
+        if Instant::now() > deadline {
+            return give_up(not_connected(name));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let deadline = Instant::now() + SYNC_BEGINS;
+    while begun.exists() {
+        if Instant::now() > deadline {
+            return give_up(io::Error::other(format!("{name} didn't start a round: is its stick in?")));
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let deadline = Instant::now() + SYNC_ENDS;
+    loop {
+        if let Ok(text) = std::fs::read_to_string(&answer) {
+            let _ = std::fs::remove_file(&answer);
+            return match text.split_once(' ') {
+                Some(("ok", what)) => Ok(Synced::Done(what.to_string())),
+                Some((_, what)) => match what.strip_prefix(neochumby_proto::dev::NEEDS_RESTART) {
+                    Some(why) => Ok(Synced::NeedsRestart(why.to_string())),
+                    None => Err(io::Error::other(what.to_string())),
+                },
+                None => Err(io::Error::other(text)),
+            };
+        }
+        if Instant::now() > deadline {
+            return Err(io::Error::other(format!("{name}'s round didn't end in time")));
+        }
+        std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// A round begins for `name`: whether `neochumbyd sync` waits on this one.
+pub fn sync_started(state_dir: &Path, name: &str) -> bool {
+    take(&requests(state_dir, name).join("sync.asked"))
+}
+
+/// Tells a waiting `neochumbyd sync` how its round ended.
+pub fn sync_answer(state_dir: &Path, name: &str, ok: bool, what: &str) {
+    let asks = requests(state_dir, name);
+    let tmp = asks.join("sync.answer.new");
+    let text = format!("{} {}", if ok { "ok" } else { "failed" }, clean_line(what));
+    if std::fs::write(&tmp, text).is_ok() {
+        let _ = std::fs::rename(tmp, asks.join("sync.answer"));
+    }
 }
 
 /// Why a Chumby not set `dev=on` takes no input.
@@ -619,7 +706,6 @@ mod tests {
         let api = Api {
             state,
             identity,
-            nfs_port: 2049,
             tree: d.join("tree"),
             state_dir: d.clone(),
             hashes: Default::default(),
@@ -631,9 +717,7 @@ mod tests {
         std::thread::spawn(move || crate::api::serve(l, Arc::new(api)));
 
         let mut s = Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &server_key).unwrap();
-        s.send(&Msg::Hello { name: "den".into() }).unwrap();
-        assert_eq!(s.recv().unwrap(), Msg::Welcome);
-        assert!(matches!(s.recv().unwrap(), Msg::Config(_)));
+        neochumby_proto::version::hello(&mut s, "den".into(), Duration::from_secs(5)).unwrap();
         s.send(&Msg::Dev).unwrap();
         s.send(&Msg::Log(vec!["neochumby: opening home".into(), "\x1b[2Jboo".into()])).unwrap();
         let next = |s: &mut Session| loop {
@@ -641,6 +725,21 @@ mod tests {
                 return m;
             }
         };
+
+        // Sync: the command waits for a round that began after it asked.
+        let state_dir = d.clone();
+        let asked = std::thread::spawn(move || sync(&state_dir, "den", Duration::from_secs(5)));
+        assert_eq!(next(&mut s), Msg::SyncNow);
+        assert!(sync_started(&d, "den"), "the round that begins answers");
+        assert!(!sync_started(&d, "den"), "and only that one");
+        sync_answer(&d, "den", true, "up to date");
+        assert_eq!(asked.join().unwrap().unwrap(), Synced::Done("up to date".into()));
+        let state_dir = d.clone();
+        let asked = std::thread::spawn(move || sync(&state_dir, "den", Duration::from_secs(5)));
+        assert_eq!(next(&mut s), Msg::SyncNow);
+        assert!(sync_started(&d, "den"));
+        sync_answer(&d, "den", false, &format!("{}set a is running", neochumby_proto::dev::NEEDS_RESTART));
+        assert_eq!(asked.join().unwrap().unwrap(), Synced::NeedsRestart("set a is running".into()));
 
         // Restart: the command returns once the daemon has asked.
         let state_dir = d.clone();
@@ -703,10 +802,11 @@ mod tests {
         assert_eq!(
             kept,
             [
-                // A Chumby from before versions: version 0.
-                "-- neochumbyd: den connected, protocol version 0",
+                "-- neochumbyd: den connected, protocol version 2",
                 "neochumby: opening home",
                 "?[2Jboo",
+                "-- neochumbyd: a sync round asked",
+                "-- neochumbyd: a sync round asked",
                 "-- neochumbyd: restart asked",
                 "mid-shot",
                 "-- neochumbyd: tap 10 20 100",

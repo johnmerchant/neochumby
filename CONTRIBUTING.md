@@ -52,7 +52,7 @@ function there, and uses std instead wherever std does the job safely. The
 games (Doom, Quake) and the terminal apps that link a C program (fetch, htop,
 top, cmatrix, clock, bonsai) are allowed it as FFI to their C, and
 `crates/neochumby-wamr` as FFI to WAMR, in its one module `runtime.rs`. We use libc
-rather than rustix: neochumby-boot still runs on the stock 2.6.16, where rustix
+rather than rustix: the session's `check-set` still runs on the stock 2.6.16, where rustix
 can't (it needs Linux 3.2), and its `ioctl` and `mmap` are `unsafe` too (see
 neochumby-sys's documentation).
 
@@ -119,9 +119,10 @@ other than crates.io, is added to `deny.toml` in the same pull request,
 saying why.
 
 neochumbyd's tests include one end to end on loopback
-(`crates/neochumbyd/tests/server.rs`): a Chumby pairs, and a server
-program approves it through the admin socket, sandboxed where the system
-can, and checks that it can't read neochumbyd's key or the owner's token.
+(`crates/neochumbyd/tests/server.rs`): a Chumby's key is registered, an
+unknown one is refused, and server programs and a companion run sandboxed
+where the system can, and check that they can't read neochumbyd's key or the
+owner's token.
 `neochumby-sys`'s tests check the sandbox itself; on Linux they need
 Landlock, and in CI they fail without it.
 
@@ -148,8 +149,8 @@ crash test sees it.
 
 ### On a Chumby
 
-A paired Chumby can be worked on without SSH. Deploy a tree and restart
-its session on it (`tools/deploy HOST [APP ...] --restart NAME`), read
+A paired Chumby can be worked on without SSH. Deploy a tree, sync it to the
+stick and restart its session on that (`tools/deploy HOST [APP ...] --restart NAME`), read
 what it and its apps wrote (`neochumbyd log NAME -f`) and capture its
 screen (`neochumbyd shot NAME OUT.png`), all on the server. Everything
 an app writes to stdout or stderr ends up in that log, so print what
@@ -176,14 +177,14 @@ group.
 
 A loop that works well: deploy (`tools/deploy HOST APP --restart NAME`),
 then ask Claude to read the log and look at the screen and say what's
-wrong. Pairing stays with a person (`neochumbyd pairing`, `approve`), and
+wrong. Making a stick stays with a person (`tools/stick --pair`), and
 so does turning on remote input (`dev=on`): don't let a tool do that for
 you.
 
 To drive it as a scenario drives the emulator, turn on input for it
 first: `neochumbyd set NAME dev=on` (and `dev=` to turn it off again). It
 is off by default, and both neochumbyd and the Chumby refuse input
-without it: pairing a Chumby lets its server see its log and its screen,
+without it: pairing a stick lets its server see its log and its screen,
 not use it, until its owner says so. Then:
 
 - `neochumbyd tap NAME X Y [--hold MS]` touches the screen at (X, Y), in
@@ -261,13 +262,18 @@ dev/emulate stop
 - **The stick** is a FAT image in the emulator's directory, made afresh
   at each `start`. Its `userhook2` is `dev/emulate-userhook2`, which puts
   the settings and `--bind` directories in place, copies the session's log
-  to the console and runs the tree's own `userhook2`, unchanged; the
+  to the console and runs `boot/userhook2`, unchanged; the
   session's end is that hook's `neochumby exited: N`. `dev/emulate mkstick
   IMG TREE` makes one to keep, and `start --stick IMG` boots it as it is,
   written as the Chumby writes it.
 - **Settings:** `start --psp DIR` adds DIR's files to `/psp`: on stock, in
   the settings partition of a copy of your NAND image (yours is never
-  written); on dist, through the stick.
+  written); on dist, through the stick, standing in for the handoff. Its
+  `neochumby.conf`, `.key` and `.settings` go in the stick's `neochumby/state`,
+  as `tools/stick --pair` puts them. The dist profile boots the image directly,
+  with no stock stage: it runs the Linux 7 half of `boot/userhook2`, never its
+  stock half. Only the stock profile (`dev/emulate-stock`), or a real Chumby,
+  runs that.
 - **Pictures and the like:** `start --bind DIR:/tmp/pictures` puts a host
   directory on the stick and links it there. `dev/emulate compare RAW ...`
   says which 320x240 RGB565 picture the screen is most like.
@@ -275,12 +281,12 @@ dev/emulate stop
   directory, or `--state DIR`: the stick, the NAND copy, the console's log
   and chumby-machine's sockets.
 - **No network.** The emulated Chumby never has one (QEMU runs with `-nic
-  none`). `start --server SOCK` joins its second UART (ttymxc1) to SOCK, a neochumbyd's `--listen-unix` socket, and
-  writes `server=serial` in the stick's neochumby.conf: the session then
-  reaches neochumbyd over that line, with the same TLS sessions as over TCP
-  (neochumby-proto's `mux`). Pairing and `delivery=sync` work there; NFS
-  doesn't. The pairing it keeps goes back in /psp at the next start
-  (`dev/emulate kept` copies it out), and `--psp` starts afresh.
+  none`). `start --server SOCK` joins its second UART (ttymxc1) to SOCK, a
+  neochumbyd's `--listen-unix` socket; with a conf saying `server=serial`, the
+  session then reaches neochumbyd over that line, with the same TLS sessions as
+  over TCP (neochumby-proto's `mux`). What the stick keeps goes on to the next
+  `start TREE` (`dev/emulate kept` copies it out), and `--psp` starts afresh;
+  `start --stick IMG` boots a stick exactly as it is.
 
 `python3 dev/test_emulate.py` (CI runs it) checks the images dev/emulate
 makes and its whole control path against a stub QEMU, without firmware.
@@ -315,26 +321,24 @@ touch.
 DIR`; the stock profile only): the stock boot runs the hook, the hook loads the
 module from the stick and jumps, and Linux 7 comes up and opens home.
 
-**link** (`dev/emulate-link TREE NEOCHUMBYD OUT`): a neochumbyd here, at
-the other end of the emulated Chumby's serial line. PAIR pairs over the
-line, with the code both ends show; at the next start neochumbyd has the
-Chumby's log and its screen over the developer link, and with
-`delivery=sync` a first round fills set a of its stick. The power is cut
-the moment the round says set a is live, and the stick as the cut left it
-boots set a.
+**link** (`dev/emulate-link TREE NEOCHUMBYD OUT`): a neochumbyd here, at the
+other end of the emulated Chumby's serial line. A stick made paired is
+neochumbyd's at once: it has the Chumby's log and its screen over the developer
+link, and `neochumbyd sync` fills set a of its stick. The power is cut the moment
+the round says set a is live, and the stick as the cut left it boots set a. Then
+deploys, timed: the tree changes, `sync` brings it, `restart` runs the new set;
+a sync that would write the set running exits 3.
 
-**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`). The
-Chumby taps PAIR against a neochumbyd on the PC, and the code it logs must
-be the one `neochumbyd pairing` lists. A wrong code and a six-digit one are
-turned down, a refusal leaves `/psp` alone, and an approval (typed in
-capitals, without dashes) pins neochumbyd's key in the conf, after which
-the next boot's log reaches `neochumbyd log`. A new key under the same name
-pairs only with `--replace`, and once forgotten, the Chumby is turned away.
-It runs over the serial line, as link does.
+**Pairing** (`dev/emulate-pairing TREE NEOCHUMBYD OUT`). A stick made paired
+connects at once and syncs. The power is cut, and the next boot, from the stick
+as the cut left it, has the same key and is still neochumbyd's Chumby. A key
+neochumbyd doesn't have is refused and registers nothing; another key under the
+same name goes in only with `--replace`; once forgotten, the Chumby is turned
+away. It runs over the serial line, as link does.
 
 **A power cut during a sync round** (`dev/emulate-powercut TREE NEOCHUMBYD
-OUT`; over the serial line, as pairing). The Chumby pairs with a
-neochumbyd, syncs its tree to its stick (`delivery=sync`), then boots
+OUT`; over the serial line, as pairing). A stick made paired syncs its tree
+from neochumbyd, then the Chumby boots
 through the hook while a second round writes the other set, and
 `dev/emulate powercut OUT.img` cuts the power: the machine stopped where it
 is, the stick image copied as it stands, QEMU killed. Booting that copy,
@@ -361,7 +365,7 @@ The same scenarios run on a real Chumby, paired with a neochumbyd and set
 its developer link: `NEOCHUMBY_EMU_DEVICE=NAME dev/emulate-smoke /tmp/tree
 /tmp/smoke`, with `NEOCHUMBY_EMU_HOST=HOST` when neochumbyd runs elsewhere
 (over ssh; its state in `NEOCHUMBYD_DIR`). `start` installs the tree there
-(`tools/deploy --tree`) and restarts the Chumby; `log` is its log from then
+(`tools/deploy --tree`), syncs and restarts the Chumby; `log` is its log from then
 on; `shot`, `tap` and `button` are neochumbyd's (`neochumbyd tap` and
 `button`; an older neochumbyd without them skips those steps). A remote
 press goes where a real one would, so it can't reach an app that reads the
@@ -577,31 +581,33 @@ a private mount namespace, chrooted into a small tmpfs that holds:
 | `system` | `/proc`, `/sys` and `/etc` |
 | `network` | `/etc/resolv.conf` and `/etc/hosts`; and internet sockets (below) |
 | `terminal` | `/dev/ptmx` and `/dev/pts`, for a pseudo-terminal (`neochumby::term`) |
-| `storage` | `/psp/apps/<name>/`, its own, lasting across boots, shared by its `exec` and `service`, `nosuid,nodev,noexec` (below) |
+| `storage` | a directory of its own, named by `NEOCHUMBY_STORAGE`, lasting across boots, shared by its `exec` and `service`, `nosuid,nodev,noexec` (below) |
 | `logs` | the Chumby's logs, read-only, each at its own path: the session's (`/tmp/neochumby.log`), `/tmp`'s other `*.log` and `/var/log`'s files, as they are when it starts (plain files only). The kernel's ring needs no access: `neochumby_sys::klog` |
 | `root` | no jail: it runs as root, as the session does. Listed alone, or with `fb` for an app that draws the screen itself: without `fb`, a root app runs in text mode too |
 
 It may have 64 processes and 256 open files, and dumps no core. Its users
-can't signal or trace each other, or root, and can't read the Chumby's
-key or write to `/psp`, except its own `storage`.
+can't signal or trace each other, or root, can't read the Chumby's key or
+see its stick, and can keep nothing across a reboot but its own `storage`.
 
-**Storage.** With `storage`, your app has `/psp/apps/<name>/` in the
-Chumby's settings flash, named by `NEOCHUMBY_STORAGE` (the same path in
-the jail and out). Its `exec` and its `service` share it: they run as the
+**Storage.** With `storage`, your app has a directory in RAM, named by
+`NEOCHUMBY_STORAGE` (the same path in the jail and out), that the session copies
+to the stick's `neochumby/state/apps/<name>/` every 30 seconds and as it ends,
+and back as the app first starts each boot: so a power cut can lose the last 30
+seconds. FAT has no owners, so it can't be on the stick itself. Its `exec` and its `service` share it: they run as the
 same uid. Keep settings there, such as a station or a volume; anything
 else belongs in `/tmp`.
 - The session makes it as either starts, mode 0700, and gives it and
   everything in it to your app's uid. Uids follow the apps' order in the
   tree, so they can change between boots.
 - It may hold **64 KiB**: each file, directory or link counts its size
-  rounded up to 512 bytes, and at least 512. `/psp` is 2 MB in all.
+  rounded up to 512 bytes, and at least 512. Names FAT can't hold aren't kept.
 - The kernel has no quotas, so the session measures every 2 seconds. An
   app over its limit is ended, `exec` or `service`, as for the network.
   One already over as the session started may stay that size, to tidy up,
   but not grow. Write small files, and replace them whole (write a new
   one, then rename it over the old).
 - It's `nosuid,nodev,noexec`, as `/tmp` is: nothing your app writes there
-  runs. The jail remounts its bind of the directory so. A kernel that can't leaves it as `/psp` is, executable,
+  runs. The jail remounts its bind of the directory so. A kernel that can't leaves it executable,
   and the session says so once.
 
 **Playing a stream.** A stream player (`/usr/bin/btplay` and its daemon,
@@ -653,8 +659,8 @@ Ask for `network` if your app opens a socket at all, even briefly: an
 unlisted one is found sooner or later.
 
 List only what your app uses. `neochumby-manifest` (run by `tools/tree`)
-refuses words it doesn't know. `root` is for `home`, which pairs the
-Chumby and so writes its key. Under `dev/emulate`, which can't mount or
+refuses words it doesn't know. `root` is for `home`, which lists the tree and
+reads the network's name. Under `dev/emulate`, which can't mount or
 chroot, every app runs unjailed, as root.
 
 **Start apps.** The start app is the one a Chumby opens at boot and comes
@@ -757,13 +763,13 @@ takes it only:
   for wins.
 
 Which services run is decided as the session starts: one that needs a
-neochumbyd starts on a paired Chumby only, and pairing asks for a restart.
+neochumbyd starts on a paired Chumby only.
 
 Anything else is ignored and logged, and so is an `open` for the app
 already in front.
 
 **The speaker.** When a service exits, the session mutes the speaker and
-puts back the master volume the Chumby booted with (`/psp/volume`),
+puts back the master volume the Chumby booted with,
 through `neochumby::audio`, so a service that dies while playing can't
 leave it on. If another live process holds the speaker (the handover's
 claim, which `audio::Unmuted` and `audio::Speaker` make), it's left alone.
@@ -841,16 +847,6 @@ its Chumbys, not once per Chumby (a household web page), is named by
   stdout and stderr go to neochumbyd's log.
 - **Ports:** it may bind only the TCP ports `listen` names, on kernels
   whose Landlock can say (Linux 6.7 on).
-- **The admin socket,** if its owner allows it (`neochumbyd allow <app>
-  pairing`): descriptor 3, with `NEOCHUMBY_ADMIN=3`. Mark it close-on-exec
-  as the program starts (in Python, `os.set_inheritable(3, False)`). It's
-  lines of text: send `paired`, `pending`, `approve CODE TOKEN`,
-  `refuse CODE TOKEN`, `forget NAME TOKEN`, `set NAME KEY=VALUE TOKEN` or
-  `check TOKEN`; the answer is lines of data, then `ok` or
-  `error MESSAGE`. `crates/neochumbyd/src/admin.rs` has the details.
-- **Every change needs the owner.** Changes take the owner's token
-  (`neochumbyd token`). A web page asks the person for it, and should
-  check it (`check TOKEN`) before it lets them change anything.
 **Frontends.** An app's exec, in front, can talk to its own service:
 the service listens with `neochumby::service::listen("<app>")`, and the
 exec connects with `neochumby::service::connect("<app>")`; each gets a
@@ -862,7 +858,7 @@ same as that app's **frontend**: it shows the app in its place. Its
 manifest says which (`frontend = "airplay"`), with an `exec`, in text
 mode or with `fb`. The owner approves it in the Chumby's settings,
 `neochumbyd set NAME frontend_<app>=<frontend>` (`-` in the app's name
-written `_`; or the same line in `/psp/neochumby.conf`), from the
+written `_`; or the same line in the stick's `neochumby.conf`), from the
 session's next start. Then:
 - the frontend is **opened in the app's place**, however the app is
   opened: from an app list, by a MUSIC button for a player, or by the
@@ -940,8 +936,7 @@ frontend on the emulator, where the receiver is a stand-in
 
 ## Files in the tree
 
-With `delivery=sync`, a Chumby keeps a copy of the tree on its FAT stick.
-Names must be ones it can take: A-Z a-z 0-9 `.` `_` `+` `-`, not starting
+A Chumby keeps a copy of the tree on its FAT stick. Names must be ones it can take: A-Z a-z 0-9 `.` `_` `+` `-`, not starting
 or ending with `.`, unique ignoring case, and not a DOS device name (`con`,
 `aux.txt`). `neochumbyd manifest` lists anything left out. Only files that
 change are sent, so keep names stable and leave identical files alone.
@@ -1006,8 +1001,8 @@ sure CI is green. If you're changing how a Chumby boots
 that hangs stops the Chumby's boot. The hook runs under BusyBox 1.6 `sh`,
 which has `sed` but no `sha256sum`, `printf`, `od` or `head -c`. Anything
 it can't do goes in the session binary as a subcommand, like `neochumby
-check-set`. Raise its `neochumby-hook-version` line with every change: the
-session replaces the hook installed in `/psp` only with a higher version.
+check-set`. It reaches a Chumby only by the stick being made again
+(`tools/stick`). The dist emulator profile doesn't run its stock half.
 
 ### Test on a Chumby, or an emulated one, and show it
 

@@ -14,8 +14,7 @@
 //! `neochumbyd` is `required` or `optional` (absent: the app never needs
 //! one), and an app with a `companion` must set it: only a neochumbyd runs
 //! companions. It is stated, not inferred from `companion`. Nothing in the
-//! manifest gives an app neochumbyd's admin socket; only its owner does
-//! (`neochumbyd allow <app> pairing`).
+//! manifest gives an app neochumbyd's admin protocol: nothing does.
 //!
 //! An app's exec runs in text mode, on a terminal, unless its `access`
 //! lists `fb`. In text mode, `font` names its terminal's font ([`FONTS`],
@@ -93,7 +92,7 @@ const SPELLINGS: &[(&str, &str)] = &[("colour", "color")];
 /// - `logs`: the Chumby's logs, read-only: the session's, /tmp's *.log
 ///   and /var/log's files;
 /// - `storage`: a directory of its own that lasts across boots
-///   (/psp/apps/<name>, NEOCHUMBY_STORAGE), shared by its exec and service,
+///   (NEOCHUMBY_STORAGE), shared by its exec and service,
 ///   capped at 64 KiB;
 /// - `root`: no jail: it runs as root, as the session does. Listed alone,
 ///   or with `fb` for an app that draws the screen itself (without it, a
@@ -304,7 +303,7 @@ mod tests {
         assert_eq!(m.unwrap(), "server=neochumby-web\n");
         let m = manifest(&wrap("server = \"w\"\nlisten = [8080, 8443]"));
         assert_eq!(m.unwrap(), "server=w\nlisten=8080,8443\n");
-        // The owner grants pairing; an app can't take it.
+        // No such access word.
         assert!(manifest(&wrap("server = \"w\"\naccess = [\"pairing\"]")).is_err());
         assert!(manifest(&wrap("server = \"w\"\nlisten = [0]")).is_err());
         assert!(manifest(&wrap("server = \"w\"\nlisten = [\"80\"]")).is_err());
