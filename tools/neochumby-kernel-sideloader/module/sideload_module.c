@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MIT
 //
-// Reserve a contiguous kernel block and hand off to a 5.9 zImage.
-// Loaded on the stock 2.6.16, this module owns the pages; root writes the
-// images through /proc and writes /proc/sideload-go to jump.
+// Reserve a contiguous kernel block and hand off to a 5.9 zImage without
+// CVE-2009-2698.  Loaded on the stock 2.6.16, this module owns the pages;
+// root writes the images through /proc and writes /proc/sideload-go to jump.
 
 #include <linux/module.h>
 #include <linux/kernel.h>
@@ -16,7 +16,7 @@
 
 #define KERNEL_ORDER 10
 #define INITRD_ORDER 10
-#define BLOCKS 3
+#define BLOCKS 4
 #define KERNEL_SIZE (1UL << (KERNEL_ORDER + PAGE_SHIFT))
 #define INITRD_SIZE (1UL << (INITRD_ORDER + PAGE_SHIFT))
 #define ATAGS_PHYS 0xc3f00000UL
@@ -135,8 +135,10 @@ static int __init sideload_init(void)
 				t = blocks[i]; blocks[i] = blocks[j]; blocks[j] = t;
 			}
 	guard = blocks[0];
-	iva = blocks[1];
-	kva = blocks[2];
+	/* The zImage stays above the decompressed Image; the initrd is the
+	 * highest block, out of its way.  blocks[1] is unused. */
+	kva = blocks[BLOCKS - 2];
+	iva = blocks[BLOCKS - 1];
 	kphys = __pa(kva);
 	iphys = __pa(iva);
 	koff = ioff = 0;
