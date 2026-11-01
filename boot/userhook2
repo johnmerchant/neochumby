@@ -1,5 +1,5 @@
 #!/bin/sh
-# neochumby-hook-version=5
+# neochumby-hook-version=6
 # (Raise it with every change: the session replaces an installed hook only
 # with a higher version, so a rollback to an older set never downgrades it.)
 # neochumby's boot hook. The same script runs on the stock firmware and in
@@ -205,7 +205,7 @@ elif [ "${server%%:*}" = serial ]; then
   echo "no apps: no stick tree or synced set, and neochumbyd is over the serial line"
   exit 0
 elif [ -n "$server" ]; then
-  deadline 20 sh -c "until ping -c 1 $server >/dev/null 2>&1; do sleep 1; done" || exit 0
+  deadline 60 sh -c "until ping -c 1 $server >/dev/null 2>&1; do sleep 1; done" || exit 0
   mkdir -p "$MNT"
   # No port mapper (ports given), no lock manager (nolock), TCP; soft with
   # short timeouts so a lost network fails reads instead of hanging;
