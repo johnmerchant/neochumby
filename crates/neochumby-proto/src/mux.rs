@@ -8,8 +8,7 @@
 //! frames out, and each channel's reads and writes. [`Line`] runs one with
 //! a thread each way and gives each channel as a [`Channel`], a blocking
 //! [`Stream`]: that is neochumbyd's side (and the tests'). The Chumby's
-//! session drives its own with poll(2), as std's blocking waits use futex
-//! flags its 2.6.16 kernel doesn't have.
+//! session drives its own with poll(2).
 //!
 //! On the line each frame is a kind, a channel, a length and that many
 //! bytes, then the CRC-32 of all of it (big-endian):

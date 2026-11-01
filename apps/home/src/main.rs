@@ -1,9 +1,7 @@
 //! neochumby-home, the app list: the installed apps, tap one to open it;
 //! PAIR when booted with a neochumbyd this Chumby is not paired with; the
-//! time; how it's connected (network.rs), which only looks; and, on the stock 2.6 kernel, CHUMBY MODE, which hands the Chumby
-//! back to its own software. (On the dist's Linux, 5.9 and later, there is
-//! no stock software to go back to, and no CHUMBY MODE.) It's an ordinary
-//! app that may be the start app (`start = true`), and the start app when
+//! time; and how it's connected (network.rs), which only looks. It's an
+//! ordinary app that may be the start app (`start = true`), and the start app when
 //! no other is chosen. The session also opens it from anything when the
 //! top-left corner is held.
 //!
@@ -14,7 +12,7 @@
 //! 48 high, and the bar along the bottom 32. Another font (the owner's
 //! `font=`) scales the same layout to its cells.
 //!
-//! It opens apps and CHUMBY MODE by asking the session over its request
+//! It opens apps by asking the session over its request
 //! pipe (neochumby::session), then exits: the session runs what it asked
 //! for, and opens the start app again when that exits. Opened for any
 //! reason (NEOCHUMBY_REASON), it shows its first page. The top button,
@@ -41,7 +39,6 @@ const TITLE: Rgb = (255, 200, 120);
 const ROW: Rgb = (28, 28, 48);
 const PRESSED: Rgb = (230, 230, 230);
 const DARK: Rgb = (0, 0, 0);
-const BLUE: Rgb = (120, 200, 255);
 const GREEN: Rgb = (120, 220, 120);
 
 /// How often the network's line is read again.
@@ -55,12 +52,11 @@ enum Hit {
     App(usize),
     More,
     Pair,
-    ChumbyMode,
 }
 
 /// Where things are on a terminal of `cols` by `rows` cells: the title on
 /// the top row, then [`ROWS`] rows of apps, each `entry` high, and the bar
-/// (PAIR, CHUMBY MODE), when it has a button, `bar` high along the bottom.
+/// (PAIR), when it has a button, `bar` high along the bottom.
 #[derive(Clone, Copy, PartialEq, Debug)]
 struct Layout {
     cols: usize,
@@ -102,8 +98,6 @@ struct Screen {
     listed: Vec<usize>,
     page: usize,
     pairing: Option<(String, u16)>,
-    /// Whether CHUMBY MODE is offered: on the stock 2.6 kernel only.
-    chumby_mode: bool,
     /// How the Chumby is connected, a line to show.
     network: String,
 }
@@ -134,9 +128,6 @@ impl Screen {
         let mut b = Vec::new();
         if self.pairing.is_some() {
             b.push(Hit::Pair);
-        }
-        if self.chumby_mode {
-            b.push(Hit::ChumbyMode);
         }
         b
     }
@@ -238,11 +229,7 @@ fn draw(t: &mut Term, all: &[App], s: &Screen, pressed: Option<Hit>) {
     let bar = s.bar();
     for (i, hit) in bar.iter().enumerate() {
         let (from, to) = (i * l.cols / bar.len(), (i + 1) * l.cols / bar.len());
-        let (label, colour) = match hit {
-            Hit::Pair => ("PAIR", GREEN),
-            _ => ("CHUMBY MODE", BLUE),
-        };
-        button(&mut p, &l, from, to - from, label, colour, pressed == Some(*hit));
+        button(&mut p, &l, from, to - from, "PAIR", GREEN, pressed == Some(*hit));
     }
     t.show(&p.0);
 }
@@ -283,25 +270,16 @@ fn pairing_offer() -> Option<(String, u16)> {
     }
 }
 
-/// Whether the Chumby's own software is there to go back to: on its stock
-/// 2.6 kernel, not on the dist's (5.9 and later), which replaced it. When
-/// the kernel doesn't say, as run by hand off the Chumby, it is offered.
-fn stock_kernel(release: Option<&str>) -> bool {
-    release.is_none_or(|r| r.trim().starts_with("2."))
-}
-
 fn main() {
     neochumby::debug::install("neochumby-home");
     let mut t = Term::open();
     let mut pipe = Pipe::from_env();
     let root = apps::root();
     let all = apps::all(&root);
-    let release = std::fs::read_to_string("/proc/sys/kernel/osrelease").ok();
     let mut screen = Screen {
         listed: all.iter().enumerate().filter(|(_, a)| a.title.is_some() && a.exec.is_some()).map(|(i, _)| i).collect(),
         page: 0,
         pairing: pairing_offer(),
-        chumby_mode: stock_kernel(release.as_deref()),
         network: network::Status::read().line(),
     };
     let mut pressed: Option<Hit> = None;
@@ -324,7 +302,6 @@ fn main() {
                 }
                 Touch::Up => {
                     match pressed.take() {
-                        Some(Hit::ChumbyMode) => ask(&mut t, pipe.as_mut(), "CHUMBY MODE", |p| p.chumby_mode()),
                         Some(Hit::App(i)) => {
                             if all[i].runnable() {
                                 ask(&mut t, pipe.as_mut(), &all[i].name, |p| p.open(&all[i].name));
@@ -375,13 +352,18 @@ fn main() {
 mod tests {
     use super::*;
 
-    fn screen(apps: usize, pairing: bool, chumby_mode: bool) -> Screen {
-        Screen { listed: (0..apps).collect(), page: 0, pairing: pairing.then(|| ("s".into(), 1)), chumby_mode, network: String::new() }
+    fn screen(apps: usize, pairing: bool) -> Screen {
+        Screen {
+            listed: (0..apps).collect(),
+            page: 0,
+            pairing: pairing.then(|| ("s".into(), 1)),
+            network: String::new(),
+        }
     }
 
     #[test]
     fn the_button_goes_back_to_the_first_page() {
-        let mut s = screen(10, false, true);
+        let mut s = screen(10, false);
         s.page = 2;
         assert!(s.pages() > 2);
         s.button();
@@ -391,12 +373,10 @@ mod tests {
     }
 
     /// In Spleen 8x16, a tap lands where it did on the framebuffer home
-    /// drew before: dev/emulate-smoke taps apps at y = 62, 102, 142 and 182
-    /// and CHUMBY MODE at 220, and dev/emulate-boot looks for the bar at
-    /// y = 228.
+    /// drew before: dev/emulate-smoke taps apps at y = 62, 102, 142 and 182.
     #[test]
     fn rows_fall_where_they_did() {
-        let s = screen(5, false, true);
+        let s = screen(5, true);
         let l = s.layout(40, 15);
         assert_eq!(l, Layout { cols: 40, rows: 15, entry: 3, bar: 2 });
         let at = |x: usize, y: usize| s.hit(&l, x / 8, y / 16);
@@ -404,8 +384,8 @@ mod tests {
         assert_eq!(at(160, 102), Some(Hit::App(1)));
         assert_eq!(at(160, 142), Some(Hit::App(2)));
         assert_eq!(at(160, 182), Some(Hit::More));
-        assert_eq!(at(160, 220), Some(Hit::ChumbyMode));
-        assert_eq!(at(160, 228), Some(Hit::ChumbyMode));
+        assert_eq!(at(160, 220), Some(Hit::Pair));
+        assert_eq!(at(160, 228), Some(Hit::Pair));
         // Above the apps, where dev/emulate-smoke taps for `neochumby
         // sensors`, and the row parting the first from the title: nothing.
         assert_eq!(at(160, 8), None);
@@ -414,15 +394,11 @@ mod tests {
 
     #[test]
     fn the_bar_holds_what_there_is() {
-        // Pairing on the stock kernel: PAIR on the left, CHUMBY MODE right.
-        let s = screen(2, true, true);
-        let l = s.layout(40, 15);
-        assert_eq!((s.hit(&l, 5, 14), s.hit(&l, 35, 14)), (Some(Hit::Pair), Some(Hit::ChumbyMode)));
-        // On 5.9 and later: no CHUMBY MODE; PAIR alone, else no bar.
-        let s = screen(2, true, false);
+        // PAIR alone, else no bar.
+        let s = screen(2, true);
         let l = s.layout(40, 15);
         assert_eq!(s.hit(&l, 35, 14), Some(Hit::Pair));
-        let s = screen(2, false, false);
+        let s = screen(2, false);
         let l = s.layout(40, 15);
         assert_eq!(l.bar, 0);
         assert_eq!(s.hit(&l, 20, 14), None);
@@ -432,18 +408,10 @@ mod tests {
     #[test]
     fn another_font_scales_the_layout() {
         // Spleen 5x8: 64 by 30.
-        let s = screen(3, false, true);
+        let s = screen(3, true);
         let l = s.layout(64, 30);
         assert_eq!((l.entry, l.bar), (6, 2));
         assert_eq!(s.hit(&l, 10, 8), Some(Hit::App(1)));
-        assert_eq!(s.hit(&l, 10, 29), Some(Hit::ChumbyMode));
-    }
-
-    #[test]
-    fn chumby_mode_only_on_the_stock_kernel() {
-        assert!(stock_kernel(Some("2.6.16-chumby-1.7\n")));
-        assert!(!stock_kernel(Some("5.9.16-mx21-sideload\n")));
-        assert!(!stock_kernel(Some("7.2.13-mx21-sideload")));
-        assert!(stock_kernel(None));
+        assert_eq!(s.hit(&l, 10, 29), Some(Hit::Pair));
     }
 }

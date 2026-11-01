@@ -5,8 +5,7 @@
 //! and the engine takes what has arrived in each frame's idle time.
 //!
 //! Requests and replies cross between the threads through
-//! neochumby_sys::chan, not std's channels: std's blocking waits use futex
-//! flags that the Chumby's 2.6.16 kernel doesn't have.
+//! neochumby_sys::chan.
 //!
 //! If the thread's channels fail, the engine reads synchronously instead. A
 //! panic in the thread is not caught: release builds abort on panic, so it

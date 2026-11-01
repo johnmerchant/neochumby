@@ -255,8 +255,6 @@ jobs:
       - run: cargo clippy --all-targets --manifest-path crates/neochumby-handoff/Cargo.toml -- -D warnings
       - run: cargo test --manifest-path crates/neochumby-handoff/Cargo.toml
       - run: cargo test -p neochumby-sys --features boot
-      - run: cargo clippy --all-targets -p neochumby-sys --features compat26 -- -D warnings
-      - run: cargo test -p neochumby-sys --features compat26
       - run: cargo test -p neochumby-logs
       # The session and its library, on the host: their unit tests (the
       # Chumby's devices and crash reports are ARM-only, and left out).

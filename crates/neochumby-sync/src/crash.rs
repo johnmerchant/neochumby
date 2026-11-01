@@ -3,7 +3,8 @@
 //! booted (the hook's choice of set, as boot/userhook2 makes it, and
 //! check-set) and synced again.
 //!
-//! The model is FAT on the Chumby's 2.6.16 kernel, taken at its weakest:
+//! The model is FAT, taken at its weakest (as the stock 2.6.16, which
+//! checks sets too, does it):
 //!
 //! - A file's bytes are on the stick only once that file is fsynced, or
 //!   after a sync(). Bytes not yet there come back as they were before,

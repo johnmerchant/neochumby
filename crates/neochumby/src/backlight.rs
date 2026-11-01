@@ -1,23 +1,17 @@
-//! The backlight, which only the session sets (`brightness <n>` from the
-//! start app, and the boot's level put back on CHUMBY MODE), always in the
-//! stock kernel's range: 0 (off) to 65535 (full).
-//!
-//! The stock kernel has it at /proc/sys/sense1/brightness, in that range.
-//! A newer kernel without that node, as the dist image's, has it as a
-//! backlight class device (pwm-backlight on the Chumby), whose levels run
-//! from 0 to its own max_brightness: the session scales between the two.
-//! Which one is there is looked for once, as the session starts.
+//! The backlight, always in one range: 0 (off) to 65535 (full). The kernel
+//! has it as a backlight class device (pwm-backlight on the Chumby), whose
+//! levels run from 0 to its own max_brightness: this scales between the two.
+//! Only the session sets it for apps (`brightness <n>` from the start app);
+//! an unjailed start app may set it itself.
 
 use std::fs;
 use std::io;
 use std::path::{Path, PathBuf};
 
-/// The stock kernel's node.
-const STOCK: &str = "/proc/sys/sense1/brightness";
-/// Where a newer kernel's backlight devices are.
+/// Where the kernel's backlight devices are.
 const CLASS: &str = "/sys/class/backlight";
-/// Full brightness, in the stock range.
-const FULL: u32 = neochumby::session::MAX_BRIGHTNESS;
+/// Full brightness.
+const FULL: u32 = crate::session::MAX_BRIGHTNESS;
 
 /// The backlight's file, and the level it takes for full brightness.
 pub struct Backlight {
@@ -26,12 +20,8 @@ pub struct Backlight {
 }
 
 impl Backlight {
-    /// The stock node if the kernel has it, else the first backlight class
-    /// device with a max_brightness; None if neither is there.
+    /// The first backlight class device with a max_brightness, if any.
     pub fn find() -> Option<Backlight> {
-        if Path::new(STOCK).exists() {
-            return Some(Backlight { path: STOCK.into(), max: FULL });
-        }
         let mut devices: Vec<PathBuf> = fs::read_dir(CLASS).ok()?.flatten().map(|e| e.path()).collect();
         devices.sort();
         devices.into_iter().find_map(|d| {
@@ -51,7 +41,7 @@ impl Backlight {
         Some(scale(v.min(self.max), self.max, FULL))
     }
 
-    /// Sets the level, 0 to 65535: one write to /proc or /sys.
+    /// Sets the level, 0 to 65535: one write to /sys.
     pub fn set(&self, level: u32) -> io::Result<()> {
         fs::write(&self.path, format!("{}\n", scale(level.min(FULL), FULL, self.max)))
     }
@@ -70,16 +60,12 @@ mod tests {
 
     #[test]
     fn scales_between_the_ranges() {
-        // pwm-backlight's 0-100 on the dist image.
+        // pwm-backlight's 0-100.
         assert_eq!(scale(0, FULL, 100), 0);
         assert_eq!(scale(FULL, FULL, 100), 100);
         assert_eq!(scale(9000, FULL, 100), 14);
         assert_eq!(scale(1, FULL, 100), 1);
         assert_eq!(scale(14, 100, FULL), 9175);
         assert_eq!(scale(100, 100, FULL), FULL);
-        // The stock node: unchanged.
-        for v in [0, 1, 9000, FULL] {
-            assert_eq!(scale(v, FULL, FULL), v);
-        }
     }
 }

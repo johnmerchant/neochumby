@@ -211,7 +211,9 @@ impl Init {
             return;
         }
         run_quietly(Command::new("/bin/ifconfig").args(["lo", "127.0.0.1", "up"]).env("PATH", PATH));
-        if config.wireless && let Err(e) = start_wpa_supplicant(&config, interface) {
+        if config.wireless
+            && let Err(e) = start_wpa_supplicant(&config, interface)
+        {
             network_failed(&e);
             return;
         }
@@ -430,7 +432,9 @@ fn configure_address(address: &network::Address, interface: &str) -> Result<(), 
         if status.success() { Ok(()) } else { Err(format!("{program}: {status}")) }
     };
     match address {
-        network::Address::Dhcp => run("/sbin/udhcpc", &["-b", "-i", interface, "-s", "/usr/share/udhcpc/default.script"]),
+        network::Address::Dhcp => {
+            run("/sbin/udhcpc", &["-b", "-i", interface, "-s", "/usr/share/udhcpc/default.script"])
+        }
         network::Address::Static { ip, netmask, gateway, nameservers } => {
             run("/bin/ifconfig", &[interface, ip, "netmask", netmask, "up"])?;
             if !gateway.is_empty() {

@@ -24,13 +24,11 @@
 //! slideshow timing persist (wx_music and so on, in /psp on the Chumby;
 //! the names the C engine used, so a Chumby keeps its settings).
 //!
-//! Actions (tap zones): slideshow, screen NAME, chumby (exit: the session
-//! hands the Chumby back to its own software), music_toggle, station N,
+//! Actions (tap zones): slideshow, screen NAME, music_toggle, station N,
 //! next_station, night, nightmode, pin, next_app, prev_app, secs_up,
 //! secs_down (next_app and prev_app step whole apps with pageapp), and app
 //! NAME: open apps/NAME from the neochumby tree. classic is a start app
-//! (proposal 0002): it asks the session (session.rs) to open an app, or for
-//! CHUMBY MODE, and exits; the top button arrives from the session too.
+//! (proposal 0002): it asks the session (session.rs) to open an app, and exits; the top button arrives from the session too.
 //!
 //! Control: lines appended to the control file run within 0.2 s:
 //! show SCREEN | page N | pin on|off | night on|off |
@@ -173,13 +171,6 @@ struct Inflight {
     t0: i64,
 }
 
-/// The waiting screen's built-in choices.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum Fallback {
-    ChumbyMode,
-    Apps,
-}
-
 /// load() found no usable manifest: the last good set (if any) stays up.
 #[derive(Debug, PartialEq, Eq)]
 pub struct NoManifest;
@@ -190,7 +181,7 @@ pub struct Engine<P: Plat> {
     session: Option<Box<dyn Session>>,
     /// The session opened us for a button press: start on Home.
     reason_button: bool,
-    /// An app has been asked for (or CHUMBY MODE): leave at the frame's end.
+    /// An app has been asked for: leave at the frame's end.
     leave: bool,
     m: Manifest,
     c: Cache,
@@ -265,7 +256,7 @@ pub struct Engine<P: Plat> {
     waiting: bool,
     /// On the waiting screen: the built-in menu's choice awaiting its
     /// second tap, and until when (ms).
-    armed: Option<(Fallback, i64)>,
+    armed: Option<i64>,
 
     // The frame loop's own.
     tx: i32,
@@ -1891,8 +1882,8 @@ impl<P: Plat> Engine<P> {
         self.page_start = t;
     }
 
-    /// A tap zone's action. True: exit.
-    fn do_action(&mut self, h: usize, t: i64) -> bool {
+    /// A tap zone's action.
+    fn do_action(&mut self, h: usize, t: i64) {
         let (act, name, arg) = {
             let h = &self.m.hots[h];
             (h.act.clone(), h.name.clone(), h.arg)
@@ -1909,7 +1900,6 @@ impl<P: Plat> Engine<P> {
                 self.page_start = t;
             }
             "screen" => self.show(&name),
-            "chumby" => return true,
             "app" if !name.is_empty() => self.open_app(&name),
             "music_toggle" => self.set_music((self.music_on == 0) as i32),
             "station" if arg >= 0 && arg < ns => {
@@ -1941,7 +1931,6 @@ impl<P: Plat> Engine<P> {
             _ => {}
         }
         self.refresh_panes();
-        false
     }
 
     /// A NIGHT tap's override, until `until` (0: none). Kept in
@@ -1952,67 +1941,35 @@ impl<P: Plat> Engine<P> {
     }
 
     /// The waiting screen, with the built-in menu: a start app always
-    /// offers CHUMBY MODE and a way to the other apps (proposal 0002), even
+    /// offers a way to the other apps (proposal 0002), even
     /// before the feeder has sent the screens that do.
     fn wait_screen(&mut self) {
         let dir = self.base_dir.display().to_string();
-        self.plat.message(&[
-            "Waiting for pictures",
-            &format!("in {dir}"),
-            "",
-            "Tap the top half for CHUMBY MODE,",
-            "the bottom half for the apps.",
-        ]);
+        self.plat.message(&["Waiting for pictures", &format!("in {dir}"), "", "Tap for the apps."]);
     }
 
-    /// The waiting screen's taps: one tap picks (top half: CHUMBY MODE;
-    /// bottom: the apps, in neochumby-home), a second in the same half
-    /// within 10 s does it, anywhere else goes back.
+    /// The waiting screen's taps: one tap asks (the apps, in neochumby-home),
+    /// a second within 10 s opens them.
     fn fallback_menu(&mut self, t: i64) {
-        if self.armed.is_some_and(|(_, until)| t > until) {
+        if self.armed.is_some_and(|until| t > until) {
             self.armed = None;
             self.wait_screen();
         }
         while let Some(ev) = self.next_touch() {
-            let Touch::Up(_, y) = ev else { continue };
+            let Touch::Up(..) = ev else { continue };
             if t - self.last_tap < TAP_ECHO_MS {
                 continue;
             }
             self.last_tap = t;
-            let pick = if y < H / 2 { Fallback::ChumbyMode } else { Fallback::Apps };
-            match self.armed.take() {
-                Some((a, _)) if a == pick => {
-                    match pick {
-                        Fallback::ChumbyMode => self.ask_and_leave(Ask::ChumbyMode),
-                        Fallback::Apps => self.open_app("home"),
-                    }
-                    if !self.leave {
-                        self.wait_screen();
-                    }
-                    return;
+            if self.armed.take().is_some() {
+                self.open_app("home");
+                if !self.leave {
+                    self.wait_screen();
                 }
-                Some(_) => self.wait_screen(),
-                None => {
-                    self.armed = Some((pick, t + 10_000));
-                    self.plat.message(match pick {
-                        Fallback::ChumbyMode => {
-                            &["CHUMBY MODE?", "", "Tap the top half again", "to leave neochumby;", "elsewhere to stay."]
-                        }
-                        Fallback::Apps => {
-                            &["The apps?", "", "Tap the bottom half again", "to open them;", "elsewhere to stay."]
-                        }
-                    });
-                }
+                return;
             }
-        }
-    }
-
-    /// Asks the session for something, and leaves once it has asked.
-    fn ask_and_leave(&mut self, a: Ask) {
-        match self.session.as_mut().map(|s| s.ask(&a)) {
-            Some(true) => self.leave = true,
-            Some(false) => eprintln!("couldn't ask the session for {a:?}"),
-            None => eprintln!("{a:?}: not started by the session"),
+            self.armed = Some(t + 10_000);
+            self.plat.message(&["The apps?", "", "Tap again to open them."]);
         }
     }
 
@@ -2383,7 +2340,7 @@ impl<P: Plat> Engine<P> {
         }
     }
 
-    /// Runs frames until an exit (Home's CHUMBY) or, on the host, the end
+    /// Runs frames until an exit or, on the host, the end
     /// of the script.
     pub fn run(&mut self) {
         while self.frame() {}
@@ -2487,16 +2444,8 @@ impl<P: Plat> Engine<P> {
                 let hit = self.m.hots.iter().position(|h| {
                     h.scr as i32 == self.scr && tx >= h.x && tx < h.x + h.w && ty >= h.y && ty < h.y + h.h
                 });
-                if let Some(h) = hit
-                    && self.do_action(h, t)
-                {
-                    // The service stops the music (on the session's SIGTERM).
-                    println!("chumby: back to the Chumby");
-                    self.set_night(0);
-                    if let Some(s) = &mut self.session {
-                        s.ask(&Ask::ChumbyMode);
-                    }
-                    return false;
+                if let Some(h) = hit {
+                    self.do_action(h, t);
                 }
             } else if tx < 64 && ty < 40 && self.find_screen("home") >= 0 {
                 self.last_tap = t;
@@ -3167,8 +3116,7 @@ mod tests {
         }
     }
 
-    /// A small set: a page, Home (one zone opens doom, one is CHUMBY, one
-    /// names no app), and the session's fake end.
+    /// A small set: a page, Home (one zone opens doom, one names no app), and the session's fake end.
     fn with_session(tag: &str, reason_button: bool) -> (Engine<Host>, FakeSession, PathBuf) {
         let d = std::env::temp_dir().join(format!("classic-session-{tag}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
@@ -3178,7 +3126,7 @@ mod tests {
         std::fs::write(
             d.join("manifest.txt"),
             "page 0 p.raw 12 noclock noticker\nscreen home home.raw\n\
-             hot home 0 0 100 100 app doom\nhot home 100 0 100 100 chumby\nhot home 200 0 100 100 app ../x\n",
+             hot home 0 0 100 100 app doom\nhot home 200 0 100 100 app ../x\n",
         )
         .unwrap();
         let h = Host::new("unused", vec![1 << 40], 0, d.clone());
@@ -3221,7 +3169,7 @@ mod tests {
     }
 
     #[test]
-    fn apps_and_chumby_mode_go_through_the_session() {
+    fn apps_go_through_the_session() {
         let (mut e, s, d) = with_session("open", false);
         e.ctl_line(b"show home", e.ms());
         assert!(e.frame());
@@ -3235,14 +3183,6 @@ mod tests {
         assert_eq!(*s.asked.borrow(), vec![Ask::Open("doom".into())]);
         std::fs::remove_dir_all(&d).unwrap();
 
-        let (mut e, s, d) = with_session("chumby", false);
-        e.ctl_line(b"show home", e.ms());
-        assert!(e.frame());
-        e.ctl_line(b"tap 150 50", e.ms());
-        assert!(leaves(&mut e, 3));
-        assert_eq!(*s.asked.borrow(), vec![Ask::ChumbyMode]);
-        std::fs::remove_dir_all(&d).unwrap();
-
         // The control file's `app` asks the same way.
         let (mut e, s, d) = with_session("ctl", false);
         e.ctl_line(b"app quake", e.ms());
@@ -3252,7 +3192,7 @@ mod tests {
     }
 
     #[test]
-    fn the_waiting_screen_offers_chumby_mode_and_the_apps() {
+    fn the_waiting_screen_offers_the_apps() {
         let d = std::env::temp_dir().join(format!("classic-fallback-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         std::fs::create_dir_all(&d).unwrap();
@@ -3271,9 +3211,7 @@ mod tests {
             }
             (left, s.asked.borrow().clone())
         };
-        assert_eq!(run(&[(10, 10), (300, 20)]), (true, vec![Ask::ChumbyMode]), "two taps up top");
-        assert_eq!(run(&[(10, 200), (10, 230)]), (true, vec![Ask::Open("home".into())]), "two below");
-        assert_eq!(run(&[(10, 10), (10, 200)]), (false, vec![]), "a tap elsewhere goes back");
+        assert_eq!(run(&[(10, 200), (10, 230)]), (true, vec![Ask::Open("home".into())]), "two taps");
         assert_eq!(run(&[(10, 10)]), (false, vec![]), "one tap does nothing yet");
         std::fs::remove_dir_all(&d).unwrap();
     }

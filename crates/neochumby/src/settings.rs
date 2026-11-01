@@ -69,8 +69,7 @@ const CLOCK_SLACK: i64 = 30;
 
 /// The Chumby's clock from neochumbyd's (`t`, seconds since the epoch), when
 /// it is off by more than [`CLOCK_SLACK`]: a Chumby Classic keeps no time
-/// while off, and the stock 2.6.16 and the dist's 5.9.16 find no RTC, so
-/// they boot at 1970. Only as root (the session); anyone else leaves it.
+/// while off, and its kernel finds no RTC, so it boots at 1970. Only as root (the session); anyone else leaves it.
 fn set_clock(t: i64) {
     let now = neochumby_sys::time::wall_clock();
     if (now - t).abs() <= CLOCK_SLACK {

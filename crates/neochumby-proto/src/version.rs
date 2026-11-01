@@ -26,8 +26,7 @@
 //!
 //! The same `Config` carries neochumbyd's clock ([`CLOCK`], seconds since
 //! the epoch, UTC), for a Chumby that has no clock of its own to go by: a
-//! Chumby Classic has no battery for one, and the stock 2.6.16 and the
-//! dist's 5.9.16 find no RTC. Like the version's, its key has a dot, so a
+//! Chumby Classic has no battery for one, and its kernel finds no RTC. Like the version's, its key has a dot, so a
 //! Chumby that doesn't know it drops it.
 //!
 //! Each end keeps the version agreed on in its [`Session`], which then

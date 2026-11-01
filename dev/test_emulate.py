@@ -194,7 +194,7 @@ STUB = textwrap.dedent(r'''
             f.seek(0x100000 // 512 * 528)
             magic = f.read(2)
         log.write(b"stub: nand %d bytes, psp magic %s\n" % (os.path.getsize(nand), magic.hex().encode()))
-    log.write(b"emutest: stick mounted\nneochumby: /dev/switch: No such file or directory\n"
+    log.write(b"emutest: stick mounted\nneochumby: the top button: No such file or directory\n"
               b"neochumby: opening home\n")
     events = open(os.environ["STUB_EVENTS"], "a")
     def listen(path):
@@ -346,7 +346,7 @@ class Machine(unittest.TestCase):
         status = self.emu("status").stdout
         self.assertIn("profile: dist", status)
         self.assertIn("status: running", status)
-        self.assertIn("button_open: False", status, "the session said /dev/switch failed")
+        self.assertIn("button_open: False", status, "the session said the top button failed")
         self.assertEqual(self.emu("pixel", "0", "0").stdout.strip(), "#101021")
         self.assertEqual(self.emu("shot", os.path.join(self.t, "s.png")).returncode, 0)
         self.assertEqual(self.emu("wait", "screen", "10").returncode, 0)

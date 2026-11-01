@@ -22,9 +22,6 @@ exec = "neochumby-ttfx"
 # Any line ends it: its terminal is in line mode.
 tap = "\n"
 font = "spleen-6x12"
-# Not on the stock 2.6.16: ttfx sizes its canvas with terminal_size, which
-# calls the kernel through rustix, and rustix needs Linux 3.2.
-linux = "5.9"
 color = "b46ec8"
 
 [lints]

@@ -9,9 +9,7 @@
 //!
 //! One thread, around poll(2): it reads the line whenever there is
 //! anything, so neochumbyd is never held up, and moves bytes between each
-//! connection and its channel as the channel's window allows. std's
-//! blocking waits use futex flags the stock 2.6.16 kernel lacks, so it
-//! uses none. The socket and the device are close-on-exec, so a restart
+//! connection and its channel as the channel's window allows. The socket and the device are close-on-exec, so a restart
 //! (which replaces this process) starts the line afresh, and neochumbyd
 //! sees a new incarnation and ends the old sessions.
 

@@ -19,9 +19,6 @@ termwiz = "0.23"
 title = "PIPES"
 exec = "neochumby-pipes"
 tap = "q"
-# Not on the stock 2.6.16: rand seeds itself with getrandom, which on 2.6.16 waits on /dev/random
-# for entropy the Chumby rarely has.
-linux = "5.9"
 color = "3caa78"
 
 [lints]

@@ -11,8 +11,6 @@ publish.workspace = true
 [dependencies]
 neochumby.workspace = true
 neochumby-ncurses.workspace = true
-# The calls 2.6.16 lacks, which build.rs wraps.
-neochumby-sys = { workspace = true, features = ["compat26"] }
 
 [build-dependencies]
 cc = "1"

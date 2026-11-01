@@ -617,12 +617,12 @@ def cmd_log(state, follow):
 
 
 def button_open(log):
-    """Whether the session holds /dev/switch, as it says: it logs a failure
-    to open it, and an open that succeeds later."""
+    """Whether the session holds the top button, as it says: it logs a
+    failure to open it, and an open that succeeds later."""
     if "neochumby: opening" not in log:
         return False
-    failed = log.rfind("neochumby: /dev/switch: ")
-    return failed < 0 or log.find("neochumby: /dev/switch: open now", failed) >= 0
+    failed = log.rfind("neochumby: the top button: ")
+    return failed < 0 or log.find("neochumby: top button at ", failed) >= 0
 
 
 def cmd_status(state):

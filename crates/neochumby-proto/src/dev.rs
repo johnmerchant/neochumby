@@ -12,8 +12,7 @@
 //!   dropped, and a line saying how many takes their place. Nothing the
 //!   session or an app writes ever waits on the network.
 //! - **Restart:** neochumbyd sends [`Msg::Restart`](crate::Msg::Restart);
-//!   the session ends the app in front and the services as for CHUMBY MODE,
-//!   then runs the tree's session binary again in its place.
+//!   the session ends the app in front and the services, then runs the tree's session binary again in its place.
 //! - **Screenshot:** neochumbyd sends [`Msg::Shot`](crate::Msg::Shot); the
 //!   session answers [`Msg::Screen`](crate::Msg::Screen), then the
 //!   framebuffer as `Data` of at most [`SHOT_CHUNK`] bytes each.

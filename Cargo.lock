@@ -2192,7 +2192,6 @@ name = "neochumby-doom"
 version = "0.1.0"
 dependencies = [
  "cc",
- "libc",
  "neochumby",
 ]
 
@@ -2333,7 +2332,6 @@ dependencies = [
  "cc",
  "neochumby",
  "neochumby-ncurses",
- "neochumby-sys",
 ]
 
 [[package]]

@@ -5,9 +5,7 @@
 use std::io;
 use std::os::fd::{AsFd, AsRawFd, BorrowedFd, FromRawFd, OwnedFd, RawFd};
 
-/// Marks `fd` close-on-exec, or not. The Chumby's 2.6.16 kernel ignores
-/// O_CLOEXEC and SOCK_CLOEXEC (musl falls back to this), so the session
-/// says it outright for what it keeps.
+/// Marks `fd` close-on-exec, or not.
 pub fn set_cloexec(fd: BorrowedFd<'_>, on: bool) -> io::Result<()> {
     let flags = if on { libc::FD_CLOEXEC } else { 0 };
     // SAFETY: F_SETFD takes an int and touches no memory; the descriptor

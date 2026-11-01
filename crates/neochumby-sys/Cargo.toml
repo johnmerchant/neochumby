@@ -20,8 +20,6 @@ libc.workspace = true
 [features]
 # What ncinit, the dist image's /init, needs (the boot module).
 boot = []
-# Stand-ins for calls 2.6.16 lacks on ARM, for an app's C (compat26).
-compat26 = []
 
 [lints]
 workspace = true
