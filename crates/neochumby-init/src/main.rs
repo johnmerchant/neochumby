@@ -41,6 +41,10 @@ const STICK_WAIT: Duration = Duration::from_secs(15);
 /// How long the network adapter gets to show up, once it has a stick's
 /// wait behind it.
 const ADAPTER_WAIT: Duration = Duration::from_secs(20);
+/// The zone, as the sideload handed it over.
+const LOCALTIME: &str = "/psp/localtime";
+/// Where the time comes from.
+const NTP_SERVER: &str = "pool.ntp.org";
 /// The stock software's network, as the sideload handed it over.
 const NETWORK_CONFIG: &str = "/psp/network_config";
 /// The image's copy of the boot hook, for a Chumby with no stick of its own:
@@ -99,6 +103,7 @@ impl Init {
         // The devices already there, whose announcements nobody heard.
         init.coldplug();
         let stick_hook = init.stick();
+        install_timezone();
         init.network();
         match stick_hook {
             Some(hook) => init.hook("the stick's userhook2", hook),
@@ -220,6 +225,7 @@ impl Init {
         match configure_address(&config.address, interface) {
             Ok(()) => {
                 step(WHAT, Status::Ok, &format!("network: {interface}, {}", config.ssid));
+                start_ntp();
                 start_ssh();
             }
             Err(e) => network_failed(&e),
@@ -352,6 +358,36 @@ fn network_lines(dmesg: &str) -> Vec<&str> {
         .collect();
     let from = lines.len().saturating_sub(12);
     lines[from..].to_vec()
+}
+
+/// The zone the stock software was set to, where the C library looks.
+/// Without it, local time is UTC.
+fn install_timezone() {
+    if let Err(e) = fs::copy(LOCALTIME, "/etc/localtime")
+        && e.kind() != io::ErrorKind::NotFound
+    {
+        kmsg(&format!("timezone: {e}"));
+    }
+}
+
+/// The time, from the network, kept in step: there's no clock that runs while
+/// the Chumby is off. It looks the servers up itself, as often as it takes, so
+/// it needn't wait for an address. Unauthenticated, as NTP is here: nothing
+/// that protects the Chumby depends on the time, its connections being to
+/// pinned keys.
+fn start_ntp() {
+    let started = Command::new("/usr/sbin/ntpd")
+        .args(["-p", NTP_SERVER])
+        .env("PATH", PATH)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match started {
+        Ok(s) if s.success() => kmsg("ntp: ntpd started"),
+        Ok(s) => step("Starting the clock's sync", Status::Failed, &format!("ntp: ntpd: {s}")),
+        Err(e) => step("Starting the clock's sync", Status::Failed, &format!("ntp: ntpd: {e}")),
+    }
 }
 
 /// An SSH server, only if the owner asked for one: /psp/neochumby-ssh there,
