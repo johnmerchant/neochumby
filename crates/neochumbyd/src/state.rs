@@ -107,8 +107,12 @@ impl State {
             let path = self.dir.join(d);
             std::fs::create_dir_all(&path).map_err(|e| named(&path, e))?;
             let mode = std::fs::metadata(&path).map_err(|e| named(&path, e))?.permissions().mode();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o7770))
-                .map_err(|e| named(&path, e))?;
+            // Only if it changes anything: under systemd's RestrictSUIDSGID,
+            // a chmod that keeps a directory's setgid bit is refused.
+            if mode & 0o007 != 0 {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o7770))
+                    .map_err(|e| named(&path, e))?;
+            }
         }
         let key = self.dir.join("identity");
         match std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)) {
