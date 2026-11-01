@@ -81,6 +81,8 @@ struct Screen {
     page: usize,
     /// How the Chumby is connected, a line to show.
     network: String,
+    /// The top row: this Chumby's name.
+    title: String,
 }
 
 impl Screen {
@@ -143,7 +145,9 @@ fn paint_clock(p: &mut Paint, l: &Layout) {
 fn draw(t: &mut Term, all: &[App], s: &Screen, pressed: Option<Hit>) {
     let l = s.layout(t.cols, t.rows);
     let mut p = Paint::cleared();
-    p.at(1, 0).text("neochumby", TITLE, None, true);
+    // Leaves the clock its room: "HH:MM", and a column each side.
+    let room = t.cols.saturating_sub(5 + 3);
+    p.at(1, 0).text(&fit(&s.title, room), TITLE, None, true);
     paint_clock(&mut p, &l);
     paint_network(&mut p, &l, &s.network);
 
@@ -223,6 +227,7 @@ fn main() {
         listed: all.iter().enumerate().filter(|(_, a)| a.title.is_some() && a.exec.is_some()).map(|(i, _)| i).collect(),
         page: 0,
         network: network::Status::read().line(),
+        title: neochumby::conf::name(),
     };
     let mut pressed: Option<Hit> = None;
     let mut last_clock = Instant::now();
@@ -286,7 +291,7 @@ mod tests {
     use super::*;
 
     fn screen(apps: usize) -> Screen {
-        Screen { listed: (0..apps).collect(), page: 0, network: String::new() }
+        Screen { listed: (0..apps).collect(), page: 0, network: String::new(), title: String::new() }
     }
 
     #[test]
