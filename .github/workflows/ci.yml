@@ -133,7 +133,7 @@ jobs:
     steps:
       # All history, for gitleaks; the submodules, without which cargo
       # can't load the workspace.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           submodules: true
@@ -168,7 +168,7 @@ jobs:
     if: github.event_name != 'release' && !inputs.release && github.event.schedule != '17 6 * * 0' && !inputs.kernel_sync && !inputs.mainline && !startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           submodules: true
@@ -210,7 +210,7 @@ jobs:
     steps:
       # The workspace has members in submodules (aquarium's asciiquarium-rs),
       # without which cargo can't load it.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           persist-credentials: false
@@ -284,7 +284,7 @@ jobs:
     steps:
       # The apps' third-party C is in submodules (cmake, which builds
       # fetch's fastfetch, is on the runner).
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           persist-credentials: false
@@ -296,7 +296,7 @@ jobs:
       # Zig's cache (the C it compiles for each target) under a key that
       # changes only with the lockfile: setup-zig's own saves a new copy every
       # run, which fills the repository's cache space and evicts Buildroot's.
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .zig-cache
           key: zig-${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
@@ -376,7 +376,7 @@ jobs:
           cp dev/airplay-standin/target/armv5te-unknown-linux-musleabi/release/neochumby-airplay-standin \
             "$RUNNER_TEMP/tree.airplay-standin"
       # For the end-to-end job. (An artifact keeps no modes: it restores them.)
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: tree
           path: |
@@ -397,7 +397,7 @@ jobs:
     if: github.event_name != 'release' && !inputs.release && github.event_name != 'schedule' && !inputs.kernel_sync && !inputs.mainline && !startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           persist-credentials: false
@@ -405,7 +405,7 @@ jobs:
         with:
           toolchain: stable
           targets: armv5te-unknown-linux-musleabi
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .zig-cache
           key: zig-${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
@@ -447,7 +447,7 @@ jobs:
       kernels: ${{ steps.diff.outputs.kernels }}
       link: ${{ steps.diff.outputs.link }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -507,14 +507,14 @@ jobs:
     env:
       NEOCHUMBY_DIST_KERNEL: ${{ matrix.kernel }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
       # The image and its source (build/dist/image, build/dist/source).
       - name: Restore the image
         id: image
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/dist
           key: neochumby-dist-${{ matrix.kernel }}-image-${{ hashFiles('dist/**', '!dist/README.md', '!dist/fetch', '!dist/kernel-sync', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
@@ -529,7 +529,7 @@ jobs:
       - name: Restore Buildroot's downloads and ccache
         if: steps.image.outputs.cache-hit != 'true'
         id: dist-ccache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ runner.temp }}/neochumby-dist/dl
@@ -542,7 +542,7 @@ jobs:
       - name: Restore Buildroot's output
         if: steps.image.outputs.cache-hit != 'true'
         id: dist-output
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ runner.temp }}/neochumby-dist/buildroot-*
@@ -614,7 +614,7 @@ jobs:
 
       - name: Save Buildroot's downloads and ccache
         if: always() && steps.image.outputs.cache-hit != 'true' && steps.dist-ccache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ runner.temp }}/neochumby-dist/dl
@@ -624,7 +624,7 @@ jobs:
       # Only a finished build's: its key can't be updated once saved.
       - name: Save Buildroot's output
         if: steps.dist-build.outcome == 'success' && steps.dist-output.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ${{ runner.temp }}/neochumby-dist/buildroot-*
@@ -633,18 +633,18 @@ jobs:
 
       - name: Save the image
         if: steps.legal-info.outcome == 'success'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/dist
           key: ${{ steps.image.outputs.cache-primary-key }}
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-image-${{ matrix.kernel }}
           path: build/dist/image
           if-no-files-found: error
           retention-days: 3
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: dist-source-${{ matrix.kernel }}
           path: build/dist/source
@@ -680,7 +680,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: git submodule update --init emu/qemu/qemu-chumby
@@ -712,7 +712,7 @@ jobs:
       - name: Restore QEMU
         id: qemu-cache
         if: steps.qemu.outputs.prebuilt != 'true'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
@@ -723,28 +723,28 @@ jobs:
 
       - name: Save QEMU
         if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: emu/qemu/out
           key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tree
           path: ${{ runner.temp }}
       # The scenarios run on 5.9.16, the default kernel.
       - if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-image-5.9.16
           path: build/sideload-dist
       - if: contains(fromJSON(needs.changes.outputs.kernels), 'mainline')
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-image-mainline
           path: build/sideload-dist-mainline
       - if: needs.classic.result == 'success'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: classic-image
           path: build/classic
@@ -785,7 +785,7 @@ jobs:
 
       # Its screenshots are neochumby's own screens, never the stock software's.
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: e2e
           path: |
@@ -820,7 +820,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: git submodule update --init emu/qemu/qemu-chumby
@@ -845,7 +845,7 @@ jobs:
       - name: Restore QEMU
         id: qemu-cache
         if: steps.qemu.outputs.prebuilt != 'true'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
@@ -853,16 +853,16 @@ jobs:
         if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
         run: emu/qemu/build
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: tree
           path: ${{ runner.temp }}
       - if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-image-5.9.16
           path: build/sideload-dist
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: classic-image
           path: build/classic
@@ -888,7 +888,7 @@ jobs:
         run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/link-dist"
 
       - if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: link
           path: |
@@ -906,7 +906,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - run: git submodule update --init emu/qemu/qemu-chumby
@@ -938,7 +938,7 @@ jobs:
       - name: Restore QEMU
         id: qemu-cache
         if: steps.qemu.outputs.prebuilt != 'true'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
@@ -949,23 +949,23 @@ jobs:
 
       - name: Save QEMU
         if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: emu/qemu/out
           key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
 
       - if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-image-5.9.16
           path: build/sideload-dist
       - if: contains(fromJSON(needs.changes.outputs.kernels), 'stable')
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-image-stable
           path: build/sideload-dist-stable
       - if: contains(fromJSON(needs.changes.outputs.kernels), 'mainline')
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-image-mainline
           path: build/sideload-dist-mainline
@@ -1011,7 +1011,7 @@ jobs:
       # No submodules yet: QEMU's only if it's booted, and the kernel's at
       # its pinned commit only if it's built (classic/build fetches it;
       # `update = none` keeps it out of the other jobs' checkouts).
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
 
@@ -1029,7 +1029,7 @@ jobs:
       # The image alone (a few MB), for exactly these inputs.
       - name: Restore the image
         id: image-cache
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/classic
           key: neochumby-classic-image-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init', 'classic/zig-cc', 'classic/*.c') }}
@@ -1040,7 +1040,7 @@ jobs:
       - name: Restore the image's build
         id: classic-cache
         if: steps.image-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/neochumby-classic
           key: neochumby-classic-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init', 'classic/zig-cc', 'classic/*.c') }}
@@ -1060,21 +1060,21 @@ jobs:
 
       - name: Save the image's build
         if: always() && steps.image-cache.outputs.cache-hit != 'true' && steps.classic-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/neochumby-classic
           key: ${{ steps.classic-cache.outputs.cache-primary-key }}
 
       - name: Save the image
         if: steps.classic-build.outcome == 'success'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/classic
           key: ${{ steps.image-cache.outputs.cache-primary-key }}
 
       # Uploaded before it's tested, so that a later job can use it: the
       # tests below fail this job if it doesn't boot.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: classic-image
           path: build/classic/
@@ -1123,7 +1123,7 @@ jobs:
       - name: Restore QEMU
         id: qemu-cache
         if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true'
-        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: emu/qemu/out
           key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
@@ -1134,7 +1134,7 @@ jobs:
 
       - name: Save QEMU
         if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: emu/qemu/out
           key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
@@ -1155,7 +1155,7 @@ jobs:
             --stick "$RUNNER_TEMP/stick.img" --want 'hook: on 2.6.16-csb, from /mnt/usb/userhook2' \
             --log "$RUNNER_TEMP/console-stick.log"
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: failure() && steps.test.outputs.boot == 'true'
         with:
           name: classic-console
@@ -1182,7 +1182,7 @@ jobs:
     timeout-minutes: 60
     steps:
       # The whole history: the inputs commits.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -1195,12 +1195,12 @@ jobs:
           done
           echo "classic: $(dist/fetch --inputs --classic)"
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
           path: ${{ runner.temp }}/in
       - if: needs.classic.result == 'success'
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: classic-image
           path: ${{ runner.temp }}/in/classic-image
@@ -1342,7 +1342,7 @@ jobs:
             fi
           done
 
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: prebuilt
           path: ${{ runner.temp }}/prebuilt
@@ -1381,14 +1381,14 @@ jobs:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
       - name: Only commits on main
         run: git merge-base --is-ancestor "$GITHUB_SHA" origin/main
 
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: prebuilt
           path: ${{ runner.temp }}/prebuilt
@@ -1494,7 +1494,7 @@ jobs:
       GH_REPO: ${{ github.repository }}
       TAG: ${{ github.event.release.tag_name || inputs.release }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -1634,7 +1634,7 @@ jobs:
       group: crates-io
       cancel-in-progress: false
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           submodules: true
           fetch-depth: 0
@@ -1643,7 +1643,7 @@ jobs:
         with:
           toolchain: stable
           targets: armv5te-unknown-linux-musleabi
-      - uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4.3.0
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .zig-cache
           key: zig-${{ env.ZIG_VERSION }}-${{ hashFiles('Cargo.lock') }}
@@ -1714,7 +1714,7 @@ jobs:
       # The whole history: whose commits a bump branch has, beyond main's.
       # The only checkout that keeps the token: dist/kernel-sync pushes the
       # bump's branch with it.
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
       - name: The pins and kernel.org's
