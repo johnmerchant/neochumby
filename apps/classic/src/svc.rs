@@ -294,7 +294,6 @@ pub fn wants(st: &Path, feed: &Feed, now: i64) -> Wants {
 pub mod device {
     //! The service on the Chumby.
 
-    use std::path::Path;
     use std::process::Command;
     use std::sync::atomic::Ordering;
 

@@ -401,7 +401,8 @@ fn posix_tz(zone: &[u8]) -> Option<String> {
     let from = body.iter().rposition(|&b| b == b'\n')? + 1;
     let rule = std::str::from_utf8(&body[from..]).ok()?;
     let plain = |c: char| c.is_ascii_alphanumeric() || "<>+-:,./".contains(c);
-    (!rule.is_empty() && rule.len() <= 64 && rule.chars().all(plain) && zone.starts_with(b"TZif")).then(|| rule.to_owned())
+    (!rule.is_empty() && rule.len() <= 64 && rule.chars().all(plain) && zone.starts_with(b"TZif"))
+        .then(|| rule.to_owned())
 }
 
 /// The time, from the network, kept in step: there's no clock that runs while
