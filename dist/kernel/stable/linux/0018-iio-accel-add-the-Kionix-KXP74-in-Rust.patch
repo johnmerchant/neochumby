@@ -1,42 +1,97 @@
 Description: iio: accel: add the Kionix KXP74 in Rust
- The same driver as kxp74.c, beside it and off by default.
+ The accelerometer on the Chumby Classic's sensor board.
 Author: John Merchant <john@johnmerchant.dev>
 Upstream-Status: Inappropriate [AI generated code]
 Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 ---
+--- /dev/null
++++ b/Documentation/devicetree/bindings/iio/accel/kionix,kxp74.yaml
+@@ -0,0 +1,51 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/iio/accel/kionix,kxp74.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Kionix KXP74 Accelerometer
++
++maintainers:
++  - John Merchant <john@johnmerchant.dev>
++
++description: |
++  Three-axis analog-output accelerometer, +-2.5 g, with a 12-bit ADC
++  behind an SPI command interface. It is used in SPI mode 3.
++
++properties:
++  compatible:
++    const: kionix,kxp74
++
++  reg:
++    maxItems: 1
++
++  vdd-supply: true
++
++  spi-cpha: true
++  spi-cpol: true
++
++required:
++  - compatible
++  - reg
++
++allOf:
++  - $ref: /schemas/spi/spi-peripheral-props.yaml#
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    spi {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        accelerometer@0 {
++            compatible = "kionix,kxp74";
++            reg = <0>;
++            spi-max-frequency = <1000000>;
++            spi-cpha;
++            spi-cpol;
++        };
++    };
++...
 --- a/drivers/iio/accel/Kconfig
 +++ b/drivers/iio/accel/Kconfig
-@@ -498,6 +498,13 @@
- 	  To compile this driver as a module, choose M here: the module
- 	  will be called kxp74.
+@@ -487,6 +487,14 @@
+ 	  connected to I2C interface. Supported devices are:
+ 	    KX022A, KX132-1211, KX132ACR-LBZ
  
-+config KXP74_RUST
-+	bool "Kionix KXP74 SPI accelerometer, in Rust"
++config KXP74
++	bool "Kionix KXP74 SPI accelerometer"
 +	depends on SPI_MASTER && IIO=y && RUST
-+	depends on KXP74=n
 +	help
-+	  The same driver as KXP74, written in Rust.
++	  Say yes here to build support for the Kionix KXP74 three-axis
++	  analog-output accelerometer with SPI ADC interface, as fitted to
++	  the Chumby Classic sensor board.
 +
  config KXSD9
  	tristate "Kionix KXSD9 Accelerometer Driver"
  	select IIO_BUFFER
 --- a/drivers/iio/accel/Makefile
 +++ b/drivers/iio/accel/Makefile
-@@ -51,6 +51,7 @@
+@@ -50,6 +50,7 @@
+ obj-$(CONFIG_IIO_KX022A_I2C)	+= kionix-kx022a-i2c.o
  obj-$(CONFIG_IIO_KX022A_SPI)	+= kionix-kx022a-spi.o
  obj-$(CONFIG_KXCJK1013) += kxcjk-1013.o
- obj-$(CONFIG_KXP74)	+= kxp74.o
-+obj-$(CONFIG_KXP74_RUST)	+= kxp74_rust.o
++obj-$(CONFIG_KXP74)	+= kxp74.o
  obj-$(CONFIG_KXSD9)	+= kxsd9.o
  obj-$(CONFIG_KXSD9_SPI)	+= kxsd9-spi.o
  obj-$(CONFIG_KXSD9_I2C)	+= kxsd9-i2c.o
 --- /dev/null
-+++ b/drivers/iio/accel/kxp74_rust.rs
++++ b/drivers/iio/accel/kxp74.rs
 @@ -0,0 +1,131 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
-+//! Kionix KXP74 three-axis accelerometer, SPI interface: kxp74.c in Rust.
++//! Kionix KXP74 three-axis accelerometer, SPI interface.
 +//!
 +//! The part has a 12-bit ADC behind a command protocol rather than a register map: an 8-bit
 +//! "convert" command selects an axis, and after the conversion time the result is clocked out as
@@ -160,7 +215,7 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +
 +kernel::module_spi_driver! {
 +    type: Kxp74Driver,
-+    name: "kxp74_rust",
++    name: "kxp74",
 +    authors: ["John Merchant <john@johnmerchant.dev>"],
 +    description: "Kionix KXP74 SPI accelerometer driver",
 +    license: "GPL v2",

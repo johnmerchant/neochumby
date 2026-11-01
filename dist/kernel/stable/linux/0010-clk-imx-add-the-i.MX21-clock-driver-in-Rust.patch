@@ -1,6 +1,5 @@
-Description: clk: imx: add the i.MX21's clocks in Rust
- CLK_IMX21_RUST builds the driver from this source in place of clk-imx21.c. Its table is
- generated from that file's.
+Description: clk: imx: add the i.MX21 clock driver in Rust
+ Linux dropped the i.MX21's clocks with its board files. Its table is the one the C driver had.
 Author: John Merchant <john@johnmerchant.dev>
 Upstream-Status: Inappropriate [AI generated code]
 Signed-off-by: John Merchant <john@johnmerchant.dev>
@@ -8,39 +7,33 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 ---
 --- a/drivers/clk/imx/Kconfig
 +++ b/drivers/clk/imx/Kconfig
-@@ -19,6 +19,12 @@
- 	def_bool SOC_IMX21
+@@ -15,6 +15,10 @@
+ 	def_bool SOC_IMX25
  	select MXC_CLK
  
-+config CLK_IMX21_RUST
-+	bool "i.MX21 clocks, in Rust"
-+	depends on CLK_IMX21 && RUST
-+	help
-+	  Builds the driver of CLK_IMX21 from its Rust source.
++config CLK_IMX21
++	def_bool SOC_IMX21 && RUST
++	select MXC_CLK
 +
  config CLK_IMX27
  	def_bool SOC_IMX27
  	select MXC_CLK
 --- a/drivers/clk/imx/Makefile
 +++ b/drivers/clk/imx/Makefile
-@@ -45,7 +45,11 @@
+@@ -45,6 +45,7 @@
  
  obj-$(CONFIG_CLK_IMX1)   += clk-imx1.o
  obj-$(CONFIG_CLK_IMX25)  += clk-imx25.o
-+ifdef CONFIG_CLK_IMX21_RUST
-+obj-y += clk_imx21_rust.o
-+else
- obj-$(CONFIG_CLK_IMX21)  += clk-imx21.o
-+endif
++obj-$(CONFIG_CLK_IMX21)  += clk_imx21.o
  obj-$(CONFIG_CLK_IMX27)  += clk-imx27.o
  obj-$(CONFIG_CLK_IMX31)  += clk-imx31.o
  obj-$(CONFIG_CLK_IMX35)  += clk-imx35.o
 --- /dev/null
-+++ b/drivers/clk/imx/clk_imx21_rust.rs
++++ b/drivers/clk/imx/clk_imx21.rs
 @@ -0,0 +1,101 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
-+//! The i.MX21's clocks: clk-imx21.c in Rust, its table generated from that.
++//! The i.MX21's clocks.
 +
 +use kernel::{
 +    bindings as b,

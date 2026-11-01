@@ -1,47 +1,64 @@
 Description: pinctrl: imx: add the i.MX21 driver in Rust
- PINCTRL_IMX21_RUST builds the driver from this source in place of pinctrl-imx21.c. Its table
- is generated from that file's. It registers at device_initcall, not arch_initcall: what
- needs it earlier defers. Unlike C, it can be unbound through sysfs.
+ Linux dropped this with the board files too. Its table is the one the C driver had. It registers
+ at device_initcall, not arch_initcall: what needs it earlier defers. It can be unbound through sysfs.
 Author: John Merchant <john@johnmerchant.dev>
 Upstream-Status: Inappropriate [AI generated code]
 Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 ---
+--- a/Documentation/devicetree/bindings/pinctrl/fsl,imx27-iomuxc.yaml
++++ b/Documentation/devicetree/bindings/pinctrl/fsl,imx27-iomuxc.yaml
+@@ -4,7 +4,7 @@
+ $id: http://devicetree.org/schemas/pinctrl/fsl,imx27-iomuxc.yaml#
+ $schema: http://devicetree.org/meta-schemas/core.yaml#
+ 
+-title: Freescale i.MX1/i.MX25/i.MX27 IOMUX Controller
++title: Freescale i.MX1/i.MX21/i.MX25/i.MX27 IOMUX Controller
+ 
+ maintainers:
+   - Frank Li <Frank.Li@nxp.com>
+@@ -17,6 +17,7 @@
+   compatible:
+     enum:
+       - fsl,imx1-iomuxc
++      - fsl,imx21-iomuxc
+       - fsl,imx27-iomuxc
+ 
+   reg:
 --- a/drivers/pinctrl/freescale/Kconfig
 +++ b/drivers/pinctrl/freescale/Kconfig
-@@ -39,6 +39,12 @@
+@@ -39,6 +39,15 @@
  	help
  	  Say Y here to enable the imx1 pinctrl driver
  
-+config PINCTRL_IMX21_RUST
-+	bool "IMX21 pinctrl driver, in Rust"
-+	depends on PINCTRL_IMX21 && RUST
++config PINCTRL_IMX21
++	bool "IMX21 pinctrl driver"
++	depends on OF && RUST
++	depends on SOC_IMX21 || COMPILE_TEST
++	default SOC_IMX21
++	select PINCTRL_IMX1_CORE
 +	help
-+	  Builds the driver of PINCTRL_IMX21 from its Rust source.
++	  Say Y here to enable the imx21 pinctrl driver
 +
- config PINCTRL_IMX21
- 	bool "IMX21 pinctrl driver"
+ config PINCTRL_IMX27
+ 	bool "IMX27 pinctrl driver"
  	depends on OF
 --- a/drivers/pinctrl/freescale/Makefile
 +++ b/drivers/pinctrl/freescale/Makefile
-@@ -5,7 +5,11 @@
+@@ -5,6 +5,7 @@
  obj-$(CONFIG_PINCTRL_IMX_SCMI)	+= pinctrl-imx-scmi.o
  obj-$(CONFIG_PINCTRL_IMX1_CORE)	+= pinctrl-imx1-core.o
  obj-$(CONFIG_PINCTRL_IMX1)	+= pinctrl-imx1.o
-+ifdef CONFIG_PINCTRL_IMX21_RUST
-+obj-y	+= pinctrl_imx21_rust.o
-+else
- obj-$(CONFIG_PINCTRL_IMX21)	+= pinctrl-imx21.o
-+endif
++obj-$(CONFIG_PINCTRL_IMX21)	+= pinctrl_imx21.o
  obj-$(CONFIG_PINCTRL_IMX27)	+= pinctrl-imx27.o
  obj-$(CONFIG_PINCTRL_IMX35)	+= pinctrl-imx35.o
  obj-$(CONFIG_PINCTRL_IMX50)	+= pinctrl-imx50.o
 --- /dev/null
-+++ b/drivers/pinctrl/freescale/pinctrl_imx21_rust.rs
++++ b/drivers/pinctrl/freescale/pinctrl_imx21.rs
 @@ -0,0 +1,190 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
-+//! The i.MX21's pin controller: pinctrl-imx21.c in Rust, its table generated from that.
++//! The i.MX21's pin controller.
 +
 +use kernel::{device::Core, imx_pinctrl, of, platform, prelude::*};
 +

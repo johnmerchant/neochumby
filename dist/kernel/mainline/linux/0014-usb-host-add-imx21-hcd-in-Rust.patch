@@ -1,45 +1,159 @@
 Description: usb: host: add imx21-hcd in Rust
- The same controller as imx21-hcd.c, beside it and off by default, with its state in vectors
- under one lock instead of intrusive lists, and URBs given back once that lock is released.
- The debugfs statistics of imx21-dbg.c aren't ported.
+ The controller Linux dropped, with its state in vectors under one lock, URBs given back once that
+ lock is released, and no debugfs statistics.
  .
- Unlike C, it enables an ETD's DMA with a write of that ETD's bit alone. Writing a 1 to
- USB_ETDDMAEN toggles a bit, as the stock 2.6.16 driver's mx2otg_set_toggling_bit knows, so
- imx21-hcd.c's read-modify-write turns off the DMA of every other active ETD.
+ It enables an ETD's DMA with a write of that ETD's bit alone. Writing a 1 to USB_ETDDMAEN toggles
+ a bit, as the stock 2.6.16 driver's mx2otg_set_toggling_bit knows: a read-modify-write would turn
+ off the DMA of every other active ETD.
 Author: John Merchant <john@johnmerchant.dev>
 Upstream-Status: Inappropriate [AI generated code]
 Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 ---
+--- /dev/null
++++ b/Documentation/devicetree/bindings/usb/fsl,imx21-usbh.yaml
+@@ -0,0 +1,112 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/usb/fsl,imx21-usbh.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Freescale i.MX21 USB full-speed host controller
++
++maintainers:
++  - John Merchant <john@johnmerchant.dev>
++
++description: |
++  The i.MX21 USB OTG module contains a full-speed host controller with a
++  root hub of three ports: the OTG port (port 1, used as a host port),
++  host 1 (port 2) and host 2 (port 3). The ports connect to external
++  transceivers or, for host 1, directly to the pins. This binding covers
++  the host function only; the module's function (device) controller is
++  not used.
++
++  This is not the ChipIdea controller of the i.MX25/i.MX27 and later
++  ("fsl,imx27-usb"), although it sits at the same address as the i.MX27's.
++
++allOf:
++  - $ref: usb-hcd.yaml#
++
++properties:
++  compatible:
++    const: fsl,imx21-usbh
++
++  reg:
++    maxItems: 1
++    description:
++      The whole USB OTG module, registers and the 4 KiB data memory (8 KiB).
++
++  interrupts:
++    maxItems: 1
++    description: The host controller interrupt (USBHOST).
++
++  clocks:
++    items:
++      - description: The 48 MHz USB clock (usb_gate); set to 48 MHz.
++      - description: The AHB clock (usb_hclk_gate), needed for register access.
++
++  clock-names:
++    items:
++      - const: per
++      - const: ahb
++
++  fsl,host-xcvr-mode:
++    description:
++      Transceiver signalling of the host 1 and host 2 ports, as differential
++      (diff) or single-ended (se) transmit and receive.
++    $ref: /schemas/types.yaml#/definitions/string
++    enum: [tx-diff-rx-diff, tx-diff-rx-se, tx-se-rx-diff, tx-se-rx-se]
++    default: tx-diff-rx-diff
++
++  fsl,otg-xcvr-mode:
++    description: Transceiver signalling of the OTG port, as above.
++    $ref: /schemas/types.yaml#/definitions/string
++    enum: [tx-diff-rx-diff, tx-diff-rx-se, tx-se-rx-diff, tx-se-rx-se]
++    default: tx-diff-rx-diff
++
++  fsl,disable-otg-port:
++    description: Do not power and enable the OTG port as a host port.
++    type: boolean
++
++  fsl,disable-host1-port:
++    description: Do not power and enable the host 1 port.
++    type: boolean
++
++  fsl,disable-host2-port:
++    description: Do not power and enable the host 2 port.
++    type: boolean
++
++  fsl,host1-xcvr-less:
++    description:
++      Host 1 has no transceiver; its signals connect directly to a device
++      (the transceiverless link is not bypassed).
++    type: boolean
++
++  fsl,host1-txen-oe:
++    description: Drive the host 1 TXEN pin as an output enable.
++    type: boolean
++
++  fsl,otg-external-xcvr:
++    description:
++      The OTG port has an external transceiver, whose RXDP is used as the
++      receive data input.
++    type: boolean
++
++required:
++  - compatible
++  - reg
++  - interrupts
++  - clocks
++  - clock-names
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/clock/imx21-clock.h>
++
++    usb@10024000 {
++        compatible = "fsl,imx21-usbh";
++        reg = <0x10024000 0x2000>;
++        interrupts = <55>;
++        clocks = <&clks IMX21_CLK_USB_GATE>, <&clks IMX21_CLK_USB_HCLK_GATE>;
++        clock-names = "per", "ahb";
++        fsl,host-xcvr-mode = "tx-diff-rx-diff";
++        fsl,otg-xcvr-mode = "tx-diff-rx-diff";
++    };
 --- a/drivers/usb/host/Kconfig
 +++ b/drivers/usb/host/Kconfig
 @@ -682,6 +682,13 @@
  	  To compile this driver as a module, choose M here: the
  	  module will be called renesas-usbhs.
  
-+config USB_IMX21_HCD_RUST
-+	bool "i.MX21 HCD support, in Rust"
++config USB_IMX21_HCD
++	bool "i.MX21 HCD support"
 +	depends on (ARCH_MXC || COMPILE_TEST) && USB=y && RUST
-+	depends on USB_IMX21_HCD=n
 +	help
-+	  The same driver as USB_IMX21_HCD, written in Rust.
++	  This driver enables support for the on-chip full-speed USB
++	  host controller in the i.MX21 processor.
 +
- config USB_IMX21_HCD
- 	tristate "i.MX21 HCD support"
- 	depends on ARCH_MXC || COMPILE_TEST
+ config USB_HCD_BCMA
+ 	tristate "BCMA usb host driver"
+ 	depends on BCMA
 --- a/drivers/usb/host/Makefile
 +++ b/drivers/usb/host/Makefile
-@@ -90,3 +90,4 @@
+@@ -89,3 +89,4 @@
  obj-$(CONFIG_USB_HCD_SSB)	+= ssb-hcd.o
  obj-$(CONFIG_USB_MAX3421_HCD)	+= max3421-hcd.o
  obj-$(CONFIG_USB_XEN_HCD)	+= xen-hcd.o
-+obj-$(CONFIG_USB_IMX21_HCD_RUST)	+= imx21_hcd_rust.o
++obj-$(CONFIG_USB_IMX21_HCD)	+= imx21_hcd.o
 --- /dev/null
-+++ b/drivers/usb/host/imx21_hcd_rust.rs
++++ b/drivers/usb/host/imx21_hcd.rs
 @@ -0,0 +1,1718 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
-+//! USB Host Controller Driver for the i.MX21: imx21-hcd.c in Rust.
++//! USB Host Controller Driver for the i.MX21.
 +//!
 +//! The i.MX21 USB hardware has 32 transfer descriptors (ETDs) and 4 KB of data memory. Setting up
 +//! a transfer means allocating an ETD, filling it in, allocating data memory (with its offset in
@@ -544,7 +658,7 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +            self.clear_toggle(USBH_YBUFSTAT, mask);
 +            self.regs.write(usb_etdsmsa(num), dma);
 +            // Writing a 1 toggles a bit here, as the stock driver's mx2otg_set_toggling_bit knows:
-+            // imx21-hcd.c's read-modify-write would turn off the DMA of every other active ETD.
++            // A read-modify-write would turn off the DMA of every other active ETD.
 +            self.set_toggle(USB_ETDDMAEN, mask);
 +        } else if dir != TD_DIR_IN {
 +            // Need to set for ZLP and PIO.

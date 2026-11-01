@@ -90,6 +90,9 @@ CONFIG_SECURITY=y
 CONFIG_SECURITY_LANDLOCK=y
 CONFIG_LSM="landlock"
 
+# The Chumby's own drivers, below, are in Rust (linux/*-in-Rust.patch).
+CONFIG_RUST=y
+
 # The board: the i.MX21 as a device-tree platform. The boot loader passes
 # ATAGs and no device tree: the DTB is appended to the zImage, and the
 # command line and memory come from the ATAGs.

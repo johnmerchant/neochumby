@@ -1,5 +1,5 @@
 Description: Input: add the TSC2100 touchscreen in Rust
- The same driver as tsc2100_ts.c, beside it and off by default.
+ The Chumby Classic's touchscreen.
 Author: John Merchant <john@johnmerchant.dev>
 Upstream-Status: Inappropriate [AI generated code]
 Signed-off-by: John Merchant <john@johnmerchant.dev>
@@ -11,32 +11,32 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
  	  To compile this driver as a module, choose M here: the
  	  module will be called tsc2005.
  
-+config TOUCHSCREEN_TSC2100_RUST
-+	bool "TSC2100 based touchscreens, in Rust"
-+	depends on MFD_TSC2100_RUST && INPUT=y && RUST
-+	depends on TOUCHSCREEN_TSC2100=n
++config TOUCHSCREEN_TSC2100
++	bool "TSC2100 based touchscreens"
++	depends on MFD_TSC2100 && INPUT=y && RUST
 +	help
-+	  The same driver as TOUCHSCREEN_TSC2100, written in Rust.
++	  Say Y here if you have a TSC2100 based touchscreen, such as the
++	  Chumby Classic's.
 +
- config TOUCHSCREEN_TSC2100
- 	tristate "TSC2100 based touchscreens"
- 	depends on MFD_TSC2100
+ config TOUCHSCREEN_TSC2007
+ 	tristate "TSC2007 based touchscreens"
+ 	depends on I2C
 --- a/drivers/input/touchscreen/Makefile
 +++ b/drivers/input/touchscreen/Makefile
-@@ -98,6 +98,7 @@
+@@ -97,6 +97,7 @@
+ obj-$(CONFIG_TOUCHSCREEN_TSC2005)	+= tsc2005.o
  tsc2007-y := tsc2007_core.o
  tsc2007-$(CONFIG_TOUCHSCREEN_TSC2007_IIO)	+= tsc2007_iio.o
- obj-$(CONFIG_TOUCHSCREEN_TSC2100)	+= tsc2100_ts.o
-+obj-$(CONFIG_TOUCHSCREEN_TSC2100_RUST)	+= tsc2100_ts_rust.o
++obj-$(CONFIG_TOUCHSCREEN_TSC2100)	+= tsc2100_ts.o
  obj-$(CONFIG_TOUCHSCREEN_TSC2007)	+= tsc2007.o
  obj-$(CONFIG_TOUCHSCREEN_WACOM_W8001)	+= wacom_w8001.o
  obj-$(CONFIG_TOUCHSCREEN_WACOM_I2C)	+= wacom_i2c.o
 --- /dev/null
-+++ b/drivers/input/touchscreen/tsc2100_ts_rust.rs
++++ b/drivers/input/touchscreen/tsc2100_ts.rs
 @@ -0,0 +1,198 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
-+//! TI TSC2100 touchscreen: tsc2100_ts.c in Rust.
++//! TI TSC2100 touchscreen.
 +//!
 +//! The chip's PINTDAV output, set to signal the pen alone, interrupts on pen down. The threaded
 +//! handler then converts X, Y, Z1 and Z2 one at a time, host controlled, and reports a sample

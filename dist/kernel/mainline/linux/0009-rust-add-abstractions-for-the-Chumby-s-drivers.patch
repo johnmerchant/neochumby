@@ -1906,7 +1906,7 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +    })
 +}
 +
-+/// The TI TSC2100's registers: `include/linux/mfd/tsc2100.h`.
++/// The TI TSC2100's registers.
 +pub mod tsc2100 {
 +    /// A read, in the command word.
 +    pub const READ: u32 = 1 << 15;

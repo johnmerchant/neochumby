@@ -199,7 +199,7 @@ user's own stock firmware.
 | `board/chumby-classic/linux.fragment` | Our sideload kernel options on top of `imx_v4_v5_defconfig` (5.9.16; a track's is `kernel/TRACK/linux.fragment`). `dist/build` fails if any of them didn't make it into the kernel |
 | `package/neochumby-init/` | `/init`: ncinit, from `crates/neochumby-init`, built by Buildroot's own Rust and linked statically. It never loads the NAND's drivers (only root does, with modprobe), loads every other module as its device appears (its modalias against depmod's `modules.alias`, for the devices there at boot too), runs a neochumby stick, keeps a shell on the serial console and, when no stick's hook has the screen, one on the screen (tty1), and reaps every orphan |
 | `patches/` | 5.9.16's tarball hash, which Buildroot checks, and its patches (`linux/5.9.16/`), and the headers' hash |
-| `kernel/stable/`, `kernel/mainline/` | Each track's patches and its pin's hash (`linux/`), and its kernel options (`linux.fragment`): above. Every kernel's series has Spleen 5x8 (`lib/fonts: add Spleen 5x8`), the screen console's only font: 64x30 characters on the 320x240 screen |
+| `kernel/stable/`, `kernel/mainline/` | Each track's patches and its pin's hash (`linux/`), and its kernel options (`linux.fragment`): above. The Chumby's own drivers here are in Rust, built with the toolchain `Containerfile` pins (5.9.16's are in C). Every kernel's series has Spleen 5x8 (`lib/fonts: add Spleen 5x8`), the screen console's only font: 64x30 characters on the 320x240 screen |
 | `kernel-sync` | Moves the tracks' pins to kernel.org's, verified (CI's kernel-sync job) |
 | `Containerfile` | The build's Linux |
 

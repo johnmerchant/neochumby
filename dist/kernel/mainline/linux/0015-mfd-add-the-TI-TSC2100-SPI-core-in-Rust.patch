@@ -1,44 +1,132 @@
 Description: mfd: add the TI TSC2100 SPI core in Rust
- The same driver as tsc2100.c, beside it and off by default.
+ The register access that the touchscreen and codec share.
 Author: John Merchant <john@johnmerchant.dev>
 Upstream-Status: Inappropriate [AI generated code]
 Signed-off-by: John Merchant <john@johnmerchant.dev>
 Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 ---
+--- /dev/null
++++ b/Documentation/devicetree/bindings/mfd/ti,tsc2100.yaml
+@@ -0,0 +1,84 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/mfd/ti,tsc2100.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Texas Instruments TSC2100 touchscreen controller and audio codec
++
++maintainers:
++  - John Merchant <john@johnmerchant.dev>
++
++description: |
++  The TSC2100 is a four-wire resistive touchscreen controller with a
++  stereo audio codec, on one SPI device. Each register access is a
++  single 16-bit-word transfer, a command word and then the data, with
++  the chip select held for both.
++
++  The interrupt is the chip's PINTDAV output, which the touchscreen uses
++  as its pen-down interrupt. The optional touchscreen properties go on
++  this node. The audio codec is described by the "codec" child node,
++  which a sound card refers to.
++
++allOf:
++  - $ref: /schemas/spi/spi-peripheral-props.yaml#
++  - $ref: /schemas/input/touchscreen/touchscreen.yaml#
++
++properties:
++  compatible:
++    const: ti,tsc2100
++
++  reg:
++    maxItems: 1
++
++  interrupts:
++    maxItems: 1
++    description: PINTDAV, low while the pen is down.
++
++  spi-cpha: true
++
++  codec:
++    type: object
++    additionalProperties: false
++    description: The audio codec.
++
++    properties:
++      compatible:
++        const: ti,tsc2100-codec
++
++      "#sound-dai-cells":
++        const: 0
++
++    required:
++      - compatible
++      - "#sound-dai-cells"
++
++required:
++  - compatible
++  - reg
++  - interrupts
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/interrupt-controller/irq.h>
++
++    spi {
++        #address-cells = <1>;
++        #size-cells = <0>;
++
++        tsc2100@0 {
++            compatible = "ti,tsc2100";
++            reg = <0>;
++            spi-max-frequency = <8000000>;
++            spi-cpha;
++            interrupt-parent = <&gpio5>;
++            interrupts = <19 IRQ_TYPE_EDGE_FALLING>;
++
++            tsc2100_codec: codec {
++                compatible = "ti,tsc2100-codec";
++                #sound-dai-cells = <0>;
++            };
++        };
++    };
 --- a/drivers/mfd/Kconfig
 +++ b/drivers/mfd/Kconfig
-@@ -1722,6 +1722,15 @@
+@@ -1722,6 +1722,16 @@
  	  If you say yes here you get support for the Palmas
  	  series of PMIC chips from Texas Instruments.
  
-+config MFD_TSC2100_RUST
-+	bool "TI TSC2100 touchscreen controller and audio codec, in Rust"
++config MFD_TSC2100
++	bool "TI TSC2100 touchscreen controller and audio codec"
 +	depends on SPI_MASTER && RUST
-+	depends on MFD_TSC2100=n
 +	select MFD_CORE
 +	select REGMAP
 +	help
-+	  The same driver as MFD_TSC2100, written in Rust.
++	  Support for the TI TSC2100, a touchscreen controller and audio
++	  codec on SPI. This is the core: it provides the register access
++	  that the touchscreen and codec drivers share.
 +
- config MFD_TSC2100
- 	tristate "TI TSC2100 touchscreen controller and audio codec"
- 	depends on SPI_MASTER
+ config TPS6105X
+ 	tristate "TI TPS61050/61052 Boost Converters"
+ 	depends on I2C
 --- a/drivers/mfd/Makefile
 +++ b/drivers/mfd/Makefile
-@@ -96,6 +96,7 @@
+@@ -95,6 +95,7 @@
+ obj-$(CONFIG_MFD_CS40L50_I2C)	+= cs40l50-i2c.o
  obj-$(CONFIG_MFD_CS40L50_SPI)	+= cs40l50-spi.o
  
- obj-$(CONFIG_MFD_TSC2100)	+= tsc2100.o
-+obj-$(CONFIG_MFD_TSC2100_RUST)	+= tsc2100_rust.o
++obj-$(CONFIG_MFD_TSC2100)	+= tsc2100.o
  obj-$(CONFIG_TPS6105X)		+= tps6105x.o
  obj-$(CONFIG_TPS65010)		+= tps65010.o
  obj-$(CONFIG_TPS6507X)		+= tps6507x.o
 --- /dev/null
-+++ b/drivers/mfd/tsc2100_rust.rs
++++ b/drivers/mfd/tsc2100.rs
 @@ -0,0 +1,114 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
-+//! TI TSC2100 touchscreen controller and audio codec, SPI core: tsc2100.c in Rust.
++//! TI TSC2100 touchscreen controller and audio codec, SPI core.
 +//!
 +//! A transfer is one chip-select frame of 16-bit words: a command word (bit 15 read, bits 14:11
 +//! page, 10:5 register) and then the data. The core owns the SPI device and a regmap on it, and
