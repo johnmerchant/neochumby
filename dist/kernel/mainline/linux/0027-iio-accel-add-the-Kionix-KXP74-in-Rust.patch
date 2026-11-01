@@ -1,0 +1,167 @@
+Description: iio: accel: add the Kionix KXP74 in Rust
+ The same driver as kxp74.c, beside it and off by default.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/drivers/iio/accel/Kconfig
++++ b/drivers/iio/accel/Kconfig
+@@ -498,6 +498,13 @@
+ 	  To compile this driver as a module, choose M here: the module
+ 	  will be called kxp74.
+ 
++config KXP74_RUST
++	bool "Kionix KXP74 SPI accelerometer, in Rust"
++	depends on SPI_MASTER && IIO=y && RUST
++	depends on KXP74=n
++	help
++	  The same driver as KXP74, written in Rust.
++
+ config KXSD9
+ 	tristate "Kionix KXSD9 Accelerometer Driver"
+ 	select IIO_BUFFER
+--- a/drivers/iio/accel/Makefile
++++ b/drivers/iio/accel/Makefile
+@@ -51,6 +51,7 @@
+ obj-$(CONFIG_IIO_KX022A_SPI)	+= kionix-kx022a-spi.o
+ obj-$(CONFIG_KXCJK1013) += kxcjk-1013.o
+ obj-$(CONFIG_KXP74)	+= kxp74.o
++obj-$(CONFIG_KXP74_RUST)	+= kxp74_rust.o
+ obj-$(CONFIG_KXSD9)	+= kxsd9.o
+ obj-$(CONFIG_KXSD9_SPI)	+= kxsd9-spi.o
+ obj-$(CONFIG_KXSD9_I2C)	+= kxsd9-i2c.o
+--- /dev/null
++++ b/drivers/iio/accel/kxp74_rust.rs
+@@ -0,0 +1,131 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! Kionix KXP74 three-axis accelerometer, SPI interface: kxp74.c in Rust.
++//!
++//! The part has a 12-bit ADC behind a command protocol rather than a register map: an 8-bit
++//! "convert" command selects an axis, and after the conversion time the result is clocked out as
++//! 16 bits, MSB first, with the sample in bits 15:4. Chip select stays asserted across both.
++
++use kernel::{
++    device::Core,
++    iio::{self, AccelChannel, Axis, Info, Value},
++    of,
++    prelude::*,
++    spi,
++    sync::aref::ARef,
++};
++
++const CMD_CONVERT_X: usize = 0x00;
++const CMD_CONVERT_Z: usize = 0x01;
++const CMD_CONVERT_Y: usize = 0x02;
++const CMD_WRITE_CTRL: u8 = 0x04;
++
++const CTRL_ENABLE: u8 = 1 << 2;
++
++const CONVERT_US: u16 = 50;
++
++// The output is ratiometric with 0 g at mid-scale and +/-2.5 g across the 12-bit range, 819.2
++// counts per g: 9.80665 * 5 / 4096 m/s^2 per count.
++const OFFSET: i32 = -2048;
++const SCALE_NANO: i32 = 11971008;
++
++const CHANNELS: [AccelChannel; 3] = [
++    AccelChannel { axis: Axis::X, address: CMD_CONVERT_X },
++    AccelChannel { axis: Axis::Y, address: CMD_CONVERT_Y },
++    AccelChannel { axis: Axis::Z, address: CMD_CONVERT_Z },
++];
++
++struct Kxp74 {
++    spi: ARef<spi::Device>,
++}
++
++impl Kxp74 {
++    fn convert(&self, cmd: u8) -> Result<i32> {
++        // The stock driver repeats the command while reading.
++        let repeat = [0, cmd];
++        let mut rx = [0u8; 2];
++        // One message: the SPI core runs it whole, so conversions can't interleave.
++        self.spi.sync(&mut [
++            spi::Transfer {
++                tx: Some(&[cmd]),
++                delay_us: CONVERT_US,
++                ..Default::default()
++            },
++            spi::Transfer {
++                tx: Some(&repeat),
++                rx: Some(&mut rx),
++                ..Default::default()
++            },
++        ])?;
++
++        Ok(i32::from(rx[0]) << 4 | i32::from(rx[1]) >> 4)
++    }
++}
++
++impl iio::Operations for Kxp74 {
++    fn read(&self, address: usize, info: Info) -> Result<Value> {
++        match info {
++            Info::Raw => Ok(Value::Int(self.convert(address as u8)?)),
++            Info::Offset => Ok(Value::Int(OFFSET)),
++            Info::Scale => Ok(Value::IntPlusNano(0, SCALE_NANO)),
++        }
++    }
++}
++
++impl Drop for Kxp74 {
++    fn drop(&mut self) {
++        // Powers it off, past the registration.
++        let _ = self.spi.write(&[CMD_WRITE_CTRL, 0]);
++    }
++}
++
++struct Kxp74Driver;
++
++kernel::of_device_table!(
++    OF_TABLE,
++    <Kxp74Driver as spi::Driver>::IdInfo,
++    [(of::DeviceId::new(c"kionix,kxp74"), ())]
++);
++
++kernel::spi_device_table!(
++    SPI_TABLE,
++    <Kxp74Driver as spi::Driver>::IdInfo,
++    [(spi::DeviceId::new(c"kxp74"), ())]
++);
++
++impl spi::Driver for Kxp74Driver {
++    type IdInfo = ();
++    type Data<'bound> = Self;
++    const SPI_ID_TABLE: Option<spi::IdTable<Self::IdInfo>> = Some(&SPI_TABLE);
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = Some(&OF_TABLE);
++
++    fn probe<'bound>(
++        dev: &'bound spi::Device<Core<'_>>,
++        _id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self, Error> + 'bound {
++        dev.setup(8, true)?;
++
++        let spi = spi::device_aref(dev);
++        spi.write(&[CMD_WRITE_CTRL, CTRL_ENABLE]).inspect_err(|e| {
++            dev_err!(dev.as_ref(), "failed to enable: {}\n", e.to_errno());
++        })?;
++
++        // From here on a failure drops `Kxp74`, which powers the part off again.
++        iio::Registration::register(
++            dev.as_ref(),
++            c"kxp74",
++            &CHANNELS,
++            Kxp74 { spi },
++        )?;
++
++        Ok(Kxp74Driver)
++    }
++}
++
++kernel::module_spi_driver! {
++    type: Kxp74Driver,
++    name: "kxp74_rust",
++    authors: ["John Merchant <john@johnmerchant.dev>"],
++    description: "Kionix KXP74 SPI accelerometer driver",
++    license: "GPL v2",
++}

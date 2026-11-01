@@ -1,0 +1,71 @@
+Description: ARM: allow Rust on ARMv4T and ARMv5
+ HAVE_RUST was ARMv7 only, and rustc's target for every ARM was
+ arm-unknown-linux-gnueabi, whose baseline is ARMv6. Pick the target as
+ arch-y picks -march, in the same order, so that a kernel for both the
+ ARM920T and the ARM926 (imx_v4_v5_defconfig) is built for ARMv4T.
+ .
+ Rust's atomics add one more need of the architecture: rust/helpers has a
+ 16-bit xchg, which before ARMv6 didn't exist and failed to link. There's
+ no swph, but those kernels are never SMP, so with interrupts off a load
+ and a store are atomic.
+ .
+ Nothing here turns CONFIG_RUST on.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/arch/arm/Kconfig
++++ b/arch/arm/Kconfig
+@@ -138,7 +138,7 @@
+ 	select MMU_GATHER_RCU_TABLE_FREE if SMP && ARM_LPAE
+ 	select HAVE_REGS_AND_STACK_ACCESS_API
+ 	select HAVE_RSEQ
+-	select HAVE_RUST if CPU_LITTLE_ENDIAN && CPU_32v7 && !KASAN
++	select HAVE_RUST if CPU_LITTLE_ENDIAN && (CPU_32v7 || CPU_32v5 || CPU_32v4T) && !KASAN
+ 	select HAVE_STACKPROTECTOR
+ 	select HAVE_SYSCALL_TRACEPOINTS
+ 	select HAVE_UID16
+--- a/arch/arm/Makefile
++++ b/arch/arm/Makefile
+@@ -150,7 +150,12 @@
+ KBUILD_CPPFLAGS	+=$(cpp-y)
+ KBUILD_CFLAGS	+=$(CFLAGS_ABI) $(CFLAGS_ISA) $(arch-y) $(tune-y) $(call cc-option,-mshort-load-bytes,$(call cc-option,-malignment-traps,)) -msoft-float -Uarm
+ KBUILD_AFLAGS	+=$(CFLAGS_ABI) $(AFLAGS_ISA) -Wa,$(arch-y) $(tune-y) -include $(srctree)/arch/arm/include/asm/unified.h -msoft-float
+-KBUILD_RUSTFLAGS += --target=arm-unknown-linux-gnueabi
++# The same order as arch-y: a kernel for both ARMv4T and ARMv5 is built for
++# ARMv4T. The default target's baseline is ARMv6.
++rust-target-y			:=arm-unknown-linux-gnueabi
++rust-target-$(CONFIG_CPU_32v5)	:=armv5te-unknown-linux-gnueabi
++rust-target-$(CONFIG_CPU_32v4T)	:=armv4t-unknown-linux-gnueabi
++KBUILD_RUSTFLAGS += --target=$(rust-target-y)
+ 
+ CHECKFLAGS	+= -D__arm__
+ 
+--- a/arch/arm/include/asm/cmpxchg.h
++++ b/arch/arm/include/asm/cmpxchg.h
+@@ -31,7 +31,7 @@
+ {
+ 	extern void __bad_xchg(volatile void *, int);
+ 	unsigned long ret;
+-#ifdef swp_is_buggy
++#if __LINUX_ARM_ARCH__ < 6
+ 	unsigned long flags;
+ #endif
+ #if __LINUX_ARM_ARCH__ >= 6
+@@ -107,6 +107,15 @@
+ 			: "memory", "cc");
+ 		break;
+ #endif
++#if __LINUX_ARM_ARCH__ < 6
++	/* There's no swph, and before ARMv6 there's no SMP (below). */
++	case 2:
++		raw_local_irq_save(flags);
++		ret = *(volatile unsigned short *)ptr;
++		*(volatile unsigned short *)ptr = x;
++		raw_local_irq_restore(flags);
++		break;
++#endif
+ 	default:
+ 		/* Cause a link-time error, the xchg() size is not supported */
+ 		__bad_xchg(ptr, size), ret = 0;

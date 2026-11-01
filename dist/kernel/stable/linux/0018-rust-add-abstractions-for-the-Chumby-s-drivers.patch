@@ -1,0 +1,3238 @@
+Description: rust: add abstractions for the Chumby's drivers
+ SPI, regmap, MFD, input and threaded interrupts, IIO, generic GPIO chips, ASoC codecs and
+ cards, i.MX clocks and pins, and USB host controllers, which 7.3 has none of, so that the
+ drivers ported to Rust need no unsafe code of their own: it's all here, each block with
+ its reason.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/rust/bindgen_parameters
++++ b/rust/bindgen_parameters
+@@ -12,6 +12,10 @@
+ 
+ # Packed type cannot transitively contain a `#[repr(align)]` type.
+ --opaque-type alt_instr
++--opaque-type snd_dec_flac
++--opaque-type snd_codec_options
++--opaque-type snd_codec
++--opaque-type snd_compr_params
+ --opaque-type x86_msi_data
+ --opaque-type x86_msi_addr_lo
+ # s390-only: same packed/align issue as above (E0588).
+--- a/rust/bindings/bindings_helper.h
++++ b/rust/bindings/bindings_helper.h
+@@ -63,6 +63,31 @@
+ #include <linux/fwctl.h>
+ #include <linux/fs.h>
+ #include <linux/i2c.h>
++#include <linux/iio/iio.h>
++#include <linux/spi/spi.h>
++#include <linux/gpio/driver.h>
++#include <linux/gpio/generic.h>
++#include <linux/iio/iio.h>
++#include <linux/input.h>
++#include <linux/input/touchscreen.h>
++#include <linux/mfd/core.h>
++#include <linux/gpio/consumer.h>
++#include <dt-bindings/clock/imx21-clock.h>
++#include <linux/clk-provider.h>
++#include <linux/of_address.h>
++#include <linux/pinctrl/pinctrl.h>
++#include <linux/regmap.h>
++#include <linux/usb.h>
++#include <linux/usb/hcd.h>
++#include "../../drivers/pinctrl/freescale/pinctrl-imx1.h"
++#ifdef CONFIG_MXC_CLK
++#include "../../drivers/clk/imx/clk.h"
++#endif
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++#include <sound/soc-dapm.h>
++#include <uapi/sound/tlv.h>
++#include <linux/spi/spi.h>
+ #include <linux/interrupt.h>
+ #include <linux/io-pgtable.h>
+ #include <linux/ioport.h>
+--- /dev/null
++++ b/rust/helpers/chumby.c
+@@ -0,0 +1,95 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <linux/iio/iio.h>
++#include <linux/dma-mapping.h>
++#include <linux/of.h>
++#include <linux/usb.h>
++#include <linux/usb/hcd.h>
++#include <linux/spi/spi.h>
++#include <sound/pcm_params.h>
++#include <sound/soc.h>
++
++__rust_helper int rust_helper_spi_sync_transfer(struct spi_device *spi,
++						struct spi_transfer *xfers,
++						unsigned int num_xfers)
++{
++	return spi_sync_transfer(spi, xfers, num_xfers);
++}
++
++__rust_helper void rust_helper_spi_unregister_driver(struct spi_driver *sdrv)
++{
++	spi_unregister_driver(sdrv);
++}
++
++__rust_helper void *rust_helper_iio_priv(struct iio_dev *indio_dev)
++{
++	return iio_priv(indio_dev);
++}
++
++__rust_helper unsigned int rust_helper_params_rate(const struct snd_pcm_hw_params *p)
++{
++	return params_rate(p);
++}
++
++__rust_helper int rust_helper_params_width(const struct snd_pcm_hw_params *p)
++{
++	return params_width(p);
++}
++
++__rust_helper unsigned int rust_helper_snd_soc_component_active(struct snd_soc_component *component)
++{
++	return snd_soc_component_active(component);
++}
++
++__rust_helper struct device_node *rust_helper_of_parse_phandle(const struct device_node *np,
++							       const char *phandle_name, int index)
++{
++	return of_parse_phandle(np, phandle_name, index);
++}
++
++__rust_helper struct snd_soc_dai *rust_helper_chumby_rtd_cpu0(struct snd_soc_pcm_runtime *rtd)
++{
++	return snd_soc_rtd_to_cpu(rtd, 0);
++}
++
++__rust_helper struct snd_soc_dai *rust_helper_chumby_rtd_codec0(struct snd_soc_pcm_runtime *rtd)
++{
++	return snd_soc_rtd_to_codec(rtd, 0);
++}
++
++__rust_helper void rust_helper_of_node_put(struct device_node *node)
++{
++	of_node_put(node);
++}
++
++__rust_helper void *rust_helper_chumby_hcd_priv(struct usb_hcd *hcd)
++{
++	return hcd->hcd_priv;
++}
++
++__rust_helper u16 rust_helper_usb_maxpacket(struct usb_device *udev, unsigned int pipe)
++{
++	return usb_maxpacket(udev, pipe);
++}
++
++__rust_helper dma_addr_t rust_helper_chumby_dma_map(struct device *dev, void *ptr, size_t size,
++						    enum dma_data_direction dir)
++{
++	return dma_map_single(dev, ptr, size, dir);
++}
++
++__rust_helper void rust_helper_chumby_dma_unmap(struct device *dev, dma_addr_t addr, size_t size,
++						enum dma_data_direction dir)
++{
++	dma_unmap_single(dev, addr, size, dir);
++}
++
++__rust_helper int rust_helper_dma_mapping_error(struct device *dev, dma_addr_t addr)
++{
++	return dma_mapping_error(dev, addr);
++}
++
++__rust_helper int rust_helper_dma_coerce_mask_and_coherent(struct device *dev, u64 mask)
++{
++	return dma_coerce_mask_and_coherent(dev, mask);
++}
+--- /dev/null
++++ b/rust/helpers/chumby_imx.c
+@@ -0,0 +1,54 @@
++// SPDX-License-Identifier: GPL-2.0
++
++#include <linux/clk-provider.h>
++#include <linux/err.h>
++#include <linux/slab.h>
++#include <linux/spinlock.h>
++#include <linux/types.h>
++
++#ifdef CONFIG_MXC_CLK
++#include "../../drivers/clk/imx/clk.h"
++
++__rust_helper struct clk *rust_helper_chumby_imx_clk_fixed(const char *name, int rate)
++{
++	return imx_clk_fixed(name, rate);
++}
++
++__rust_helper struct clk *rust_helper_chumby_imx_clk_fixed_factor(const char *name, const char *parent,
++								  unsigned int mult, unsigned int div)
++{
++	return imx_clk_fixed_factor(name, parent, mult, div);
++}
++
++__rust_helper struct clk *rust_helper_chumby_imx_clk_gate(const char *name, const char *parent,
++							  void __iomem *reg, u8 shift)
++{
++	return imx_clk_gate(name, parent, reg, shift);
++}
++
++__rust_helper struct clk *rust_helper_chumby_imx_clk_gate_dis(const char *name, const char *parent,
++							      void __iomem *reg, u8 shift)
++{
++	return imx_clk_gate_dis(name, parent, reg, shift);
++}
++
++__rust_helper struct clk *rust_helper_chumby_imx_clk_divider(const char *name, const char *parent,
++							     void __iomem *reg, u8 shift, u8 width)
++{
++	return imx_clk_divider(name, parent, reg, shift, width);
++}
++
++__rust_helper struct clk *rust_helper_chumby_imx_clk_mux(const char *name, void __iomem *reg, u8 shift,
++							 u8 width, const char * const *parents,
++							 int num_parents)
++{
++	return imx_clk_mux(name, reg, shift, width, parents, num_parents);
++}
++
++__rust_helper struct clk *rust_helper_chumby_imx_clk_pllv1_imx21(const char *name, const char *parent,
++								 void __iomem *base)
++{
++	return imx_clk_pllv1(IMX_PLLV1_IMX21, name, parent, base);
++}
++
++#endif
+--- a/rust/helpers/helpers.c
++++ b/rust/helpers/helpers.c
+@@ -101,6 +101,8 @@
+ #include "task.c"
+ #include "time.c"
+ #include "uaccess.c"
++#include "chumby.c"
++#include "chumby_imx.c"
+ #include "usb.c"
+ #include "vmalloc.c"
+ #include "wait.c"
+--- /dev/null
++++ b/rust/kernel/asoc.rs
+@@ -0,0 +1,702 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! ALSA System on Chip: codecs and cards, described in Rust and built into ASoC's C tables.
++//!
++//! C header: [`include/sound/soc.h`](srctree/include/sound/soc.h)
++
++use crate::{
++    alloc::{flags::GFP_KERNEL, KBox, KVec},
++    device::{Bound, Device},
++    error::*,
++    ffi::{c_int, c_uint, c_void},
++    prelude::*,
++    regmap::Regmap,
++    sync::Arc,
++    types::Opaque,
++};
++
++/// A mixer control or a DAPM pin's switch.
++pub enum Control {
++    /// A mixer over one register: two channels if the shifts differ.
++    Mixer {
++        /// The name.
++        name: &'static CStr,
++        /// The register.
++        reg: u32,
++        /// Left, or only, shift.
++        shift_l: u32,
++        /// Right shift.
++        shift_r: u32,
++        /// The largest value.
++        max: i32,
++        /// Whether the register's sense is inverted.
++        invert: bool,
++        /// A dB scale: the minimum and the step, in hundredths of a dB.
++        db_scale: Option<(i32, u32)>,
++    },
++    /// The switch of a DAPM pin.
++    PinSwitch {
++        /// The control's name.
++        name: &'static CStr,
++        /// The widget's.
++        pin: &'static CStr,
++    },
++}
++
++/// A DAPM widget.
++pub enum Widget {
++    /// A supply, in a register's bit.
++    #[allow(missing_docs)]
++    Supply { name: &'static CStr, reg: u32, shift: u32, invert: bool },
++    /// A DAC for a stream, in a register's bit.
++    #[allow(missing_docs)]
++    Dac { name: &'static CStr, stream: &'static CStr, reg: u32, shift: u32, invert: bool },
++    /// An ADC for a stream, in a register's bit.
++    #[allow(missing_docs)]
++    Adc { name: &'static CStr, stream: &'static CStr, reg: u32, shift: u32, invert: bool },
++    /// An output pin.
++    Output(&'static CStr),
++    /// An input pin.
++    Input(&'static CStr),
++    /// A speaker, which a card's [`CardOps::speaker_event`] switches.
++    Speaker(&'static CStr),
++    /// Headphones.
++    Headphone(&'static CStr),
++}
++
++/// A DAPM route, with no control.
++pub struct Route {
++    /// Where it goes.
++    pub sink: &'static CStr,
++    /// Where it's from.
++    pub source: &'static CStr,
++}
++
++type WidgetEvent = unsafe extern "C" fn(
++    *mut bindings::snd_soc_dapm_widget,
++    *mut bindings::snd_kcontrol,
++    c_int,
++) -> c_int;
++
++/// ASoC's tables for a component or a card. They don't move, being heap allocations that are
++/// never grown after they're pointed to.
++struct Tables {
++    _mixers: KVec<bindings::soc_mixer_control>,
++    _tlvs: KVec<[u32; 4]>,
++    controls: KVec<bindings::snd_kcontrol_new>,
++    widgets: KVec<bindings::snd_soc_dapm_widget>,
++    routes: KVec<bindings::snd_soc_dapm_route>,
++}
++
++// SAFETY: The tables are only read after they're built, by whichever thread.
++unsafe impl Send for Tables {}
++// SAFETY: As above.
++unsafe impl Sync for Tables {}
++
++const SND_SOC_NOPM: c_int = -1;
++const DAPM_POST_PMU: u16 = 0x2;
++const DAPM_PRE_PMD: u16 = 0x4;
++
++impl Tables {
++    fn new(
++        controls: &[Control],
++        widgets: &[Widget],
++        routes: &[Route],
++        event: Option<WidgetEvent>,
++    ) -> Result<Self> {
++        let mut mixers = KVec::with_capacity(controls.len(), GFP_KERNEL)?;
++        let mut tlvs = KVec::with_capacity(controls.len(), GFP_KERNEL)?;
++        let mut raw_controls = KVec::with_capacity(controls.len(), GFP_KERNEL)?;
++
++        for control in controls {
++            let mut k: bindings::snd_kcontrol_new = pin_init::zeroed();
++            k.iface = bindings::SNDRV_CTL_ELEM_IFACE_MIXER as _;
++            match control {
++                Control::Mixer { name, reg, shift_l, shift_r, max, invert, db_scale } => {
++                    let mut m: bindings::soc_mixer_control = pin_init::zeroed();
++                    m.reg = *reg as _;
++                    m.rreg = *reg as _;
++                    m.shift = *shift_l as _;
++                    m.rshift = *shift_r as _;
++                    m.max = *max;
++                    m.set_invert(u32::from(*invert));
++                    mixers.push(m, GFP_KERNEL)?;
++
++                    k.name = name.as_char_ptr().cast();
++                    k.info = Some(bindings::snd_soc_info_volsw);
++                    k.get = Some(bindings::snd_soc_get_volsw);
++                    k.put = Some(bindings::snd_soc_put_volsw);
++                    // `mixers` has its capacity, so its elements never move.
++                    k.private_value = mixers.last().map_or(0, |m| core::ptr::from_ref(m) as _);
++
++                    if let Some((min, step)) = db_scale {
++                        tlvs.push(
++                            [
++                                bindings::SNDRV_CTL_TLVT_DB_SCALE,
++                                8,
++                                *min as u32,
++                                *step & bindings::SNDRV_CTL_TLVD_DB_SCALE_MASK,
++                            ],
++                            GFP_KERNEL,
++                        )?;
++                        k.access = bindings::SNDRV_CTL_ELEM_ACCESS_TLV_READ
++                            | bindings::SNDRV_CTL_ELEM_ACCESS_READWRITE;
++                        k.tlv.p = tlvs.last().map_or(core::ptr::null(), |t| t.as_ptr());
++                    }
++                }
++                Control::PinSwitch { name, pin } => {
++                    k.name = name.as_char_ptr().cast();
++                    k.info = Some(bindings::snd_soc_dapm_info_pin_switch);
++                    k.get = Some(bindings::snd_soc_dapm_get_pin_switch);
++                    k.put = Some(bindings::snd_soc_dapm_put_pin_switch);
++                    k.private_value = pin.as_char_ptr() as _;
++                }
++            }
++            raw_controls.push(k, GFP_KERNEL)?;
++        }
++
++        let mut raw_widgets = KVec::with_capacity(widgets.len(), GFP_KERNEL)?;
++        for widget in widgets {
++            let mut w: bindings::snd_soc_dapm_widget = pin_init::zeroed();
++            let in_reg = |w: &mut bindings::snd_soc_dapm_widget, reg: u32, shift: u32, invert: bool| {
++                w.reg = reg as _;
++                w.mask = 1;
++                w.shift = shift as _;
++                w.on_val = u32::from(!invert) as _;
++                w.off_val = u32::from(invert) as _;
++            };
++            match widget {
++                Widget::Supply { name, reg, shift, invert } => {
++                    w.id = bindings::snd_soc_dapm_type_snd_soc_dapm_supply;
++                    w.name = name.as_char_ptr();
++                    in_reg(&mut w, *reg, *shift, *invert);
++                }
++                Widget::Dac { name, stream, reg, shift, invert } => {
++                    w.id = bindings::snd_soc_dapm_type_snd_soc_dapm_dac;
++                    w.name = name.as_char_ptr();
++                    w.sname = stream.as_char_ptr();
++                    in_reg(&mut w, *reg, *shift, *invert);
++                }
++                Widget::Adc { name, stream, reg, shift, invert } => {
++                    w.id = bindings::snd_soc_dapm_type_snd_soc_dapm_adc;
++                    w.name = name.as_char_ptr();
++                    w.sname = stream.as_char_ptr();
++                    in_reg(&mut w, *reg, *shift, *invert);
++                }
++                Widget::Output(name) => {
++                    w.id = bindings::snd_soc_dapm_type_snd_soc_dapm_output;
++                    w.name = name.as_char_ptr();
++                    w.reg = SND_SOC_NOPM;
++                }
++                Widget::Input(name) => {
++                    w.id = bindings::snd_soc_dapm_type_snd_soc_dapm_input;
++                    w.name = name.as_char_ptr();
++                    w.reg = SND_SOC_NOPM;
++                }
++                Widget::Speaker(name) => {
++                    w.id = bindings::snd_soc_dapm_type_snd_soc_dapm_spk;
++                    w.name = name.as_char_ptr();
++                    w.reg = SND_SOC_NOPM;
++                    w.event = event;
++                    w.event_flags = DAPM_POST_PMU | DAPM_PRE_PMD;
++                }
++                Widget::Headphone(name) => {
++                    w.id = bindings::snd_soc_dapm_type_snd_soc_dapm_hp;
++                    w.name = name.as_char_ptr();
++                    w.reg = SND_SOC_NOPM;
++                    w.event_flags = DAPM_POST_PMU | DAPM_PRE_PMD;
++                }
++            }
++            raw_widgets.push(w, GFP_KERNEL)?;
++        }
++
++        let mut raw_routes = KVec::with_capacity(routes.len(), GFP_KERNEL)?;
++        for route in routes {
++            let mut r: bindings::snd_soc_dapm_route = pin_init::zeroed();
++            r.sink = route.sink.as_char_ptr();
++            r.source = route.source.as_char_ptr();
++            raw_routes.push(r, GFP_KERNEL)?;
++        }
++
++        Ok(Self {
++            _mixers: mixers,
++            _tlvs: tlvs,
++            controls: raw_controls,
++            widgets: raw_widgets,
++            routes: raw_routes,
++        })
++    }
++}
++
++/// A component: a codec, as ASoC calls it back.
++///
++/// # Invariants
++///
++/// A reference to this is to a valid `struct snd_soc_component`.
++#[repr(transparent)]
++pub struct Component(Opaque<bindings::snd_soc_component>);
++
++impl Component {
++    /// Sets the bits of `mask` in a register to those of `val`.
++    pub fn update_bits(&self, reg: u32, mask: u32, val: u32) -> Result {
++        // SAFETY: By the type invariant, the component is valid.
++        let ret = unsafe { bindings::snd_soc_component_update_bits(self.0.get(), reg, mask, val) };
++        to_result(ret.min(0))
++    }
++
++    /// How many streams are active on it.
++    pub fn active(&self) -> u32 {
++        // SAFETY: By the type invariant, the component is valid.
++        unsafe { bindings::snd_soc_component_active(self.0.get()) as u32 }
++    }
++
++    /// Gives it the regmap that its controls and widgets use.
++    pub fn init_regmap(&self, map: &Regmap) {
++        // SAFETY: By the type invariant the component is valid, and `map` too.
++        unsafe { bindings::snd_soc_component_init_regmap(self.0.get(), map.as_ptr()) };
++    }
++
++    /// Takes the regmap back.
++    pub fn exit_regmap(&self) {
++        // SAFETY: By the type invariant, the component is valid.
++        unsafe { bindings::snd_soc_component_exit_regmap(self.0.get()) };
++    }
++}
++
++/// A codec's implementation.
++pub trait Codec: Send + Sync + 'static {
++    /// The component is being probed.
++    fn probe(&self, component: &Component) -> Result;
++    /// The component is being removed.
++    fn remove(&self, component: &Component);
++    /// A stream's parameters: its rate and its sample width.
++    fn hw_params(&self, component: &Component, rate: u32, width: u32) -> Result;
++    /// The DAI's clock.
++    fn set_sysclk(&self, freq: u32) -> Result;
++    /// The DAI's format: `SND_SOC_DAIFMT_*`.
++    fn set_fmt(&self, fmt: u32) -> Result;
++}
++
++/// A DAI's stream.
++#[derive(Clone, Copy)]
++pub struct Stream {
++    /// The name, which DAPM widgets name.
++    pub name: &'static CStr,
++    /// Least channels.
++    pub channels_min: u32,
++    /// Most channels.
++    pub channels_max: u32,
++    /// `SNDRV_PCM_RATE_*`.
++    pub rates: u32,
++    /// `SNDRV_PCM_FMTBIT_*`.
++    pub formats: u64,
++}
++
++/// A codec with one DAI, with symmetric rates and sample bits.
++pub struct CodecDesc<'a> {
++    /// The DAI's name.
++    pub dai_name: &'static CStr,
++    /// Playback.
++    pub playback: Stream,
++    /// Capture.
++    pub capture: Stream,
++    /// Mixer controls.
++    pub controls: &'a [Control],
++    /// DAPM widgets.
++    pub widgets: &'a [Widget],
++    /// DAPM routes.
++    pub routes: &'a [Route],
++}
++
++#[repr(C)]
++struct CodecHolder<T> {
++    component: bindings::snd_soc_component_driver,
++    dai: bindings::snd_soc_dai_driver,
++    dai_ops: bindings::snd_soc_dai_ops,
++    tables: Tables,
++    ops: Arc<T>,
++}
++
++fn raw_stream(s: &Stream) -> bindings::snd_soc_pcm_stream {
++    let mut r: bindings::snd_soc_pcm_stream = pin_init::zeroed();
++    r.stream_name = s.name.as_char_ptr();
++    r.formats = s.formats;
++    r.rates = s.rates;
++    r.channels_min = s.channels_min;
++    r.channels_max = s.channels_max;
++    r
++}
++
++unsafe fn codec_of_component<'a, T>(c: *mut bindings::snd_soc_component) -> (&'a CodecHolder<T>, &'a Component) {
++    // SAFETY: ASoC passes the component registered in `register_codec`, whose driver is the first
++    // field of a live, `repr(C)` `CodecHolder<T>`, which outlasts the component.
++    unsafe { (&*(*c).driver.cast::<CodecHolder<T>>(), &*c.cast::<Component>()) }
++}
++
++unsafe fn codec_of_dai<'a, T>(dai: *mut bindings::snd_soc_dai) -> (&'a CodecHolder<T>, &'a Component) {
++    // SAFETY: A DAI's component is valid while the DAI is.
++    unsafe { codec_of_component((*dai).component) }
++}
++
++unsafe extern "C" fn codec_probe<T: Codec>(c: *mut bindings::snd_soc_component) -> c_int {
++    // SAFETY: ASoC passes a valid component.
++    let (holder, component) = unsafe { codec_of_component::<T>(c) };
++    from_result(|| holder.ops.probe(component).map(|()| 0))
++}
++
++unsafe extern "C" fn codec_remove<T: Codec>(c: *mut bindings::snd_soc_component) {
++    // SAFETY: ASoC passes a valid component.
++    let (holder, component) = unsafe { codec_of_component::<T>(c) };
++    holder.ops.remove(component);
++}
++
++unsafe extern "C" fn codec_hw_params<T: Codec>(
++    _substream: *mut bindings::snd_pcm_substream,
++    params: *mut bindings::snd_pcm_hw_params,
++    dai: *mut bindings::snd_soc_dai,
++) -> c_int {
++    // SAFETY: ASoC passes a valid DAI.
++    let (holder, component) = unsafe { codec_of_dai::<T>(dai) };
++    // SAFETY: ASoC passes valid parameters.
++    let (rate, width) = unsafe { (bindings::params_rate(params), bindings::params_width(params)) };
++    from_result(|| holder.ops.hw_params(component, rate as u32, width as u32).map(|()| 0))
++}
++
++unsafe extern "C" fn codec_set_sysclk<T: Codec>(
++    dai: *mut bindings::snd_soc_dai,
++    _clk_id: c_int,
++    freq: c_uint,
++    _dir: c_int,
++) -> c_int {
++    // SAFETY: ASoC passes a valid DAI.
++    let (holder, _) = unsafe { codec_of_dai::<T>(dai) };
++    from_result(|| holder.ops.set_sysclk(freq).map(|()| 0))
++}
++
++unsafe extern "C" fn codec_set_fmt<T: Codec>(dai: *mut bindings::snd_soc_dai, fmt: c_uint) -> c_int {
++    // SAFETY: ASoC passes a valid DAI.
++    let (holder, _) = unsafe { codec_of_dai::<T>(dai) };
++    from_result(|| holder.ops.set_fmt(fmt).map(|()| 0))
++}
++
++unsafe extern "C" fn drop_box<H>(data: *mut c_void) {
++    // SAFETY: `data` came from `KBox::into_raw`, and this devres action runs once.
++    drop(unsafe { KBox::from_raw(data.cast::<H>()) });
++}
++
++/// Registers a codec on `dev` until it's unbound.
++pub fn register_codec<T: Codec>(dev: &Device<Bound>, desc: &CodecDesc<'_>, ops: Arc<T>) -> Result {
++    let tables = Tables::new(desc.controls, desc.widgets, desc.routes, None)?;
++
++    let holder = KBox::new(
++        CodecHolder::<T> {
++            component: pin_init::zeroed(),
++            dai: pin_init::zeroed(),
++            dai_ops: pin_init::zeroed(),
++            tables,
++            ops,
++        },
++        GFP_KERNEL,
++    )?;
++    let h = KBox::into_raw(holder);
++
++    // SAFETY: `h` is valid and exclusively ours, until it's registered below. The pointers it
++    // gets are to its own heap-allocated fields and tables, and to `'static` strings.
++    unsafe {
++        (*h).dai_ops.hw_params = Some(codec_hw_params::<T>);
++        (*h).dai_ops.set_sysclk = Some(codec_set_sysclk::<T>);
++        (*h).dai_ops.set_fmt = Some(codec_set_fmt::<T>);
++
++        (*h).dai.name = desc.dai_name.as_char_ptr();
++        (*h).dai.playback = raw_stream(&desc.playback);
++        (*h).dai.capture = raw_stream(&desc.capture);
++        (*h).dai.ops = &raw const (*h).dai_ops;
++        (*h).dai.set_symmetric_rate(1);
++        (*h).dai.set_symmetric_sample_bits(1);
++
++        (*h).component.probe = Some(codec_probe::<T>);
++        (*h).component.remove = Some(codec_remove::<T>);
++        (*h).component.controls = (*h).tables.controls.as_ptr();
++        (*h).component.num_controls = (*h).tables.controls.len() as _;
++        (*h).component.dapm_widgets = (*h).tables.widgets.as_ptr();
++        (*h).component.num_dapm_widgets = (*h).tables.widgets.len() as _;
++        (*h).component.dapm_routes = (*h).tables.routes.as_ptr();
++        (*h).component.num_dapm_routes = (*h).tables.routes.len() as _;
++        (*h).component.set_use_pmdown_time(1);
++        (*h).component.set_endianness(1);
++    }
++
++    // SAFETY: `h` is valid until the action frees it, which, actions running in reverse order, is
++    // after the component below has gone.
++    to_result(unsafe {
++        bindings::devm_add_action_or_reset(dev.as_raw(), Some(drop_box::<CodecHolder<T>>), h.cast())
++    })?;
++
++    // SAFETY: `h` is fully set up, and stays until the component has gone.
++    to_result(unsafe {
++        bindings::devm_snd_soc_register_component(
++            dev.as_raw(),
++            &raw const (*h).component,
++            &raw mut (*h).dai,
++            1,
++        )
++    })
++}
++
++/// A device tree node, with a reference on it.
++pub struct OfNode(core::ptr::NonNull<bindings::device_node>);
++
++// SAFETY: A node's reference count may be dropped from any thread.
++unsafe impl Send for OfNode {}
++
++impl OfNode {
++    /// The node that `dev`'s node's property `name` points to.
++    pub fn from_phandle(dev: &Device<Bound>, name: &CStr) -> Result<Self> {
++        // SAFETY: `dev` is valid and its node, if any, is valid. `name` is a valid string, and
++        // the C function returns a new reference, or null.
++        let np = unsafe { bindings::of_parse_phandle((*dev.as_raw()).of_node, name.as_char_ptr(), 0) };
++        core::ptr::NonNull::new(np).map(Self).ok_or(EINVAL)
++    }
++}
++
++impl Drop for OfNode {
++    fn drop(&mut self) {
++        // SAFETY: We hold a reference.
++        unsafe { bindings::of_node_put(self.0.as_ptr()) };
++    }
++}
++
++/// A PCM stream that a card is starting.
++#[repr(transparent)]
++pub struct Substream(Opaque<bindings::snd_pcm_substream>);
++
++impl Substream {
++    /// Allows only the formats of this mask: `SNDRV_PCM_FMTBIT_*`.
++    pub fn constrain_formats(&self, mask: u64) -> Result {
++        // SAFETY: ASoC passes `self` as a valid stream, and its `runtime` is set up at startup.
++        to_result(unsafe {
++            bindings::snd_pcm_hw_constraint_mask64(
++                (*self.0.get()).runtime,
++                bindings::SNDRV_PCM_HW_PARAM_FORMAT as _,
++                mask,
++            )
++        })
++    }
++}
++
++/// A card's running DAI link.
++#[repr(transparent)]
++pub struct Runtime(Opaque<bindings::snd_soc_pcm_runtime>);
++
++impl Runtime {
++    /// Sets the codec DAI's clock, as an input.
++    pub fn codec_set_sysclk(&self, freq: u32) -> Result {
++        // SAFETY: ASoC passes `self` as a valid runtime, with one codec.
++        to_result(unsafe {
++            bindings::snd_soc_dai_set_sysclk(
++                bindings::chumby_rtd_codec0(self.0.get()),
++                0,
++                freq,
++                bindings::SND_SOC_CLOCK_IN as _,
++            )
++        })
++    }
++
++    /// Sets the CPU DAI's TDM slots.
++    pub fn cpu_set_tdm_slot(&self, tx: u32, rx: u32, slots: i32, width: i32) -> Result {
++        // SAFETY: ASoC passes `self` as a valid runtime, with one CPU DAI.
++        to_result(unsafe {
++            bindings::snd_soc_dai_set_tdm_slot(bindings::chumby_rtd_cpu0(self.0.get()), tx, rx, slots, width)
++        })
++    }
++}
++
++/// A card's implementation.
++pub trait CardOps: Send + Sync + 'static {
++    /// The speaker widget is going on or off.
++    fn speaker_event(&self, on: bool) -> Result;
++    /// A stream is starting.
++    fn startup(&self, substream: &Substream) -> Result;
++    /// The DAI link is being set up.
++    fn dai_init(&self, runtime: &Runtime) -> Result;
++}
++
++/// A card with one DAI link, one CPU DAI and one codec, its platform being the CPU DAI's device.
++pub struct CardDesc<'a> {
++    /// The card's and the link's name.
++    pub name: &'static CStr,
++    /// `SND_SOC_DAIFMT_*`.
++    pub dai_fmt: u32,
++    /// The CPU DAI's node.
++    pub cpu: OfNode,
++    /// The codec's node.
++    pub codec: OfNode,
++    /// The codec DAI's name.
++    pub codec_dai: &'static CStr,
++    /// A property of the device's node to name the card, if it's there.
++    pub model_property: &'static CStr,
++    /// Mixer controls.
++    pub controls: &'a [Control],
++    /// DAPM widgets.
++    pub widgets: &'a [Widget],
++    /// DAPM routes.
++    pub routes: &'a [Route],
++}
++
++struct CardHolder<T> {
++    card: bindings::snd_soc_card,
++    link: bindings::snd_soc_dai_link,
++    cpu_c: bindings::snd_soc_dai_link_component,
++    codec_c: bindings::snd_soc_dai_link_component,
++    platform_c: bindings::snd_soc_dai_link_component,
++    link_ops: bindings::snd_soc_ops,
++    tables: Tables,
++    _cpu: OfNode,
++    _codec: OfNode,
++    ops: Arc<T>,
++}
++
++unsafe fn card_holder<'a, T>(card: *mut bindings::snd_soc_card) -> &'a CardHolder<T> {
++    // SAFETY: `drvdata` is set in `register_card`, to a `CardHolder<T>` that outlasts the card.
++    unsafe { &*(*card).drvdata.cast::<CardHolder<T>>() }
++}
++
++unsafe extern "C" fn card_event<T: CardOps>(
++    w: *mut bindings::snd_soc_dapm_widget,
++    _k: *mut bindings::snd_kcontrol,
++    event: c_int,
++) -> c_int {
++    // SAFETY: ASoC passes a valid widget of the card.
++    let holder = unsafe { card_holder::<T>(bindings::snd_soc_dapm_to_card((*w).dapm)) };
++    from_result(|| holder.ops.speaker_event(event & c_int::from(DAPM_POST_PMU) != 0).map(|()| 0))
++}
++
++unsafe extern "C" fn card_startup<T: CardOps>(s: *mut bindings::snd_pcm_substream) -> c_int {
++    // SAFETY: ASoC passes a valid stream, whose private data is its runtime.
++    let holder = unsafe {
++        let rtd = (*s).private_data.cast::<bindings::snd_soc_pcm_runtime>();
++        card_holder::<T>((*rtd).card)
++    };
++    // SAFETY: `Substream` is a transparent wrapper, and `s` is valid.
++    from_result(|| holder.ops.startup(unsafe { &*s.cast::<Substream>() }).map(|()| 0))
++}
++
++unsafe extern "C" fn card_dai_init<T: CardOps>(rtd: *mut bindings::snd_soc_pcm_runtime) -> c_int {
++    // SAFETY: ASoC passes a valid runtime of the card.
++    let holder = unsafe { card_holder::<T>((*rtd).card) };
++    // SAFETY: `Runtime` is a transparent wrapper, and `rtd` is valid.
++    from_result(|| holder.ops.dai_init(unsafe { &*rtd.cast::<Runtime>() }).map(|()| 0))
++}
++
++/// Registers a card on `dev` until it's unbound.
++pub fn register_card<T: CardOps>(dev: &Device<Bound>, desc: CardDesc<'_>, ops: Arc<T>) -> Result {
++    let tables = Tables::new(desc.controls, desc.widgets, desc.routes, Some(card_event::<T>))?;
++    let (cpu_np, codec_np) = (desc.cpu.0.as_ptr(), desc.codec.0.as_ptr());
++    let (name, dai_fmt, codec_dai, model) = (desc.name, desc.dai_fmt, desc.codec_dai, desc.model_property);
++
++    let h = KBox::into_raw(KBox::new(
++        CardHolder::<T> {
++            card: pin_init::zeroed(),
++            link: pin_init::zeroed(),
++            cpu_c: pin_init::zeroed(),
++            codec_c: pin_init::zeroed(),
++            platform_c: pin_init::zeroed(),
++            link_ops: pin_init::zeroed(),
++            tables,
++            _cpu: desc.cpu,
++            _codec: desc.codec,
++            ops,
++        },
++        GFP_KERNEL,
++    )?);
++
++    // SAFETY: `h` is valid and exclusively ours until the card's registered. It points only to
++    // its own heap-allocated fields and tables, to nodes it holds, and to `'static` strings.
++    unsafe {
++        (*h).cpu_c.of_node = cpu_np;
++        (*h).codec_c.of_node = codec_np;
++        (*h).codec_c.dai_name = codec_dai.as_char_ptr();
++        // fsl_ssi registers its dmaengine PCM on the SSI's own device.
++        (*h).platform_c.of_node = cpu_np;
++
++        (*h).link_ops.startup = Some(card_startup::<T>);
++
++        (*h).link.name = name.as_char_ptr();
++        (*h).link.stream_name = name.as_char_ptr();
++        (*h).link.init = Some(card_dai_init::<T>);
++        (*h).link.ops = &raw const (*h).link_ops;
++        (*h).link.dai_fmt = dai_fmt;
++        (*h).link.cpus = &raw mut (*h).cpu_c;
++        (*h).link.num_cpus = 1;
++        (*h).link.codecs = &raw mut (*h).codec_c;
++        (*h).link.num_codecs = 1;
++        (*h).link.platforms = &raw mut (*h).platform_c;
++        (*h).link.num_platforms = 1;
++
++        (*h).card.name = name.as_char_ptr();
++        // `dev` is bound, so its driver is set; that driver's module owns the card.
++        (*h).card.owner = (*(*dev.as_raw()).driver).owner;
++        (*h).card.dev = dev.as_raw();
++        (*h).card.dai_link = &raw mut (*h).link;
++        (*h).card.num_links = 1;
++        (*h).card.controls = (*h).tables.controls.as_ptr();
++        (*h).card.num_controls = (*h).tables.controls.len() as _;
++        (*h).card.dapm_widgets = (*h).tables.widgets.as_ptr();
++        (*h).card.num_dapm_widgets = (*h).tables.widgets.len() as _;
++        (*h).card.dapm_routes = (*h).tables.routes.as_ptr();
++        (*h).card.num_dapm_routes = (*h).tables.routes.len() as _;
++        (*h).card.drvdata = h.cast();
++    }
++
++    // SAFETY: `h` is valid until the action frees it, which, actions running in reverse order, is
++    // after the card below has gone.
++    to_result(unsafe {
++        bindings::devm_add_action_or_reset(dev.as_raw(), Some(drop_box::<CardHolder<T>>), h.cast())
++    })?;
++
++    // SAFETY: `card` is set up, with its `dev`.
++    to_result(unsafe { bindings::snd_soc_of_parse_card_name(&raw mut (*h).card, model.as_char_ptr()) })?;
++
++    // SAFETY: `card` is fully set up, and stays until it's unregistered.
++    to_result(unsafe { bindings::devm_snd_soc_register_card(dev.as_raw(), &raw mut (*h).card) })
++}
++
++/// Sets an i.MX AUDMUX v1 port's configuration.
++pub fn imx_audmux_v1_configure_port(port: u32, pcr: u32) -> Result {
++    extern "C" {
++        fn imx_audmux_v1_configure_port(port: c_uint, pcr: c_uint) -> c_int;
++    }
++    // SAFETY: The C function checks `port`, and that the AUDMUX has been probed.
++    to_result(unsafe { imx_audmux_v1_configure_port(port, pcr) })
++}
++
++/// An output GPIO a driver holds until its device is unbound.
++pub struct GpioOutput(core::ptr::NonNull<bindings::gpio_desc>);
++
++// SAFETY: `gpiod_set_value_cansleep` may be called from any thread that can sleep.
++unsafe impl Send for GpioOutput {}
++// SAFETY: As above.
++unsafe impl Sync for GpioOutput {}
++
++impl GpioOutput {
++    /// The optional GPIO `con_id` of `dev`, initially logically low, if it has it.
++    ///
++    /// The holder must not outlive `dev`'s binding: hold it in what `register_card` drops.
++    pub fn optional_low(dev: &Device<Bound>, con_id: &'static CStr) -> Result<Option<Self>> {
++        // SAFETY: `dev` is bound, and `con_id` is a valid string.
++        let desc = from_err_ptr(unsafe {
++            bindings::devm_gpiod_get_optional(
++                dev.as_raw(),
++                con_id.as_char_ptr(),
++                bindings::gpiod_flags_GPIOD_OUT_LOW,
++            )
++        })?;
++        Ok(core::ptr::NonNull::new(desc).map(Self))
++    }
++
++    /// Sets it, logically. May sleep.
++    pub fn set(&self, on: bool) -> Result {
++        // SAFETY: The descriptor is valid while the device is bound, as `optional_low` requires.
++        to_result(unsafe { bindings::gpiod_set_value_cansleep(self.0.as_ptr(), i32::from(on)) })
++    }
++}
+--- a/rust/kernel/device.rs
++++ b/rust/kernel/device.rs
+@@ -267,7 +267,6 @@
+     }
+ 
+     /// Returns a reference to the parent device, if any.
+-    #[cfg_attr(not(CONFIG_AUXILIARY_BUS), expect(dead_code))]
+     pub(crate) fn parent(&self) -> Option<&Device> {
+         // SAFETY:
+         // - By the type invariant `self.as_raw()` is always valid.
+--- /dev/null
++++ b/rust/kernel/gpio_generic.rs
+@@ -0,0 +1,104 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! GPIO chips on the generic MMIO library.
++//!
++//! C header: [`include/linux/gpio/generic.h`](srctree/include/linux/gpio/generic.h)
++
++use crate::{
++    alloc::flags::GFP_KERNEL,
++    device,
++    error::*,
++    platform,
++    prelude::*,
++    static_lock_class,
++};
++
++/// A chip of 16-bit registers in the platform device's first memory resource.
++pub struct Config<'a> {
++    /// Offset of the data register.
++    pub dat: usize,
++    /// Offset of the direction register, where 1 is an output.
++    pub dirout: usize,
++    /// How many lines.
++    pub ngpio: u16,
++    /// Offsets to write first, and the values to write there.
++    pub init: &'a [(usize, u16)],
++}
++
++/// Maps the registers, enables the device's only clock, writes `config.init` and adds the chip,
++/// all until `pdev` is unbound.
++pub fn register_16(pdev: &platform::Device<device::Core<'_>>, config: &Config<'_>) -> Result {
++    let dev: &device::Device<device::Bound> = pdev.as_ref();
++    let raw = dev.as_raw();
++
++    // SAFETY: A `platform::Device` is a `struct platform_device`, whose `dev` is `dev`.
++    let pdev_raw = unsafe { crate::container_of!(raw, bindings::platform_device, dev) };
++
++    // SAFETY: `pdev_raw` is valid and bound.
++    let regs = from_err_ptr(unsafe {
++        bindings::devm_platform_ioremap_resource(pdev_raw, 0)
++    })?;
++
++    // SAFETY: `raw` is valid and bound, and a null name asks for its only clock.
++    from_err_ptr(unsafe { bindings::devm_clk_get_enabled(raw, core::ptr::null()) })?;
++
++    // Past here, the size of the mapping is what the device tree says: check it holds these.
++    // SAFETY: `pdev_raw` is valid.
++    let res = unsafe { bindings::platform_get_resource(pdev_raw, bindings::IORESOURCE_MEM, 0) };
++    if res.is_null() {
++        return Err(ENODEV);
++    }
++    // SAFETY: `res` is the device's resource, just checked to be there.
++    let size = unsafe { (*res).end - (*res).start + 1 } as usize;
++    let fits = |off: usize| off + 2 <= size;
++    if !fits(config.dat) || !fits(config.dirout) || !config.init.iter().all(|&(off, _)| fits(off)) {
++        return Err(EINVAL);
++    }
++
++    for &(off, val) in config.init {
++        // SAFETY: `regs` maps `size` bytes, and `off` was just checked against it.
++        unsafe { bindings::writew(val, regs.cast::<u8>().add(off).cast()) };
++    }
++
++    // SAFETY: `raw` is valid; the allocation lasts until it's unbound, as long as the chip.
++    let chip = unsafe {
++        bindings::devm_kmalloc(
++            raw,
++            core::mem::size_of::<bindings::gpio_generic_chip>(),
++            (GFP_KERNEL | crate::alloc::flags::__GFP_ZERO).as_raw(),
++        )
++    }
++    .cast::<bindings::gpio_generic_chip>();
++    if chip.is_null() {
++        return Err(ENOMEM);
++    }
++
++    let mut cfg: bindings::gpio_generic_chip_config = pin_init::zeroed();
++    cfg.dev = raw;
++    cfg.sz = 2;
++    // SAFETY: Both offsets were checked against the mapping.
++    unsafe {
++        cfg.dat = regs.cast::<u8>().add(config.dat).cast();
++        cfg.dirout = regs.cast::<u8>().add(config.dirout).cast();
++    }
++
++    // SAFETY: `chip` is valid and zeroed, and `cfg` is filled in.
++    to_result(unsafe { bindings::gpio_generic_chip_init(chip, &cfg) })?;
++
++    // SAFETY: `chip` was just initialized and isn't registered yet.
++    unsafe {
++        (*chip).gc.base = -1;
++        (*chip).gc.ngpio = config.ngpio;
++    }
++
++    // SAFETY: `chip` is valid as long as the chip's registered. The keys are static.
++    to_result(unsafe {
++        bindings::devm_gpiochip_add_data_with_key(
++            raw,
++            &raw mut (*chip).gc,
++            core::ptr::null_mut(),
++            static_lock_class!().as_ptr(),
++            static_lock_class!().as_ptr(),
++        )
++    })
++}
+--- /dev/null
++++ b/rust/kernel/iio.rs
+@@ -0,0 +1,189 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! Industrial I/O: read-only, direct-mode devices.
++//!
++//! C header: [`include/linux/iio/iio.h`](srctree/include/linux/iio/iio.h)
++
++use crate::{
++    alloc::{flags::GFP_KERNEL, KVec},
++    device::{Bound, Device},
++    error::*,
++    prelude::*,
++};
++use crate::ffi::{c_int, c_long, c_void};
++
++/// What's asked of a channel, in [`Operations::read`].
++#[derive(Clone, Copy, PartialEq, Eq)]
++pub enum Info {
++    /// The raw sample.
++    Raw,
++    /// The multiplier from raw units to SI units.
++    Scale,
++    /// What's added to a raw sample before scaling.
++    Offset,
++}
++
++/// A value read from a channel.
++pub enum Value {
++    /// An integer.
++    Int(i32),
++    /// An integer, plus billionths.
++    IntPlusNano(i32, i32),
++}
++
++/// The acceleration axis a channel measures.
++#[derive(Clone, Copy)]
++pub enum Axis {
++    /// X.
++    X,
++    /// Y.
++    Y,
++    /// Z.
++    Z,
++}
++
++/// An acceleration channel: raw per channel, scale and offset shared by all of them.
++#[derive(Clone, Copy)]
++pub struct AccelChannel {
++    /// The axis.
++    pub axis: Axis,
++    /// The driver's own value for the channel, handed back in [`Operations::read`].
++    pub address: usize,
++}
++
++/// A device's implementation.
++pub trait Operations: Send + Sync + Sized + 'static {
++    /// Reads `info` of the channel with this `address`.
++    fn read(&self, address: usize, info: Info) -> Result<Value>;
++}
++
++struct Inner<T> {
++    ops: T,
++    // Lives as long as the IIO device, which points to it.
++    _channels: KVec<bindings::iio_chan_spec>,
++}
++
++/// The registration of IIO devices of a type of driver.
++pub struct Registration<T>(core::marker::PhantomData<T>);
++
++impl<T: Operations> Registration<T> {
++    const INFO: bindings::iio_info = {
++        let mut info: bindings::iio_info = pin_init::zeroed();
++        info.read_raw = Some(Self::read_raw);
++        info
++    };
++
++    unsafe extern "C" fn read_raw(
++        indio_dev: *mut bindings::iio_dev,
++        chan: *const bindings::iio_chan_spec,
++        val: *mut c_int,
++        val2: *mut c_int,
++        mask: c_long,
++    ) -> c_int {
++        let info = match mask as u32 {
++            bindings::iio_chan_info_enum_IIO_CHAN_INFO_RAW => Info::Raw,
++            bindings::iio_chan_info_enum_IIO_CHAN_INFO_SCALE => Info::Scale,
++            bindings::iio_chan_info_enum_IIO_CHAN_INFO_OFFSET => Info::Offset,
++            _ => return EINVAL.to_errno(),
++        };
++
++        // SAFETY: The IIO core passes the device registered in `register`, whose private data
++        // is an initialized `Inner<T>` until the device has been unregistered.
++        let inner = unsafe { &*bindings::iio_priv(indio_dev).cast::<Inner<T>>() };
++        // SAFETY: The IIO core passes one of the device's channels.
++        let address = unsafe { (*chan).address } as usize;
++
++        match inner.ops.read(address, info) {
++            // SAFETY: The IIO core passes valid pointers to the results.
++            Ok(Value::Int(v)) => unsafe {
++                *val = v;
++                bindings::IIO_VAL_INT as c_int
++            },
++            // SAFETY: The IIO core passes valid pointers to the results.
++            Ok(Value::IntPlusNano(v, nano)) => unsafe {
++                *val = v;
++                *val2 = nano;
++                bindings::IIO_VAL_INT_PLUS_NANO as c_int
++            },
++            Err(e) => e.to_errno(),
++        }
++    }
++
++    unsafe extern "C" fn release(inner: *mut c_void) {
++        // SAFETY: This action is registered, in `register`, on an initialized `Inner<T>`, and
++        // runs once, after the device's unregistration (devres runs in reverse order).
++        unsafe { core::ptr::drop_in_place(inner.cast::<Inner<T>>()) };
++    }
++
++    /// Registers a device, for as long as `parent` is bound, that `ops` implements.
++    ///
++    /// When `ops` is dropped the device has been unregistered: its [`Drop`] may power it off.
++    pub fn register(
++        parent: &Device<Bound>,
++        name: &'static CStr,
++        channels: &[AccelChannel],
++        ops: T,
++    ) -> Result {
++        let mut raw = KVec::with_capacity(channels.len(), GFP_KERNEL)?;
++        for c in channels {
++            let mut spec: bindings::iio_chan_spec = pin_init::zeroed();
++            spec.type_ = bindings::iio_chan_type_IIO_ACCEL;
++            spec.set_modified(1);
++            spec.channel2 = match c.axis {
++                Axis::X => bindings::iio_modifier_IIO_MOD_X,
++                Axis::Y => bindings::iio_modifier_IIO_MOD_Y,
++                Axis::Z => bindings::iio_modifier_IIO_MOD_Z,
++            } as _;
++            spec.address = c.address as _;
++            spec.info_mask_separate = 1 << bindings::iio_chan_info_enum_IIO_CHAN_INFO_RAW;
++            spec.info_mask_shared_by_type = (1 << bindings::iio_chan_info_enum_IIO_CHAN_INFO_SCALE)
++                | (1 << bindings::iio_chan_info_enum_IIO_CHAN_INFO_OFFSET);
++            raw.push(spec, GFP_KERNEL)?;
++        }
++
++        // SAFETY: `parent` is a valid, bound device. The size fits `Inner<T>`, whose alignment
++        // is no more than the private data's, which is `ARCH_DMA_MINALIGN`.
++        let indio_dev = unsafe {
++            bindings::devm_iio_device_alloc(parent.as_raw(), size_of::<Inner<T>>() as c_int)
++        };
++        if indio_dev.is_null() {
++            return Err(ENOMEM);
++        }
++
++        let (chan_ptr, chan_len) = (raw.as_ptr(), raw.len());
++
++        // SAFETY: `indio_dev` was just allocated with room for an `Inner<T>`.
++        let inner = unsafe { bindings::iio_priv(indio_dev) }.cast::<Inner<T>>();
++        // SAFETY: As above, and it's not initialized yet.
++        unsafe {
++            inner.write(Inner {
++                ops,
++                _channels: raw,
++            })
++        };
++
++        // SAFETY: `inner` is valid until the action runs. On failure the action has run, and
++        // dropped `inner`, so nothing here touches it again.
++        to_result(unsafe {
++            bindings::devm_add_action_or_reset(parent.as_raw(), Some(Self::release), inner.cast())
++        })?;
++
++        // SAFETY: `indio_dev` isn't registered yet, so it's exclusively ours. `name` and the
++        // tables are `'static` or live in `inner`, which outlasts the registration.
++        unsafe {
++            (*indio_dev).name = name.as_char_ptr();
++            (*indio_dev).info = &Self::INFO;
++            (*indio_dev).modes = bindings::INDIO_DIRECT_MODE as _;
++            (*indio_dev).channels = chan_ptr;
++            (*indio_dev).num_channels = chan_len as _;
++        }
++
++        // SAFETY: `parent` is bound, so its driver is set; that driver's module owns the device.
++        let module = unsafe { (*(*parent.as_raw()).driver).owner };
++
++        // SAFETY: `indio_dev` is fully set up, and devres unregisters it before `release` runs.
++        to_result(unsafe {
++            bindings::__devm_iio_device_register(parent.as_raw(), indio_dev, module)
++        })
++    }
++}
+--- /dev/null
++++ b/rust/kernel/imx_clk.rs
+@@ -0,0 +1,184 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! i.MX clock controllers (CCMs) as `drivers/clk/imx` builds them, for a Rust clock driver.
++//!
++//! C headers: [`include/linux/clk-provider.h`](srctree/include/linux/clk-provider.h),
++//! [`drivers/clk/imx/clk.h`](srctree/drivers/clk/imx/clk.h)
++
++use crate::{
++    alloc::{flags::GFP_ATOMIC, KBox, KVec},
++    error::*,
++    ffi::{c_char, c_void},
++    prelude::*,
++};
++
++/// A node in the device tree that a clock driver's init function is given.
++#[repr(transparent)]
++pub struct OfNode(bindings::device_node);
++
++/// An entry of the table of clock drivers that `of_clk_init` runs through.
++#[repr(transparent)]
++pub struct OfEntry(bindings::of_device_id);
++
++// SAFETY: The entry is immutable, and its pointers are to code.
++unsafe impl Sync for OfEntry {}
++
++impl OfEntry {
++    /// An entry for the given `compatible`, calling `init`.
++    pub const fn new(compatible: &'static CStr, init: unsafe extern "C" fn(*mut bindings::device_node)) -> Self {
++        let mut id: bindings::of_device_id = pin_init::zeroed();
++        let src = compatible.to_bytes_with_nul();
++        let mut i = 0;
++        while i < src.len() {
++            id.compatible[i] = src[i] as _;
++            i += 1;
++        }
++        id.data = init as *const c_void;
++        Self(id)
++    }
++}
++
++/// `CLK_OF_DECLARE`: runs `$init`, a `fn(&OfNode)`, early in boot for a node `$compat` matches.
++#[macro_export]
++macro_rules! clk_of_declare {
++    ($name:ident, $compat:expr, $init:path) => {
++        unsafe extern "C" fn __clk_of_trampoline(np: *mut $crate::bindings::device_node) {
++            // SAFETY: `of_clk_init` passes a valid node, and `OfNode` is a transparent wrapper.
++            $init(unsafe { &*np.cast::<$crate::imx_clk::OfNode>() })
++        }
++
++        #[used]
++        #[link_section = "__clk_of_table"]
++        static $name: $crate::imx_clk::OfEntry =
++            $crate::imx_clk::OfEntry::new($compat, __clk_of_trampoline);
++    };
++}
++
++/// A clock controller being set up: clocks go in by their id, and [`Ccm::finish`] provides them.
++pub struct Ccm {
++    np: *mut bindings::device_node,
++    base: *mut u8,
++    size: usize,
++    clks: KVec<*mut bindings::clk>,
++}
++
++impl Ccm {
++    /// Maps the node's registers, for `count` clocks.
++    pub fn new(np: &OfNode, count: usize) -> Result<Self> {
++        let np = (&raw const np.0).cast_mut();
++
++        let mut res: bindings::resource = pin_init::zeroed();
++        // SAFETY: `np` is a valid node, and `res` a valid destination.
++        to_result(unsafe { bindings::of_address_to_resource(np, 0, &mut res) })?;
++        let size = (res.end - res.start + 1) as usize;
++
++        // SAFETY: `np` is a valid node. The mapping's never undone, as these clocks never go.
++        let base = unsafe { bindings::of_iomap(np, 0) }.cast::<u8>();
++        if base.is_null() {
++            return Err(ENOMEM);
++        }
++
++        let mut clks = KVec::with_capacity(count, GFP_ATOMIC)?;
++        for _ in 0..count {
++            clks.push(core::ptr::null_mut(), GFP_ATOMIC)?;
++        }
++
++        Ok(Self { np, base, size, clks })
++    }
++
++    fn reg(&self, offset: usize) -> *mut c_void {
++        // A register that isn't there is a programming error, and to touch it would be worse.
++        assert!(offset + 4 <= self.size);
++        // SAFETY: `base` maps `size` bytes, and `offset` was just checked.
++        unsafe { self.base.add(offset) }.cast()
++    }
++
++    /// A fixed-rate clock.
++    pub fn fixed(&mut self, id: u32, name: &'static CStr, rate: i32) {
++        // SAFETY: `name` is a valid string; the clock framework copies it.
++        self.clks[id as usize] = unsafe { bindings::chumby_imx_clk_fixed(name.as_char_ptr(), rate) };
++    }
++
++    /// The fixed clock from the device tree, or this one if it has none.
++    pub fn obtain_fixed(&mut self, id: u32, name: &'static CStr, rate: u32) {
++        // SAFETY: `name` is a valid string.
++        self.clks[id as usize] = unsafe { bindings::imx_obtain_fixed_clock(name.as_char_ptr(), rate as _) };
++    }
++
++    /// A clock that's its parent's times `mult` over `div`.
++    pub fn fixed_factor(&mut self, id: u32, name: &'static CStr, parent: &'static CStr, mult: u32, div: u32) {
++        // SAFETY: The names are valid strings; the clock framework copies them.
++        self.clks[id as usize] = unsafe {
++            bindings::chumby_imx_clk_fixed_factor(name.as_char_ptr(), parent.as_char_ptr(), mult, div)
++        };
++    }
++
++    /// A clock gate: a bit of a register, set to enable.
++    pub fn gate(&mut self, id: u32, name: &'static CStr, parent: &'static CStr, offset: usize, shift: u8) {
++        let reg = self.reg(offset);
++        // SAFETY: The names are valid strings, and `reg` is a mapped register, mapped forever.
++        self.clks[id as usize] = unsafe {
++            bindings::chumby_imx_clk_gate(name.as_char_ptr(), parent.as_char_ptr(), reg, shift)
++        };
++    }
++
++    /// A clock gate: a bit of a register, set to disable.
++    pub fn gate_dis(&mut self, id: u32, name: &'static CStr, parent: &'static CStr, offset: usize, shift: u8) {
++        let reg = self.reg(offset);
++        // SAFETY: As in `gate`.
++        self.clks[id as usize] = unsafe {
++            bindings::chumby_imx_clk_gate_dis(name.as_char_ptr(), parent.as_char_ptr(), reg, shift)
++        };
++    }
++
++    /// A divider, in a field of a register.
++    pub fn divider(&mut self, id: u32, name: &'static CStr, parent: &'static CStr, offset: usize, shift: u8, width: u8) {
++        let reg = self.reg(offset);
++        // SAFETY: As in `gate`.
++        self.clks[id as usize] = unsafe {
++            bindings::chumby_imx_clk_divider(name.as_char_ptr(), parent.as_char_ptr(), reg, shift, width)
++        };
++    }
++
++    /// A mux, in a field of a register.
++    pub fn mux(&mut self, id: u32, name: &'static CStr, offset: usize, shift: u8, width: u8, parents: &[&'static CStr]) -> Result {
++        let reg = self.reg(offset);
++        let mut raw: KVec<*const c_char> = KVec::with_capacity(parents.len(), GFP_ATOMIC)?;
++        for p in parents {
++            raw.push(p.as_char_ptr(), GFP_ATOMIC)?;
++        }
++        // SAFETY: The names are valid strings; the clock framework copies them and the array.
++        self.clks[id as usize] = unsafe {
++            bindings::chumby_imx_clk_mux(name.as_char_ptr(), reg, shift, width, raw.as_ptr(), raw.len() as _)
++        };
++        Ok(())
++    }
++
++    /// An i.MX21's PLL, whose registers start at `offset`.
++    pub fn pllv1_imx21(&mut self, id: u32, name: &'static CStr, parent: &'static CStr, offset: usize) {
++        let reg = self.reg(offset);
++        // SAFETY: As in `gate`.
++        self.clks[id as usize] = unsafe {
++            bindings::chumby_imx_clk_pllv1_imx21(name.as_char_ptr(), parent.as_char_ptr(), reg)
++        };
++    }
++
++    /// Reports any clock that failed, and provides the clocks to the device tree. They stay.
++    pub fn finish(self) -> Result {
++        let (ptr, len, _cap) = self.clks.into_raw_parts();
++
++        // SAFETY: `ptr` has `len` clocks, which, like everything here, are kept forever.
++        unsafe { bindings::imx_check_clocks(ptr, len as _) };
++
++        let mut data: bindings::clk_onecell_data = pin_init::zeroed();
++        data.clks = ptr;
++        data.clk_num = len as _;
++        let data = KBox::into_raw(KBox::new(data, GFP_ATOMIC)?);
++
++        // SAFETY: `self.np` is a valid node, and `data`, valid forever, is what
++        // `of_clk_src_onecell_get` wants.
++        to_result(unsafe {
++            bindings::of_clk_add_provider(self.np, Some(bindings::of_clk_src_onecell_get), data.cast())
++        })
++    }
++}
+--- /dev/null
++++ b/rust/kernel/imx_pinctrl.rs
+@@ -0,0 +1,56 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! i.MX1, i.MX21 and i.MX27 pin controllers, on `drivers/pinctrl/freescale`'s core.
++//!
++//! C header: [`drivers/pinctrl/freescale/pinctrl-imx1.h`](srctree/drivers/pinctrl/freescale/pinctrl-imx1.h)
++
++use crate::{
++    alloc::{flags::GFP_KERNEL, KBox, KVec},
++    device,
++    error::*,
++    ffi::c_void,
++    platform,
++    prelude::*,
++};
++
++struct Info {
++    info: bindings::imx1_pinctrl_soc_info,
++    _pins: KVec<bindings::pinctrl_pin_desc>,
++}
++
++unsafe extern "C" fn release(data: *mut c_void) {
++    // SAFETY: `data` came from `KBox::into_raw`, and this devres action runs once.
++    drop(unsafe { KBox::from_raw(data.cast::<Info>()) });
++}
++
++/// Runs the core's probe for a controller with these pins: each its number and name.
++pub fn imx1_probe(pdev: &platform::Device<device::Core<'_>>, pins: &[(u32, &'static CStr)]) -> Result {
++    let dev: &device::Device<device::Bound> = pdev.as_ref();
++
++    let mut raw = KVec::with_capacity(pins.len(), GFP_KERNEL)?;
++    for &(number, name) in pins {
++        let mut desc: bindings::pinctrl_pin_desc = pin_init::zeroed();
++        desc.number = number;
++        desc.name = name.as_char_ptr();
++        raw.push(desc, GFP_KERNEL)?;
++    }
++
++    let mut info: bindings::imx1_pinctrl_soc_info = pin_init::zeroed();
++    info.pins = raw.as_ptr();
++    info.npins = raw.len() as _;
++
++    let holder = KBox::into_raw(KBox::new(Info { info, _pins: raw }, GFP_KERNEL)?);
++
++    // SAFETY: `holder` is valid until the action frees it, which, actions running in reverse order,
++    // is after the core's devres, which uses it.
++    to_result(unsafe {
++        bindings::devm_add_action_or_reset(dev.as_raw(), Some(release), holder.cast())
++    })?;
++
++    // SAFETY: A `platform::Device` is a `struct platform_device`, whose `dev` is `dev`.
++    let raw_pdev = unsafe { crate::container_of!(dev.as_raw(), bindings::platform_device, dev) };
++
++    // SAFETY: `raw_pdev` is valid and being probed, and `holder`'s `info` is set up, valid and
++    // exclusively the core's from here on.
++    to_result(unsafe { bindings::imx1_pinctrl_core_probe(raw_pdev, &raw mut (*holder).info) })
++}
+--- /dev/null
++++ b/rust/kernel/input.rs
+@@ -0,0 +1,319 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! Input devices that report absolute axes and keys, and a threaded interrupt to drive them.
++//!
++//! C headers: [`include/linux/input.h`](srctree/include/linux/input.h),
++//! [`include/linux/input/touchscreen.h`](srctree/include/linux/input/touchscreen.h)
++
++use crate::{
++    alloc::{flags::GFP_KERNEL, KBox},
++    device::{Bound, Device},
++    error::*,
++    ffi::{c_int, c_void},
++    irq::Flags,
++    prelude::*,
++    sync::{Arc, ArcBorrow},
++};
++use core::ptr::NonNull;
++
++/// `ABS_X`.
++pub const ABS_X: u32 = bindings::ABS_X;
++/// `ABS_Y`.
++pub const ABS_Y: u32 = bindings::ABS_Y;
++/// `ABS_PRESSURE`.
++pub const ABS_PRESSURE: u32 = bindings::ABS_PRESSURE;
++/// `BTN_TOUCH`.
++pub const BTN_TOUCH: u32 = bindings::BTN_TOUCH;
++/// `BUS_SPI`.
++pub const BUS_SPI: u16 = bindings::BUS_SPI as u16;
++
++/// What a device does as it's opened and closed.
++pub trait Operations: Send + Sync + 'static {
++    /// The first user has opened it.
++    fn open(&self) -> Result;
++    /// The last user has closed it.
++    fn close(&self);
++}
++
++/// An input device being set up. Dropped unregistered, it's freed.
++///
++/// # Invariants
++///
++/// `self.0` is a valid `struct input_dev`, from `input_allocate_device`, not registered.
++pub struct Builder(NonNull<bindings::input_dev>);
++
++/// Reports events to an input device, for as long as it's held.
++///
++/// # Invariants
++///
++/// `input` holds a reference on the device, so it stays allocated. `input_event` takes the
++/// device's own lock, and ignores events it isn't set up for.
++pub struct Reporter {
++    input: NonNull<bindings::input_dev>,
++    prop: KBox<bindings::touchscreen_properties>,
++}
++
++// SAFETY: `Reporter` only calls `input_event` and `touchscreen_report_pos`, which any thread may.
++unsafe impl Send for Reporter {}
++// SAFETY: As above: those lock the device for themselves.
++unsafe impl Sync for Reporter {}
++
++impl Builder {
++    /// Allocates an input device, a child of `parent`.
++    pub fn new(
++        parent: &Device<Bound>,
++        name: &'static CStr,
++        phys: &'static CStr,
++        bustype: u16,
++    ) -> Result<Self> {
++        // SAFETY: There are no preconditions.
++        let input = NonNull::new(unsafe { bindings::input_allocate_device() }).ok_or(ENOMEM)?;
++        let raw = input.as_ptr();
++
++        // SAFETY: `raw` is valid and not registered, so it's exclusively ours. The strings are
++        // `'static`, and a device keeps a reference on its parent.
++        unsafe {
++            (*raw).name = name.as_char_ptr();
++            (*raw).phys = phys.as_char_ptr();
++            (*raw).id.bustype = bustype;
++            (*raw).dev.parent = parent.as_raw();
++        }
++
++        Ok(Self(input))
++    }
++
++    /// Says it reports the key `code`.
++    pub fn key(&mut self, code: u32) -> &mut Self {
++        // SAFETY: By the type invariant, `self.0` is valid.
++        unsafe { bindings::input_set_capability(self.0.as_ptr(), bindings::EV_KEY, code) };
++        self
++    }
++
++    /// Says it reports the absolute axis `axis`, between `min` and `max`.
++    pub fn abs(&mut self, axis: u32, min: i32, max: i32) -> &mut Self {
++        // SAFETY: By the type invariant, `self.0` is valid.
++        unsafe { bindings::input_set_abs_params(self.0.as_ptr(), axis, min, max, 0, 0) };
++        self
++    }
++
++    /// A [`Reporter`], with the touchscreen properties of the device tree node of the device's
++    /// parent, or of its parent's parent when it has no node of its own.
++    pub fn reporter(&mut self, parent: &Device<Bound>) -> Result<Reporter> {
++        let raw = self.0.as_ptr();
++        let dev = parent.as_raw();
++        let mut prop = KBox::new(pin_init::zeroed(), GFP_KERNEL)?;
++
++        // SAFETY: `dev` is a valid, bound device, whose parent, if any, is valid. Its node isn't
++        // used concurrently: it's being probed. `raw` and `prop` are valid.
++        unsafe {
++            if (*dev).of_node.is_null() && !(*dev).parent.is_null() && !(*(*dev).parent).of_node.is_null() {
++                bindings::device_set_of_node_from_dev(dev, (*dev).parent);
++            }
++            bindings::touchscreen_parse_properties(raw, false, &mut *prop);
++            bindings::get_device(&raw mut (*raw).dev);
++        }
++
++        Ok(Reporter { input: self.0, prop })
++    }
++
++    /// Registers the device, until `parent` is unbound, for `ops` to open and close.
++    pub fn register<T: Operations>(self, parent: &Device<Bound>, ops: Arc<T>) -> Result {
++        let raw = self.0.as_ptr();
++        let cookie = Arc::into_raw(ops);
++
++        // SAFETY: `raw` is valid and not registered, so it's exclusively ours.
++        unsafe {
++            (*raw).open = Some(open::<T>);
++            (*raw).close = Some(close::<T>);
++            (*raw).dev.driver_data = cookie.cast_mut().cast();
++        }
++
++        // SAFETY: `raw` is fully set up.
++        let ret = to_result(unsafe { bindings::input_register_device(raw) });
++        if let Err(e) = ret {
++            // SAFETY: `cookie` came from `Arc::into_raw` above, and nothing else has it.
++            drop(unsafe { Arc::from_raw(cookie) });
++            return Err(e); // `self` frees the device.
++        }
++        core::mem::forget(self);
++
++        let action = KBox::into_raw(KBox::new(Registered::<T> { input: raw, cookie }, GFP_KERNEL)?);
++        // SAFETY: `action` is valid until the action, which runs once, frees it.
++        to_result(unsafe {
++            bindings::devm_add_action_or_reset(
++                parent.as_raw(),
++                Some(unregister::<T>),
++                action.cast::<c_void>(),
++            )
++        })
++    }
++}
++
++impl Drop for Builder {
++    fn drop(&mut self) {
++        // SAFETY: By the type invariant, it's allocated and not registered.
++        unsafe { bindings::input_free_device(self.0.as_ptr()) };
++    }
++}
++
++struct Registered<T> {
++    input: *mut bindings::input_dev,
++    cookie: *const T,
++}
++
++unsafe extern "C" fn unregister<T: Operations>(data: *mut c_void) {
++    // SAFETY: `data` came from `KBox::into_raw` in `register`, and this runs once.
++    let reg = unsafe { KBox::from_raw(data.cast::<Registered<T>>()) };
++    // SAFETY: `reg.input` is registered. Past this, it's not opened or closed again.
++    unsafe { bindings::input_unregister_device(reg.input) };
++    // SAFETY: `reg.cookie` came from `Arc::into_raw`, and the device no longer uses it.
++    drop(unsafe { Arc::from_raw(reg.cookie) });
++}
++
++unsafe extern "C" fn open<T: Operations>(input: *mut bindings::input_dev) -> c_int {
++    // SAFETY: `driver_data` is the `Arc` of `register`, alive until after unregistration.
++    let ops = unsafe { ArcBorrow::<T>::from_raw((*input).dev.driver_data.cast::<T>()) };
++    match ops.open() {
++        Ok(()) => 0,
++        Err(e) => e.to_errno(),
++    }
++}
++
++unsafe extern "C" fn close<T: Operations>(input: *mut bindings::input_dev) {
++    // SAFETY: As in `open`.
++    let ops = unsafe { ArcBorrow::<T>::from_raw((*input).dev.driver_data.cast::<T>()) };
++    ops.close();
++}
++
++impl Reporter {
++    /// Reports the touchscreen's position, as its properties transform it.
++    pub fn touch_pos(&self, x: u32, y: u32) {
++        // SAFETY: By the type invariant `input` is valid, and `prop` is initialized.
++        unsafe {
++            bindings::touchscreen_report_pos(self.input.as_ptr(), &*self.prop, x, y, false);
++        }
++    }
++
++    /// Reports an absolute axis.
++    pub fn abs(&self, axis: u32, value: i32) {
++        // SAFETY: By the type invariant `input` is valid.
++        unsafe { bindings::input_event(self.input.as_ptr(), bindings::EV_ABS, axis, value) };
++    }
++
++    /// Reports a key.
++    pub fn key(&self, code: u32, down: bool) {
++        // SAFETY: By the type invariant `input` is valid.
++        unsafe {
++            bindings::input_event(self.input.as_ptr(), bindings::EV_KEY, code, i32::from(down))
++        };
++    }
++
++    /// Ends a set of events.
++    pub fn sync(&self) {
++        // SAFETY: By the type invariant `input` is valid.
++        unsafe {
++            bindings::input_event(self.input.as_ptr(), bindings::EV_SYN, bindings::SYN_REPORT, 0)
++        };
++    }
++}
++
++impl Drop for Reporter {
++    fn drop(&mut self) {
++        // SAFETY: By the type invariant we hold a reference.
++        unsafe { bindings::put_device(&raw mut (*self.input.as_ptr()).dev) };
++    }
++}
++
++/// What a threaded interrupt runs.
++pub trait IrqThread: Send + Sync + 'static {
++    /// Runs in the interrupt's thread.
++    fn thread(&self);
++}
++
++/// An interrupt line.
++#[derive(Clone, Copy)]
++pub struct IrqLine(u32);
++
++impl IrqLine {
++    /// The line with this number.
++    pub const fn new(irq: u32) -> Self {
++        Self(irq)
++    }
++
++    /// Enables it.
++    pub fn enable(self) {
++        // SAFETY: `enable_irq` checks the number, and warns of an imbalance.
++        unsafe { bindings::enable_irq(self.0) };
++    }
++
++    /// Disables it, and waits for its handlers.
++    pub fn disable(self) {
++        // SAFETY: `disable_irq` checks the number, and may sleep, as this may.
++        unsafe { bindings::disable_irq(self.0) };
++    }
++
++    /// Requests it, until `dev` is unbound, with no primary handler, for `handler` to run.
++    pub fn request_threaded<T: IrqThread>(
++        self,
++        dev: &Device<Bound>,
++        flags: Flags,
++        name: &'static CStr,
++        handler: Arc<T>,
++    ) -> Result {
++        let cookie = Arc::into_raw(handler);
++
++        // SAFETY: `cookie` stays valid until `free_threaded`, which frees the interrupt first.
++        let ret = to_result(unsafe {
++            bindings::request_threaded_irq(
++                self.0,
++                None,
++                Some(run_thread::<T>),
++                flags.into_inner() as _,
++                name.as_char_ptr(),
++                cookie.cast_mut().cast(),
++            )
++        });
++        if let Err(e) = ret {
++            // SAFETY: `cookie` came from `Arc::into_raw` above, and nothing has it.
++            drop(unsafe { Arc::from_raw(cookie) });
++            return Err(e);
++        }
++
++        let action = KBox::into_raw(KBox::new(
++            Requested::<T> {
++                irq: self.0,
++                cookie,
++            },
++            GFP_KERNEL,
++        )?);
++        // SAFETY: `action` is valid until the action, which runs once, frees it.
++        to_result(unsafe {
++            bindings::devm_add_action_or_reset(
++                dev.as_raw(),
++                Some(free_threaded::<T>),
++                action.cast::<c_void>(),
++            )
++        })
++    }
++}
++
++struct Requested<T> {
++    irq: u32,
++    cookie: *const T,
++}
++
++unsafe extern "C" fn run_thread<T: IrqThread>(_irq: c_int, data: *mut c_void) -> bindings::irqreturn_t {
++    // SAFETY: `data` is the `Arc` of `request_threaded`, alive until the interrupt is freed.
++    let handler = unsafe { ArcBorrow::<T>::from_raw(data.cast::<T>()) };
++    handler.thread();
++    bindings::irqreturn_IRQ_HANDLED
++}
++
++unsafe extern "C" fn free_threaded<T: IrqThread>(data: *mut c_void) {
++    // SAFETY: `data` came from `KBox::into_raw`, and this runs once.
++    let req = unsafe { KBox::from_raw(data.cast::<Requested<T>>()) };
++    // SAFETY: The interrupt was requested with this cookie.
++    unsafe { bindings::free_irq(req.irq, req.cookie.cast_mut().cast()) };
++    // SAFETY: `req.cookie` came from `Arc::into_raw`, and the interrupt no longer uses it.
++    drop(unsafe { Arc::from_raw(req.cookie) });
++}
+--- a/rust/kernel/lib.rs
++++ b/rust/kernel/lib.rs
+@@ -82,6 +82,27 @@
+ pub mod gpu;
+ #[cfg(CONFIG_I2C = "y")]
+ pub mod i2c;
++#[cfg(CONFIG_IIO = "y")]
++pub mod iio;
++#[cfg(CONFIG_GPIO_GENERIC)]
++pub mod gpio_generic;
++#[cfg(CONFIG_INPUT = "y")]
++pub mod input;
++#[cfg(CONFIG_MXC_CLK)]
++pub mod imx_clk;
++#[cfg(CONFIG_PINCTRL_IMX1_CORE)]
++pub mod imx_pinctrl;
++pub mod math64;
++#[cfg(CONFIG_USB = "y")]
++pub mod usb_hcd;
++#[cfg(all(CONFIG_SND_SOC = "y", CONFIG_REGMAP))]
++pub mod asoc;
++#[cfg(CONFIG_MFD_CORE)]
++pub mod mfd;
++#[cfg(CONFIG_REGMAP)]
++pub mod regmap;
++#[cfg(CONFIG_SPI_MASTER)]
++pub mod spi;
+ pub mod id_pool;
+ #[doc(hidden)]
+ pub mod impl_flags;
+--- /dev/null
++++ b/rust/kernel/math64.rs
+@@ -0,0 +1,19 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! 64-bit division that works on 32-bit architectures.
++//!
++//! Dividing a `u64` with `/` on 32-bit ARM links, but `__aeabi_uldivmod` goes to a stub that
++//! panics (see `rust/compiler_builtins.rs`).
++//!
++//! C header: [`include/linux/math64.h`](srctree/include/linux/math64.h)
++
++/// `dividend / divisor`, or [`None`] when `divisor` is zero.
++#[inline]
++pub fn div64_u64(dividend: u64, divisor: u64) -> Option<u64> {
++    if divisor == 0 {
++        return None;
++    }
++
++    // SAFETY: `div64_u64` only reads its arguments, and `divisor` isn't zero.
++    Some(unsafe { bindings::div64_u64(dividend, divisor) })
++}
+--- /dev/null
++++ b/rust/kernel/mfd.rs
+@@ -0,0 +1,122 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! Multi-function devices, and the registers of the one we have.
++//!
++//! C header: [`include/linux/mfd/core.h`](srctree/include/linux/mfd/core.h)
++
++use crate::{
++    alloc::{flags::GFP_KERNEL, KVec},
++    device::{Bound, Device},
++    error::*,
++    prelude::*,
++};
++
++/// A child device of a multi-function device.
++pub struct Cell {
++    /// The name, which is what a platform driver matches.
++    pub name: &'static CStr,
++    /// The device tree `compatible` of its child node, if it has one.
++    pub of_compatible: Option<&'static CStr>,
++}
++
++/// Adds `cells` as `dev`'s children until it's unbound, with no device numbering.
++pub fn add_devices(dev: &Device<Bound>, cells: &[Cell]) -> Result {
++    let mut raw = KVec::with_capacity(cells.len(), GFP_KERNEL)?;
++    for cell in cells {
++        let mut c: bindings::mfd_cell = pin_init::zeroed();
++        c.name = cell.name.as_char_ptr();
++        if let Some(of) = cell.of_compatible {
++            c.of_compatible = of.as_char_ptr();
++        }
++        raw.push(c, GFP_KERNEL)?;
++    }
++
++    // SAFETY: `dev` is bound. The MFD core copies the cells it keeps, and their strings are
++    // `'static`.
++    to_result(unsafe {
++        bindings::devm_mfd_add_devices(
++            dev.as_raw(),
++            bindings::PLATFORM_DEVID_NONE,
++            raw.as_ptr(),
++            raw.len() as _,
++            core::ptr::null_mut(),
++            0,
++            core::ptr::null_mut(),
++        )
++    })
++}
++
++/// The TI TSC2100's registers: `include/linux/mfd/tsc2100.h`.
++pub mod tsc2100 {
++    /// A read, in the command word.
++    pub const READ: u32 = 1 << 15;
++
++    /// A register's address, as it appears in the command word.
++    pub const fn reg(page: u32, reg: u32) -> u32 {
++        (page << 11) | (reg << 5)
++    }
++
++    /// The distance between registers.
++    pub const REG_STRIDE: u32 = reg(0, 1);
++    /// The highest register.
++    pub const REG_MAX: u32 = reg(3, 0x3f);
++
++    /// X result.
++    pub const REG_X: u32 = reg(0, 0x00);
++    /// Y result.
++    pub const REG_Y: u32 = reg(0, 0x01);
++    /// Z1 result.
++    pub const REG_Z1: u32 = reg(0, 0x02);
++    /// Z2 result.
++    pub const REG_Z2: u32 = reg(0, 0x03);
++
++    /// ADC control.
++    pub const REG_ADC: u32 = reg(1, 0x00);
++    /// Status.
++    pub const REG_STATUS: u32 = reg(1, 0x01);
++    /// Reference.
++    pub const REG_REF: u32 = reg(1, 0x03);
++    /// Reset.
++    pub const REG_RESET: u32 = reg(1, 0x04);
++
++    /// `REG_ADC`, read: the pen is down.
++    pub const ADC_PSTCM: u32 = 1 << 15;
++    /// `REG_ADC`: the conversion or scan mode.
++    pub const fn adc_adscm(mode: u32) -> u32 {
++        mode << 10
++    }
++    /// No conversion.
++    pub const ADSCM_NONE: u32 = 0x0;
++    /// Convert X.
++    pub const ADSCM_X: u32 = 0x3;
++    /// Convert Y.
++    pub const ADSCM_Y: u32 = 0x4;
++    /// Convert Z1 and Z2.
++    pub const ADSCM_Z: u32 = 0x5;
++    /// 12-bit.
++    pub const ADC_RES_12BIT: u32 = 0 << 8;
++    /// Mean of 4.
++    pub const ADC_AVG_4: u32 = 1 << 6;
++    /// 1 MHz conversion clock.
++    pub const ADC_CL_1MHZ: u32 = 3 << 4;
++    /// 500 us panel settling.
++    pub const ADC_PV_500US: u32 = 2 << 1;
++
++    /// `REG_STATUS`: what PINTDAV does.
++    pub const fn status_pintdav(mode: u32) -> u32 {
++        mode << 14
++    }
++    /// PINTDAV signals the pen alone.
++    pub const PINTDAV_PEN: u32 = 2;
++    /// X is done.
++    pub const STATUS_XSTAT: u32 = 1 << 10;
++    /// Y is done.
++    pub const STATUS_YSTAT: u32 = 1 << 9;
++    /// Z2 is done.
++    pub const STATUS_Z2STAT: u32 = 1 << 7;
++
++    /// `REG_RESET`: writing this resets the chip.
++    pub const RESET_MAGIC: u32 = 0xbb00;
++    /// `REG_REF`: the internal reference, as the stock driver sets it.
++    pub const REF_DEFAULT: u32 = 0x0011;
++}
+--- /dev/null
++++ b/rust/kernel/regmap.rs
+@@ -0,0 +1,172 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! Register maps with their own read and write functions.
++//!
++//! C header: [`include/linux/regmap.h`](srctree/include/linux/regmap.h)
++
++use crate::{
++    alloc::{flags::GFP_KERNEL, KBox},
++    device::{Bound, Device},
++    error::*,
++    ffi::{c_int, c_uint, c_void},
++    prelude::*,
++    static_lock_class,
++    time::{delay::fsleep, Delta},
++};
++use core::ptr::NonNull;
++
++/// A register map's accessors.
++pub trait Bus: Send + Sync + 'static {
++    /// Reads a register.
++    fn read(&self, reg: u32) -> Result<u32>;
++    /// Writes a register.
++    fn write(&self, reg: u32, val: u32) -> Result;
++}
++
++/// A register map's shape.
++pub struct Config {
++    /// Bits in a register's address.
++    pub reg_bits: i32,
++    /// Bits in a register's value.
++    pub val_bits: i32,
++    /// The distance between registers.
++    pub reg_stride: i32,
++    /// The highest register.
++    pub max_register: u32,
++}
++
++/// A register map, which regmap's lock makes safe to share.
++///
++/// # Invariants
++///
++/// `self.0` is a regmap that lives as long as the device it's registered on stays bound. A
++/// [`Regmap`] is only obtained from that device while bound or from its child, and is held in
++/// driver data, which is dropped before the device's devres (and a child's before its parent's).
++#[derive(Clone, Copy)]
++pub struct Regmap(NonNull<bindings::regmap>);
++
++// SAFETY: regmap's own lock serializes every access.
++unsafe impl Send for Regmap {}
++// SAFETY: regmap's own lock serializes every access.
++unsafe impl Sync for Regmap {}
++
++unsafe extern "C" fn reg_read<T: Bus>(ctx: *mut c_void, reg: c_uint, val: *mut c_uint) -> c_int {
++    // SAFETY: `ctx` is the `T` given in `register`, alive as long as the regmap.
++    let bus = unsafe { &*ctx.cast::<T>() };
++    match bus.read(reg) {
++        Ok(v) => {
++            // SAFETY: regmap passes a valid pointer to the result.
++            unsafe { *val = v };
++            0
++        }
++        Err(e) => e.to_errno(),
++    }
++}
++
++unsafe extern "C" fn reg_write<T: Bus>(ctx: *mut c_void, reg: c_uint, val: c_uint) -> c_int {
++    // SAFETY: `ctx` is the `T` given in `register`, alive as long as the regmap.
++    let bus = unsafe { &*ctx.cast::<T>() };
++    match bus.write(reg, val) {
++        Ok(()) => 0,
++        Err(e) => e.to_errno(),
++    }
++}
++
++unsafe extern "C" fn release<T: Bus>(ctx: *mut c_void) {
++    // SAFETY: `ctx` came from `KBox::into_raw` in `register`, and this action runs once.
++    drop(unsafe { KBox::from_raw(ctx.cast::<T>()) });
++}
++
++impl Regmap {
++    pub(crate) fn as_ptr(&self) -> *mut bindings::regmap {
++        self.0.as_ptr()
++    }
++
++    /// Registers a register map on `dev` until it's unbound, where `bus` does the accesses.
++    pub fn register<T: Bus>(dev: &Device<Bound>, bus: T, config: &Config) -> Result<Self> {
++        let ctx = KBox::into_raw(KBox::new(bus, GFP_KERNEL)?).cast::<c_void>();
++
++        // SAFETY: `ctx` is valid until the action runs. Actions run in reverse order, so that's
++        // after the regmap below has gone.
++        to_result(unsafe {
++            bindings::devm_add_action_or_reset(dev.as_raw(), Some(release::<T>), ctx)
++        })?;
++
++        let mut cfg: bindings::regmap_config = pin_init::zeroed();
++        cfg.reg_bits = config.reg_bits;
++        cfg.val_bits = config.val_bits;
++        cfg.reg_stride = config.reg_stride;
++        cfg.max_register = config.max_register;
++        cfg.reg_read = Some(reg_read::<T>);
++        cfg.reg_write = Some(reg_write::<T>);
++
++        // SAFETY: `dev` is bound, `ctx` is valid as above, and regmap copies what it needs of
++        // the config. The key is static.
++        let map = from_err_ptr(unsafe {
++            bindings::__devm_regmap_init(
++                dev.as_raw(),
++                core::ptr::null(),
++                ctx,
++                &cfg,
++                static_lock_class!().as_ptr(),
++                c"regmap".as_char_ptr(),
++            )
++        })?;
++
++        Ok(Self(NonNull::new(map).ok_or(ENOMEM)?))
++    }
++
++    /// The register map of `dev`'s parent, which a child outlasts only unbound.
++    pub fn of_parent(dev: &Device<Bound>) -> Result<Self> {
++        let parent = dev.parent().ok_or(ENODEV)?;
++        // SAFETY: `parent` is a valid device, and a null name asks for its only regmap.
++        let map = unsafe { bindings::dev_get_regmap(parent.as_raw(), core::ptr::null()) };
++        Ok(Self(NonNull::new(map).ok_or(ENODEV)?))
++    }
++
++    /// Reads a register.
++    pub fn read(&self, reg: u32) -> Result<u32> {
++        let mut val = 0;
++        // SAFETY: By the type invariant the map is valid, and `val` is a valid destination.
++        to_result(unsafe { bindings::regmap_read(self.0.as_ptr(), reg, &mut val) })?;
++        Ok(val)
++    }
++
++    /// Writes a register.
++    pub fn write(&self, reg: u32, val: u32) -> Result {
++        // SAFETY: By the type invariant the map is valid.
++        to_result(unsafe { bindings::regmap_write(self.0.as_ptr(), reg, val) })
++    }
++
++    /// Sets the bits of `mask` in a register to those of `val`.
++    pub fn update_bits(&self, reg: u32, mask: u32, val: u32) -> Result {
++        let old = self.read(reg)?;
++        let new = (old & !mask) | (val & mask);
++        if new != old {
++            self.write(reg, new)?;
++        }
++        Ok(())
++    }
++
++    /// Reads a register every `sleep_us` until `done` says so, for up to about `timeout_us`.
++    pub fn read_poll_timeout(
++        &self,
++        reg: u32,
++        done: impl Fn(u32) -> bool,
++        sleep_us: u32,
++        timeout_us: u32,
++    ) -> Result<u32> {
++        let mut waited = 0;
++        loop {
++            let val = self.read(reg)?;
++            if done(val) {
++                return Ok(val);
++            }
++            if waited >= timeout_us {
++                return Err(ETIMEDOUT);
++            }
++            fsleep(Delta::from_micros(i64::from(sleep_us)));
++            waited += sleep_us;
++        }
++    }
++}
+--- /dev/null
++++ b/rust/kernel/spi.rs
+@@ -0,0 +1,358 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! SPI device driver abstractions, in the shape of [`kernel::i2c`].
++//!
++//! C header: [`include/linux/spi/spi.h`](srctree/include/linux/spi/spi.h)
++
++use crate::{
++    alloc::{flags::GFP_KERNEL, KVec},
++    device,
++    device_id::{RawDeviceId, RawDeviceIdIndex},
++    driver,
++    error::*,
++    of,
++    prelude::*,
++    sync::aref::{ARef, AlwaysRefCounted},
++    types::Opaque,
++};
++use core::{marker::PhantomData, mem::offset_of, ptr::NonNull};
++
++/// An SPI device id.
++#[repr(transparent)]
++#[derive(Clone, Copy)]
++pub struct DeviceId(bindings::spi_device_id);
++
++impl DeviceId {
++    const NAME_SIZE: usize = 32;
++
++    /// Creates a device id from its name.
++    #[inline(always)]
++    pub const fn new(id: &'static CStr) -> Self {
++        let src = id.to_bytes_with_nul();
++        build_assert!(src.len() <= Self::NAME_SIZE, "ID exceeds 32 bytes");
++        let mut raw: bindings::spi_device_id = pin_init::zeroed();
++        let mut i = 0;
++        while i < src.len() {
++            raw.name[i] = src[i];
++            i += 1;
++        }
++        Self(raw)
++    }
++}
++
++// SAFETY: `DeviceId` is a `#[repr(transparent)]` wrapper of `spi_device_id` and adds no
++// invariants, so it's safe to transmute to `RawType`.
++unsafe impl RawDeviceId for DeviceId {
++    type RawType = bindings::spi_device_id;
++}
++
++// SAFETY: `DRIVER_DATA_OFFSET` is the offset to the `driver_data` field.
++unsafe impl RawDeviceIdIndex for DeviceId {
++    const DRIVER_DATA_OFFSET: usize = offset_of!(bindings::spi_device_id, driver_data);
++}
++
++/// An id table for SPI devices.
++pub type IdTable<T> = &'static dyn kernel::device_id::IdTable<DeviceId, T>;
++
++/// Creates an SPI [`IdTable`] with its alias for modpost.
++#[macro_export]
++macro_rules! spi_device_table {
++    ($($tt:tt)*) => {
++        $crate::module_device_table!("spi", $crate::spi::DeviceId, $($tt)*);
++    };
++}
++
++/// An adapter for the registration of SPI drivers.
++pub struct Adapter<T: Driver>(T);
++
++// SAFETY:
++// - `bindings::spi_driver` is a C type declared as `repr(C)`.
++// - `T::Data` is the type of the driver's device private data.
++// - `struct spi_driver` embeds a `struct device_driver` at `DEVICE_DRIVER_OFFSET`.
++unsafe impl<T: Driver> driver::DriverLayout for Adapter<T> {
++    type DriverType = bindings::spi_driver;
++    type DriverData<'bound> = T::Data<'bound>;
++    const DEVICE_DRIVER_OFFSET: usize = offset_of!(Self::DriverType, driver);
++}
++
++// SAFETY: `unregister` is only called after a successful `register`.
++unsafe impl<T: Driver> driver::RegistrationOps for Adapter<T> {
++    unsafe fn register(
++        sdrv: &Opaque<Self::DriverType>,
++        name: &'static CStr,
++        module: &'static ThisModule,
++    ) -> Result {
++        let id_table = match T::SPI_ID_TABLE {
++            Some(table) => table.as_ptr(),
++            None => core::ptr::null(),
++        };
++        let of_table = match T::OF_ID_TABLE {
++            Some(table) => table.as_ptr(),
++            None => core::ptr::null(),
++        };
++
++        // SAFETY: It's safe to set the fields of `struct spi_driver` on initialization.
++        unsafe {
++            (*sdrv.get()).driver.name = name.as_char_ptr();
++            (*sdrv.get()).probe = Some(Self::probe_callback);
++            (*sdrv.get()).remove = Some(Self::remove_callback);
++            (*sdrv.get()).id_table = id_table;
++            (*sdrv.get()).driver.of_match_table = of_table;
++        }
++
++        // SAFETY: `sdrv` is guaranteed to be a valid `DriverType`.
++        to_result(unsafe { bindings::__spi_register_driver(module.as_ptr(), sdrv.get()) })
++    }
++
++    unsafe fn unregister(sdrv: &Opaque<Self::DriverType>) {
++        // SAFETY: `sdrv` is guaranteed to be a valid `DriverType`.
++        unsafe { bindings::spi_unregister_driver(sdrv.get()) }
++    }
++}
++
++impl<T: Driver> Adapter<T> {
++    extern "C" fn probe_callback(sdev: *mut bindings::spi_device) -> kernel::ffi::c_int {
++        // SAFETY: The SPI bus only calls probe with a valid `struct spi_device`, valid for the
++        // duration of this callback.
++        let sdev = unsafe { &*sdev.cast::<Device<device::CoreInternal<'_>>>() };
++
++        // SAFETY: The matched data is of type `Self::IdInfo`.
++        let info = unsafe { <Self as driver::Adapter>::id_info(sdev.as_ref()) };
++
++        from_result(|| {
++            let data = T::probe(sdev, info);
++            sdev.as_ref().set_drvdata(data)?;
++            Ok(0)
++        })
++    }
++
++    extern "C" fn remove_callback(sdev: *mut bindings::spi_device) {
++        // SAFETY: `sdev` is a valid `struct spi_device`.
++        let sdev = unsafe { &*sdev.cast::<Device<device::CoreInternal<'_>>>() };
++
++        // SAFETY: remove only follows a successful probe, which stored a `Pin<KBox<T::Data<'_>>>`.
++        let data = unsafe { sdev.as_ref().drvdata_borrow::<T::Data<'_>>() };
++
++        T::unbind(sdev, data);
++    }
++}
++
++impl<T: Driver> driver::Adapter for Adapter<T> {
++    type IdInfo = T::IdInfo;
++
++    fn of_id_table() -> Option<of::IdTable<Self::IdInfo>> {
++        T::OF_ID_TABLE
++    }
++
++    fn acpi_id_table() -> Option<kernel::acpi::IdTable<Self::IdInfo>> {
++        None
++    }
++}
++
++/// Declares a kernel module that exposes a single SPI driver.
++#[macro_export]
++macro_rules! module_spi_driver {
++    ($($f:tt)*) => {
++        $crate::module_driver!(<T>, $crate::spi::Adapter<T>, { $($f)* });
++    };
++}
++
++/// The SPI driver trait.
++pub trait Driver {
++    /// The type holding information about each device id supported by the driver.
++    type IdInfo: 'static;
++
++    /// The type of the driver's bus device private data.
++    type Data<'bound>: Send + 'bound;
++
++    /// The table of SPI device ids supported by the driver.
++    const SPI_ID_TABLE: Option<IdTable<Self::IdInfo>> = None;
++
++    /// The table of OF device ids supported by the driver.
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = None;
++
++    /// Called when a device matches the driver.
++    fn probe<'bound>(
++        dev: &'bound Device<device::Core<'_>>,
++        id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self::Data<'bound>, Error> + 'bound;
++
++    /// Called when the device is unbound from the driver.
++    fn unbind<'bound>(dev: &'bound Device<device::Core<'_>>, this: Pin<&Self::Data<'bound>>) {
++        let _ = (dev, this);
++    }
++}
++
++/// One transfer of a [`Device::sync`] message, all in one chip-select frame with the others.
++#[derive(Default)]
++pub struct Transfer<'a> {
++    /// What to send, if anything.
++    pub tx: Option<&'a [u8]>,
++    /// Where to put what's received, if anything. With `tx`, the two must be the same length.
++    pub rx: Option<&'a mut [u8]>,
++    /// How long to wait after this transfer, in microseconds.
++    pub delay_us: u16,
++}
++
++/// An SPI device.
++///
++/// # Invariants
++///
++/// A [`Device`] represents a valid `struct spi_device` created by the C portion of the kernel.
++#[repr(transparent)]
++pub struct Device<Ctx: device::DeviceContext = device::Normal>(
++    Opaque<bindings::spi_device>,
++    PhantomData<Ctx>,
++);
++
++impl<Ctx: device::DeviceContext> Device<Ctx> {
++    fn as_raw(&self) -> *mut bindings::spi_device {
++        self.0.get()
++    }
++}
++
++impl Device<device::Core<'_>> {
++    /// Sets the word size, in bits, and applies the device's settings to the controller.
++    ///
++    /// `only_if_unset` leaves a word size that the device tree already chose.
++    pub fn setup(&self, bits_per_word: u8, only_if_unset: bool) -> Result {
++        // SAFETY: In the `Core` context the device isn't in use by anyone else, so its settings
++        // may be written, and `as_raw` is valid by the type invariant.
++        unsafe {
++            if !only_if_unset || (*self.as_raw()).bits_per_word == 0 {
++                (*self.as_raw()).bits_per_word = bits_per_word;
++            }
++            to_result(bindings::spi_setup(self.as_raw()))
++        }
++    }
++}
++
++impl Device {
++    /// Runs `transfers` as one message, in one chip-select frame.
++    ///
++    /// The buffers needn't be DMA-safe: they're copied through a heap buffer. May sleep.
++    pub fn sync(&self, transfers: &mut [Transfer<'_>]) -> Result {
++        let total = transfers.iter().try_fold(0usize, |sum, t| {
++            let (tx, rx) = (t.tx.map(<[u8]>::len), t.rx.as_ref().map(|r| r.len()));
++            match (tx, rx) {
++                (Some(a), Some(b)) if a != b => Err(EINVAL),
++                (a, b) => Ok(sum + a.or(b).unwrap_or(0)),
++            }
++        })?;
++
++        // Twice over: a transmit and a receive buffer for each.
++        let mut buf = KVec::<u8>::with_capacity(total * 2, GFP_KERNEL)?;
++        buf.resize(total * 2, 0, GFP_KERNEL)?;
++        let (txs, rxs) = buf.split_at_mut(total);
++
++        let mut raw = KVec::with_capacity(transfers.len(), GFP_KERNEL)?;
++        let mut at = 0;
++        for t in transfers.iter() {
++            let len = t.tx.map(<[u8]>::len).or(t.rx.as_ref().map(|r| r.len())).unwrap_or(0);
++            let mut x: bindings::spi_transfer = pin_init::zeroed();
++            x.len = len as u32;
++            if let Some(tx) = t.tx {
++                txs[at..at + len].copy_from_slice(tx);
++                x.tx_buf = txs[at..].as_ptr().cast();
++            }
++            if t.rx.is_some() {
++                x.rx_buf = rxs[at..].as_mut_ptr().cast();
++            }
++            x.delay.value = t.delay_us;
++            x.delay.unit = bindings::SPI_DELAY_UNIT_USECS as u8;
++            raw.push(x, GFP_KERNEL)?;
++            at += len;
++        }
++
++        // SAFETY: `as_raw` is valid by the type invariant. `raw` and the buffers it points to
++        // live until the call returns, and `spi_sync` is synchronous.
++        to_result(unsafe {
++            bindings::spi_sync_transfer(self.as_raw(), raw.as_mut_ptr(), raw.len() as _)
++        })?;
++
++        let mut at = 0;
++        for t in transfers.iter_mut() {
++            let len = t.tx.map(<[u8]>::len).or(t.rx.as_ref().map(|r| r.len())).unwrap_or(0);
++            if let Some(rx) = t.rx.as_mut() {
++                rx.copy_from_slice(&rxs[at..at + len]);
++            }
++            at += len;
++        }
++
++        Ok(())
++    }
++
++    /// Sends `data` in one transfer.
++    pub fn write(&self, data: &[u8]) -> Result {
++        self.sync(&mut [Transfer {
++            tx: Some(data),
++            ..Default::default()
++        }])
++    }
++
++    /// The SPI device that's `dev`'s parent.
++    pub fn of_parent<Ctx: device::DeviceContext>(dev: &device::Device<Ctx>) -> Result<ARef<Self>> {
++        let parent = dev.parent().ok_or(ENODEV)?;
++        // SAFETY: `parent` is a valid device, and `bus` isn't written after it's added.
++        if !core::ptr::eq(unsafe { (*parent.as_raw()).bus }, &raw const bindings::spi_bus_type) {
++            return Err(ENODEV);
++        }
++        // SAFETY: Its bus is SPI's, so `parent` is the `dev` of a `struct spi_device`, and a
++        // `Device` is a transparent wrapper of that.
++        let spi = unsafe {
++            &*crate::container_of!(parent.as_raw(), bindings::spi_device, dev).cast::<Self>()
++        };
++        Ok(spi.into())
++    }
++
++    /// The device's interrupt, if it has one.
++    pub fn irq(&self) -> Option<u32> {
++        // SAFETY: `as_raw` is valid by the type invariant, and `irq` isn't written after probe.
++        let irq = unsafe { (*self.as_raw()).irq };
++        u32::try_from(irq).ok().filter(|&irq| irq != 0)
++    }
++}
++
++// SAFETY: `Device` is a transparent wrapper of `struct spi_device`, whose `dev` is at `OFFSET`.
++unsafe impl<Ctx: device::DeviceContext> device::AsBusDevice<Ctx> for Device<Ctx> {
++    const OFFSET: usize = offset_of!(bindings::spi_device, dev);
++}
++
++// SAFETY: `Device` is a transparent wrapper of a type that doesn't depend on its generic argument.
++kernel::impl_device_context_deref!(unsafe { Device });
++kernel::impl_device_context_into_aref!(Device);
++
++// SAFETY: Instances of `Device` are always reference-counted.
++unsafe impl AlwaysRefCounted for Device {
++    fn inc_ref(&self) {
++        // SAFETY: A shared reference guarantees that the refcount is non-zero.
++        unsafe { bindings::get_device(self.as_ref().as_raw()) };
++    }
++
++    unsafe fn dec_ref(obj: NonNull<Self>) {
++        // SAFETY: The safety requirements guarantee that the refcount is non-zero.
++        unsafe { bindings::put_device(&raw mut (*obj.as_ref().as_raw()).dev) }
++    }
++}
++
++impl<Ctx: device::DeviceContext> AsRef<device::Device<Ctx>> for Device<Ctx> {
++    fn as_ref(&self) -> &device::Device<Ctx> {
++        // SAFETY: By the type invariant, `as_raw` points to a valid `struct spi_device`.
++        let dev = unsafe { &raw mut (*self.as_raw()).dev };
++
++        // SAFETY: `dev` points to a valid `struct device`.
++        unsafe { device::Device::from_raw(dev) }
++    }
++}
++
++// SAFETY: A `Device` is reference-counted and can be released from any thread.
++unsafe impl Send for Device {}
++
++// SAFETY: The C SPI core serializes `spi_sync`, the only thing `Device`'s methods do to it.
++unsafe impl Sync for Device {}
++
++/// Gets a reference to `ARef` from a device in any context, for use after probe.
++pub fn device_aref(dev: &Device<device::Core<'_>>) -> ARef<Device> {
++    let normal: &Device = dev;
++    normal.into()
++}
+--- /dev/null
++++ b/rust/kernel/usb_hcd.rs
+@@ -0,0 +1,717 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! USB host controller drivers.
++//!
++//! An URB the core hands over is a [`Urb`] for the length of the call. Linked to its endpoint it's
++//! a [`LinkedUrb`], which has one owner and can't be copied: it goes back to the core only by
++//! moving it into [`Done::complete`], so that no URB is completed twice or used afterwards. A
++//! [`Done`] gives its URBs back as it's dropped, which should be after the driver's lock is
++//! released: declare it first, and it is.
++//!
++//! C header: [`include/linux/usb/hcd.h`](srctree/include/linux/usb/hcd.h)
++
++use crate::{
++    alloc::{flags::GFP_ATOMIC, KVec},
++    device::{self, Bound},
++    error::*,
++    ffi::{c_char, c_int, c_void},
++    platform,
++    prelude::*,
++    types::Opaque,
++};
++use core::{marker::PhantomData, ptr::NonNull};
++
++/// `USB_PIPE*`, from a pipe's bits.
++pub const PIPE_ISOCHRONOUS: u32 = 0;
++/// See [`PIPE_ISOCHRONOUS`].
++pub const PIPE_INTERRUPT: u32 = 1;
++/// See [`PIPE_ISOCHRONOUS`].
++pub const PIPE_CONTROL: u32 = 2;
++/// See [`PIPE_ISOCHRONOUS`].
++pub const PIPE_BULK: u32 = 3;
++
++/// `URB_SHORT_NOT_OK`.
++pub const URB_SHORT_NOT_OK: u32 = bindings::URB_SHORT_NOT_OK;
++/// `URB_ISO_ASAP`.
++pub const URB_ISO_ASAP: u32 = bindings::URB_ISO_ASAP;
++/// `URB_ZERO_PACKET`.
++pub const URB_ZERO_PACKET: u32 = bindings::URB_ZERO_PACKET;
++
++/// A controller's registers, in the platform device's first memory resource.
++///
++/// # Invariants
++///
++/// `base` maps `size` bytes for as long as the device is bound. A `Regs` isn't `Clone`, and belongs
++/// in what's given to [`Registration::new`], which drops it before the device's devres.
++pub struct Regs {
++    base: *mut u8,
++    size: usize,
++    start: u64,
++}
++
++// SAFETY: MMIO may be accessed from any thread, and the mapping isn't tied to one.
++unsafe impl Send for Regs {}
++// SAFETY: As above: these are volatile accesses by a register's own width.
++unsafe impl Sync for Regs {}
++
++impl Regs {
++    /// Maps the device's first memory resource until it's unbound.
++    pub fn map(pdev: &platform::Device<device::Core<'_>>) -> Result<Self> {
++        let dev: &device::Device<Bound> = pdev.as_ref();
++        // SAFETY: A `platform::Device` is a `struct platform_device`, whose `dev` is `dev`.
++        let raw = unsafe { crate::container_of!(dev.as_raw(), bindings::platform_device, dev) };
++        let mut res = core::ptr::null_mut();
++        // SAFETY: `raw` is valid and being probed, and `res` a valid destination.
++        let base = from_err_ptr(unsafe {
++            bindings::devm_platform_get_and_ioremap_resource(raw, 0, &mut res)
++        })?;
++        // SAFETY: On success the C function sets `res` to the device's resource.
++        let (start, end) = unsafe { ((*res).start, (*res).end) };
++        Ok(Self {
++            base: base.cast(),
++            size: (end - start + 1) as usize,
++            start: start as u64,
++        })
++    }
++
++    /// Where they are, as [`Registration::new`] wants it, once they're in the driver's data.
++    pub fn mapping_info(&self) -> MappingInfo {
++        MappingInfo { start: self.start, size: self.size }
++    }
++
++    fn at(&self, offset: usize, width: usize) -> *mut c_void {
++        // A register that isn't there is a programming error, and to touch it would be worse.
++        assert!(offset + width <= self.size);
++        // SAFETY: By the type invariant, `base` maps `size` bytes, and `offset` was just checked.
++        unsafe { self.base.add(offset) }.cast()
++    }
++
++    /// Reads a 32-bit register.
++    pub fn read(&self, offset: usize) -> u32 {
++        // SAFETY: `at` returns a mapped address.
++        unsafe { bindings::readl(self.at(offset, 4)) }
++    }
++
++    /// Writes a 32-bit register.
++    pub fn write(&self, offset: usize, value: u32) {
++        // SAFETY: `at` returns a mapped address.
++        unsafe { bindings::writel(value, self.at(offset, 4)) };
++    }
++
++    /// Reads a byte.
++    pub fn read8(&self, offset: usize) -> u8 {
++        // SAFETY: `at` returns a mapped address.
++        unsafe { bindings::readb(self.at(offset, 1)) }
++    }
++}
++
++/// Where a controller's registers are.
++pub struct MappingInfo {
++    start: u64,
++    size: usize,
++}
++
++/// An URB, for the length of a call from the core, or while it's linked.
++#[repr(transparent)]
++pub struct Urb(Opaque<bindings::urb>);
++
++impl Urb {
++    fn raw(&self) -> *mut bindings::urb {
++        self.0.get()
++    }
++
++    /// What identifies it, while it's linked.
++    pub fn id(&self) -> usize {
++        self.raw() as usize
++    }
++
++    /// What identifies its endpoint, until the endpoint's disabled.
++    pub fn ep_id(&self) -> usize {
++        // SAFETY: `self` is a valid URB, and the core sets `ep` before it gets to a driver.
++        unsafe { (*self.raw()).ep as usize }
++    }
++
++    /// The pipe's bits.
++    pub fn pipe(&self) -> u32 {
++        // SAFETY: `self` is a valid URB, and its `pipe` doesn't change while it's submitted.
++        unsafe { (*self.raw()).pipe }
++    }
++
++    /// `usb_pipetype`.
++    pub fn pipe_type(&self) -> u32 {
++        (self.pipe() >> 30) & 3
++    }
++
++    /// `usb_pipeendpoint`.
++    pub fn pipe_endpoint(&self) -> u32 {
++        (self.pipe() >> 15) & 0xf
++    }
++
++    /// `usb_pipedevice`.
++    pub fn pipe_device(&self) -> u32 {
++        (self.pipe() >> 8) & 0x7f
++    }
++
++    /// `usb_pipein`.
++    pub fn pipe_in(&self) -> bool {
++        self.pipe() & bindings::USB_DIR_IN != 0
++    }
++
++    /// `usb_pipeisoc`.
++    pub fn is_isoc(&self) -> bool {
++        self.pipe_type() == PIPE_ISOCHRONOUS
++    }
++
++    /// Whether its device is low speed.
++    pub fn is_low_speed(&self) -> bool {
++        // SAFETY: `self` is a valid URB, whose device is valid while it's submitted.
++        unsafe { (*(*self.raw()).dev).speed == bindings::usb_device_speed_USB_SPEED_LOW }
++    }
++
++    /// `usb_maxpacket`.
++    pub fn maxpacket(&self) -> u16 {
++        // SAFETY: `self` is a valid URB, whose device is valid while it's submitted.
++        unsafe { bindings::usb_maxpacket((*self.raw()).dev, self.pipe()) }
++    }
++
++    /// `usb_gettoggle`.
++    pub fn get_toggle(&self) -> bool {
++        let out = usize::from(!self.pipe_in());
++        // SAFETY: As in `maxpacket`.
++        let toggles = unsafe { (*(*self.raw()).dev).toggle[out] };
++        toggles >> self.pipe_endpoint() & 1 != 0
++    }
++
++    /// `usb_settoggle`.
++    pub fn set_toggle(&self, on: bool) {
++        let out = usize::from(!self.pipe_in());
++        let bit = 1 << self.pipe_endpoint();
++        // SAFETY: As in `maxpacket`; the core leaves an endpoint's toggle to its controller.
++        unsafe {
++            let t = &raw mut (*(*self.raw()).dev).toggle[out];
++            *t = (*t & !bit) | if on { bit } else { 0 };
++        }
++    }
++
++    /// `transfer_flags`.
++    pub fn transfer_flags(&self) -> u32 {
++        // SAFETY: `self` is a valid URB.
++        unsafe { (*self.raw()).transfer_flags }
++    }
++
++    /// `transfer_buffer_length`.
++    pub fn transfer_buffer_length(&self) -> u32 {
++        // SAFETY: `self` is a valid URB.
++        unsafe { (*self.raw()).transfer_buffer_length }
++    }
++
++    /// `transfer_dma`.
++    pub fn transfer_dma(&self) -> u32 {
++        // SAFETY: `self` is a valid URB.
++        unsafe { (*self.raw()).transfer_dma as u32 }
++    }
++
++    /// `setup_dma`.
++    pub fn setup_dma(&self) -> u32 {
++        // SAFETY: `self` is a valid URB.
++        unsafe { (*self.raw()).setup_dma as u32 }
++    }
++
++    /// `interval`.
++    pub fn interval(&self) -> i32 {
++        // SAFETY: `self` is a valid URB.
++        unsafe { (*self.raw()).interval }
++    }
++
++    /// `number_of_packets`.
++    pub fn number_of_packets(&self) -> i32 {
++        // SAFETY: `self` is a valid URB.
++        unsafe { (*self.raw()).number_of_packets }
++    }
++
++    /// `start_frame`.
++    pub fn set_start_frame(&self, frame: i32) {
++        // SAFETY: `self` is a valid URB, whose this field its controller owns while it's linked.
++        unsafe { (*self.raw()).start_frame = frame };
++    }
++
++    /// Starts its bookkeeping.
++    pub fn begin(&self) {
++        // SAFETY: As in `set_start_frame`. `hcpriv` needs only not to be null while it's linked.
++        unsafe {
++            (*self.raw()).status = -(bindings::EINPROGRESS as i32);
++            (*self.raw()).actual_length = 0;
++            (*self.raw()).error_count = 0;
++            (*self.raw()).hcpriv = self.raw().cast();
++        }
++    }
++
++    /// Adds to `actual_length`.
++    pub fn add_actual(&self, bytes: u32) {
++        // SAFETY: As in `set_start_frame`.
++        unsafe { (*self.raw()).actual_length += bytes };
++    }
++
++    /// Clears `error_count`.
++    pub fn clear_errors(&self) {
++        // SAFETY: As in `set_start_frame`.
++        unsafe { (*self.raw()).error_count = 0 };
++    }
++
++    fn iso(&self, index: i32) -> *mut bindings::usb_iso_packet_descriptor {
++        assert!((0..self.number_of_packets()).contains(&index));
++        // SAFETY: The URB was allocated with `number_of_packets` of these, and `index` is one.
++        unsafe { (*self.raw()).iso_frame_desc.as_mut_ptr().add(index as usize) }
++    }
++
++    /// The `index`th packet's offset and length.
++    pub fn iso_packet(&self, index: i32) -> (u32, u32) {
++        let d = self.iso(index);
++        // SAFETY: `iso` returns a valid descriptor.
++        unsafe { ((*d).offset, (*d).length) }
++    }
++
++    /// Sets the `index`th packet's result.
++    pub fn set_iso_result(&self, index: i32, actual: u32, status: i32) {
++        let d = self.iso(index);
++        // SAFETY: `iso` returns a valid descriptor, whose results its controller owns.
++        unsafe {
++            (*d).actual_length = actual;
++            (*d).status = status;
++        }
++    }
++
++    /// `len` bytes of its transfer buffer from `offset`, for its controller to read.
++    pub fn transfer_slice(&self, offset: u32, len: u32) -> Option<&[u8]> {
++        // SAFETY: `self` is a valid URB.
++        let p = unsafe { (*self.raw()).transfer_buffer }.cast::<u8>();
++        if p.is_null() || offset.checked_add(len)? > self.transfer_buffer_length() {
++            return None;
++        }
++        // SAFETY: The buffer has `transfer_buffer_length` bytes, and those were just checked.
++        Some(unsafe { core::slice::from_raw_parts(p.add(offset as usize), len as usize) })
++    }
++
++    /// The 8 bytes of its setup packet.
++    pub fn setup_slice(&self) -> Option<&[u8]> {
++        // SAFETY: `self` is a valid URB.
++        let p = unsafe { (*self.raw()).setup_packet };
++        if p.is_null() {
++            return None;
++        }
++        // SAFETY: A control URB's setup packet is 8 bytes.
++        Some(unsafe { core::slice::from_raw_parts(p, 8) })
++    }
++
++    /// Fills `len` bytes of its transfer buffer from `offset`, each from `byte`.
++    pub fn fill_transfer(&self, offset: u32, len: u32, mut byte: impl FnMut(u32) -> u8) -> Result {
++        // SAFETY: `self` is a valid URB.
++        let p = unsafe { (*self.raw()).transfer_buffer }.cast::<u8>();
++        let end = offset.checked_add(len).ok_or(EINVAL)?;
++        if p.is_null() || end > self.transfer_buffer_length() {
++            return Err(EINVAL);
++        }
++        for i in 0..len {
++            // SAFETY: Within the buffer, as was just checked, which is its controller's to write.
++            unsafe { p.add((offset + i) as usize).write(byte(i)) };
++        }
++        Ok(())
++    }
++}
++
++/// An URB linked to its endpoint, owned by its controller's driver until it's completed.
++///
++/// # Invariants
++///
++/// `self.0` is valid: the core holds a reference until it's given back, which only [`Done`] does.
++pub struct LinkedUrb(NonNull<bindings::urb>);
++
++// SAFETY: An URB isn't tied to a thread, and this is its only owner.
++unsafe impl Send for LinkedUrb {}
++
++impl core::ops::Deref for LinkedUrb {
++    type Target = Urb;
++
++    fn deref(&self) -> &Urb {
++        // SAFETY: By the type invariant `self.0` is valid, and `Urb` is a transparent wrapper.
++        unsafe { &*self.0.as_ptr().cast::<Urb>() }
++    }
++}
++
++/// URBs that are finished with: they're given back to the core as this is dropped.
++///
++/// They're chained through `hcpriv`, so that completing one can't fail for want of memory.
++pub struct Done<T: HcDriver> {
++    hcd: *mut bindings::usb_hcd,
++    head: *mut bindings::urb,
++    tail: *mut bindings::urb,
++    _t: PhantomData<T>,
++}
++
++impl<T: HcDriver> Done<T> {
++    /// Nothing, yet, for `hcd`.
++    pub fn new(hcd: &Hcd<T>) -> Self {
++        Self {
++            hcd: hcd.0.get(),
++            head: core::ptr::null_mut(),
++            tail: core::ptr::null_mut(),
++            _t: PhantomData,
++        }
++    }
++
++    /// Unlinks `urb` from its endpoint, to be given back with `status`.
++    pub fn complete(&mut self, urb: LinkedUrb, status: i32) {
++        let raw = urb.0.as_ptr();
++        // SAFETY: `raw` is valid by the invariant of `LinkedUrb`, which has been consumed, and
++        // linked to `self.hcd`'s endpoint. Its other fields aren't the core's until given back.
++        unsafe {
++            bindings::usb_hcd_unlink_urb_from_ep(self.hcd, raw);
++            (*raw).status = status;
++            (*raw).hcpriv = core::ptr::null_mut();
++            if self.tail.is_null() {
++                self.head = raw;
++            } else {
++                (*self.tail).hcpriv = raw.cast();
++            }
++        }
++        self.tail = raw;
++    }
++}
++
++impl<T: HcDriver> Drop for Done<T> {
++    fn drop(&mut self) {
++        let mut urb = self.head;
++        while !urb.is_null() {
++            // SAFETY: `urb` was put in the chain by `complete`, and still isn't the core's.
++            let (next, status) = unsafe { ((*urb).hcpriv.cast::<bindings::urb>(), (*urb).status) };
++            // SAFETY: As above. `hcpriv` is clear for the core, and it's given back once.
++            unsafe {
++                (*urb).hcpriv = core::ptr::null_mut();
++                bindings::usb_hcd_giveback_urb(self.hcd, urb, status);
++            }
++            urb = next;
++        }
++    }
++}
++
++/// A buffer mapped for DMA for a transfer whose own buffer can't be: unmapped as it's dropped.
++pub struct Bounce {
++    dev: *mut bindings::device,
++    buf: KVec<u8>,
++    dma: bindings::dma_addr_t,
++    to_device: bool,
++    mapped: bool,
++}
++
++// SAFETY: The buffer is owned, and the device outlasts anything in its driver's state.
++unsafe impl Send for Bounce {}
++
++impl Bounce {
++    /// Maps a buffer of `len` bytes, filled from `src` when going to the device.
++    pub fn new<T: HcDriver>(hcd: &Hcd<T>, src: Option<&[u8]>, len: usize) -> Result<Self> {
++        let mut buf = KVec::with_capacity(len, GFP_ATOMIC)?;
++        match src {
++            Some(s) => buf.extend_from_slice(s.get(..len).ok_or(EINVAL)?, GFP_ATOMIC)?,
++            None => buf.resize(len, 0, GFP_ATOMIC)?,
++        }
++        let dev = hcd.controller();
++        let dir = if src.is_some() {
++            bindings::dma_data_direction_DMA_TO_DEVICE
++        } else {
++            bindings::dma_data_direction_DMA_FROM_DEVICE
++        };
++        // SAFETY: `dev` is valid, and `buf` is a heap buffer that lives at least to the unmapping.
++        let dma = unsafe { bindings::chumby_dma_map(dev, buf.as_mut_ptr().cast(), len, dir) };
++        // SAFETY: `dev` is valid, and `dma` is what it mapped.
++        if unsafe { bindings::dma_mapping_error(dev, dma) } != 0 {
++            return Err(ENOMEM);
++        }
++        Ok(Self { dev, buf, dma, to_device: src.is_some(), mapped: true })
++    }
++
++    /// The address for the device.
++    pub fn dma(&self) -> u32 {
++        self.dma as u32
++    }
++
++    fn unmap(&mut self) {
++        if !self.mapped {
++            return;
++        }
++        self.mapped = false;
++        let dir = if self.to_device {
++            bindings::dma_data_direction_DMA_TO_DEVICE
++        } else {
++            bindings::dma_data_direction_DMA_FROM_DEVICE
++        };
++        // SAFETY: This is the mapping `new` made, undone once.
++        unsafe { bindings::chumby_dma_unmap(self.dev, self.dma, self.buf.len(), dir) };
++    }
++
++    /// Hands the buffer back to the CPU, with what the device left in it.
++    pub fn finish(mut self) -> KVec<u8> {
++        self.unmap();
++        core::mem::take(&mut self.buf)
++    }
++}
++
++impl Drop for Bounce {
++    fn drop(&mut self) {
++        self.unmap();
++    }
++}
++
++/// A host controller, as the core calls its driver back.
++#[repr(transparent)]
++pub struct Hcd<T>(Opaque<bindings::usb_hcd>, PhantomData<T>);
++
++impl<T: HcDriver> Hcd<T> {
++    /// The driver's data.
++    pub fn data(&self) -> Pin<&T> {
++        // SAFETY: `hcd_priv` holds a `T`, pinned in place by `Registration::new`, which stays until
++        // the core no longer calls back.
++        unsafe { Pin::new_unchecked(&*bindings::chumby_hcd_priv(self.0.get()).cast::<T>()) }
++    }
++
++    fn controller(&self) -> *mut bindings::device {
++        // SAFETY: The core sets the controller as it creates the HCD.
++        unsafe { (*self.0.get()).self_.controller }
++    }
++
++    /// Says the controller's running.
++    pub fn set_running(&self) {
++        // SAFETY: A controller's `start` sets this, and only `start` calls this.
++        unsafe { (*self.0.get()).state = bindings::HC_STATE_RUNNING as _ };
++    }
++
++    /// Links `urb` to its endpoint, unless the endpoint's going away.
++    pub fn link(&self, urb: &Urb) -> Result<LinkedUrb> {
++        // SAFETY: `urb` is valid, and is being submitted to this controller.
++        to_result(unsafe { bindings::usb_hcd_link_urb_to_ep(self.0.get(), urb.raw()) })?;
++        // INVARIANT: The core holds a reference from submission to giveback.
++        Ok(LinkedUrb(NonNull::new(urb.raw()).ok_or(EINVAL)?))
++    }
++
++    /// `usb_hcd_check_unlink_urb`: whether the URB being unlinked really is, with `status`.
++    pub fn check_unlink(&self, urb: &Urb, status: i32) -> Result {
++        // SAFETY: `urb` is valid, and is being unlinked from this controller.
++        to_result(unsafe { bindings::usb_hcd_check_unlink_urb(self.0.get(), urb.raw(), status) })
++    }
++
++    /// Unmaps the transfer buffer, which the driver will use by hand.
++    pub fn unmap_for_dma(&self, urb: &Urb) {
++        // SAFETY: `urb` is valid and this controller's.
++        unsafe { bindings::usb_hcd_unmap_urb_for_dma(self.0.get(), urb.raw()) };
++    }
++
++    /// Unmaps the setup packet, which the driver will use by hand.
++    pub fn unmap_setup_for_dma(&self, urb: &Urb) {
++        // SAFETY: `urb` is valid and this controller's.
++        unsafe { bindings::usb_hcd_unmap_urb_setup_for_dma(self.0.get(), urb.raw()) };
++    }
++}
++
++/// A host controller driver.
++pub trait HcDriver: Send + Sync + Sized + 'static {
++    /// The controller's name.
++    const NAME: &'static CStr;
++    /// Its product description.
++    const PRODUCT: &'static CStr;
++
++    /// The controller's interrupt.
++    fn irq(hcd: &Hcd<Self>);
++    /// Resets it. May sleep.
++    fn reset(hcd: &Hcd<Self>) -> Result;
++    /// Starts it.
++    fn start(hcd: &Hcd<Self>) -> Result;
++    /// Stops it.
++    fn stop(hcd: &Hcd<Self>);
++    /// Takes on an URB.
++    fn urb_enqueue(hcd: &Hcd<Self>, urb: &Urb) -> Result;
++    /// Takes an URB back.
++    fn urb_dequeue(hcd: &Hcd<Self>, urb: &Urb, status: i32) -> Result;
++    /// Forgets an endpoint: the id of [`Urb::ep_id`].
++    fn endpoint_disable(hcd: &Hcd<Self>, ep_id: usize);
++    /// The current frame.
++    fn get_frame(hcd: &Hcd<Self>) -> i32;
++    /// Fills in which of the root hub's ports changed, and returns whether any did.
++    fn hub_status_data(hcd: &Hcd<Self>, buf: &mut [u8]) -> bool;
++    /// A request to the root hub.
++    fn hub_control(hcd: &Hcd<Self>, request: u16, value: u16, index: u16, buf: &mut [u8]) -> Result;
++}
++
++struct Vtable<T>(PhantomData<T>);
++
++impl<T: HcDriver> Vtable<T> {
++    const DRIVER: bindings::hc_driver = {
++        let mut d: bindings::hc_driver = pin_init::zeroed();
++        d.description = T::NAME.as_ptr().cast();
++        d.product_desc = T::PRODUCT.as_ptr().cast();
++        d.hcd_priv_size = core::mem::size_of::<T>();
++        d.flags = (bindings::HCD_DMA | bindings::HCD_USB11) as _;
++        d.irq = Some(Self::irq);
++        d.reset = Some(Self::reset);
++        d.start = Some(Self::start);
++        d.stop = Some(Self::stop);
++        d.urb_enqueue = Some(Self::urb_enqueue);
++        d.urb_dequeue = Some(Self::urb_dequeue);
++        d.endpoint_disable = Some(Self::endpoint_disable);
++        d.get_frame_number = Some(Self::get_frame);
++        d.hub_status_data = Some(Self::hub_status_data);
++        d.hub_control = Some(Self::hub_control);
++        d
++    };
++
++    unsafe fn hcd<'a>(raw: *mut bindings::usb_hcd) -> &'a Hcd<T> {
++        // SAFETY: The core passes the valid HCD, and `Hcd` is a transparent wrapper.
++        unsafe { &*raw.cast::<Hcd<T>>() }
++    }
++
++    unsafe extern "C" fn irq(raw: *mut bindings::usb_hcd) -> bindings::irqreturn_t {
++        // SAFETY: See `hcd`.
++        T::irq(unsafe { Self::hcd(raw) });
++        bindings::irqreturn_IRQ_HANDLED
++    }
++
++    unsafe extern "C" fn reset(raw: *mut bindings::usb_hcd) -> c_int {
++        // SAFETY: See `hcd`.
++        from_result(|| T::reset(unsafe { Self::hcd(raw) }).map(|()| 0))
++    }
++
++    unsafe extern "C" fn start(raw: *mut bindings::usb_hcd) -> c_int {
++        // SAFETY: See `hcd`.
++        from_result(|| T::start(unsafe { Self::hcd(raw) }).map(|()| 0))
++    }
++
++    unsafe extern "C" fn stop(raw: *mut bindings::usb_hcd) {
++        // SAFETY: See `hcd`.
++        T::stop(unsafe { Self::hcd(raw) });
++    }
++
++    unsafe extern "C" fn urb_enqueue(
++        raw: *mut bindings::usb_hcd,
++        urb: *mut bindings::urb,
++        _flags: bindings::gfp_t,
++    ) -> c_int {
++        // SAFETY: See `hcd`; the core passes a valid URB, and `Urb` is a transparent wrapper.
++        from_result(|| T::urb_enqueue(unsafe { Self::hcd(raw) }, unsafe { &*urb.cast::<Urb>() }).map(|()| 0))
++    }
++
++    unsafe extern "C" fn urb_dequeue(raw: *mut bindings::usb_hcd, urb: *mut bindings::urb, status: c_int) -> c_int {
++        // SAFETY: As in `urb_enqueue`.
++        from_result(|| {
++            T::urb_dequeue(unsafe { Self::hcd(raw) }, unsafe { &*urb.cast::<Urb>() }, status).map(|()| 0)
++        })
++    }
++
++    unsafe extern "C" fn endpoint_disable(raw: *mut bindings::usb_hcd, ep: *mut bindings::usb_host_endpoint) {
++        if !ep.is_null() {
++            // SAFETY: See `hcd`.
++            T::endpoint_disable(unsafe { Self::hcd(raw) }, ep as usize);
++        }
++    }
++
++    unsafe extern "C" fn get_frame(raw: *mut bindings::usb_hcd) -> c_int {
++        // SAFETY: See `hcd`.
++        T::get_frame(unsafe { Self::hcd(raw) })
++    }
++
++    unsafe extern "C" fn hub_status_data(raw: *mut bindings::usb_hcd, buf: *mut c_char) -> c_int {
++        // SAFETY: The core passes a buffer with room for the root hub's 7 ports and hub bit: one.
++        let buf = unsafe { core::slice::from_raw_parts_mut(buf.cast::<u8>(), 1) };
++        // SAFETY: See `hcd`.
++        c_int::from(T::hub_status_data(unsafe { Self::hcd(raw) }, buf))
++    }
++
++    unsafe extern "C" fn hub_control(
++        raw: *mut bindings::usb_hcd,
++        request: u16,
++        value: u16,
++        index: u16,
++        buf: *mut c_char,
++        length: u16,
++    ) -> c_int {
++        // SAFETY: `rh_call_control` allocates the larger of 15 bytes and `length`.
++        let buf = unsafe { core::slice::from_raw_parts_mut(buf.cast::<u8>(), usize::from(length).max(15)) };
++        // SAFETY: See `hcd`.
++        from_result(|| T::hub_control(unsafe { Self::hcd(raw) }, request, value, index, buf).map(|()| 0))
++    }
++}
++
++/// A host controller added to the core. It's removed, and `T` dropped, as this is dropped.
++pub struct Registration<T: HcDriver>(NonNull<bindings::usb_hcd>, PhantomData<T>);
++
++// SAFETY: The registration may be undone from any thread, and `T` is `Send`.
++unsafe impl<T: HcDriver> Send for Registration<T> {}
++
++impl<T: HcDriver> Registration<T> {
++    /// Creates a controller on `pdev` with its data from `init`, and adds it with interrupt `irq`.
++    pub fn new(
++        pdev: &platform::Device<device::Core<'_>>,
++        regs: &MappingInfo,
++        irq: u32,
++        init: impl PinInit<T, Error>,
++    ) -> Result<Self> {
++        build_assert!(core::mem::align_of::<T>() <= 8);
++        let dev: &device::Device<Bound> = pdev.as_ref();
++        let raw_dev = dev.as_raw();
++
++        // SAFETY: `raw_dev` is valid, and being probed.
++        to_result(unsafe { bindings::dma_coerce_mask_and_coherent(raw_dev, u64::from(u32::MAX)) })?;
++
++        // SAFETY: The driver lives in `Vtable`'s promoted constant, and the name in the device.
++        let hcd = NonNull::new(unsafe {
++            bindings::usb_create_hcd(&Vtable::<T>::DRIVER, raw_dev, bindings::dev_name(raw_dev))
++        })
++        .ok_or(ENOMEM)?;
++
++        // SAFETY: `hcd_priv` has room for a `T`, as `DRIVER` says, and stays where it is.
++        let slot = unsafe { bindings::chumby_hcd_priv(hcd.as_ptr()) }.cast::<T>();
++        // SAFETY: `slot` is valid, uninitialized, and not moved until it's dropped.
++        if let Err(e) = unsafe { init.__init(slot) } {
++            // SAFETY: We hold the reference that `usb_create_hcd` returned.
++            unsafe { bindings::usb_put_hcd(hcd.as_ptr()) };
++            return Err(e);
++        }
++
++        // SAFETY: `hcd` isn't added yet, so it's exclusively ours.
++        unsafe {
++            (*hcd.as_ptr()).rsrc_start = regs.start as _;
++            (*hcd.as_ptr()).rsrc_len = regs.size as _;
++        }
++
++        // SAFETY: `hcd` is fully set up.
++        if let Err(e) = to_result(unsafe { bindings::usb_add_hcd(hcd.as_ptr(), irq, 0) }) {
++            // SAFETY: `slot` is initialized, and the core won't call back; we hold the reference.
++            unsafe {
++                core::ptr::drop_in_place(slot);
++                bindings::usb_put_hcd(hcd.as_ptr());
++            }
++            return Err(e);
++        }
++
++        // SAFETY: `raw_dev` is valid, and is the controller.
++        unsafe { bindings::device_wakeup_enable(raw_dev) };
++
++        Ok(Self(hcd, PhantomData))
++    }
++}
++
++impl<T: HcDriver> Drop for Registration<T> {
++    fn drop(&mut self) {
++        // SAFETY: `self.0` was added, once, in `new`. Past `usb_remove_hcd` the core won't call
++        // back, so its `T` may go, and we hold the last reference of ours.
++        unsafe {
++            bindings::usb_remove_hcd(self.0.as_ptr());
++            core::ptr::drop_in_place(bindings::chumby_hcd_priv(self.0.as_ptr()).cast::<T>());
++            bindings::usb_put_hcd(self.0.as_ptr());
++        }
++    }
++}
++
++/// `clk_round_rate`, then `clk_set_rate`.
++pub fn clk_set_nearest_rate(clk: &crate::clk::Clk, hz: usize) -> Result {
++    // SAFETY: `clk` is valid, and `clk_round_rate` only reads it.
++    let rate = unsafe { bindings::clk_round_rate(clk.as_raw(), hz as _) };
++    clk.set_rate(crate::clk::Hertz(rate as _))
++}

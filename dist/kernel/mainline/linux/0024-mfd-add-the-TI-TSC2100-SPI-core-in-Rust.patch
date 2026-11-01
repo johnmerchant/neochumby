@@ -1,0 +1,152 @@
+Description: mfd: add the TI TSC2100 SPI core in Rust
+ The same driver as tsc2100.c, beside it and off by default.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/drivers/mfd/Kconfig
++++ b/drivers/mfd/Kconfig
+@@ -1722,6 +1722,15 @@
+ 	  If you say yes here you get support for the Palmas
+ 	  series of PMIC chips from Texas Instruments.
+ 
++config MFD_TSC2100_RUST
++	bool "TI TSC2100 touchscreen controller and audio codec, in Rust"
++	depends on SPI_MASTER && RUST
++	depends on MFD_TSC2100=n
++	select MFD_CORE
++	select REGMAP
++	help
++	  The same driver as MFD_TSC2100, written in Rust.
++
+ config MFD_TSC2100
+ 	tristate "TI TSC2100 touchscreen controller and audio codec"
+ 	depends on SPI_MASTER
+--- a/drivers/mfd/Makefile
++++ b/drivers/mfd/Makefile
+@@ -96,6 +96,7 @@
+ obj-$(CONFIG_MFD_CS40L50_SPI)	+= cs40l50-spi.o
+ 
+ obj-$(CONFIG_MFD_TSC2100)	+= tsc2100.o
++obj-$(CONFIG_MFD_TSC2100_RUST)	+= tsc2100_rust.o
+ obj-$(CONFIG_TPS6105X)		+= tps6105x.o
+ obj-$(CONFIG_TPS65010)		+= tps65010.o
+ obj-$(CONFIG_TPS6507X)		+= tps6507x.o
+--- /dev/null
++++ b/drivers/mfd/tsc2100_rust.rs
+@@ -0,0 +1,114 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! TI TSC2100 touchscreen controller and audio codec, SPI core: tsc2100.c in Rust.
++//!
++//! A transfer is one chip-select frame of 16-bit words: a command word (bit 15 read, bits 14:11
++//! page, 10:5 register) and then the data. The core owns the SPI device and a regmap on it, and
++//! registers the touchscreen and the codec as children that share that regmap.
++
++use kernel::{
++    device::Core,
++    mfd::{self, tsc2100 as chip},
++    of,
++    prelude::*,
++    regmap::{self, Regmap},
++    spi,
++    sync::aref::ARef,
++    time::{delay::fsleep, Delta},
++};
++
++/// A register access is a single transfer, so that the command and data share one chip-select
++/// frame: regmap's SPI bus would send them as two transfers, which an i.MX CSPI frames separately.
++struct Bus {
++    spi: ARef<spi::Device>,
++}
++
++impl Bus {
++    fn xfer(&self, cmd: u32, val: u32) -> Result<u16> {
++        // 16-bit words, which go to the SPI device in the CPU's order.
++        let mut tx = [0u8; 4];
++        tx[..2].copy_from_slice(&(cmd as u16).to_ne_bytes());
++        tx[2..].copy_from_slice(&(val as u16).to_ne_bytes());
++        let mut rx = [0u8; 4];
++        self.spi.sync(&mut [spi::Transfer {
++            tx: Some(&tx),
++            rx: Some(&mut rx),
++            ..Default::default()
++        }])?;
++        Ok(u16::from_ne_bytes([rx[2], rx[3]]))
++    }
++}
++
++impl regmap::Bus for Bus {
++    fn read(&self, reg: u32) -> Result<u32> {
++        Ok(u32::from(self.xfer(chip::READ | reg, 0)?))
++    }
++
++    fn write(&self, reg: u32, val: u32) -> Result {
++        self.xfer(reg, val).map(|_| ())
++    }
++}
++
++struct Tsc2100;
++
++kernel::of_device_table!(
++    OF_TABLE,
++    <Tsc2100 as spi::Driver>::IdInfo,
++    [(of::DeviceId::new(c"ti,tsc2100"), ())]
++);
++
++kernel::spi_device_table!(
++    SPI_TABLE,
++    <Tsc2100 as spi::Driver>::IdInfo,
++    [(spi::DeviceId::new(c"tsc2100"), ())]
++);
++
++impl spi::Driver for Tsc2100 {
++    type IdInfo = ();
++    type Data<'bound> = Self;
++    const SPI_ID_TABLE: Option<spi::IdTable<Self::IdInfo>> = Some(&SPI_TABLE);
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = Some(&OF_TABLE);
++
++    fn probe<'bound>(
++        dev: &'bound spi::Device<Core<'_>>,
++        _id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self, Error> + 'bound {
++        dev.setup(16, false)?;
++
++        let map = Regmap::register(
++            dev.as_ref(),
++            Bus { spi: spi::device_aref(dev) },
++            &regmap::Config {
++                reg_bits: 16,
++                val_bits: 16,
++                reg_stride: chip::REG_STRIDE as i32,
++                max_register: chip::REG_MAX,
++            },
++        )?;
++
++        map.write(chip::REG_RESET, chip::RESET_MAGIC).inspect_err(|e| {
++            dev_err!(dev.as_ref(), "reset failed: {}\n", e.to_errno());
++        })?;
++        fsleep(Delta::from_micros(1000));
++
++        // The touchscreen takes the pen interrupt from the SPI device. The codec gets the "codec"
++        // child node, which the sound card names as its codec. One TSC2100 per board.
++        mfd::add_devices(
++            dev.as_ref(),
++            &[
++                mfd::Cell { name: c"tsc2100-ts", of_compatible: None },
++                mfd::Cell { name: c"tsc2100-codec", of_compatible: Some(c"ti,tsc2100-codec") },
++            ],
++        )?;
++
++        Ok(Tsc2100)
++    }
++}
++
++kernel::module_spi_driver! {
++    type: Tsc2100,
++    name: "tsc2100",
++    authors: ["John Merchant <john@johnmerchant.dev>"],
++    description: "TI TSC2100 SPI core",
++    license: "GPL v2",
++}

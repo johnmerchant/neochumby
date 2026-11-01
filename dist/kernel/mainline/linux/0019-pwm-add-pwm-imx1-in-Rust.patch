@@ -1,0 +1,351 @@
+Description: pwm: add pwm-imx1 in Rust
+ The same driver as pwm-imx1.c, beside it and off by default, on the waveform callbacks that
+ Rust's PWM abstraction requires.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/drivers/pwm/Kconfig
++++ b/drivers/pwm/Kconfig
+@@ -770,6 +770,17 @@
+ 	  To compile this driver as a module, choose M here: the module
+ 	  will be called pwm-tegra.
+ 
++config PWM_IMX1_RUST
++	tristate "i.MX1 PWM support, in Rust"
++	depends on ARCH_MXC || COMPILE_TEST
++	depends on HAS_IOMEM && COMMON_CLK
++	depends on RUST
++	depends on PWM_IMX1=n
++	select RUST_PWM_ABSTRACTIONS
++	help
++	  The same driver as PWM_IMX1, written in Rust, for the PWM of the
++	  i.MX1 and i.MX21.
++
+ config PWM_TH1520
+ 	tristate "TH1520 PWM support"
+ 	depends on ARCH_THEAD || COMPILE_TEST
+--- a/drivers/pwm/Makefile
++++ b/drivers/pwm/Makefile
+@@ -70,6 +70,7 @@
+ obj-$(CONFIG_PWM_SUN4I)		+= pwm-sun4i.o
+ obj-$(CONFIG_PWM_SUNPLUS)	+= pwm-sunplus.o
+ obj-$(CONFIG_PWM_TEGRA)		+= pwm-tegra.o
++obj-$(CONFIG_PWM_IMX1_RUST)	+= pwm_imx1.o
+ obj-$(CONFIG_PWM_TH1520)	+= pwm_th1520.o
+ obj-$(CONFIG_PWM_TIECAP)	+= pwm-tiecap.o
+ obj-$(CONFIG_PWM_TIEHRPWM)	+= pwm-tiehrpwm.o
+--- /dev/null
++++ b/drivers/pwm/pwm_imx1.rs
+@@ -0,0 +1,310 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! Rust i.MX1 and i.MX21 PWM driver: pwm-imx1.c, on the waveform callbacks.
++//!
++//! Limitations, as the C driver has them:
++//! - One channel, normal polarity only: a waveform with a duty offset is refused.
++//! - The registers only take writes while the clocks run, so the clocks run only
++//!   while the output is enabled, and a disabled channel reads as disabled without
++//!   touching the registers. As in C, the output is taken to be off at probe.
++//!
++//! Dividing a `u64` in Rust links on 32-bit ARM but panics (`__aeabi_uldivmod`
++//! goes to a panicking stub), so those go through `div`, below.
++
++use kernel::{
++    clk::Clk,
++    device::{
++        Bound,
++        Core,
++        Device, //
++    },
++    math64::div64_u64,
++    io::{
++        mem::DevresIoMem,
++        Io, //
++    },
++    of,
++    platform,
++    prelude::*,
++    pwm,
++    sync::atomic::{
++        Atomic,
++        Relaxed, //
++    },
++    time, //
++};
++
++const MX1_PWMC: usize = 0x00;
++const MX1_PWMS: usize = 0x04;
++const MX1_PWMP: usize = 0x08;
++const MX1_REG_SIZE: usize = 0x0c;
++
++const MX1_PWMC_CLKSEL_MASK: u32 = 0x3; // divide by 2 << n
++const MX1_PWMC_EN: u32 = 1 << 4;
++const MX1_PWMC_PRESCALER_SHIFT: u32 = 8; // divide by n + 1
++const MX1_PWMC_PRESCALER_MASK: u32 = 0x7f << MX1_PWMC_PRESCALER_SHIFT;
++const MX1_PWMC_CLKSRC: u32 = 1 << 15; // 32 kHz, not PERCLK1
++
++const MX1_PWMP_MAX: u32 = 0xffff;
++const MX1_PRESCALE_MAX: u32 = 128;
++
++const NSEC_PER_SEC: u64 = time::NSEC_PER_SEC as u64;
++
++// The longest period the hardware has at any clock this SoC's PERCLK1 runs
++// at is under this, and it keeps `period_ns * rate` within a u64.
++const MAX_PERIOD_NS: u64 = 4 * NSEC_PER_SEC;
++
++fn div(dividend: u64, divisor: u64) -> u64 {
++    // Every divisor here is checked to be nonzero first.
++    div64_u64(dividend, divisor).unwrap_or(0)
++}
++
++#[derive(Copy, Clone, Debug, Default)]
++struct Imx1WfHw {
++    clksel: u32,
++    prescale: u32,
++    pwmp: u32,
++    pwms: u32,
++    enabled: bool,
++}
++
++impl Imx1WfHw {
++    fn divider(&self) -> u64 {
++        u64::from(self.prescale) << (self.clksel + 1)
++    }
++}
++
++#[pin_data(PinnedDrop)]
++struct Imx1PwmData {
++    #[pin]
++    iomem: DevresIoMem<MX1_REG_SIZE>,
++    clk_ipg: Clk,
++    clk_per: Clk,
++    // Whether the output, and so the clocks, are on. The PWM core serializes
++    // the callbacks that write it.
++    enabled: Atomic<bool>,
++}
++
++impl Imx1PwmData {
++    fn clocks_on(&self) -> Result {
++        self.clk_ipg.prepare_enable()?;
++        if let Err(e) = self.clk_per.prepare_enable() {
++            self.clk_ipg.disable_unprepare();
++            return Err(e);
++        }
++        Ok(())
++    }
++
++    fn clocks_off(&self) {
++        self.clk_per.disable_unprepare();
++        self.clk_ipg.disable_unprepare();
++    }
++
++    fn rate(&self) -> Result<u64> {
++        match self.clk_per.rate().as_hz() as u64 {
++            0 => Err(EINVAL),
++            rate => Ok(rate),
++        }
++    }
++}
++
++impl pwm::PwmOps for Imx1PwmData {
++    type WfHw = Imx1WfHw;
++
++    fn round_waveform_tohw(
++        chip: &pwm::Chip<Self>,
++        _pwm: &pwm::Device,
++        wf: &pwm::Waveform,
++    ) -> Result<pwm::RoundedWaveform<Self::WfHw>> {
++        if wf.period_length_ns == 0 {
++            return Ok(pwm::RoundedWaveform {
++                status: 0,
++                hardware_waveform: Imx1WfHw::default(),
++            });
++        }
++        if wf.duty_offset_ns != 0 {
++            return Err(EINVAL);
++        }
++
++        let rate = chip.drvdata().rate()?;
++        let period_ns = wf.period_length_ns.min(MAX_PERIOD_NS);
++        let wanted = div(period_ns * rate, NSEC_PER_SEC).min(u64::from(u32::MAX)) as u32;
++
++        // A period is PWMP + 2 cycles of PERCLK1 divided by CLKSEL (2, 4, 8 or
++        // 16) and the prescaler (1 to 128). Use the smallest divider that fits,
++        // and when none does, the largest: a period's rounded down.
++        let mut clksel = 0;
++        let mut prescale = MX1_PRESCALE_MAX;
++        for sel in 0..=3 {
++            let p = wanted.div_ceil((MX1_PWMP_MAX + 2) << (sel + 1));
++            clksel = sel;
++            if p <= MX1_PRESCALE_MAX {
++                prescale = p.max(1);
++                break;
++            }
++        }
++
++        let divider = prescale << (clksel + 1);
++        let mut cycles = (wanted.saturating_add(divider / 2) / divider).min(MX1_PWMP_MAX + 2);
++
++        let mut status = 0;
++        if cycles < 2 {
++            cycles = 2;
++            status = 1;
++        }
++
++        let duty_ns = wf.duty_length_ns.min(period_ns);
++        let pwms = div(u64::from(cycles) * duty_ns, period_ns).min(u64::from(MX1_PWMP_MAX)) as u32;
++
++        Ok(pwm::RoundedWaveform {
++            status,
++            hardware_waveform: Imx1WfHw {
++                clksel,
++                prescale,
++                pwmp: cycles - 2,
++                pwms,
++                enabled: true,
++            },
++        })
++    }
++
++    fn round_waveform_fromhw(
++        chip: &pwm::Chip<Self>,
++        _pwm: &pwm::Device,
++        wfhw: &Self::WfHw,
++        wf: &mut pwm::Waveform,
++    ) -> Result {
++        if !wfhw.enabled {
++            *wf = pwm::Waveform::default();
++            return Ok(());
++        }
++
++        let rate = chip.drvdata().rate()?;
++        let ns = |cycles: u32| div(u64::from(cycles) * wfhw.divider() * NSEC_PER_SEC + rate - 1, rate);
++
++        wf.period_length_ns = ns(wfhw.pwmp + 2);
++        wf.duty_length_ns = ns(wfhw.pwms);
++        wf.duty_offset_ns = 0;
++
++        Ok(())
++    }
++
++    fn read_waveform(
++        chip: &pwm::Chip<Self>,
++        _pwm: &pwm::Device,
++        parent_dev: &Device<Bound>,
++    ) -> Result<Self::WfHw> {
++        let data = chip.drvdata();
++
++        if !data.enabled.load(Relaxed) {
++            return Ok(Imx1WfHw::default());
++        }
++
++        let iomap = data.iomem.access(parent_dev)?;
++        let pwmc = iomap.try_read32(MX1_PWMC)?;
++
++        Ok(Imx1WfHw {
++            clksel: pwmc & MX1_PWMC_CLKSEL_MASK,
++            prescale: ((pwmc & MX1_PWMC_PRESCALER_MASK) >> MX1_PWMC_PRESCALER_SHIFT) + 1,
++            pwmp: iomap.try_read32(MX1_PWMP)?,
++            pwms: iomap.try_read32(MX1_PWMS)?,
++            enabled: true,
++        })
++    }
++
++    fn write_waveform(
++        chip: &pwm::Chip<Self>,
++        _pwm: &pwm::Device,
++        wfhw: &Self::WfHw,
++        parent_dev: &Device<Bound>,
++    ) -> Result {
++        let data = chip.drvdata();
++        let iomap = data.iomem.access(parent_dev)?;
++        let was_enabled = data.enabled.load(Relaxed);
++
++        if !wfhw.enabled {
++            if was_enabled {
++                let pwmc = iomap.try_read32(MX1_PWMC)?;
++                iomap.try_write32(pwmc & !MX1_PWMC_EN, MX1_PWMC)?;
++                data.clocks_off();
++                data.enabled.store(false, Relaxed);
++            }
++            return Ok(());
++        }
++
++        if !was_enabled {
++            data.clocks_on()?;
++        }
++
++        let mut pwmc = iomap.try_read32(MX1_PWMC)?;
++        pwmc &= !(MX1_PWMC_CLKSEL_MASK | MX1_PWMC_PRESCALER_MASK | MX1_PWMC_CLKSRC);
++        pwmc |= wfhw.clksel | ((wfhw.prescale - 1) << MX1_PWMC_PRESCALER_SHIFT);
++        iomap.try_write32(pwmc, MX1_PWMC)?;
++        iomap.try_write32(wfhw.pwmp, MX1_PWMP)?;
++        iomap.try_write32(wfhw.pwms, MX1_PWMS)?;
++
++        if !was_enabled {
++            iomap.try_write32(pwmc | MX1_PWMC_EN, MX1_PWMC)?;
++            data.enabled.store(true, Relaxed);
++        }
++
++        Ok(())
++    }
++}
++
++#[pinned_drop]
++impl PinnedDrop for Imx1PwmData {
++    fn drop(self: Pin<&mut Self>) {
++        if self.enabled.load(Relaxed) {
++            self.clocks_off();
++        }
++    }
++}
++
++struct Imx1PwmPlatformDriver;
++
++kernel::of_device_table!(
++    OF_TABLE,
++    <Imx1PwmPlatformDriver as platform::Driver>::IdInfo,
++    [(of::DeviceId::new(c"fsl,imx1-pwm"), ())]
++);
++
++impl platform::Driver for Imx1PwmPlatformDriver {
++    type IdInfo = ();
++    type Data<'bound> = Self;
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = Some(&OF_TABLE);
++
++    fn probe<'bound>(
++        pdev: &'bound platform::Device<Core<'_>>,
++        _id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self, Error> + 'bound {
++        let dev = pdev.as_ref();
++        let request = pdev.io_request_by_index(0).ok_or(ENODEV)?;
++
++        let clk_ipg = Clk::get(dev, Some(c"ipg"))?;
++        let clk_per = Clk::get(dev, Some(c"per"))?;
++
++        let chip = pwm::Chip::new(
++            dev,
++            1,
++            try_pin_init!(Imx1PwmData {
++                iomem <- request.iomap_sized::<MX1_REG_SIZE>()?.into_devres(),
++                clk_ipg <- clk_ipg,
++                clk_per <- clk_per,
++                enabled: Atomic::new(false),
++            }),
++        )?;
++
++        chip.register()?;
++
++        Ok(Imx1PwmPlatformDriver)
++    }
++}
++
++kernel::module_pwm_platform_driver! {
++    type: Imx1PwmPlatformDriver,
++    name: "pwm-imx1-rust",
++    authors: ["John Merchant <john@johnmerchant.dev>"],
++    description: "i.MX1 and i.MX21 Pulse Width Modulator driver",
++    license: "GPL v2",
++}

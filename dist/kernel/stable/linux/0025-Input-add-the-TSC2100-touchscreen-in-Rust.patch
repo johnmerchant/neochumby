@@ -1,0 +1,234 @@
+Description: Input: add the TSC2100 touchscreen in Rust
+ The same driver as tsc2100_ts.c, beside it and off by default.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/drivers/input/touchscreen/Kconfig
++++ b/drivers/input/touchscreen/Kconfig
+@@ -1169,6 +1169,13 @@
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called tsc2005.
+ 
++config TOUCHSCREEN_TSC2100_RUST
++	bool "TSC2100 based touchscreens, in Rust"
++	depends on MFD_TSC2100_RUST && INPUT=y && RUST
++	depends on TOUCHSCREEN_TSC2100=n
++	help
++	  The same driver as TOUCHSCREEN_TSC2100, written in Rust.
++
+ config TOUCHSCREEN_TSC2100
+ 	tristate "TSC2100 based touchscreens"
+ 	depends on MFD_TSC2100
+--- a/drivers/input/touchscreen/Makefile
++++ b/drivers/input/touchscreen/Makefile
+@@ -98,6 +98,7 @@
+ tsc2007-y := tsc2007_core.o
+ tsc2007-$(CONFIG_TOUCHSCREEN_TSC2007_IIO)	+= tsc2007_iio.o
+ obj-$(CONFIG_TOUCHSCREEN_TSC2100)	+= tsc2100_ts.o
++obj-$(CONFIG_TOUCHSCREEN_TSC2100_RUST)	+= tsc2100_ts_rust.o
+ obj-$(CONFIG_TOUCHSCREEN_TSC2007)	+= tsc2007.o
+ obj-$(CONFIG_TOUCHSCREEN_WACOM_W8001)	+= wacom_w8001.o
+ obj-$(CONFIG_TOUCHSCREEN_WACOM_I2C)	+= wacom_i2c.o
+--- /dev/null
++++ b/drivers/input/touchscreen/tsc2100_ts_rust.rs
+@@ -0,0 +1,198 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! TI TSC2100 touchscreen: tsc2100_ts.c in Rust.
++//!
++//! The chip's PINTDAV output, set to signal the pen alone, interrupts on pen down. The threaded
++//! handler then converts X, Y, Z1 and Z2 one at a time, host controlled, and reports a sample
++//! every few milliseconds until the pen lifts, as tsc2007 does.
++
++use kernel::{
++    device::Core,
++    input::{self, IrqLine, IrqThread, Reporter},
++    irq::Flags,
++    mfd::tsc2100 as chip,
++    platform,
++    prelude::*,
++    regmap::Regmap,
++    spi,
++    sync::{
++        atomic::{Acquire, Atomic, Release},
++        Arc,
++    },
++    time::{delay::fsleep, Delta},
++};
++
++const ADC_MAX: u32 = 0xfff;
++const POLL_MS: i64 = 10;
++const CONV_POLL_US: u32 = 100;
++const CONV_TIMEOUT_US: u32 = 10000;
++
++// 12-bit, mean of 4, 1 MHz conversion clock, 500 us panel settling.
++const ADC_DEFAULT: u32 =
++    chip::ADC_RES_12BIT | chip::ADC_AVG_4 | chip::ADC_CL_1MHZ | chip::ADC_PV_500US;
++
++struct Ts {
++    map: Regmap,
++    input: Reporter,
++    irq: IrqLine,
++    stopped: Atomic<bool>,
++}
++
++impl Ts {
++    fn pen_down(&self) -> bool {
++        self.map.read(chip::REG_ADC).is_ok_and(|adc| adc & chip::ADC_PSTCM != 0)
++    }
++
++    /// Starts one host-controlled conversion and reads its result.
++    fn convert(&self, mode: u32, status_bit: u32, reg: u32) -> Result<u32> {
++        self.map.write(chip::REG_ADC, ADC_DEFAULT | chip::adc_adscm(mode))?;
++        self.map.read_poll_timeout(
++            chip::REG_STATUS,
++            |status| status & status_bit != 0,
++            CONV_POLL_US,
++            CONV_TIMEOUT_US,
++        )?;
++        self.map.read(reg)
++    }
++
++    fn sample(&self) -> Result<(u32, u32, u32)> {
++        let x = self.convert(chip::ADSCM_X, chip::STATUS_XSTAT, chip::REG_X)? & ADC_MAX;
++        let y = self.convert(chip::ADSCM_Y, chip::STATUS_YSTAT, chip::REG_Y)? & ADC_MAX;
++        let z1 = self.convert(chip::ADSCM_Z, chip::STATUS_Z2STAT, chip::REG_Z1)? & ADC_MAX;
++        let z2 = self.map.read(chip::REG_Z2)? & ADC_MAX;
++
++        // Z1/Z2 rises as the touch resistance falls, that is with a firmer press: scale it to the
++        // ADC's range, and never report a press as zero.
++        let p = if z2 != 0 {
++            (z1 * (ADC_MAX + 1) / z2).min(ADC_MAX)
++        } else {
++            ADC_MAX
++        };
++
++        Ok((x, y, p.max(1)))
++    }
++
++    fn idle(&self) -> Result {
++        self.map.write(chip::REG_ADC, ADC_DEFAULT | chip::adc_adscm(chip::ADSCM_NONE))
++    }
++
++    fn hw_init(map: &Regmap) -> Result {
++        // PINTDAV goes low for the pen only, not for finished conversions.
++        map.write(chip::REG_STATUS, chip::status_pintdav(chip::PINTDAV_PEN))?;
++        // The internal reference, which keeps the samples quiet.
++        map.write(chip::REG_REF, chip::REF_DEFAULT)?;
++        map.write(chip::REG_ADC, ADC_DEFAULT | chip::adc_adscm(chip::ADSCM_NONE))
++    }
++}
++
++impl IrqThread for Ts {
++    fn thread(&self) {
++        let mut touched = false;
++
++        while !self.stopped.load(Acquire) && self.pen_down() {
++            let Ok((x, y, p)) = self.sample() else {
++                break;
++            };
++
++            // The pen may have lifted during the conversions.
++            if !self.pen_down() {
++                break;
++            }
++
++            self.input.touch_pos(x, y);
++            self.input.abs(input::ABS_PRESSURE, p as i32);
++            self.input.key(input::BTN_TOUCH, true);
++            self.input.sync();
++            touched = true;
++
++            fsleep(Delta::from_millis(POLL_MS));
++        }
++
++        if touched {
++            self.input.abs(input::ABS_PRESSURE, 0);
++            self.input.key(input::BTN_TOUCH, false);
++            self.input.sync();
++        }
++
++        let _ = self.idle();
++    }
++}
++
++impl input::Operations for Ts {
++    fn open(&self) -> Result {
++        self.stopped.store(false, Release);
++        self.irq.enable();
++        Ok(())
++    }
++
++    fn close(&self) {
++        self.stopped.store(true, Release);
++        self.irq.disable();
++    }
++}
++
++struct Tsc2100Ts;
++
++impl platform::Driver for Tsc2100Ts {
++    type IdInfo = ();
++    type Data<'bound> = Self;
++
++    fn probe<'bound>(
++        pdev: &'bound platform::Device<Core<'_>>,
++        _id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self, Error> + 'bound {
++        let dev = pdev.as_ref();
++
++        let irq = spi::Device::of_parent(dev)?.irq().ok_or_else(|| {
++            dev_err!(dev, "no pen interrupt\n");
++            EINVAL
++        })?;
++        let irq = IrqLine::new(irq);
++        let map = Regmap::of_parent(dev)?;
++
++        let mut builder = input::Builder::new(dev, c"tsc2100_ts", c"tsc2100/input0", input::BUS_SPI)?;
++        builder
++            .key(input::BTN_TOUCH)
++            .abs(input::ABS_X, 0, ADC_MAX as i32)
++            .abs(input::ABS_Y, 0, ADC_MAX as i32)
++            .abs(input::ABS_PRESSURE, 0, ADC_MAX as i32);
++        // The touchscreen properties, if any, are on the TSC2100's node. Without them the axes
++        // stay as set above.
++        let reporter = builder.reporter(dev)?;
++
++        Ts::hw_init(&map).inspect_err(|e| {
++            dev_err!(dev, "failed to set up the controller: {}\n", e.to_errno());
++        })?;
++
++        let ts = Arc::new(
++            Ts {
++                map,
++                input: reporter,
++                irq,
++                stopped: Atomic::new(true),
++            },
++            GFP_KERNEL,
++        )?;
++
++        irq.request_threaded(
++            dev,
++            Flags::TRIGGER_FALLING | Flags::ONESHOT,
++            c"tsc2100",
++            ts.clone(),
++        )?;
++        // Until the device is opened.
++        irq.disable();
++
++        builder.register(dev, ts)?;
++
++        Ok(Tsc2100Ts)
++    }
++}
++
++kernel::module_platform_driver! {
++    type: Tsc2100Ts,
++    name: "tsc2100-ts",
++    authors: ["John Merchant <john@johnmerchant.dev>"],
++    description: "TI TSC2100 touchscreen driver",
++    license: "GPL v2",
++}

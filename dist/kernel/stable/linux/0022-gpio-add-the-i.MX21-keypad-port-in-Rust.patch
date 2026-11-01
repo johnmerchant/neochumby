@@ -1,0 +1,93 @@
+Description: gpio: add the i.MX21 keypad port in Rust
+ The same driver as gpio-imx21-kpp.c, beside it and off by default.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/drivers/gpio/Kconfig
++++ b/drivers/gpio/Kconfig
+@@ -423,6 +423,14 @@
+        def_bool y
+        depends on IMX_SCU
+ 
++config GPIO_IMX21_KPP_RUST
++	bool "i.MX21/i.MX27 keypad port as GPIO, in Rust"
++	depends on (ARCH_MXC || COMPILE_TEST) && RUST
++	depends on GPIO_IMX21_KPP=n
++	select GPIO_GENERIC
++	help
++	  The same driver as GPIO_IMX21_KPP, written in Rust.
++
+ config GPIO_IMX21_KPP
+ 	tristate "i.MX21/i.MX27 keypad port as GPIO"
+ 	depends on ARCH_MXC || COMPILE_TEST
+--- a/drivers/gpio/Makefile
++++ b/drivers/gpio/Makefile
+@@ -85,6 +85,7 @@
+ obj-$(CONFIG_GPIO_IDIO_16)		+= gpio-idio-16.o
+ obj-$(CONFIG_GPIO_IDT3243X)		+= gpio-idt3243x.o
+ obj-$(CONFIG_GPIO_IMX21_KPP)		+= gpio-imx21-kpp.o
++obj-$(CONFIG_GPIO_IMX21_KPP_RUST)	+= gpio_imx21_kpp_rust.o
+ obj-$(CONFIG_GPIO_IMX_SCU)		+= gpio-imx-scu.o
+ obj-$(CONFIG_GPIO_IT87)			+= gpio-it87.o
+ obj-$(CONFIG_GPIO_IXP4XX)		+= gpio-ixp4xx.o
+--- /dev/null
++++ b/drivers/gpio/gpio_imx21_kpp_rust.rs
+@@ -0,0 +1,56 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! The i.MX21/i.MX27 keypad port (KPP) as 16 general-purpose lines: gpio-imx21-kpp.c in Rust.
++//!
++//! Some boards, such as the Chumby Classic, don't wire a key matrix to the KPP: its columns switch
++//! power rails and its rows read buttons. With KPCR cleared every pin is a plain input or push-pull
++//! output, and KDDR and KPDR work as a GPIO port: lines 0-7 are the rows, lines 8-15 the columns.
++//! The KPP can't interrupt on a single row, so there are no interrupts: poll inputs instead.
++//!
++//! The lines keep the state the boot loader left them in until claimed.
++
++use kernel::{device::Core, gpio_generic, of, platform, prelude::*};
++
++const KPP_KPCR: usize = 0x0; // row enables and column open-drain
++const KPP_KDDR: usize = 0x4; // data direction, 1 = output
++const KPP_KPDR: usize = 0x6; // data
++
++struct Imx21KppGpio;
++
++kernel::of_device_table!(
++    OF_TABLE,
++    <Imx21KppGpio as platform::Driver>::IdInfo,
++    [(of::DeviceId::new(c"fsl,imx21-kpp-gpio"), ())]
++);
++
++impl platform::Driver for Imx21KppGpio {
++    type IdInfo = ();
++    type Data<'bound> = Self;
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = Some(&OF_TABLE);
++
++    fn probe<'bound>(
++        pdev: &'bound platform::Device<Core<'_>>,
++        _id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self, Error> + 'bound {
++        gpio_generic::register_16(
++            pdev,
++            &gpio_generic::Config {
++                dat: KPP_KPDR,
++                dirout: KPP_KDDR,
++                ngpio: 16,
++                // No scanning: rows not ANDed into the interrupt, columns push-pull.
++                init: &[(KPP_KPCR, 0)],
++            },
++        )?;
++
++        Ok(Imx21KppGpio)
++    }
++}
++
++kernel::module_platform_driver! {
++    type: Imx21KppGpio,
++    name: "imx21-kpp-gpio",
++    authors: ["John Merchant <john@johnmerchant.dev>"],
++    description: "i.MX21 keypad port as GPIO",
++    license: "GPL",
++}
