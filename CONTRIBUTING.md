@@ -425,6 +425,7 @@ player = true                        # optional: a player (below)
 font = "spleen-8x16"                 # optional, text mode: its terminal's font
 tap = "q"                            # optional, text mode: what a tap types
 frontend = "airplay"                 # optional: it shows another app (below)
+transition = "neochumby-x-wipe"      # optional: animates switches between apps
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -731,6 +732,31 @@ if let Some(p) = pipe.as_mut() {
 }
 // In the player's service: Notice::Pause and Notice::Resume.
 ```
+
+### Transitions
+
+An app may animate the switch from one app to the next: `transition`
+names a binary of its own, and a Chumby plays it when its settings say
+`transition=<app>` (set like `player`; unset, there's no animation). As one
+app leaves, the session copies the screen into the LCD controller's overlay
+(`/dev/fb1`) and makes it opaque, opens the next app beneath it, and waits
+for that app's screen to settle. Then it runs your binary:
+- jailed as your app, with nothing beyond its own directory and `/tmp`
+  (not the screen: the session draws what you write);
+- with `NEOCHUMBY_FROM` and `NEOCHUMBY_TO` naming the two apps;
+- with two pictures on stdin, the screen as the first app left it and as
+  the second has drawn it, each 320x240 RGB565, little-endian, line after
+  line (153,600 bytes), then end of file;
+- showing each frame of that form you write to stdout as it arrives, so
+  pace them yourself, by the clock: the Chumby may not keep up.
+
+When you close stdout, or after 3 seconds, the session ends your binary
+with whatever it started and puts the overlay back, and the live app
+shows. Anything that ends the app beneath cuts the transition short.
+`apps/transitions` is one with nine effects; on a host, `cat from.raw
+to.raw | NEOCHUMBY_EFFECT=melt neochumby-transitions > frames.raw` shows one
+without a Chumby. A kernel without the overlay has no transitions, and Linux 7's
+imxfb doesn't have it yet: until then, a chosen transition only logs that.
 
 ### Services
 

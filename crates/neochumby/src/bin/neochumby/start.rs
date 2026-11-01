@@ -77,6 +77,7 @@ pub mod tests {
             frontend: None,
             wasm: None,
             catalog: false,
+            transition: None,
         }
     }
 

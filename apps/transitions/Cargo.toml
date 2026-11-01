@@ -1,0 +1,16 @@
+[package]
+name = "neochumby-transitions"
+description = "Transitions between apps for neochumby: slides, irises, melts, glitches and more"
+license = "MIT"
+version.workspace = true
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+neochumby-sys.workspace = true
+
+[package.metadata.neochumby]
+transition = "neochumby-transitions"
+
+[lints]
+workspace = true

@@ -133,11 +133,14 @@ fn libraries(root: &Path) -> io::Result<Vec<(std::path::PathBuf, String)>> {
     Ok(found)
 }
 
-/// What an app is started as: its exec, in front, or its service.
+/// What an app is started as: its exec, in front, its service, or its
+/// transition (transition.rs), which reaches nothing beyond its stdin and
+/// stdout but what `access` gives a service.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Role {
     Front,
     Service,
+    Transition,
 }
 
 /// The apps' names, in the tree's order, which gives their uids.
@@ -303,6 +306,8 @@ pub struct Given<'a> {
     pub storage: Option<&'a Path>,
     /// Its terminal, as its stdin and stdout (terminal.rs).
     pub terminal: Option<RawFd>,
+    /// In place of a terminal, its stdin and stdout (transition.rs).
+    pub stdio: Option<(RawFd, RawFd)>,
 }
 
 /// Starts `exe` of `app` jailed, as `role`, with the tree at `root`, only
@@ -417,6 +422,8 @@ pub fn start(
     j.limit(Limit::Processes(PROCESSES)).limit(Limit::Files(FILES)).limit(Limit::Core(0));
     if let Some(t) = given.terminal {
         j.stdio(t, t);
+    } else if let Some((stdin, stdout)) = given.stdio {
+        j.stdio(stdin, stdout);
     }
 
     env.push(("NEOCHUMBY_ROOT".into(), path(root)?));

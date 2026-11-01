@@ -57,6 +57,12 @@
 //! directory has grown over its limit is ended, as the network check ends
 //! one.
 //!
+//! With a transition chosen (transition.rs), each switch after the first
+//! app is animated: the screen is held in the overlay as one app leaves,
+//! the next is opened beneath it, and the transition plays while the loop
+//! watches the new app as usual. Whatever it does next stops the
+//! transition first.
+//!
 //! A restart asked by neochumbyd (devlink.rs) ends whatever is in front as
 //! the escape hatch does, closes the button, stops the services and puts
 //! the speaker back, and the loop returns for the
@@ -82,6 +88,7 @@ use crate::services::{Backoff, Services};
 use crate::start;
 use crate::storage;
 use crate::terminal::Terminal;
+use crate::transition::Transitions;
 
 /// What the session needs of the Chumby itself.
 pub trait Device {
@@ -237,6 +244,8 @@ pub struct Session<'a, D: Device> {
     lit: bool,
     /// When to look for apps on the network without `network`.
     network: network::Watch,
+    /// The transition, if one was chosen and the screen can show it.
+    transitions: Option<Transitions>,
 }
 
 /// Whether the service of the app `from` may replace `front` in front;
@@ -291,7 +300,14 @@ impl<'a, D: Device> Session<'a, D> {
             playing_by: None,
             lit: false,
             network: network::Watch::new(),
+            transitions: None,
         }
+    }
+
+    /// Animates each switch between apps with `t`.
+    pub fn transitions(mut self, t: Option<Transitions>) -> Session<'a, D> {
+        self.transitions = t;
+        self
     }
 
     /// Runs apps, and the services, until a restart, or `home` keeps
@@ -299,6 +315,8 @@ impl<'a, D: Device> Session<'a, D> {
     /// back first.
     pub fn run(mut self) -> Ended {
         let mut next = Next::Open(self.start, None);
+        // The app that was in front last, for the transition.
+        let mut last: Option<&'a App> = None;
         loop {
             let (app, reason) = match next {
                 Next::Open(app, reason) => (app, reason),
@@ -311,14 +329,20 @@ impl<'a, D: Device> Session<'a, D> {
                     return self.end(Ended::Restart);
                 }
             };
+            // The screen as `last` left it, held until `app` has drawn.
+            let covered = last.zip(self.transitions.as_ref()).and_then(|(l, t)| t.cover(&l.name));
             if let Some(gap) = self.last_open.and_then(|t| self.timing.min_gap.checked_sub(t.elapsed())) {
                 neochumby::sleep_ms(gap.as_millis() as u32);
             }
             self.last_open = Some(Instant::now());
+            last = Some(app);
             next = match self.open(app, reason) {
                 Ok(mut front) => {
                     let terminal = front.terminal.take();
+                    let playing = covered.zip(self.transitions.as_ref()).map(|(c, t)| c.play(t, &app.name));
                     let next = self.watch(front);
+                    // Stopped, if it's still playing, before anything else.
+                    drop(playing);
                     // Gone with whatever it started (watch ends the whole
                     // group), so its terminal has closed.
                     if let Some(t) = terminal {
@@ -586,6 +610,8 @@ impl<'a, D: Device> Session<'a, D> {
         let ours = match role {
             Role::Front => Some(f.child.id()),
             Role::Service => self.services.pid(name),
+            // It has no line to the session, so never asks to play.
+            Role::Transition => None,
         };
         if ours != Some(holder) {
             self.stop_playing(&format!("process group {holder} has taken the speaker"));
@@ -1678,6 +1704,7 @@ mod tests {
             frontend: None,
             wasm: None,
             catalog: false,
+            transition: None,
         }];
         let all = apps::all(&root);
         let start = start::choose(&all, Some(("settings", "wx"))).expect("a start app");

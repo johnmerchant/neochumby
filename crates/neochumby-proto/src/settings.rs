@@ -14,6 +14,9 @@ pub mod key {
     pub const START: &str = "start";
     /// The default player (an app whose manifest says `player = true`).
     pub const PLAYER: &str = "player";
+    /// The app whose transition plays between apps (one whose manifest
+    /// names a `transition`).
+    pub const TRANSITION: &str = "transition";
     /// Taps and button presses from neochumbyd (crate::dev): `on` or `off`.
     pub const DEV: &str = "dev";
     /// `frontend_<app>=<frontend>`: the owner approves an app as `<app>`'s
@@ -32,6 +35,9 @@ pub struct Settings {
     pub start: Option<String>,
     /// `player`: the default player, if set; checked like `start`.
     pub player: Option<String>,
+    /// `transition`: the app animating switches between apps, if set;
+    /// checked like `start`.
+    pub transition: Option<String>,
     /// `dev=on`: the Chumby takes taps and button presses from its
     /// neochumbyd. Off unless set (crate::dev).
     pub dev: bool,
@@ -50,7 +56,7 @@ impl Settings {
             if !valid(&k, &v) {
                 continue;
             }
-            let known = [key::START, key::PLAYER, key::DEV].into_iter().find(|n| *n == k);
+            let known = [key::START, key::PLAYER, key::TRANSITION, key::DEV].into_iter().find(|n| *n == k);
             // A known key's first value is taken if it is one of its own.
             let took = match known {
                 Some(n) if !seen.contains(&n) => {
@@ -62,6 +68,10 @@ impl Settings {
                         }
                         key::PLAYER if crate::valid_name(&v) => {
                             s.player = Some(v.clone());
+                            true
+                        }
+                        key::TRANSITION if crate::valid_name(&v) => {
+                            s.transition = Some(v.clone());
                             true
                         }
                         key::DEV if v == ON || v == OFF => {
@@ -91,6 +101,9 @@ impl Settings {
         if let Some(v) = &self.player {
             put(key::PLAYER, v);
         }
+        if let Some(v) = &self.transition {
+            put(key::TRANSITION, v);
+        }
         if self.dev {
             put(key::DEV, ON);
         }
@@ -114,7 +127,7 @@ impl Settings {
             return Err("bad setting: values are 1-128 of A-Z a-z 0-9 . : / _ -".into());
         }
         match key {
-            key::START | key::PLAYER if !crate::valid_name(value) => {
+            key::START | key::PLAYER | key::TRANSITION if !crate::valid_name(value) => {
                 Err(format!("{key} names an app: 1-32 of a-z, 0-9, _ and -"))
             }
             key::DEV if value != ON && value != OFF => Err(format!("{key} is {ON} or {OFF}")),
@@ -152,12 +165,28 @@ mod tests {
 
     #[test]
     fn typed_fields_and_the_rest() {
-        let s = Settings::from_pairs(pairs(&[("start", "wx"), ("dev", "on"), ("player", "somafm"), ("theme", "dark")]));
+        let s = Settings::from_pairs(pairs(&[
+            ("start", "wx"),
+            ("dev", "on"),
+            ("player", "somafm"),
+            ("transition", "transitions"),
+            ("theme", "dark"),
+        ]));
         assert_eq!(s.start.as_deref(), Some("wx"));
         assert_eq!(s.player.as_deref(), Some("somafm"));
+        assert_eq!(s.transition.as_deref(), Some("transitions"));
         assert!(s.dev);
         assert_eq!(s.other, pairs(&[("theme", "dark")]));
-        assert_eq!(s.to_pairs(), pairs(&[("start", "wx"), ("player", "somafm"), ("dev", "on"), ("theme", "dark")]));
+        assert_eq!(
+            s.to_pairs(),
+            pairs(&[
+                ("start", "wx"),
+                ("player", "somafm"),
+                ("transition", "transitions"),
+                ("dev", "on"),
+                ("theme", "dark")
+            ])
+        );
         assert_eq!(Settings::from_pairs(s.to_pairs()), s);
         assert_eq!(Settings::from_pairs(vec![]), Settings::default());
     }
@@ -188,6 +217,8 @@ mod tests {
         assert!(Settings::check("start", "wx").is_ok());
         assert!(Settings::check("start", "Wx").is_err());
         assert!(Settings::check("player", "../x").is_err());
+        assert!(Settings::check("transition", "../x").is_err());
+        assert!(Settings::check("transition", "transitions").is_ok());
         assert!(Settings::check("dev", "on").is_ok());
         assert!(Settings::check("dev", "off").is_ok());
         assert!(Settings::check("dev", "On").is_err());
