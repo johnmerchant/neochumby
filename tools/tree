@@ -6,6 +6,15 @@
 #   OUT/neochumby-sync   the receiver for delivery=sync (not on a stick made
 #                        by tools/stick)
 #   OUT/userhook2        the boot hook, which pairing installs
+#   OUT/sideload/        what that hook needs on the stock firmware to reach
+#                        Linux 7: neochumby-handoff, always, and with
+#                        --sideload DIR sideload.ko, zImage and
+#                        initramfs.cpio.gz, from DIR/sideload.ko
+#                        (tools/neochumby-kernel-sideloader/build DIR) and
+#                        DIR/sideload-zImage and sideload-rootfs.cpio.gz
+#                        (dist/fetch DIR or dist/build DIR). Without them,
+#                        which is enough for an emulated Chumby or one already
+#                        on Linux 7, stock boots as it always did
 #   OUT/neochumby-boot   what checks a tree over NFS before it runs, which
 #                        pairing and the session install in /psp
 #   OUT/colors           the colour schemes text-mode apps can be drawn in
@@ -17,8 +26,7 @@
 #   OUT/colors.LICENSE   their licences
 #   OUT/apps/home/       neochumby-home, the app list, always
 #   OUT/apps/<name>/     each APP asked for
-#   OUT/lib/             in a tree for Linux 5.9 and later, the shared
-#                        libraries its apps that use curses link
+#   OUT/lib/             the shared libraries its apps that use curses link
 #                        (tools/linux-libs): musl, as ld-musl-arm.so.1,
 #                        libncursesw.so.6 and libpanelw.so.6
 #
@@ -54,25 +62,21 @@
 #   host                          the machine building it, natively (a Mac,
 #                                 say, to run neochumbyd there)
 #
-# A tree is for one Linux, --linux MAJOR.MINOR: the stock firmware's
-# 2.6 (the default), or the dist's 5.9 and later. An app whose manifest
-# says it needs a newer one (`linux`) is left out, with a line saying so.
-# The Chumby's binaries are static, but for one kind of app in a tree for
-# 5.9 and later: one that links neochumby-ncurses links it, and musl,
-# dynamically, against OUT/lib's (NEOCHUMBY_NCURSES=system), which the
-# session's jail puts at /lib for it (crates/neochumby/src/bin/neochumby/
-# jail.rs). In a tree for the stock 2.6 every binary is static.
+# The Chumby's binaries are static, but for one kind of app: one that links
+# neochumby-ncurses links it, and musl, dynamically, against OUT/lib's
+# (NEOCHUMBY_NCURSES=system), which the session's jail puts at /lib for it
+# (crates/neochumby/src/bin/neochumby/jail.rs).
 #
-#   tools/tree OUT [-d DATA] [--linux X.Y] [--server-target TRIPLE] [--pinned] [APP ...]
+#   tools/tree OUT [-d DATA] [--sideload DIR] [--server-target TRIPLE] [--pinned] [APP ...]
 #       e.g. tools/tree /tmp/t doom quake
-#       (zig, git, curl and sha256sum or shasum on PATH; for 5.9 and
-#       later, make, patch and pkg-config too)
+#       (zig, git, curl, make, patch, pkg-config and sha256sum or shasum on
+#       PATH)
 set -eu
-usage="usage: tools/tree OUT [-d DATA] [--linux X.Y] [--server-target TRIPLE] [--pinned] [APP ...]"
+usage="usage: tools/tree OUT [-d DATA] [--sideload DIR] [--server-target TRIPLE] [--pinned] [APP ...]"
 out=${1:?$usage}
 shift
 data=
-linux=2.6
+sideload=
 server_t=x86_64-unknown-linux-musl
 pinned=
 while :; do
@@ -81,8 +85,8 @@ while :; do
       data=${2:?$usage}
       shift 2
       ;;
-    --linux)
-      linux=${2:?$usage}
+    --sideload)
+      sideload=${2:?$usage}
       shift 2
       ;;
     --server-target)
@@ -96,15 +100,6 @@ while :; do
     *) break ;;
   esac
 done
-case $linux in
-  *[!0-9.]* | *.*.* | .* | *.) linux= ;;
-  [0-9]*.[0-9]*) ;;
-  *) linux= ;;
-esac
-[ -n "$linux" ] || {
-  echo "tools/tree: --linux: MAJOR.MINOR, as 2.6 or 5.9" >&2
-  exit 2
-}
 host_t=$(rustc -vV | sed -n 's/^host: //p')
 [ "$server_t" = host ] && server_t=$host_t
 case $server_t in
@@ -115,6 +110,7 @@ case $server_t in
     exit 2
     ;;
 esac
+[ -z "$sideload" ] || sideload=$(cd "$sideload" && pwd)
 root=$(git rev-parse --show-toplevel)
 cd "$root"
 chumby_t=armv5te-unknown-linux-musleabi
@@ -140,11 +136,6 @@ export CC_aarch64_unknown_linux_musl=$root/tools/zigcc-aarch64 AR_aarch64_unknow
 export CARGO_TARGET_WASM32_WASIP1_RUSTFLAGS="-C link-arg=-zstack-size=1048576"
 
 field() { sed -n "s/^$2=//p" "$1" | head -n 1; }
-
-# Whether Linux $1 is at least $2, both MAJOR.MINOR.
-at_least() {
-  [ "${1%.*}" -gt "${2%.*}" ] || { [ "${1%.*}" -eq "${2%.*}" ] && [ "${1#*.}" -ge "${2#*.}" ]; }
-}
 
 # An app that isn't pinned: refused with --pinned, else a warning.
 unpinned() {
@@ -265,23 +256,37 @@ uses_curses() {
   cargo tree -q --manifest-path "$src/Cargo.toml" -p "$crate" --target $chumby_t -e normal --prefix none |
     grep -q '^neochumby-ncurses '
 }
-# The shared libraries, made once a tree's first app that uses curses is
-# built, and how such an app is linked against them: dynamically, and
+# The shared libraries, and how an app that uses curses is linked against
+# them: dynamically, and
 # position-independent. A fixed-address executable would take copies of
 # libc's data (environ, optarg and the like) by copy relocation, and zig's
 # stand-in for libc.so, which it links against, has them all at one
 # address: the copies would overlap.
 libs=$root/target/linux-libs
-shared=
 dynamic="-C target-feature=-crt-static -C relocation-model=pic -C link-arg=-pie"
 
 cargo chumby
 cargo build -q --release -p neochumby-manifest
 mkdir -p "$out"
-# What a tree for another Linux had.
-rm -rf "${out:?}/lib"
+tools/linux-libs "$libs"
+# Plain files, under the names the binaries ask for: a FAT stick holds no
+# links. musl's libc.so is its own loader, and answers for libc.so.
+mkdir -p "$out/lib"
+cp "$libs/lib/ld-musl-arm.so.1" "$libs/usr/lib/libncursesw.so.6" "$libs/usr/lib/libpanelw.so.6" "$out/lib/"
 cp "target/$chumby_t/release/neochumby" "target/$chumby_t/release/neochumby-sync" \
   "target/$chumby_t/release/neochumby-boot" boot/userhook2 "$out/"
+# What the boot hook needs on stock, in a workspace of its own. Nothing here
+# is run unchecked: from NFS, the signed manifest covers these as it does the
+# rest of the tree (neochumby::verified::sideload).
+cargo build -q --release --manifest-path crates/neochumby-handoff/Cargo.toml \
+  --target $chumby_t --target-dir target/handoff
+mkdir -p "$out/sideload"
+cp "target/handoff/$chumby_t/release/neochumby-handoff" "$out/sideload/"
+if [ -n "$sideload" ]; then
+  cp "$sideload/sideload.ko" "$out/sideload/sideload.ko"
+  cp "$sideload/sideload-zImage" "$out/sideload/zImage"
+  cp "$sideload/sideload-rootfs.cpio.gz" "$out/sideload/initramfs.cpio.gz"
+fi
 # The colour schemes. iTerm2-Color-Schemes is large and only this needs
 # it, so its submodule isn't checked out with the rest (update = none):
 # here, at the commit pinned, without its history.
@@ -317,11 +322,6 @@ for app in home "$@"; do
   target/release/neochumby-manifest "$src/Cargo.toml" > "$manifest"
   crate=$(sed -n 's/^name *= *"\(neochumby-[a-z0-9_-]*\)".*/\1/p' "$src/Cargo.toml" | head -n 1)
   name=${crate#neochumby-}
-  needs=$(field "$manifest" linux)
-  if [ -n "$needs" ] && ! at_least "$linux" "$needs"; then
-    echo "tools/tree: $name needs Linux $needs, and this tree is for $linux: left out" >&2
-    continue
-  fi
   # This repository's apps build in its workspace; others in their own,
   # beside it.
   case $src in
@@ -333,15 +333,10 @@ for app in home "$@"; do
   dest=$out/apps/$name
   mkdir -p "$dest"
   # The Chumby's binaries, if it has any: an app may be only a server
-  # program. Linked dynamically in a tree for 5.9 and later if it uses
-  # curses, in a target directory of their own (their flags differ).
+  # program. Linked dynamically if it uses curses, in a target directory of their own (their flags differ).
   chumby_bin=$bin
   if [ -n "$(field "$manifest" exec)$(field "$manifest" service)" ]; then
-    if at_least "$linux" 5.9 && uses_curses; then
-      [ -n "$shared" ] || {
-        tools/linux-libs "$libs"
-        shared=1
-      }
+    if uses_curses; then
       chumby_bin=$bin/shared
       NEOCHUMBY_NCURSES=system PKG_CONFIG_SYSROOT_DIR=$libs PKG_CONFIG_LIBDIR=$libs/usr/lib/pkgconfig \
         PKG_CONFIG_PATH='' PKG_CONFIG_ALLOW_SYSTEM_CFLAGS=1 PKG_CONFIG_ALLOW_SYSTEM_LIBS=1 \
@@ -387,10 +382,4 @@ for app in home "$@"; do
   cp "$manifest" "$dest/manifest"
   [ ! -d "$src/files" ] || cp -R "$src/files/." "$dest/"
 done
-if [ -n "$shared" ]; then
-  # Plain files, under the names the binaries ask for: a FAT stick holds
-  # no links. musl's libc.so is its own loader, and answers for libc.so.
-  mkdir -p "$out/lib"
-  cp "$libs/lib/ld-musl-arm.so.1" "$libs/usr/lib/libncursesw.so.6" "$libs/usr/lib/libpanelw.so.6" "$out/lib/"
-fi
 [ -z "$data" ] || cp -R "$data/." "$out/"

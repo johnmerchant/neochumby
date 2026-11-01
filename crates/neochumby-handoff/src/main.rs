@@ -15,7 +15,7 @@
 //! stay out of the kernel's command line, which every process can read.
 //!
 //! The stock system has no cpio or printf, so this is a static program. It
-//! runs on 2.6.16: std's files and directories, and nothing newer. /proc's
+//! runs on the stock 2.6.16: std's files and directories, and nothing newer. /proc's
 //! file takes what one write gives it, so it writes in small pieces.
 
 mod newc;
@@ -26,8 +26,10 @@ use std::os::unix::fs::MetadataExt;
 use std::path::Path;
 use std::process::ExitCode;
 
-/// Files larger than this aren't settings, and the initrd's room is small.
-const MAX_FILE: u64 = 256 * 1024;
+/// Files larger than this aren't settings, and the initrd's room is small:
+/// the largest that belongs is /psp/neochumby-boot, at most 768 KiB, which
+/// goes over so that Linux 7 checks the tree too.
+const MAX_FILE: u64 = 1024 * 1024;
 const PIECE: usize = 4096;
 
 fn main() -> ExitCode {
