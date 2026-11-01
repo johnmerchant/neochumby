@@ -367,6 +367,8 @@ impl<'a, D: Device> Session<'a, D> {
         if let Some(r) = reason {
             launch.env(neochumby::session::REASON_ENV, r);
         }
+        // ncinit stops drawing on the screen: it's about to be the app's.
+        let _ = std::fs::write("/tmp/neochumby.started", "");
         eprintln!("neochumby: opening {}{}", app.name, reason.map(|r| format!(" ({r})")).unwrap_or_default());
         if app.button
             && let Some(fd) = self.device.button_fd()

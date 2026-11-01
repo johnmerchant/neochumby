@@ -108,7 +108,8 @@ fn prepare(tty: &mut File, opts: &Options) -> io::Result<()> {
     if let Err(e) = busybox(&["loadfont"], opts.font.data()) {
         eprintln!("neochumby: terminal: {e}; keeping the console's font");
     }
-    tty.write_all(b"\x1b[0m\x1b[H\x1b[2J")
+    // The cursor too, as ncinit hides it during a boot.
+    tty.write_all(b"\x1b[0m\x1b[?25h\x1b[H\x1b[2J")
 }
 
 /// What of the program's output the relay must act on.

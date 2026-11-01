@@ -35,6 +35,7 @@ use neochumby_sys::boot::{self, MountFlags};
 use crate::modules::Db;
 use crate::status::Status;
 
+const STARTING: &str = "Starting neochumby";
 const PATH: &str = "/bin:/sbin:/usr/bin:/usr/sbin";
 /// How long the stick gets to show up: several seconds, more when a
 /// control transfer times out and the hub tries it again.
@@ -42,6 +43,11 @@ const STICK_WAIT: Duration = Duration::from_secs(15);
 /// How long the network adapter gets to show up, once it has a stick's
 /// wait behind it.
 const ADAPTER_WAIT: Duration = Duration::from_secs(20);
+/// What the session leaves just before it opens its first app, which then has
+/// the screen: nothing more is drawn on it from here.
+const SESSION_STARTED: &str = "/tmp/neochumby.started";
+/// Waited this long for the session, it's the server that's being waited for.
+const SERVER_SLOW: Duration = Duration::from_secs(25);
 /// The zone, as the sideload handed it over.
 const LOCALTIME: &str = "/psp/localtime";
 /// Where the time comes from.
@@ -122,11 +128,24 @@ impl Init {
     }
 
     fn run(&mut self) -> ! {
+        // How long the session has been coming, while it is.
+        let mut coming = self.hook.map(|_| Instant::now());
         loop {
             for shell in &mut self.shells {
                 shell.keep_running();
             }
             self.service(TICK_MS);
+            if let Some(since) = coming {
+                let started = Path::new(SESSION_STARTED).exists();
+                if started || self.hook.is_none() {
+                    let what = if started { STARTING } else { "Starting neochumby: its hook gave up" };
+                    screen_step(what, if started { Status::Ok } else { Status::Failed });
+                    coming = None;
+                } else {
+                    let what = if since.elapsed() < SERVER_SLOW { STARTING } else { "Waiting for the server" };
+                    spin(what, since);
+                }
+            }
             while let Some(pid) = boot::reap() {
                 if self.hook == Some(pid) {
                     log("userhook2 exited");
@@ -168,8 +187,10 @@ impl Init {
     /// /mnt/usb, read-write, for what the Chumby keeps there. Its boot hook,
     /// if it has one.
     fn stick(&mut self) -> Option<&'static str> {
-        let until = Instant::now() + STICK_WAIT;
+        let since = Instant::now();
+        let until = since + STICK_WAIT;
         while !is_block_device("/dev/sda1") && Instant::now() < until {
+            spin("Looking for a neochumby stick", since);
             self.service(TICK_MS);
         }
         if !is_block_device("/dev/sda1") {
@@ -202,9 +223,11 @@ impl Init {
             }
         };
         let interface = if config.wireless { "wlan0" } else { "eth0" };
-        let until = Instant::now() + ADAPTER_WAIT;
+        let since = Instant::now();
+        let until = since + ADAPTER_WAIT;
         let present = |i: &str| Path::new("/sys/class/net").join(i).exists();
         while !present(interface) && Instant::now() < until {
+            spin(WHAT, since);
             self.service(TICK_MS);
         }
         if !present(interface) {
@@ -319,7 +342,8 @@ impl Shell {
             return;
         }
         self.started = Some(Instant::now());
-        let Some(tty) = terminal(self.tty) else { return };
+        let Some(mut tty) = terminal(self.tty) else { return };
+        let _ = tty.write_all(status::SHOW_CURSOR.as_bytes());
         let (Ok(i), Ok(o)) = (tty.try_clone(), tty.try_clone()) else { return };
         let mut sh = Command::new("/bin/sh");
         sh.arg("-i").env("PATH", PATH).stdin(i).stdout(o).stderr(tty);
@@ -526,6 +550,7 @@ fn mount_kernel_fs() {
     // Only now: the screen's console is in /dev, devtmpfs. The logo first,
     // under the kernel's Tux, then the steps.
     screen(&logo::for_screen());
+    screen(status::HIDE_CURSOR);
     screen_step("Mounting /proc, /sys and /dev", if ok { Status::Ok } else { Status::Failed });
     for dir in ["/tmp", "/mnt"] {
         let _ = fs::create_dir_all(dir);
@@ -567,11 +592,18 @@ fn step(what: &str, status: Status, msg: &str) {
     screen_step(what, status);
 }
 
+/// A step still going, in place of the console's cursor: a spinner and the
+/// seconds so far, on a line the step's result replaces.
+fn spin(what: &str, since: Instant) {
+    let elapsed = since.elapsed();
+    screen(&status::working(what, elapsed.as_millis() / u128::from(TICK_MS), elapsed.as_secs()));
+}
+
 /// A step on the screen only.
 fn screen_step(what: &str, status: Status) {
     let cols =
         OpenOptions::new().read(true).open("/dev/tty1").ok().and_then(|t| boot::columns(&t)).map_or(64, usize::from);
-    screen(&status::line(what, status, cols));
+    screen(&format!("\r{}", status::line(what, status, cols)));
 }
 
 fn kmsg(msg: &str) {
