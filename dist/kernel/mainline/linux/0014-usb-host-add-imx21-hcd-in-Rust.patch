@@ -150,7 +150,7 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +obj-$(CONFIG_USB_IMX21_HCD)	+= imx21_hcd.o
 --- /dev/null
 +++ b/drivers/usb/host/imx21_hcd.rs
-@@ -0,0 +1,1718 @@
+@@ -0,0 +1,1724 @@
 +// SPDX-License-Identifier: GPL-2.0
 +
 +//! USB Host Controller Driver for the i.MX21.
@@ -1697,6 +1697,12 @@ Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
 +        let regs = &hcd.data().get_ref().regs;
 +        let port = usize::from(index).wrapping_sub(1);
 +        let mut status_write = 0;
++        if matches!(request, CLEAR_PORT_FEATURE | GET_PORT_STATUS | SET_PORT_FEATURE)
++            && port >= (regs.read(USBH_ROOTHUBA) & USBH_ROOTHUBA_NDNSTMPRT_MASK) as usize
++        {
++            return Err(EINVAL);
++        }
++
 +
 +        match request {
 +            CLEAR_HUB_FEATURE | SET_HUB_FEATURE => match value {

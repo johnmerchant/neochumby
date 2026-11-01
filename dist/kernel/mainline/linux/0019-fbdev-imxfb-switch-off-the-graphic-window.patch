@@ -1,0 +1,33 @@
+Description: fbdev: imxfb: switch off the graphic window left on by the boot
+ The i.MX21 and i.MX27 LCDC blend a second plane, the graphic window, over
+ the screen when LGWCR's GWE bit is set. The driver doesn't use the window
+ and never wrote the register, so a kernel handed off from a running system
+ inherits it: the Chumby's stock firmware leaves it on, and once its memory
+ belongs to someone else the screen shows that memory blended over the
+ console. Clear it whenever the controller is programmed.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/drivers/video/fbdev/imxfb.c
++++ b/drivers/video/fbdev/imxfb.c
+@@ -127,6 +127,9 @@
+ 
+ #define IMXFB_LSCR1_DEFAULT 0x00120300
+ 
++/* The graphic window, on the i.MX21 and i.MX27 */
++#define LCDC_LGWCR	0x64
++
+ #define LCDC_LAUSCR	0x80
+ #define LAUSCR_AUS_MODE	BIT(31)
+ 
+@@ -676,6 +679,8 @@
+ 	if (fbi->pwmr)
+ 		writel(fbi->pwmr, fbi->regs + LCDC_PWMR);
+ 	writel(fbi->lscr1, fbi->regs + LCDC_LSCR1);
++	if (!is_imx1_fb(fbi))
++		writel(0, fbi->regs + LCDC_LGWCR);
+ 
+ 	/* dmacr = 0 is no valid value, as we need DMA control marks. */
+ 	if (fbi->dmacr)
