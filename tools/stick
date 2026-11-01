@@ -1,17 +1,152 @@
 #!/bin/sh
-# Makes a neochumby stick: any FAT-formatted USB stick, mounted at STICK.
-# Plugged into a Chumby at power-on, it boots neochumby with its own apps;
-# nothing on the Chumby is changed, and without the stick it boots as it
-# always did. A neochumby.conf beside it (server=...) offers pairing with a
-# neochumbyd, for apps that need one.
+# Makes a neochumby stick: any FAT-formatted USB stick, mounted at STICK. In a
+# Chumby at power-on, it takes the Chumby from its stock firmware to Linux 7,
+# with its own apps. Nothing on the Chumby is changed, and without the stick it
+# boots as it always did. On the stick:
 #
-#   tools/stick STICK [-d DATA] [APP ...]    (as tools/tree)
+#   userhook2                  the boot hook, the only way in
+#   neochumby/                 the tree it was made with: the session, home,
+#                              apps; sideload/ (sideload.ko, zImage,
+#                              initramfs.cpio.gz, neochumby-handoff)
+#   neochumby/state/           only with --pair: neochumby.key, neochumby.conf;
+#                              then, as the Chumby runs, neochumby.settings and
+#                              what apps keep
+#   neochumby/a b current ...  synced sets, once a paired Chumby has them
+#
+# DIR holds the sideload's files (tools/tree has which):
+#
+#   dist/fetch DIR    (or dist/build DIR)
+#   tools/neochumby-kernel-sideloader/build DIR
+#   tools/stick STICK --sideload DIR [-d DATA] [APP ...]    (as tools/tree)
+#
+# A stick made so is not paired: it runs its own tree, with no server.
+#
+#   tools/stick STICK --sideload DIR --pair HOST --name NAME [--replace]
+#               [--server ADDR] [--state DIR] [--api-port N] [APP ...]
+#
+# pairs it with the neochumbyd on HOST, over ssh (`local`: on this machine).
+# The Chumby's key is made here by neochumbyd keygen, which writes the private
+# key straight to the stick: no temporary file, nothing on this machine's disk,
+# and it is never sent anywhere. Its public half, and NAME, go to HOST
+# (`neochumbyd add`), which answers with its own key; that and its address go on
+# the stick. The stick is then the Chumby's identity. Made again, a stick keeps
+# its key. ADDR is the address a Chumby reaches the server at (default: HOST,
+# without any user@); DIR is neochumbyd's state directory on HOST (default
+# NEOCHUMBYD_DIR, else /var/lib/neochumbyd); N its API port (default 7340).
+# Another key already under NAME is replaced only with --replace.
 set -eu
-stick=${1:?usage: tools/stick STICK [-d DATA] [APP ...]}
+usage="usage: tools/stick STICK --sideload DIR [-d DATA] [--pair HOST --name NAME [--replace] [--server ADDR] [--state DIR] [--api-port N]] [APP ...]"
+stick=${1:?$usage}
 shift
+pair=
+name=
+replace=
+server=
+state=${NEOCHUMBYD_DIR:-/var/lib/neochumbyd}
+port=7340
+# What's ours is taken out; the rest stays in "$@", for tools/tree.
+n=$#
+while [ "$n" -gt 0 ]; do
+  a=$1
+  shift
+  n=$((n - 1))
+  case $a in
+    --pair | --name | --server | --state | --api-port)
+      [ "$n" -gt 0 ] || {
+        echo "$usage" >&2
+        exit 2
+      }
+      case $a in
+        --pair) pair=$1 ;;
+        --name) name=$1 ;;
+        --server) server=$1 ;;
+        --state) state=$1 ;;
+        --api-port) port=$1 ;;
+      esac
+      shift
+      n=$((n - 1))
+      ;;
+    --replace) replace=--replace ;;
+    *) set -- "$@" "$a" ;;
+  esac
+done
+if [ -n "$pair" ] || [ -n "$name" ]; then
+  [ -n "$pair" ] && [ -n "$name" ] || {
+    echo "tools/stick: --pair HOST and --name NAME go together" >&2
+    exit 2
+  }
+  case $name in
+    *[!a-z0-9_-]*)
+      echo "tools/stick: $name: a Chumby's name is 1-32 of a-z, 0-9, _ and -" >&2
+      exit 2
+      ;;
+  esac
+fi
 root=$(git rev-parse --show-toplevel)
 "$root/tools/tree" "$stick/neochumby" "$@"
-# Nothing syncs into a stick made by hand, so it carries no receiver.
-rm -f "$stick/neochumby/neochumby-sync"
+[ -f "$stick/neochumby/sideload/zImage" ] || {
+  echo "tools/stick: no --sideload DIR: this stick can't leave the stock firmware" >&2
+  exit 2
+}
 cp "$root/boot/userhook2" "$stick/userhook2"
-echo "neochumby stick ready: $stick"
+
+# Synced sets need room for two whole trees, as big as this one at least. A
+# Chumby refuses a tree too big when it is sent one, leaving what it runs; say
+# so now.
+if [ -n "$pair" ]; then
+  tree_kib=$(du -sk "$stick/neochumby" | cut -f1)
+  free_kib=$(df -Pk "$stick" | sed -n '2s/  */ /gp' | cut -d' ' -f4)
+  if [ "$free_kib" -lt $((tree_kib * 2)) ]; then
+    echo "tools/stick: $stick has $free_kib KiB free, and two synced copies of this $tree_kib KiB tree need $((tree_kib * 2)) KiB: use a bigger stick, or fewer apps" >&2
+    exit 1
+  fi
+fi
+
+if [ -n "$pair" ]; then
+  # The host's neochumbyd, for keygen; for `local`, for add too.
+  (cd "$root" && cargo build -q --release -p neochumbyd)
+  nd=$root/target/release/neochumbyd
+  mkdir -p "$stick/neochumby/state"
+  key=$stick/neochumby/state/neochumby.key
+  made=
+  [ -e "$key" ] || made=1
+  public=$("$nd" keygen "$key")
+  sync
+  [ -n "$server" ] || server=${pair##*@}
+  if [ "$pair" = local ]; then
+    [ "$server" != local ] || {
+      echo "tools/stick: --pair local needs --server ADDR, the address a Chumby reaches it at" >&2
+      [ -z "$made" ] || rm -f "$key"
+      exit 2
+    }
+    answer=$("$nd" add "$name" "$public" $replace --address "$server" --api "0.0.0.0:$port" --state "$state") || {
+      [ -z "$made" ] || rm -f "$key"
+      exit 1
+    }
+  else
+    answer=$(ssh "$pair" "'$state/neochumbyd' add '$name' '$public' $replace --address '$server' --api '0.0.0.0:$port' --state '$state'") || {
+      [ -z "$made" ] || rm -f "$key"
+      exit 1
+    }
+  fi
+  server_key=$(echo "$answer" | sed -n 's/^server_key=\([0-9a-f]\{64\}\)$/\1/p')
+  [ -n "$server_key" ] || {
+    echo "tools/stick: $pair didn't give its key: $answer" >&2
+    exit 1
+  }
+  # Whole, and on the stick: NAME.new, synced, then renamed, then synced, as
+  # the Chumby writes it.
+  conf=$stick/neochumby/state/neochumby.conf
+  {
+    echo "$answer" | grep -E '^(server|api_port)=[A-Za-z0-9._:/-]+$'
+    echo "server_key=$server_key"
+    echo "name=$name"
+  } > "$conf.new"
+  sync
+  mv "$conf.new" "$conf"
+  sync
+  echo "neochumby stick ready: $stick, paired with $pair as $name (key $public)"
+else
+  sync
+  echo "neochumby stick ready: $stick, not paired: it runs its own tree"
+fi

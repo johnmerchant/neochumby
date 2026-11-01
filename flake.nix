@@ -49,7 +49,7 @@
             pkgs.zig_0_17
             pkgs.cmake
             # neochumby-ncurses finds the shared ncurses with it, in a
-            # tree for Linux 5.9 and later (tools/tree, tools/linux-libs).
+            # tree (tools/tree, tools/linux-libs).
             pkgs.pkg-config
             pkgs.python3
             pkgs.gh

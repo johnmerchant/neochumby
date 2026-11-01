@@ -1,21 +1,21 @@
 #!/bin/sh
-# Pairing and delivery=sync over the serial line, end to end: the emulated
-# Chumby has no network, and reaches a neochumbyd on this machine over its
-# second UART, which qemu-chumby joins to neochumbyd's --listen-unix
-# socket (dev/emulate start --server). The Chumby pairs through
-# neochumby-home's PAIR (the code it shows is the one neochumbyd lists),
-# keeps the pairing, and at its next start is neochumbyd's paired Chumby:
-# its log arrives over the developer link, `neochumbyd shot` gets its
-# screen, and with delivery=sync a first round fills set a of its stick,
-# which the boot after runs.
+# Sync over the serial line, end to end: the emulated Chumby has no network,
+# and reaches a neochumbyd on this machine over its second UART, which
+# qemu-chumby joins to neochumbyd's --listen-unix socket (dev/emulate start
+# --server). A stick made paired is neochumbyd's Chumby at once: its log arrives
+# over the developer link, `neochumbyd shot` gets its screen, and a first round
+# fills set a of its stick, which the boot after runs. Then deploys: the tree
+# changes, `neochumbyd sync` brings it and `neochumbyd restart` runs it, with
+# what each takes printed; and a sync that would write the set running says to
+# restart first.
 #
 #   dev/emulate-link TREE NEOCHUMBYD OUT
 #
 # TREE from tools/tree, with neochumby-sync; NEOCHUMBYD the neochumbyd
 # built with it, for this machine. Only the session, its receiver and
 # home are synced, so that a round over the line (about 100 KB/s) takes a
-# minute or so, not the tree's apps. A real Chumby is skipped: pairing one
-# is its owner's to do.
+# minute or so, not the tree's apps. A real Chumby is skipped: its stick is its
+# owner's to make.
 set -eu
 tree=${1:?usage: dev/emulate-link TREE NEOCHUMBYD OUT}
 neochumbyd=${2:?usage: dev/emulate-link TREE NEOCHUMBYD OUT}
@@ -38,15 +38,15 @@ fail() {
 backend=$(emu backend)
 slow=$(emu scale)
 if [ "$backend" = device ]; then
-  echo "dev/emulate-link: skipped: pairing a real Chumby is its owner's to do"
+  echo "dev/emulate-link: skipped: a real Chumby's stick is its owner's to make"
   exit 77
 fi
-[ -x "$tree/neochumby-sync" ] || fail "$tree has no neochumby-sync (a tree with delivery=sync)"
+[ -x "$tree/neochumby-sync" ] || fail "$tree has no neochumby-sync"
 
-# The session, its receiver and hook, and the home screen.
+# The session, its receiver, and the home screen.
 work=$out/tree
-rm -rf "$work" "$out/nd" "$out/psp0"
-mkdir -p "$work/apps" "$out/psp0"
+rm -rf "$work" "$out/nd" "$out/made" "$state"
+mkdir -p "$work/apps" "$out/made"
 for f in "$tree"/*; do
   [ -f "$f" ] && cp -p "$f" "$work/"
 done
@@ -55,7 +55,7 @@ cp -Rp "$tree/apps/home" "$work/apps/"
 # The line's socket: a short path, as a Unix socket's must be.
 sockdir=$(mktemp -d /tmp/ncline.XXXXXX)
 sock=$sockdir/line.sock
-"$neochumbyd" serve --state "$out/nd" --tree "$work" --api 127.0.0.1:0 --nfs 127.0.0.1:0 \
+"$neochumbyd" serve --state "$out/nd" --tree "$work" --api 127.0.0.1:0 \
   --listen-unix "$sock" > "$out/neochumbyd.log" 2>&1 &
 server=$!
 trap 'kill $server 2>/dev/null || true; rm -rf "$sockdir"' EXIT
@@ -72,42 +72,29 @@ until_ok() {
   done
 }
 listening() { [ -S "$sock" ]; }
-# The Chumby's name is its own (the stock firmware's host name, else
-# chumby), and its request says it.
-asking() { nd pairing | sed -n 's/^asking *[a-z0-9_-]* *code \([0-9a-f-]*\).*/\1/p'; }
-asking_name() { nd pairing | sed -n 's/^asking *\([a-z0-9_-]*\) .*/\1/p'; }
-has_asking() { [ -n "$(asking)" ]; }
-shown() { emu log | sed -n 's/.*neochumby-home: pairing with .*, showing \([0-9a-f-]*\).*/\1/p' | tail -n 1; }
-shows_code() { [ "$(shown)" = "$code" ]; }
-kept() { emu kept >/dev/null 2>&1; }
 logged() { nd log "$name" 2>/dev/null | grep -q "$1"; }
 until_ok 10 listening || fail "neochumbyd didn't start"
+name=chumby
 
-step "the line comes up, and PAIR pairs over it"
+step "a stick made paired: the line comes up, and it is neochumbyd's Chumby"
+pub=$("$neochumbyd" keygen "$out/made/neochumby.key")
+{
+  nd add "$name" "$pub" --address serial
+  echo "name=$name"
+} > "$out/made/neochumby.conf"
 size=$(du -sm "$work" | cut -f1)
-emu start --psp "$out/psp0" --size $((size * 3 + 32)) --server "$sock" "$work"
+emu start --psp "$out/made" --size $((size * 5 + 32)) --server "$sock" "$work"
 emu wait log 'neochumby: neochumbyd over the serial line' $((60 * slow)) || fail "the session didn't open the line"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
 until_ok 30 grep -q 'serial line .* connected' "$out/neochumbyd.log" || fail "the emulator didn't connect to neochumbyd"
-emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
-emu wait log "neochumby-home: showing" $((30 * slow)) || fail "home didn't draw"
-emu tap 80 232 --hold 300 # PAIR, in the bottom row
-until_ok 60 has_asking || fail "the Chumby didn't ask to pair"
-code=$(asking)
-name=$(asking_name)
-until_ok 10 shows_code || fail "the Chumby shows $(shown), neochumbyd lists $code"
-grep -q "$name at serial-line-.* asks to pair" "$out/neochumbyd.log" || fail "the request didn't come over the line"
-nd approve "$code"
-emu wait log 'neochumby-home: paired with serial' $((30 * slow)) || fail "the Chumby didn't hear it was approved"
-until_ok 30 kept || fail "the Chumby didn't keep the pairing"
-nd set "$name" delivery=sync
-
-step "paired, the next start is neochumbyd's Chumby, and syncs"
-emu stop
-emu start --server "$sock" "$work"
-until_ok 120 logged 'neochumby: opening home' || fail "neochumbyd has no log from the paired Chumby"
+until_ok 120 logged 'neochumby: opening home' || fail "neochumbyd has no log from the Chumby"
 nd shot "$name" "$out/screen.png" || fail "neochumbyd got no screenshot over the line"
-emu wait log 'neochumby-sync: set a is live from the next boot' $((600 * slow)) || fail "the first round didn't finish"
+
+step "its first round, by neochumbyd sync"
+t0=$(date +%s)
+nd sync "$name" || fail "the first round failed"
+echo "the first sync, the whole tree ($size MB): $(($(date +%s) - t0)) s"
+emu wait log 'neochumby-sync: set a is live from the next restart' $((60 * slow)) || fail "the first round didn't finish"
 # The power goes as soon as the round says so: the set it made live must
 # already be on the stick, its marker and `current` included.
 emu powercut "$out/synced.img"
@@ -116,6 +103,51 @@ step "the boot after, from the stick as the power cut left it, runs the synced s
 emu start --boot --stick "$out/synced.img" --server "$sock"
 emu wait log "apps from the stick's set a" $((60 * slow)) || fail "the boot hook didn't run set a"
 until_ok 120 logged 'neochumby-sync: up to date' || fail "the next round didn't find the set up to date"
+
+# A deploy: the tree changes, a sync brings it, a restart runs it. The tree is
+# replaced by rename, as tools/deploy's rsync does.
+change() {
+  head -c "$1" /dev/urandom > "$work/apps/home/deployed.new"
+  mv "$work/apps/home/deployed.new" "$work/apps/home/deployed"
+}
+restarts() { emu log | grep -c 'neochumby: restart: running' || true; }
+restarted_more() { [ "$(restarts)" -gt "$before" ]; }
+# Asks for a restart, and checks it ran set $1.
+restart_into() {
+  before=$(restarts)
+  nd restart "$name"
+  until_ok 60 restarted_more || fail "it didn't restart"
+  emu log | grep 'neochumby: restart: running' | tail -n 1 | grep -q "/$1/neochumby" ||
+    fail "the restart didn't run set $1"
+  # Its link comes back with the new session.
+  emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the new session didn't open home"
+  sleep $((5 * slow))
+}
+deploy() {
+  t0=$(date +%s)
+  nd sync "$name" || fail "the sync failed"
+  t1=$(date +%s)
+  restart_into "$1"
+  echo "$2: sync $((t1 - t0)) s, restart and back $(($(date +%s) - t1)) s"
+}
+
+step "a deploy with an empty standby set: the whole tree again, and a restart runs it"
+change 100000
+deploy b "the first deploy to set b, all of it"
+
+step "a typical deploy: one file of 100 KB changed, against a standby set one behind"
+change 100000
+deploy a "a typical deploy of 100 KB"
+
+step "a sync that would write the set running says to restart first"
+change 1000
+nd sync "$name" || fail "the sync to set b failed"
+change 1000
+r=0
+nd sync "$name" 2> "$out/needs.txt" || r=$?
+[ "$r" -eq 3 ] || fail "wanted status 3 from a sync with the running set to write, got $r: $(cat "$out/needs.txt")"
+grep -q 'restart' "$out/needs.txt" || fail "it didn't say to restart: $(cat "$out/needs.txt")"
+restart_into b
 emu stop
 
 echo "dev/emulate-link: all passed"

@@ -2,7 +2,7 @@
 //! its MUTE button pauses and resumes.
 //!
 //! It's named by `player=<app>` in this Chumby's settings from its
-//! neochumbyd, else in /psp/neochumby.conf, as `start` is (start.rs). Only
+//! neochumbyd, else in the stick's neochumby.conf, as `start` is (start.rs). Only
 //! an app whose manifest says `player = true`, and that can be opened here,
 //! may be it. A name that isn't one is refused, with the reason logged.
 //! Then, or when nothing names one, it's [`DEFAULT`] if that's a player

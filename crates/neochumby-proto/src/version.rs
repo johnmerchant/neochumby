@@ -16,7 +16,7 @@
 //! ```
 //!
 //! - A version-0 Chumby drops the pair, as it drops any pair whose key
-//!   isn't all a-z and `_` (so it is never kept in its /psp either), and
+//!   isn't all a-z and `_` (so it is never kept on its stick either), and
 //!   sends what it always sent next. neochumbyd takes a first message
 //!   that isn't `Version` to mean version 0, and handles it as before.
 //! - A version-0 neochumbyd sends no such pair. The Chumby stays at
@@ -26,8 +26,7 @@
 //!
 //! The same `Config` carries neochumbyd's clock ([`CLOCK`], seconds since
 //! the epoch, UTC), for a Chumby that has no clock of its own to go by: a
-//! Chumby Classic has no battery for one, and the stock 2.6.16 and the
-//! dist's 5.9.16 find no RTC. Like the version's, its key has a dot, so a
+//! Chumby Classic has no battery for one, and its kernel finds no RTC. Like the version's, its key has a dot, so a
 //! Chumby that doesn't know it drops it.
 //!
 //! Each end keeps the version agreed on in its [`Session`], which then
@@ -141,8 +140,7 @@ fn hello_as(s: &mut Session, name: String, wait: Duration, ours: u16) -> io::Res
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::settings::Delivery;
-    use crate::{Identity, Unverified};
+    use crate::Identity;
     use std::net::{TcpListener, TcpStream};
     use std::thread::JoinHandle;
 
@@ -155,13 +153,14 @@ mod tests {
         let addr = l.local_addr().unwrap();
         let server_key = server.public();
         let t = std::thread::spawn(move || {
-            f(Unverified::accept(l.accept().unwrap().0, &server).unwrap().verify(|_| true).unwrap())
+            let by = Instant::now() + Duration::from_secs(20);
+            f(Session::accept(l.accept().unwrap().0, &server, by, |_| true).unwrap())
         });
         (Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &server_key).unwrap(), t)
     }
 
     fn settings() -> Settings {
-        Settings { start: Some("wx".into()), delivery: Some(Delivery::Sync), ..Default::default() }
+        Settings { start: Some("wx".into()), dev: true, ..Default::default() }
     }
 
     /// neochumbyd at version `ours`, as api.rs runs it (version 0: as one
@@ -238,7 +237,7 @@ mod tests {
         // As a later version's skippable message would arrive.
         c.send_body(&[200, 1, 2, 3]).unwrap();
         c.send(&Msg::Dev).unwrap();
-        assert_eq!(t.join().unwrap(), (Msg::Dev, 1));
+        assert_eq!(t.join().unwrap(), (Msg::Dev, VERSION));
     }
 
     /// A Chumby that says nothing after Config is given up on.

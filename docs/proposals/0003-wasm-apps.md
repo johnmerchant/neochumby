@@ -4,6 +4,9 @@ Status: **proposed**, for John to read. The design below is the one agreed
 before it was written down; the numbers are the spike's, measured on a
 Chumby Classic (`dev/wasmbench`).
 
+> Since this was written, neochumby runs only on Linux 7: what follows about
+> 2.6.16 and 5.9.16 is history.
+
 ## Why
 
 Every app today is native ARM code, and [SECURITY](../../SECURITY.md) says
@@ -332,8 +335,7 @@ pinned and **never updated by themselves**.
 Installing needs the owner: the request is made on neochumbyd's admin
 socket with the owner's token (#9's admin socket, once #9 is merged; until
 then `neochumbyd install` as the server's admin). A Chumby's own GET APPS
-asks its neochumbyd, which shows a code to type on the server, as pairing
-does.
+asks its neochumbyd, which shows a code to type on the server.
 
 ### Discovery
 

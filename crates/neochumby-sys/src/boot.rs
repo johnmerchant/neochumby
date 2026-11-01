@@ -2,8 +2,7 @@
 //! loading a module from its image, the kernel's device events, a child in
 //! a session of its own on a terminal, and reaping whatever child exits.
 //!
-//! Only the dist image runs these, on Linux 5.9 and later; the stock
-//! 2.6.16 never runs ncinit. Built only with the `boot` feature, which
+//! Only the image runs these. Built only with the `boot` feature, which
 //! ncinit alone turns on.
 
 use std::ffi::CString;

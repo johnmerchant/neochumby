@@ -223,7 +223,7 @@ impl Stick {
             .flat_map(|e| e.path.match_indices('/').map(|(i, _)| e.path[..i].to_ascii_lowercase()).collect::<Vec<_>>())
             .collect();
         prune(d, &dir, "", &files, &dirs)?;
-        room(d, &dir, tree, &have)?;
+        room(d, &dir, &self.set_dir(s.other()), tree, &have)?;
         let journal = d.append(&self.dir.join(self.journal(s)))?;
         let unverified = if from_journal { kept.clone() } else { Vec::new() };
         Ok(Writer {
@@ -471,9 +471,12 @@ fn hash_file(disk: &dyn Disk, p: &Path, read: &mut dyn FnMut(u64)) -> io::Result
 }
 
 /// Whether the stick has room for what `tree` still needs, once `dir` holds
-/// only files the tree names. A file replaced keeps its old bytes until its
-/// new ones are renamed over it, so the largest of those is counted too.
-fn room(disk: &dyn Disk, dir: &Path, tree: &[Entry], have: &HashSet<&Entry>) -> io::Result<()> {
+/// only files the tree names, and then for a second copy of the tree in
+/// `other`, the other set, as the next round will write it: so a tree too big
+/// for two sets is refused now, while one good set is still whole, not the
+/// day after it has been made live. A file replaced keeps its old bytes until
+/// its new ones are renamed over it, so the largest of those is counted too.
+fn room(disk: &dyn Disk, dir: &Path, other: &Path, tree: &[Entry], have: &HashSet<&Entry>) -> io::Result<()> {
     let (mut need, mut freed, mut largest) = (0u64, 0u64, 0u64);
     for e in tree.iter().filter(|e| !have.contains(e)) {
         need += e.size;
@@ -482,12 +485,33 @@ fn room(disk: &dyn Disk, dir: &Path, tree: &[Entry], have: &HashSet<&Entry>) -> 
             largest = largest.max(m.len);
         }
     }
+    let whole: u64 = tree.iter().map(|e| e.size).sum();
+    let second = whole.saturating_sub(bytes_in(disk, other));
     let free = disk.available(dir)?;
-    if free + freed < need + largest {
-        let short = need + largest - free - freed;
-        return Err(io::Error::new(io::ErrorKind::StorageFull, format!("the stick needs {short} more bytes free")));
+    if free + freed < need + largest + second {
+        let short = need + largest + second - free - freed;
+        return Err(io::Error::new(
+            io::ErrorKind::StorageFull,
+            format!(
+                "the stick can't hold two copies of this tree, {whole} bytes each: it needs {short} more bytes free. \
+                 Use a bigger stick, or a smaller tree"
+            ),
+        ));
     }
     Ok(())
+}
+
+/// The bytes of the plain files under `dir`, if it is there.
+fn bytes_in(disk: &dyn Disk, dir: &Path) -> u64 {
+    let Ok(entries) = disk.list(dir) else { return 0 };
+    entries
+        .into_iter()
+        .map(|(name, kind)| match kind {
+            Kind::Dir => bytes_in(disk, &dir.join(name)),
+            Kind::File => disk.stat(&dir.join(name)).map_or(0, |m| m.len),
+            Kind::Other => 0,
+        })
+        .sum()
 }
 
 /// Removes what is in `rel` under `base` and not named: files not in
@@ -544,7 +568,7 @@ fn real_dir(disk: &dyn Disk, p: &Path) -> io::Result<()> {
 /// fsync of the file, or a sync()), so a power cut after a directory fsync
 /// still found `current` and the set's marker empty, and the boot ran the
 /// old set. On that kernel an fsync costs a whole sync anyway.
-fn write_whole(disk: &dyn Disk, dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
+pub fn write_whole(disk: &dyn Disk, dir: &Path, name: &str, data: &[u8]) -> io::Result<()> {
     let tmp = dir.join(format!("{name}.new"));
     remove_if_there(disk, &tmp)?;
     let mut f = disk.create(&tmp, 0o644)?;
@@ -819,6 +843,69 @@ pub(crate) mod tests {
         let huge = Entry { path: "neochumby".into(), size: 1 << 60, sha256: [0; 32] };
         let e = st.begin(Set::A, &[huge], &[]).err().unwrap();
         assert_eq!(e.kind(), io::ErrorKind::StorageFull, "{e}");
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    /// Two copies must fit, with a clear word, before the good set is
+    /// touched; a set already holding the tree's size counts towards it.
+    #[test]
+    fn two_copies_must_fit() {
+        struct Small(u64);
+        impl Disk for Small {
+            fn open(&self, p: &Path) -> io::Result<Box<dyn Read>> {
+                RealDisk.open(p)
+            }
+            fn stat(&self, p: &Path) -> io::Result<crate::disk::Meta> {
+                RealDisk.stat(p)
+            }
+            fn list(&self, d: &Path) -> io::Result<Vec<(std::ffi::OsString, Kind)>> {
+                RealDisk.list(d)
+            }
+            fn create(&self, p: &Path, m: u32) -> io::Result<Box<dyn Output>> {
+                RealDisk.create(p, m)
+            }
+            fn append(&self, p: &Path) -> io::Result<Box<dyn Output>> {
+                RealDisk.append(p)
+            }
+            fn rename(&self, a: &Path, b: &Path) -> io::Result<()> {
+                RealDisk.rename(a, b)
+            }
+            fn remove_file(&self, p: &Path) -> io::Result<()> {
+                RealDisk.remove_file(p)
+            }
+            fn remove_dir_all(&self, p: &Path) -> io::Result<()> {
+                RealDisk.remove_dir_all(p)
+            }
+            fn create_dir(&self, p: &Path) -> io::Result<()> {
+                RealDisk.create_dir(p)
+            }
+            fn sync_dir(&self, d: &Path) -> io::Result<()> {
+                RealDisk.sync_dir(d)
+            }
+            fn sync(&self) {}
+            fn available(&self, _: &Path) -> io::Result<u64> {
+                Ok(self.0)
+            }
+            fn mounted(&self, _: &Path) -> bool {
+                true
+            }
+        }
+        let root = tempdir("two");
+        let mut st = Stick::new(root.join("neochumby"), None);
+        let tree = vec![entry("neochumby", &[7; 1000])];
+        // Room for one copy, not for two.
+        st.disk = Arc::new(Small(1500));
+        let e = st.begin(Set::A, &tree, &[]).err().unwrap();
+        assert_eq!(e.kind(), io::ErrorKind::StorageFull);
+        assert!(e.to_string().contains("two copies") && e.to_string().contains("500 more bytes"), "{e}");
+        // Room for both.
+        st.disk = Arc::new(Small(2000));
+        drop(st.begin(Set::A, &tree, &[]).unwrap());
+        // The other set already holds as much: only this one's room counts.
+        fs::create_dir_all(root.join("neochumby/b")).unwrap();
+        fs::write(root.join("neochumby/b/old"), [0; 1000]).unwrap();
+        st.disk = Arc::new(Small(1000));
+        drop(st.begin(Set::A, &tree, &[]).unwrap());
         fs::remove_dir_all(&root).unwrap();
     }
 

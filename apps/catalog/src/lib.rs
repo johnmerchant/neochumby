@@ -7,9 +7,6 @@
 //! touches come as mouse reports ([`input`]). It talks only to neochumbyd,
 //! whose own catalog is its companion (neochumby_proto::catalog), never to
 //! crates.io or GitHub. [`ui`] has the screens; [`screen`] draws them.
-//!
-//! Linux 5.9 and later only (`linux = "5.9"`): catalog apps aren't
-//! allowed on the stock 2.6.16, whose kernel has no sandbox for them.
 
 pub mod input;
 pub mod screen;

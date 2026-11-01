@@ -1,7 +1,7 @@
 // ncurses for the apps, one of two ways, as NEOCHUMBY_NCURSES says
-// (tools/tree sets it from the Linux the tree is for, --linux):
+// (tools/tree sets it to `system`):
 //
-// - `source` (or unset), for the stock 2.6 and any static build: builds
+// - `source` (or unset), for any static build: builds
 //   ncurses (third_party/ncurses) with its own configure and make, as
 //   static libraries, libncursesw and libpanelw (which cbonsai uses), for
 //   the C compiler cargo is given (tools/zigcc for the Chumby). There is no
@@ -11,7 +11,7 @@
 //   Compiling them takes ncurses' tic and infocmp, which are built for the
 //   host first: the host's own may be too old to read ncurses'
 //   terminfo.src (macOS's is).
-// - `system`, for the dist's Linux (5.9 and later): links libncursesw and
+// - `system`, for a tree: links libncursesw and
 //   libpanelw dynamically, found with pkg-config in a sysroot
 //   (PKG_CONFIG_SYSROOT_DIR and PKG_CONFIG_LIBDIR, which tools/tree points
 //   at tools/linux-libs' output). They are the same ncurses, configured

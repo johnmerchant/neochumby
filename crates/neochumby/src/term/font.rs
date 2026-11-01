@@ -3,8 +3,7 @@
 //! comes in (fonts/, BSD-2-Clause: fonts/LICENSE.spleen), and an app may
 //! bring a font of its own in its directory.
 //!
-//! On 2.6.16 the terminal draws with the font itself (grid.rs); where the
-//! kernel has a console on the screen, it is loaded there (vt.rs).
+//! The font is loaded on the kernel's console on the screen (vt.rs).
 
 use std::collections::HashMap;
 use std::io;
@@ -17,7 +16,6 @@ pub const BUILTIN: &[(&str, &[u8])] = &[
     ("spleen-8x16", include_bytes!("../../fonts/spleen-8x16.psfu")),
     ("spleen-12x24", include_bytes!("../../fonts/spleen-12x24.psfu")),
     ("spleen-16x32", include_bytes!("../../fonts/spleen-16x32.psfu")),
-    ("spleen-32x64", include_bytes!("../../fonts/spleen-32x64.psfu")),
 ];
 
 /// The font a text-mode app gets when neither it nor the owner names one:
@@ -178,7 +176,6 @@ mod tests {
             ("spleen-8x16", 8, 16),
             ("spleen-12x24", 12, 24),
             ("spleen-16x32", 16, 32),
-            ("spleen-32x64", 32, 64),
         ] {
             let f = Font::builtin(name).unwrap();
             assert_eq!((f.width, f.height), (w, h), "{name}");

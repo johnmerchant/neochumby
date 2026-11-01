@@ -1,8 +1,6 @@
 //! ALSA's mixer controls, from sound/asound.h: a control's value written
 //! by its name through a card's /dev/snd/controlC<n>, as `amixer cset`
-//! does. The stock 2.6.16 kernel has its own nodes for what the session
-//! sets; a newer kernel's (the dist image's) drivers have ALSA controls in
-//! their place, such as the speaker amplifier's switch.
+//! does: the speaker amplifier's switch, say.
 
 use std::fs::OpenOptions;
 use std::io;

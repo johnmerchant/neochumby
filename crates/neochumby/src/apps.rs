@@ -29,8 +29,6 @@
 //!   frontend=airplay           it shows another app (its service), in its
 //!                              place, once the owner approves
 //!                              (neochumby::service)
-//!   linux=5.9                  the oldest Linux it runs on, which tools/tree
-//!                              reads: a tree for an older one leaves it out
 //!   wasm=neochumby-x.wasm      in place of exec: a WebAssembly module, run
 //!                              in front by the tree's neochumby-wasm, with
 //!                              aot=, aot-key= and aot-sha256= for its
@@ -134,7 +132,7 @@ pub struct Access {
     pub network: bool,
     /// /dev/ptmx and /dev/pts.
     pub terminal: bool,
-    /// A directory of its own in /psp, lasting across boots, shared by its
+    /// A directory of its own, kept on the stick, lasting across boots, shared by its
     /// exec and its service (NEOCHUMBY_STORAGE).
     pub storage: bool,
     /// The Chumby's logs, read-only.
@@ -181,8 +179,8 @@ impl App {
 
     /// Whether this Chumby's owner trusts it: named in `trusted`, app names
     /// separated by `:`, in its settings from neochumbyd (`neochumbyd set
-    /// NAME trusted=clock:weather`), else in /psp/neochumby.conf. On a
-    /// kernel without seccomp (2.6.16), the runner runs a catalog app only
+    /// NAME trusted=clock:weather`), else in the stick's neochumby.conf. On a
+    /// kernel without seccomp, the runner runs a catalog app only
     /// if it is trusted.
     pub fn trusted(&self) -> bool {
         let list = conf::get(crate::settings::SETTINGS, "trusted").or_else(|| conf::get(conf::CONF, "trusted"));
@@ -218,10 +216,9 @@ fn parse_color(s: &str) -> Option<u16> {
     Some(rgb((v >> 16) as u8, (v >> 8) as u8, v as u8))
 }
 
-/// The app in `dir`, from its manifest: checked against the tree's signed
-/// manifest where the tree is checked (crate::verified).
+/// The app in `dir`, from its manifest.
 pub fn load(dir: &Path) -> Option<App> {
-    let manifest = String::from_utf8(crate::verified::read(&dir.join("manifest")).ok()?).ok()?;
+    let manifest = std::fs::read_to_string(dir.join("manifest")).ok()?;
     let field = |k: &str| {
         manifest
             .lines()
@@ -271,7 +268,7 @@ pub fn root() -> PathBuf {
     std::env::var_os("NEOCHUMBY_ROOT")
         .map(PathBuf::from)
         .or_else(|| std::env::current_exe().ok().and_then(|p| p.parent().map(Path::to_path_buf)))
-        .unwrap_or_else(|| "/mnt/neochumby".into())
+        .unwrap_or_else(|| crate::conf::STICK_TREE.into())
 }
 
 /// This program's own binary, to run it again (on a terminal, say): /proc's

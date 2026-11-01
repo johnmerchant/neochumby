@@ -18,8 +18,7 @@
 #   - a runaway loop runs until it is killed, and is killed;
 #   - on a kernel with seccomp (dist), the runner is locked down before
 #     the module runs, a catalog app runs, and a forbidden call kills it
-#     (SIGSYS); on 2.6.16 (classic, stock), a catalog app is refused
-#     unless trusted.
+#     (SIGSYS).
 # The console goes in OUT.
 #
 #   cargo build --release --target armv5te-unknown-linux-musleabi -p neochumby-wasm

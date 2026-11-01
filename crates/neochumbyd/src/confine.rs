@@ -21,7 +21,6 @@
 //! TMPDIR in its app's own directory.
 
 use std::io::{self, BufRead, BufReader, Read};
-use std::os::fd::RawFd;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -186,12 +185,12 @@ impl Plan {
 
     /// Makes `cmd` run on its own, in `own`, its app's directory: HOME and
     /// TMPDIR there (`own/tmp`), the environment [`PASSED`] and nothing
-    /// else, a session of its own, and `keep`, if given, as its descriptor
-    /// 3 and no other. Set what it needs of its own environment after
+    /// else, a session of its own, and no descriptor but its standard
+    /// three. Set what it needs of its own environment after
     /// this. Returns `own` as the program sees it, with no symbolic links
     /// on the way (which it may not be able to follow from inside the
     /// sandbox).
-    pub fn prepare(&self, cmd: &mut Command, own: &Path, keep: Option<RawFd>) -> io::Result<PathBuf> {
+    pub fn prepare(&self, cmd: &mut Command, own: &Path) -> io::Result<PathBuf> {
         let own = own.canonicalize()?;
         let tmp = own.join("tmp");
         // Under a uid of its own the directory is the app's, which
@@ -208,7 +207,7 @@ impl Plan {
             }
         }
         cmd.env("HOME", &own).env("TMPDIR", &tmp).current_dir(&own);
-        process::isolate(cmd, keep);
+        process::isolate(cmd, None);
         Ok(own)
     }
 }

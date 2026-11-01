@@ -10,12 +10,11 @@
 //!
 //! Each side has a static key, its [`Identity`], and presents its public
 //! half in the handshake: TLS with raw public keys (RFC 7250, Ed25519), no
-//! certificates. Each side then checks the other's key against the keys it
-//! has paired with, before the connection carries anything but pairing
-//! ([`Unverified`], then a [`Session`]). Pairing is how those are learnt:
-//! both sides show a 128-bit code derived from the handshake
-//! ([`Unverified::code`]), and someone who can see both says they match,
-//! which no one in the middle can arrange.
+//! certificates. Each side checks the other's key before the connection
+//! carries anything: the Chumby against the server key on its stick
+//! ([`Session::connect`]), neochumbyd against the keys registered with it
+//! ([`Session::accept`]), which turns any other away. Keys are learnt when a
+//! stick is made (tools/stick), never over this protocol.
 //!
 //! ChaCha20-Poly1305 either way: the Chumby's ARM926 has no AES
 //! instructions. Blocking std I/O: the Chumby has one connection, and
@@ -26,8 +25,7 @@
 //! then go both ways as [`Msg::Data`], each one a [`frame`] on the
 //! companion's stdin or stdout.
 //!
-//! A Chumby with `delivery=sync` keeps a copy of its tree on its stick, in
-//! step with neochumbyd, through the `Sync*` messages (neochumby-sync has
+//! A Chumby keeps a copy of its tree on its stick, in step with neochumbyd, through the `Sync*` messages (neochumby-sync has
 //! the rounds they make up).
 //!
 //! A paired Chumby's session also keeps a connection of its own, the
@@ -59,7 +57,7 @@ pub mod settings;
 pub mod version;
 pub use msg::{Msg, SyncEntry};
 pub use server::Server;
-pub use settings::{Delivery, Settings};
+pub use settings::Settings;
 
 /// The newest protocol version this build speaks. Version 0 is the
 /// protocol from before versions were numbered; [`version`] has how two
@@ -67,7 +65,8 @@ pub use settings::{Delivery, Settings};
 ///
 /// - 1: [`Msg::Version`]; and [`Msg::Unknown`] in place of an error for a
 ///   tag not known, skipped where [`Msg`] says.
-pub const VERSION: u16 = 1;
+/// - 2: [`Msg::SyncNow`]; and pairing's messages gone (tags 3, 4 and 5).
+pub const VERSION: u16 = 2;
 
 /// A companion's frames, on its stdin and stdout: a u32 big-endian length,
 /// then that many bytes, at most [`MAX_FRAME`].
@@ -172,77 +171,6 @@ impl Stream for UnixStream {
     }
 }
 
-/// A connection whose peer's key is not yet checked. It carries only what
-/// comes before that check, `Hello` and pairing's messages, until
-/// [`Unverified::verify`] makes it a [`Session`]: so no caller can use a
-/// connection without checking who is on the other end.
-pub struct Unverified(Session);
-
-impl Unverified {
-    /// neochumbyd's side: any key may connect, and [`Unverified::verify`]
-    /// says whether it is one paired.
-    pub fn accept(stream: impl Stream + 'static, me: &Identity) -> io::Result<Unverified> {
-        Session::server(Box::new(stream), me, None).map(Unverified)
-    }
-
-    /// As [`Unverified::accept`], with the whole handshake done by
-    /// `deadline` ([`io::ErrorKind::TimedOut`] if not), however the peer
-    /// spaces out what it sends: a socket's read timeout bounds one read,
-    /// and a handshake sent a byte at a time takes many.
-    pub fn accept_by(stream: impl Stream + 'static, me: &Identity, deadline: Instant) -> io::Result<Unverified> {
-        Session::server(Box::new(stream), me, Some(deadline)).map(Unverified)
-    }
-
-    /// A Chumby's side, to pair: it knows no server key yet.
-    pub fn connect(stream: impl Stream + 'static, me: &Identity) -> io::Result<Unverified> {
-        Session::client(Box::new(stream), me).map(Unverified)
-    }
-
-    /// The other side's public key, proven in the handshake.
-    pub fn peer(&self) -> &PublicKey {
-        self.0.peer()
-    }
-
-    /// The pairing code: 128 bits both sides derive from this handshake
-    /// and both keys, as eight groups of four hex digits. Equal on both
-    /// screens only if no one sits between them, and too long for anyone
-    /// to find a handshake that makes it so.
-    pub fn code(&self) -> String {
-        self.0.code()
-    }
-
-    /// What the session runs over.
-    pub fn stream(&self) -> &dyn Stream {
-        self.0.stream()
-    }
-
-    /// Sends one of the messages that come before the check.
-    pub fn send(&mut self, msg: &Msg) -> io::Result<()> {
-        before_verify(msg)?;
-        self.0.send(msg)
-    }
-
-    /// The next message, which must be one of those before the check.
-    pub fn recv(&mut self) -> io::Result<Msg> {
-        self.0.recv().and_then(before_verify)
-    }
-
-    /// The next message by `deadline`, as [`Session::recv_by`].
-    pub fn recv_by(&mut self, deadline: Instant) -> io::Result<Msg> {
-        self.0.recv_by(deadline).and_then(before_verify)
-    }
-
-    /// The session, if `known` says the peer's key is one paired with;
-    /// [`io::ErrorKind::PermissionDenied`] if not.
-    pub fn verify(self, known: impl FnOnce(&PublicKey) -> bool) -> io::Result<Session> {
-        if known(self.0.peer()) {
-            Ok(self.0)
-        } else {
-            Err(io::Error::new(io::ErrorKind::PermissionDenied, "not a key paired with"))
-        }
-    }
-}
-
 /// A handshake's socket: each read waits only for what is left until the
 /// deadline, if there is one, and fails at it.
 pub(crate) struct ByDeadline<'a> {
@@ -273,22 +201,38 @@ impl Write for ByDeadline<'_> {
     }
 }
 
-/// `msg`, if it may cross a connection whose peer is not yet checked.
-fn before_verify<M: std::borrow::Borrow<Msg>>(msg: M) -> io::Result<M> {
-    match msg.borrow() {
-        Msg::Hello { .. } | Msg::Unpaired | Msg::Pair { .. } | Msg::Paired { .. } | Msg::Refused => Ok(msg),
-        _ => Err(io::Error::new(io::ErrorKind::PermissionDenied, "the peer's key is not yet checked")),
-    }
-}
-
 impl Session {
     /// A Chumby's side: a session with the neochumbyd holding
     /// `server_key`, or [`io::ErrorKind::PermissionDenied`] if the one
     /// answering holds another.
     pub fn connect(stream: impl Stream + 'static, me: &Identity, server_key: &PublicKey) -> io::Result<Session> {
-        Unverified::connect(stream, me)?
-            .verify(|k| k == server_key)
-            .map_err(|_| io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"))
+        let s = Session::client(Box::new(stream), me)?;
+        if s.peer() != server_key {
+            return Err(io::Error::new(io::ErrorKind::PermissionDenied, "not the paired neochumbyd's key"));
+        }
+        Ok(s)
+    }
+
+    /// neochumbyd's side, the whole handshake and refusal by `deadline`
+    /// ([`io::ErrorKind::TimedOut`] if not), however the peer spaces out what
+    /// it sends. A key `known` doesn't take gets [`Msg::Unpaired`], and
+    /// nothing else, and this fails with [`io::ErrorKind::PermissionDenied`].
+    pub fn accept(
+        stream: impl Stream + 'static,
+        me: &Identity,
+        deadline: Instant,
+        known: impl FnOnce(&PublicKey) -> bool,
+    ) -> io::Result<Session> {
+        let mut s = Session::server(Box::new(stream), me, Some(deadline))?;
+        if known(s.peer()) {
+            return Ok(s);
+        }
+        let key = hex(s.peer());
+        // Its Hello, which it sends before it can hear anything, is read so
+        // that closing doesn't reset the connection over the answer.
+        let _ = s.recv_by(deadline.min(Instant::now() + Duration::from_secs(2)));
+        let _ = s.send(&Msg::Unpaired);
+        Err(io::Error::new(io::ErrorKind::PermissionDenied, format!("key {key} is not registered: refused")))
     }
 
     /// The next message, if it comes by `deadline`;
@@ -345,22 +289,7 @@ pub fn unhex_key(s: &str) -> io::Result<PublicKey> {
     unhex(s)?.try_into().map_err(|_| invalid("not a 32-byte key"))
 }
 
-/// A pairing code from 16 bytes both ends derived alike from a handshake:
-/// eight groups of four hex digits, `3f9a-0c21-...`.
-fn pairing_code(b: [u8; 16]) -> String {
-    b.chunks(2).map(hex).collect::<Vec<_>>().join("-")
-}
-
-/// A pairing code as someone typed it, in either case, with or without its
-/// dashes and spaces: as [`Unverified::code`] gives it, or None if it isn't
-/// one.
-pub fn parse_code(s: &str) -> Option<String> {
-    let digits: String = s.chars().filter(|c| !matches!(c, '-' | ' ')).collect();
-    let b: [u8; 16] = unhex(&digits).ok()?.try_into().ok()?;
-    Some(pairing_code(b))
-}
-
-/// A Chumby's name, as it pairs and as its AirPlay receiver is called:
+/// A Chumby's name, as it is registered and as its AirPlay receiver is called:
 /// 1 to 32 of a-z, 0-9, '_' and '-'.
 pub fn valid_name(s: &str) -> bool {
     (1..=32).contains(&s.len())
@@ -373,29 +302,28 @@ mod tests {
     use std::net::{TcpListener, TcpStream};
     use std::time::Duration;
 
-    #[test]
-    fn handshake_and_messages() {
+    /// A connected pair, each side's key checked.
+    fn connected() -> (Session, Session, PublicKey, PublicKey) {
         let (server, chumby) = (Identity::generate().unwrap(), Identity::generate().unwrap());
         let (sp, cp) = (server.public(), chumby.public());
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
-        let t = std::thread::spawn(move || {
-            let mut u = Unverified::accept(l.accept().unwrap().0, &server).unwrap();
-            assert_eq!(u.peer(), &cp);
-            let m = u.recv().unwrap();
-            let code = u.code();
-            let mut s = u.verify(|k| k == &cp).unwrap();
-            // Nothing for a while: a timeout, and nothing lost by it.
-            assert_eq!(s.recv_timeout(Duration::from_millis(50)).unwrap(), None);
-            s.send(&Msg::Data(vec![7; 40000])).unwrap();
-            s.send(&Msg::Closed).unwrap();
-            (code, m)
-        });
-        let mut u = Unverified::connect(TcpStream::connect(addr).unwrap(), &chumby).unwrap();
-        assert_eq!(u.peer(), &sp);
-        u.send(&Msg::Hello { name: "kitchen_chumby".into() }).unwrap();
-        let chumby_code = u.code();
-        let mut c = u.verify(|k| k == &sp).unwrap();
+        let by = Instant::now() + Duration::from_secs(20);
+        let t = std::thread::spawn(move || Session::accept(l.accept().unwrap().0, &server, by, |k| k == &cp).unwrap());
+        let c = Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &sp).unwrap();
+        (t.join().unwrap(), c, sp, cp)
+    }
+
+    #[test]
+    fn handshake_and_messages() {
+        let (mut s, mut c, sp, cp) = connected();
+        assert_eq!((s.peer(), c.peer()), (&cp, &sp));
+        c.send(&Msg::Hello { name: "kitchen_chumby".into() }).unwrap();
+        assert_eq!(s.recv().unwrap(), Msg::Hello { name: "kitchen_chumby".into() });
+        // Nothing for a while: a timeout, and nothing lost by it.
+        assert_eq!(s.recv_timeout(Duration::from_millis(50)).unwrap(), None);
+        s.send(&Msg::Data(vec![7; 40000])).unwrap();
+        s.send(&Msg::Closed).unwrap();
         // Waits that end mid-message keep what came.
         let mut got = Vec::new();
         while got.len() < 2 {
@@ -404,57 +332,38 @@ mod tests {
             }
         }
         assert_eq!(got, [Msg::Data(vec![7; 40000]), Msg::Closed]);
-        let (code, m) = t.join().unwrap();
-        assert_eq!(code, chumby_code);
-        assert_eq!(parse_code(&code), Some(code.clone()));
-        assert_eq!(m, Msg::Hello { name: "kitchen_chumby".into() });
     }
 
-    /// A connected pair, neither side's key checked.
-    fn unverified() -> (Unverified, Unverified, PublicKey, PublicKey) {
-        let (server, chumby) = (Identity::generate().unwrap(), Identity::generate().unwrap());
-        let (sp, cp) = (server.public(), chumby.public());
-        let l = TcpListener::bind("127.0.0.1:0").unwrap();
-        let addr = l.local_addr().unwrap();
-        let t = std::thread::spawn(move || Unverified::accept(l.accept().unwrap().0, &server).unwrap());
-        let c = Unverified::connect(TcpStream::connect(addr).unwrap(), &chumby).unwrap();
-        (t.join().unwrap(), c, sp, cp)
-    }
-
-    /// A session with a key not expected can't be used: it carries only
-    /// pairing until checked, and the check fails.
+    /// A key neochumbyd doesn't have hears `Unpaired` and nothing else; a
+    /// server key the Chumby doesn't expect is refused on its side.
     #[test]
     fn unexpected_keys() {
-        let (mut s, mut c, sp, cp) = unverified();
-        for m in [Msg::Welcome, Msg::Open { app: "x".into() }, Msg::Data(vec![1]), Msg::Dev] {
-            assert_eq!(c.send(&m).unwrap_err().kind(), io::ErrorKind::PermissionDenied, "{m:?}");
-        }
-        // What the other side sends before the check is refused on receipt.
-        c.send(&Msg::Pair { name: "den".into() }).unwrap();
-        assert_eq!(s.recv().unwrap(), Msg::Pair { name: "den".into() });
-        assert_eq!(s.verify(|k| k != &cp).err().unwrap().kind(), io::ErrorKind::PermissionDenied);
-        assert!(c.verify(|k| k == &sp).is_ok());
-
-        // Session::connect checks the server's key for the Chumby.
+        let (server, chumby) = (Identity::generate().unwrap(), Identity::generate().unwrap());
+        let sp = server.public();
         let l = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = l.local_addr().unwrap();
-        std::thread::spawn(move || Unverified::accept(l.accept().unwrap().0, &Identity::generate().unwrap()));
+        let by = Instant::now() + Duration::from_secs(20);
+        let t = std::thread::spawn(move || {
+            Session::accept(l.accept().unwrap().0, &server, by, |_| false).err().unwrap().kind()
+        });
+        let mut c = Session::connect(TcpStream::connect(addr).unwrap(), &chumby, &sp).unwrap();
+        c.send(&Msg::Hello { name: "den".into() }).unwrap();
+        assert_eq!(c.recv().unwrap(), Msg::Unpaired);
+        assert_eq!(t.join().unwrap(), io::ErrorKind::PermissionDenied);
+
+        let l = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = l.local_addr().unwrap();
+        std::thread::spawn(move || {
+            let by = Instant::now() + Duration::from_secs(20);
+            Session::accept(l.accept().unwrap().0, &Identity::generate().unwrap(), by, |_| true)
+        });
         let r = Session::connect(TcpStream::connect(addr).unwrap(), &Identity::generate().unwrap(), &sp);
         assert_eq!(r.err().unwrap().kind(), io::ErrorKind::PermissionDenied);
     }
 
     #[test]
-    fn unverified_refuses_what_comes_after_the_check() {
-        let (s, mut c, _, cp) = unverified();
-        let mut s = s.verify(|k| k == &cp).unwrap();
-        s.send(&Msg::Welcome).unwrap();
-        assert_eq!(c.recv().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
-    }
-
-    #[test]
     fn deadlines() {
-        let (s, c, sp, cp) = unverified();
-        let (mut s, mut c) = (s.verify(|k| k == &cp).unwrap(), c.verify(|k| k == &sp).unwrap());
+        let (mut s, mut c, _, _) = connected();
         let t = Instant::now();
         let e = s.recv_by(t + Duration::from_millis(100)).unwrap_err();
         assert_eq!(e.kind(), io::ErrorKind::TimedOut);
@@ -462,15 +371,6 @@ mod tests {
         c.send(&Msg::Closed).unwrap();
         assert_eq!(s.recv_by(Instant::now() + Duration::from_secs(5)).unwrap(), Msg::Closed);
         assert_eq!(s.recv_by(Instant::now()).unwrap_err().kind(), io::ErrorKind::TimedOut);
-    }
-
-    #[test]
-    fn codes() {
-        let code = pairing_code([0x3f, 0x9a, 0, 0x21, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 0xff]);
-        assert_eq!(code, "3f9a-0021-0102-0304-0506-0708-090a-0bff");
-        assert_eq!(parse_code("3F9A 0021 0102 0304-0506-0708-090a0bff").as_deref(), Some(&code[..]));
-        assert_eq!(parse_code("3f9a-0021-0102-0304-0506-0708-090a-0bf"), None);
-        assert_eq!(parse_code("123456"), None);
     }
 
     #[test]
@@ -488,14 +388,12 @@ mod tests {
             Msg::Hello { name: "a".into() },
             Msg::Welcome,
             Msg::Unpaired,
-            Msg::Pair { name: "b-1".into() },
-            Msg::Paired { nfs_port: 2049, path: "/".into() },
-            Msg::Refused,
+            Msg::SyncNow,
             Msg::Open { app: "airplay".into() },
             Msg::Data(vec![1, 2, 3]),
             Msg::Closed,
             Msg::Config(vec![]),
-            Msg::Config(vec![("start".into(), "wx".into()), ("delivery".into(), "nfs".into())]),
+            Msg::Config(vec![("start".into(), "wx".into()), ("dev".into(), "on".into())]),
             Msg::SyncHave { live: [3; 32] },
             Msg::SyncUpToDate,
             Msg::SyncWant,
@@ -569,9 +467,6 @@ mod tests {
             (Msg::Hello { name: "den".into() }, b"\x00\x00\x03den".to_vec()),
             (Msg::Welcome, vec![1]),
             (Msg::Unpaired, vec![2]),
-            (Msg::Pair { name: "den".into() }, b"\x03\x00\x03den".to_vec()),
-            (Msg::Paired { nfs_port: 2049, path: "/".into() }, b"\x04\x08\x01\x00\x01/".to_vec()),
-            (Msg::Refused, vec![5]),
             (Msg::Open { app: "logs".into() }, b"\x06\x00\x04logs".to_vec()),
             (Msg::Data(vec![9, 8]), vec![7, 9, 8]),
             (Msg::Closed, vec![8]),
@@ -634,9 +529,20 @@ mod tests {
         let m = version::config(&s);
         assert_eq!(m.since(), Some(0));
         let e = m.encode();
-        let head = b"\x09\x00\x03\x00\x05start\x00\x02wx\x00\x0dproto.version\x00\x011\x00\x0bproto.clock\x00";
+        let head = b"\x09\x00\x03\x00\x05start\x00\x02wx\x00\x0dproto.version\x00\x012\x00\x0bproto.clock\x00";
         assert!(e.starts_with(head), "{e:?}");
         assert_eq!(Msg::decode(&e).unwrap(), m);
+    }
+
+    #[test]
+    fn version_2() {
+        assert_eq!(Msg::SyncNow.since(), Some(2));
+        assert_eq!(Msg::SyncNow.encode(), [41]);
+        assert_eq!(Msg::decode(&[41]).unwrap(), Msg::SyncNow);
+        // Pairing's tags are unknown now.
+        for tag in [3, 4, 5] {
+            assert_eq!(Msg::decode(&[tag, 0]).unwrap(), Msg::Unknown { tag, body: vec![0] });
+        }
     }
 
     #[test]
@@ -652,7 +558,7 @@ mod tests {
     /// tag's bad body is still an error.
     #[test]
     fn unknown_messages() {
-        for tag in [19, 31, 41, 99, 255] {
+        for tag in [19, 31, 42, 99, 255] {
             let m = Msg::decode(&[tag, 1, 2]).unwrap();
             assert_eq!(m, Msg::Unknown { tag, body: vec![1, 2] });
             assert_eq!(m.since(), None);

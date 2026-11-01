@@ -20,8 +20,7 @@
 //!
 //! A name none of these has is logged, and GitHub Dark used.
 //!
-//! On 2.6.16 the terminal draws in these colours itself (grid.rs), its
-//! cursor in the cursor's colour; on a kernel console they go in its
+//! The colours go in the kernel's console's
 //! palette (vt.rs), which has no colour for the cursor (the console draws
 //! it in reverse video).
 

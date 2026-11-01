@@ -1,42 +1,47 @@
-//! neochumbyd: what a Chumby pairs with. Serves the app tree over NFS, or
-//! keeps a copy of it on the Chumby's stick (`delivery=sync`, sync.rs),
-//! pairs Chumbys, and runs the server half of their apps (companion.rs)
+//! neochumbyd: what a Chumby's stick is paired with. It keeps a copy of the
+//! app tree on each Chumby's stick (sync.rs), and runs the server half of
+//! their apps (companion.rs)
 //! over neochumby-proto, and the apps' once-per-server server programs
 //! (server.rs), which may reach it through an admin socket (admin.rs).
 //! Both run sandboxed (confine.rs). It knows no app by name: an app brings
 //! its own companion and server program, in its directory of the tree.
 //!
 //!   neochumbyd serve [options]    the daemon
-//!   neochumbyd pairing            Chumbys paired and asking to pair, and
-//!                                 the start and players in the tree
-//!                                 (tree.rs)
-//!   neochumbyd approve CODE [--replace]
-//!                                 pair the Chumby showing CODE (its 32
-//!                                 digits, typed from its screen); one
-//!                                 already paired under its name with
-//!                                 another key is unpaired only with
-//!                                 --replace
-//!   neochumbyd refuse CODE
-//!                                 a code of eight letters (ABCD-EF23) is
-//!                                 a Chumby's GET APPS asking to install
-//!                                 or remove a catalog app: approve shows
-//!                                 what it asks and lets it go ahead
+//!   neochumbyd keygen FILE        a new Chumby key: its private half, in FILE
+//!                                 alone (tools/stick has it write the stick
+//!                                 directly); prints its public half. A FILE
+//!                                 that is there already is left, and read
+//!   neochumbyd add NAME KEY [--replace] [--address ADDR] [--api ADDR]
+//!                                 registers a Chumby's public key under NAME
+//!                                 and prints what its stick needs: server=,
+//!                                 api_port= and server_key=. One already
+//!                                 registered under NAME with another key is
+//!                                 replaced only with --replace
+//!   neochumbyd list               the Chumbys registered, GET APPS requests
+//!                                 waiting, and the start and players in the
+//!                                 tree (tree.rs)
+//!   neochumbyd approve CODE
+//!   neochumbyd refuse CODE        a code of eight letters (ABCD-EF23) is a
+//!                                 Chumby's GET APPS asking to install or
+//!                                 remove a catalog app: approve shows what
+//!                                 it asks and lets it go ahead
 //!                                 (catalog/chumby.rs)
-//!   neochumbyd forget NAME
+//!   neochumbyd forget NAME        revokes that stick's key at once
 //!   neochumbyd set NAME KEY=VALUE  one of a Chumby's settings (`start=wx`),
 //!                                  sent to it when it next connects;
 //!                                  KEY= removes it. For `start` and
 //!                                  `player` (the default player), it
 //!                                  says which apps in the tree may be
-//!                                  named;
-//!                                  `delivery=sync` keeps the tree on the
-//!                                  Chumby's stick
+//!                                  named
 //!   neochumbyd manifest            what a sync sends: the tree's files,
 //!                                  and any a Chumby could not take
 //!   neochumbyd log NAME [-f]       a paired Chumby's log, as its session
 //!                                  sent it; -f follows it (dev.rs)
+//!   neochumbyd sync NAME           asks it for a sync round now, and waits
+//!                                  for the round to end. Exits 3 if nothing
+//!                                  can be written until it restarts
 //!   neochumbyd restart NAME        its session ends its apps and starts
-//!                                  again from the tree
+//!                                  again from its stick's live set
 //!   neochumbyd shot NAME OUT.png   its screen
 //!   neochumbyd tap NAME X Y [--hold MS]
 //!                                  touches its screen at (X, Y), in
@@ -46,8 +51,8 @@
 //!                                  its top button: down, up, or both.
 //!                                  Both of these only once its owner has
 //!                                  run `neochumbyd set NAME dev=on`
-//!   neochumbyd mcp                 log, restart, shot, set and pairing's
-//!                                  list as an MCP server on stdio, for
+//!   neochumbyd mcp                 log, sync, restart, shot, set and list
+//!                                  as an MCP server on stdio, for
 //!                                  Claude Code and the like (mcp.rs)
 //!   neochumbyd catalog [refresh|log] [--json]
 //!                                  the catalog's apps, from its cache
@@ -65,13 +70,8 @@
 //!                                  admin socket's protocol with the
 //!                                  owner's token (catalog/, admin.rs)
 //!   neochumbyd uninstall NAME      a catalog app out of it, likewise
-//!   neochumbyd allow APP pairing  lets APP's server program use the admin
-//!                                  socket (admin.rs) as it next starts;
-//!                                  `allow` alone lists what's allowed
-//!   neochumbyd disallow APP pairing
-//!   neochumbyd token [new]        the owner's token, which approving or
-//!                                  every change through the admin socket
-//!                                  needs; `new` replaces it
+//!   neochumbyd token [new]        the owner's token, which the admin
+//!                                  protocol needs; `new` replaces it
 //!
 //! and, not for typing, `neochumbyd wasm-companion`: the process a wasm
 //! companion runs in, under Wasmtime, sandboxed (wasm.rs). Only a
@@ -81,7 +81,6 @@
 //! Options (each command takes --state):
 //!   --state DIR        default /var/lib/neochumbyd
 //!   --tree DIR         the app tree to serve, default <state>/tree
-//!   --nfs ADDR         default 0.0.0.0:2049
 //!   --api ADDR         default 0.0.0.0:7340
 //!   --wamrc PATH       a wamrc built by tools/wamrc (else NEOCHUMBY_WAMRC):
 //!                      catalog apps are compiled for the Chumby on
@@ -115,7 +114,6 @@ mod egress;
 mod isolate;
 mod line;
 mod mcp;
-mod nfs;
 mod png;
 mod server;
 mod state;
@@ -127,10 +125,8 @@ mod wasm;
 use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::atomic::Ordering;
 use std::time::Duration;
-
-use nfsserve::tcp::{NFSTcp, NFSTcpListener};
-use tokio::signal::unix::{SignalKind, signal};
 
 use neochumby_proto::Msg;
 use neochumby_proto::dev::{BUTTON_TAP_MS, MAX_HOLD_MS};
@@ -138,7 +134,9 @@ use neochumby_proto::settings::key;
 
 use state::State;
 
-/// How long `restart`, `shot`, `tap` and `button` wait for the Chumby's
+/// How `neochumbyd sync` says that a restart must come first.
+const NEEDS_RESTART: i32 = 3;
+/// How long `restart`, `sync`, `shot`, `tap` and `button` wait for the Chumby's
 /// developer link: long enough for it to come back after the daemon itself
 /// restarted (a new binary deployed), as its session reconnects within a
 /// few seconds.
@@ -158,7 +156,7 @@ struct Args {
     wamrc: Option<PathBuf>,
     state: PathBuf,
     tree: Option<PathBuf>,
-    nfs: String,
+    address: Option<String>,
     api: String,
     app_uids: Option<String>,
     unsandboxed: bool,
@@ -169,7 +167,7 @@ struct Args {
 
 fn usage() -> ! {
     eprintln!(
-        "usage: neochumbyd serve|pairing|approve CODE [--replace]|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|allow [APP pairing]|disallow APP pairing|catalog [refresh] [--json]|install crate:NAME@VERSION [--yes --access WORDS]|uninstall NAME [--state DIR] [--tree DIR] [--nfs ADDR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed] [--listen-unix PATH] [--wamrc PATH] [--no-catalog-refresh]"
+        "usage: neochumbyd serve|keygen FILE|add NAME KEY [--replace] [--address ADDR]|list|approve CODE|refuse CODE|forget NAME|set NAME KEY=VALUE|manifest|log NAME [-f]|sync NAME|restart NAME|shot NAME OUT.png|mcp|tap NAME X Y [--hold MS]|button NAME press|release|tap|token [new]|catalog [refresh] [--json]|install crate:NAME@VERSION [--yes --access WORDS]|uninstall NAME [--state DIR] [--tree DIR] [--api ADDR] [--app-uids FIRST-LAST] [--unsandboxed] [--listen-unix PATH] [--wamrc PATH] [--no-catalog-refresh]"
     );
     std::process::exit(2)
 }
@@ -186,7 +184,7 @@ fn args() -> Args {
         wamrc: None,
         state: "/var/lib/neochumbyd".into(),
         tree: None,
-        nfs: "0.0.0.0:2049".into(),
+        address: None,
         api: format!("0.0.0.0:{}", neochumby_proto::API_PORT),
         app_uids: None,
         unsandboxed: false,
@@ -199,7 +197,7 @@ fn args() -> Args {
         match arg.as_str() {
             "--state" => a.state = value().into(),
             "--tree" => a.tree = Some(value().into()),
-            "--nfs" => a.nfs = value(),
+            "--address" => a.address = Some(value()),
             "--api" => a.api = value(),
             "--listen-unix" => a.listen_unix = Some(value().into()),
             "-f" | "--follow" => a.follow = true,
@@ -212,9 +210,7 @@ fn args() -> Args {
             _ if arg.starts_with("--") => usage(),
             _ if a.command.is_empty() => a.command = arg,
             _ if a.operand.is_none() => a.operand = Some(arg),
-            _ if matches!(a.command.as_str(), "set" | "shot" | "allow" | "disallow") && a.setting.is_none() => {
-                a.setting = Some(arg)
-            }
+            _ if matches!(a.command.as_str(), "set" | "shot" | "add") && a.setting.is_none() => a.setting = Some(arg),
             _ if matches!(a.command.as_str(), "tap" | "button") => a.rest.push(arg),
             _ => usage(),
         }
@@ -240,6 +236,15 @@ fn main() {
         fail(companion::no_wasm_companions());
     }
     let a = args();
+    // A key for a stick: on the machine making it, which has no state.
+    if a.command == "keygen" {
+        let file = a.operand.clone().unwrap_or_else(|| usage());
+        match keygen(file.as_ref()) {
+            Ok(key) => println!("{}", neochumby_proto::hex(&key)),
+            Err(e) => fail(format!("{file}: {e}")),
+        }
+        return;
+    }
     // Before anything is written or any thread started: with --app-uids,
     // neochumbyd started as root becomes its own user here.
     let confine = (a.command == "serve")
@@ -252,11 +257,23 @@ fn main() {
     let tree_dir = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
     match a.command.as_str() {
         "serve" => serve(&a, state, confine.expect("chosen for serve")),
-        "pairing" => {
+        "add" => {
+            let name = operand();
+            let key = a.setting.clone().unwrap_or_else(|| usage());
+            let key = neochumby_proto::unhex_key(&key).unwrap_or_else(|e| fail(format!("{key}: {e}")));
+            state.add(&name, &key, a.replace).unwrap_or_else(|e| fail(e));
+            let server = state.public_key().unwrap_or_else(|e| fail(format!("identity: {e}")));
+            if let Some(address) = &a.address {
+                println!("server={address}");
+            }
+            println!("api_port={}", a.api.rsplit(':').next().unwrap_or_default());
+            println!("server_key={}", neochumby_proto::hex(&server));
+        }
+        "list" => {
             let (starts, players) = (tree::start_apps(&tree_dir), tree::players(&tree_dir));
             for (name, key) in state.pairs().unwrap_or_else(|e| fail(e)) {
                 let pairs: Vec<String> = state.config(&name).iter().map(|(k, v)| format!("{k}={v}")).collect();
-                println!("paired   {name}  {key}  {}", pairs.join(" "));
+                println!("chumby   {name}  {key}  {}", pairs.join(" "));
                 let settings = state.settings(&name);
                 let notes = [
                     tree::start_note(&name, settings.start.as_deref(), &starts),
@@ -266,18 +283,18 @@ fn main() {
                     println!("         {note}");
                 }
             }
-            for p in state.pending().unwrap_or_else(|e| fail(e)) {
-                println!("asking   {}  code {}  from {}  {}", p.name, p.code, p.addr, neochumby_proto::hex(&p.key));
-            }
             for r in catalog::chumby::requests(&a.state) {
                 println!("asking   {}  code {}  to {}", r.chumby, r.code, r.what);
             }
             println!("{}", tree::hint(&starts));
             println!("{}", tree::player_hint(&players));
         }
-        // A Chumby's GET APPS asking: through the admin socket's protocol,
-        // with the owner's token, as a page would.
-        "approve" | "refuse" if catalog::chumby::parse_code(&operand()).is_some() => {
+        // A Chumby's GET APPS asking: through the admin protocol, with the
+        // owner's token.
+        "approve" | "refuse" => {
+            if catalog::chumby::parse_code(&operand()).is_none() {
+                fail("not a request's code: the eight letters the Chumby shows, ABCD-EF23");
+            }
             let token = state.owner_token().unwrap_or_else(|e| fail(format!("the owner's token: {e}")));
             let line = format!("{} {} {token}", a.command, operand());
             let answer = admin::local(&state, &line).unwrap_or_else(|e| fail(e));
@@ -292,11 +309,6 @@ fn main() {
                 operand()
             );
         }
-        "approve" => {
-            let name = state.approve(&operand(), a.replace).unwrap_or_else(|e| fail(e));
-            println!("paired {name}");
-        }
-        "refuse" => state.refuse(&operand()).unwrap_or_else(|e| fail(e)),
         "forget" => state.forget(&operand()).unwrap_or_else(|e| fail(e)),
         "set" => {
             let setting = a.setting.clone().unwrap_or_else(|| usage());
@@ -336,6 +348,16 @@ fn main() {
             };
             r.unwrap_or_else(|e| fail(format!("{name}: {e}")));
         }
+        "sync" => {
+            let name = paired(&state, &operand());
+            match dev::sync(&a.state, &name, LINK_WAIT).unwrap_or_else(|e| fail(format!("{name}: {e}"))) {
+                dev::Synced::Done(what) => println!("{name}: {what}"),
+                dev::Synced::NeedsRestart(why) => {
+                    eprintln!("neochumbyd: {name} needs a restart before it can sync: {why}");
+                    std::process::exit(NEEDS_RESTART);
+                }
+            }
+        }
         "restart" => {
             let name = paired(&state, &operand());
             dev::restart(&a.state, &name, LINK_WAIT).unwrap_or_else(|e| fail(e));
@@ -364,22 +386,6 @@ fn main() {
                 dev::input(&a.state, &name, m, LINK_WAIT).unwrap_or_else(|e| fail(e));
             }
             println!("{name}: {}", a.rest.join(" "));
-        }
-        "allow" | "disallow" if a.operand.is_none() => {
-            for (app, words) in state.allowances() {
-                println!("{app}  {}", words.join(" "));
-            }
-        }
-        "allow" | "disallow" => {
-            let what = a.setting.clone().unwrap_or_else(|| usage());
-            let on = a.command == "allow";
-            state.allow(&operand(), &what, on).unwrap_or_else(|e| fail(e));
-            let app = operand();
-            if on {
-                println!("{app} allowed {what}: its server program gets the admin socket as it next starts");
-            } else {
-                println!("{app} no longer allowed {what}: its admin socket stops answering");
-            }
         }
         "token" => {
             let token = match a.operand.as_deref() {
@@ -438,10 +444,32 @@ fn manifest(a: &Args) {
     eprintln!("digest {}", neochumby_proto::hex(&neochumby_sync::manifest::digest(&m)));
 }
 
-/// `name`, if a Chumby is paired under it.
+/// A new key in `file`, written there and nowhere else, and synced: its
+/// public half. If `file` is there, its key's public half, and nothing is
+/// written: a stick made again keeps its identity.
+fn keygen(file: &std::path::Path) -> std::io::Result<neochumby_proto::PublicKey> {
+    use std::io::Write;
+    use std::os::unix::fs::OpenOptionsExt;
+    if let Ok(s) = std::fs::read_to_string(file) {
+        return Ok(neochumby_proto::Identity::from_secret(&s)?.public());
+    }
+    let id = neochumby_proto::Identity::generate()?;
+    let tmp = file.with_extension("key.new");
+    let _ = std::fs::remove_file(&tmp);
+    let mut f = std::fs::OpenOptions::new().write(true).create_new(true).mode(0o600).open(&tmp)?;
+    let r = f.write_all(id.secret().as_bytes()).and_then(|()| f.sync_all()).and_then(|()| std::fs::rename(&tmp, file));
+    if let Err(e) = r {
+        let _ = std::fs::remove_file(&tmp);
+        return Err(e);
+    }
+    neochumby_sys::fs::sync();
+    Ok(id.public())
+}
+
+/// `name`, if a Chumby is registered under it.
 fn paired(state: &State, name: &str) -> String {
     if !state.pairs().unwrap_or_else(|e| fail(e)).iter().any(|(n, _)| n == name) {
-        fail(format!("no Chumby paired as {name}"));
+        fail(format!("no Chumby registered as {name}"));
     }
     name.to_string()
 }
@@ -452,16 +480,11 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
     neochumby_sys::privilege::add_to_umask(0o007);
     state.secure().unwrap_or_else(|e| fail(format!("closing the state directory to other users: {e}")));
     let identity = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
-    // The same key again, to sign the tree's manifest for NFS (nfs.rs).
-    let signer = state.identity().unwrap_or_else(|e| fail(format!("identity: {e}")));
-    // Requests a daemon before this one kept: no one waits on them now.
-    state.clear_pending().unwrap_or_else(|e| fail(format!("pending: {e}")));
+    state.publish_key(&identity.public()).unwrap_or_else(|e| fail(format!("identity.pub: {e}")));
     let tree = a.tree.clone().unwrap_or_else(|| a.state.join("tree"));
-    let nfs_port = a.nfs.rsplit(':').next().and_then(|p| p.parse().ok()).unwrap_or_else(|| usage());
     eprintln!(
-        "neochumbyd: serving {} on {}, the API on {}; key {}",
+        "neochumbyd: syncing {}, the API on {}; key {}",
         tree.display(),
-        a.nfs,
         a.api,
         neochumby_proto::hex(&identity.public())
     );
@@ -470,7 +493,6 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
     state.owner_token().unwrap_or_else(|e| fail(format!("owner token: {e}")));
     // An admin socket left by an earlier neochumbyd (they had paths then).
     let _ = std::fs::remove_file(a.state.join("admin.sock"));
-    let server_state = state.clone();
 
     let listener = TcpListener::bind(&a.api).unwrap_or_else(|e| fail(format!("{}: {e}", a.api)));
     let lines = a.listen_unix.as_ref().map(|p| {
@@ -481,7 +503,6 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
     let api = Arc::new(api::Api {
         state,
         identity,
-        nfs_port,
         tree: tree.clone(),
         state_dir: a.state.clone(),
         hashes: neochumby_sync::serve::Hashes::default(),
@@ -496,24 +517,13 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
     std::thread::spawn(move || api::serve_with(listener, api, limits));
     catalog::serve(a.state.clone(), tree.clone(), a.wamrc.clone(), !a.no_catalog_refresh);
 
-    let rt = tokio::runtime::Runtime::new().unwrap_or_else(|e| fail(e));
-    let (servers, failed) = rt.block_on(async {
-        let mut term = signal(SignalKind::terminate()).unwrap_or_else(|e| fail(e));
-        let fs = nfs::TreeFs::new(tree.clone(), Box::new(move |m| signer.sign(m)));
-        let listener = NFSTcpListener::bind(&a.nfs, fs).await.unwrap_or_else(|e| fail(format!("{}: {e}", a.nfs)));
-        // Last, so nothing above can fail with server programs running.
-        let servers = server::start(&tree, &a.state, &server_state, &confine);
-        let failed = tokio::select! {
-            r = listener.handle_forever() => r.err(),
-            _ = term.recv() => None,
-            _ = tokio::signal::ctrl_c() => None,
-        };
-        (servers, failed)
-    });
+    let term = neochumby_sys::signal::catch_term();
+    // Last, so nothing above can fail with server programs running.
+    let servers = server::start(&tree, &a.state, &confine);
+    while !term.load(Ordering::Relaxed) {
+        std::thread::sleep(Duration::from_millis(200));
+    }
     // Stopping, on SIGTERM or SIGINT: the server programs first.
     eprintln!("neochumbyd: stopping");
     servers.stop();
-    if let Some(e) = failed {
-        fail(format!("{}: {e}", a.nfs));
-    }
 }

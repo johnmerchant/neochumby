@@ -1,5 +1,5 @@
 //! What the app and its service share: where the pictures are, the
-//! settings kept in /psp (wx_music, wx_night...), and the night schedule.
+//! settings kept on the stick (wx_music, wx_night...), and the night schedule.
 //! The app decides night for what it draws; the service, for the backlight
 //! while another app is in front. Both decide from the same files.
 

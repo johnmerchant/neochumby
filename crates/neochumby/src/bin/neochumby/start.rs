@@ -2,10 +2,9 @@
 //! other app exits.
 //!
 //! It's named by `start=<app>` in this Chumby's settings from its
-//! neochumbyd (neochumby::settings, kept in /psp for boots without it),
-//! else in /psp/neochumby.conf. Only an app whose manifest says
-//! `start = true` may be the start app: it promises a way to other apps and
-//! to CHUMBY MODE, and leaves the top button to the session, so a Chumby
+//! neochumbyd (neochumby::settings, kept on the stick for boots without it),
+//! else in the stick's neochumby.conf. Only an app whose manifest says
+//! `start = true` may be the start app: it promises a way to other apps, and leaves the top button to the session, so a Chumby
 //! can't be left stuck in a game. A name that isn't one is refused, with
 //! the reason logged, and the start app is `home` (neochumby-home), as it
 //! is when nothing names one.

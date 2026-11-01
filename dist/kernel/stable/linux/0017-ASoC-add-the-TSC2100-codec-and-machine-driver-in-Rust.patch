@@ -1,0 +1,743 @@
+Description: ASoC: add the TSC2100 codec and machine driver in Rust
+ Audio on the Chumby Classic. The machine driver's MCLK is a constant.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- /dev/null
++++ b/Documentation/devicetree/bindings/sound/chumby,imx21-tsc2100-audio.yaml
+@@ -0,0 +1,58 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/sound/chumby,imx21-tsc2100-audio.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Chumby Classic i.MX21 audio with a TI TSC2100 codec
++
++maintainers:
++  - John Merchant <john@johnmerchant.dev>
++
++description: |
++  The sound card of the Chumby Classic: the codec of a TSC2100 on the
++  i.MX21's SSI1, I2S with the codec as bit and frame clock provider. The
++  AUDMUX gives SSI1 its transmit clock and frame sync from the SSI2 pins
++  and its receive clock, frame sync and data from its own pins; the
++  driver sets that routing, so the AUDMUX node must be enabled. The
++  codec's MCLK is the board's 16 MHz oscillator.
++
++properties:
++  compatible:
++    const: chumby,imx21-tsc2100-audio
++
++  model:
++    $ref: /schemas/types.yaml#/definitions/string
++    description: The user-visible name of the card. Defaults to "TSC2100".
++
++  ssi-controller:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: The SSI the codec is on.
++
++  audio-codec:
++    $ref: /schemas/types.yaml#/definitions/phandle
++    description: The "codec" child node of the TSC2100.
++
++  speaker-gpios:
++    maxItems: 1
++    description:
++      The speaker amplifier's switch, asserted while the speaker plays.
++
++required:
++  - compatible
++  - ssi-controller
++  - audio-codec
++
++additionalProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/gpio/gpio.h>
++
++    sound {
++        compatible = "chumby,imx21-tsc2100-audio";
++        model = "TSC2100";
++        ssi-controller = <&ssi1>;
++        audio-codec = <&tsc2100_codec>;
++        speaker-gpios = <&kpp_gpio 12 GPIO_ACTIVE_LOW>;
++    };
+--- a/Documentation/devicetree/bindings/vendor-prefixes.yaml
++++ b/Documentation/devicetree/bindings/vendor-prefixes.yaml
+@@ -333,6 +333,8 @@
+     description: Chrontel, Inc.
+   "^chrp,.*":
+     description: Common Hardware Reference Platform
++  "^chumby,.*":
++    description: Chumby Industries, Inc.
+   "^chunghwa,.*":
+     description: Chunghwa Picture Tubes Ltd.
+   "^chuwi,.*":
+--- a/sound/soc/codecs/Kconfig
++++ b/sound/soc/codecs/Kconfig
+@@ -298,6 +298,7 @@
+ 	imply SND_SOC_TSCS42XX
+ 	imply SND_SOC_TSCS454
+ 	imply SND_SOC_TS3A227E
++	imply SND_SOC_TSC2100
+ 	imply SND_SOC_TWL4030
+ 	imply SND_SOC_TWL6040
+ 	imply SND_SOC_UDA1334
+@@ -2385,6 +2386,14 @@
+ 	tristate "TI Headset/Mic detect and keypress chip"
+ 	depends on I2C
+ 
++config SND_SOC_TSC2100
++	bool "Texas Instruments TSC2100 audio CODEC"
++	depends on MFD_TSC2100 && SND_SOC=y && RUST
++	help
++	  Support for the audio codec in the TI TSC2100 touchscreen
++	  controller. The TSC2100 MFD core driver provides the register
++	  access.
++
+ config SND_SOC_TSCS42XX
+ 	tristate "Tempo Semiconductor TSCS42xx CODEC"
+ 	depends on I2C
+--- a/sound/soc/codecs/Makefile
++++ b/sound/soc/codecs/Makefile
+@@ -897,3 +897,4 @@
+ 
+ # Mux
+ obj-$(CONFIG_SND_SOC_SIMPLE_MUX)	+= snd-soc-simple-mux.o
++obj-$(CONFIG_SND_SOC_TSC2100)	+= snd_soc_tsc2100.o
+--- /dev/null
++++ b/sound/soc/codecs/snd_soc_tsc2100.rs
+@@ -0,0 +1,421 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! ASoC codec driver for the audio part of the TI TSC2100.
++//!
++//! The MFD core owns the SPI device and its regmap; this driver is the core's "tsc2100-codec"
++//! child and only touches the page 2 (audio) registers. It must never reset the chip: the
++//! touchscreen shares it. The Fsref select (AUDIO_CTRL3 bit 13) is set for 44.1 kHz and cleared
++//! for 48 kHz, which is what the stock driver does on this chip.
++
++use kernel::{
++    device::Core,
++    math64::div64_u64,
++    mfd::tsc2100::reg,
++    new_mutex, of, platform,
++    prelude::*,
++    regmap::Regmap,
++    asoc::{self, CodecDesc, Component, Control, Route, Stream, Widget},
++    sync::{Arc, Mutex},
++};
++
++const REG_AUDIO_CTRL1: u32 = reg(2, 0x00);
++const REG_ADC_GAIN: u32 = reg(2, 0x01);
++const REG_DAC_GAIN: u32 = reg(2, 0x02);
++const REG_SIDETONE: u32 = reg(2, 0x03);
++const REG_POWER: u32 = reg(2, 0x05);
++const REG_AUDIO_CTRL3: u32 = reg(2, 0x06);
++const REG_PLL1: u32 = reg(2, 0x1b);
++const REG_PLL2: u32 = reg(2, 0x1c);
++const REG_AUDIO_CTRL4: u32 = reg(2, 0x1d);
++const REG_AUDIO_CTRL5: u32 = reg(2, 0x1e);
++
++const fn genmask(h: u32, l: u32) -> u32 {
++    ((1 << (h - l + 1)) - 1) << l
++}
++
++const CTRL1_WLEN_MASK: u32 = genmask(11, 10);
++const CTRL1_WLEN_16: u32 = 0 << 10;
++const CTRL1_WLEN_20: u32 = 1 << 10;
++const CTRL1_WLEN_24: u32 = 2 << 10;
++const CTRL1_WLEN_32: u32 = 3 << 10;
++const CTRL1_DATFM_MASK: u32 = genmask(9, 8);
++const CTRL1_DATFM_I2S: u32 = 0 << 8;
++const CTRL1_DATFM_DSP: u32 = 1 << 8;
++const CTRL1_DATFM_RIGHTJ: u32 = 2 << 8;
++const CTRL1_DATFM_LEFTJ: u32 = 3 << 8;
++const CTRL1_DACFS_MASK: u32 = genmask(5, 3);
++const CTRL1_ADCFS_MASK: u32 = genmask(2, 0);
++
++const fn ctrl1_adcin(x: u32) -> u32 {
++    x << 12
++}
++const fn ctrl1_dacfs(n: u32) -> u32 {
++    n << 3
++}
++const fn ctrl1_adcfs(n: u32) -> u32 {
++    n
++}
++
++const FSDIV_1: u32 = 0;
++const FSDIV_1_5: u32 = 1;
++const FSDIV_2: u32 = 2;
++const FSDIV_3: u32 = 3;
++const FSDIV_4: u32 = 4;
++const FSDIV_6: u32 = 7;
++
++const ADCGAIN_ADPGA_SHIFT: u32 = 8;
++const ADCGAIN_ADPGA_MAX: u32 = 0x77;
++const ADCGAIN_AGCTG_SHIFT: u32 = 5;
++const ADCGAIN_AGCTC_SHIFT: u32 = 1;
++
++const DACGAIN_DALVL_SHIFT: u32 = 8;
++const DACGAIN_DARVL_SHIFT: u32 = 0;
++const DACGAIN_VOL_MAX: u32 = 0x7f;
++
++const SIDETONE_ASTMU: u32 = 1 << 15;
++const SIDETONE_DSTMU: u32 = 1 << 7;
++
++const POWER_PWDNC: u32 = 1 << 15;
++const POWER_ASTPWD: u32 = 1 << 13;
++const POWER_DAODRC: u32 = 1 << 12;
++const POWER_DAPWDN: u32 = 1 << 10;
++const POWER_ADPWDN: u32 = 1 << 9;
++const POWER_VGPWDN: u32 = 1 << 8;
++
++const CTRL3_REFFS_44K1: u32 = 1 << 13;
++const CTRL3_SLVMS: u32 = 1 << 11;
++const fn ctrl3_dapk2pk(x: u32) -> u32 {
++    x << 9
++}
++
++const PLL1_PLLSEL: u32 = 1 << 15;
++const fn pll1_pval(p: u32) -> u32 {
++    (p & 0x7) << 8
++}
++const fn pll1_jval(j: u32) -> u32 {
++    (j & 0x3f) << 2
++}
++const fn pll2_dval(d: u32) -> u32 {
++    (d & 0x3fff) << 2
++}
++
++const CTRL5_DEFAULT: u32 = 0xfe00;
++
++// `SND_SOC_DAIFMT_*`.
++const DAIFMT_FORMAT_MASK: u32 = 0x000f;
++const DAIFMT_I2S: u32 = 1;
++const DAIFMT_RIGHT_J: u32 = 2;
++const DAIFMT_LEFT_J: u32 = 3;
++const DAIFMT_DSP_A: u32 = 4;
++const DAIFMT_INV_MASK: u32 = 0x0f00;
++const DAIFMT_NB_NF: u32 = 0 << 8;
++const DAIFMT_CLOCK_PROVIDER_MASK: u32 = 0xf000;
++const DAIFMT_CBP_CFP: u32 = 1 << 12;
++const DAIFMT_CBC_CFC: u32 = 4 << 12;
++
++// Sample rates as Fsref / divisor, as the stock driver sets them.
++const RATES: [(u32, u32, u32); 7] = [
++    (8000, 48000, FSDIV_6),
++    (11025, 44100, FSDIV_4),
++    (16000, 48000, FSDIV_3),
++    (22050, 44100, FSDIV_2),
++    (32000, 48000, FSDIV_1_5),
++    (44100, 44100, FSDIV_1),
++    (48000, 48000, FSDIV_1),
++];
++
++// `SNDRV_PCM_RATE_{8000,11025,16000,22050,32000,44100,48000}`.
++const PCM_RATES: u32 = (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4) | (1 << 5) | (1 << 6) | (1 << 7);
++// `SNDRV_PCM_FMTBIT_{S16_LE,S20_3LE,S24_LE,S32_LE}`.
++const PCM_FORMATS: u64 = (1 << 2) | (1 << 36) | (1 << 6) | (1 << 10);
++
++// Defaults from the stock driver's reg_* module parameters.
++const DEFAULTS: [(u32, u32); 8] = [
++    // Everything down until DAPM needs it; high-power driver, no VGND.
++    (
++        REG_POWER,
++        POWER_PWDNC | POWER_ASTPWD | POWER_DAODRC | POWER_DAPWDN | POWER_ADPWDN | POWER_VGPWDN,
++    ),
++    // ADC input mux 2 (stock: "single-ended AUX"), 16-bit I2S.
++    (REG_AUDIO_CTRL1, ctrl1_adcin(2) | CTRL1_WLEN_16 | CTRL1_DATFM_I2S),
++    // Fsref 48 kHz, continuous transfer, master, DAC swing code 2.
++    (REG_AUDIO_CTRL3, CTRL3_SLVMS | ctrl3_dapk2pk(2)),
++    // ADC unmuted at full PGA gain, AGC target -12 dB, AGC off.
++    (
++        REG_ADC_GAIN,
++        (ADCGAIN_ADPGA_MAX << ADCGAIN_ADPGA_SHIFT)
++            | (3 << ADCGAIN_AGCTG_SHIFT)
++            | (4 << ADCGAIN_AGCTC_SHIFT),
++    ),
++    // DAC unmuted at 0 dB.
++    (REG_DAC_GAIN, 0),
++    (REG_SIDETONE, SIDETONE_ASTMU | SIDETONE_DSTMU),
++    (REG_AUDIO_CTRL4, 0),
++    (REG_AUDIO_CTRL5, CTRL5_DEFAULT),
++];
++
++struct State {
++    mclk: u32,
++    master: bool,
++    datfm: u32,
++    // What hw_params last programmed, so a second stream can share it.
++    cur_rate: u32,
++    cur_wlen: u32,
++}
++
++#[pin_data]
++struct Codec {
++    map: Regmap,
++    #[pin]
++    state: Mutex<State>,
++}
++
++impl Codec {
++    /// Fsref = MCLK * K / (2048 * P), K = J.D (D in 1/10000). The datasheet limits for a fractional
++    /// K are 10 MHz <= MCLK / P <= 20 MHz and 4 <= J <= 11. For the Chumby's 16 MHz MCLK this gives
++    /// P = 1 and J.D = 6.1440 (48 kHz) or 5.6448 (44.1 kHz), the stock values.
++    fn set_pll(&self, mclk: u32, fsref: u32) -> Result {
++        let mut found = None;
++        for p in 1..=8u32 {
++            let reference = mclk / p;
++            if !(10000000..=20000000).contains(&reference) {
++                continue;
++            }
++            let k = u64::from(fsref) * 2048 * u64::from(p) * 10000;
++            let k = div64_u64(k, u64::from(mclk)).ok_or(EINVAL)? as u32;
++            let (j, d) = (k / 10000, k % 10000);
++            if (4..=11).contains(&j) {
++                found = Some((p, j, d));
++                break;
++            }
++        }
++        let (p, j, d) = found.ok_or_else(|| {
++            pr_err!("no PLL setting for MCLK {} Hz, Fsref {} Hz\n", mclk, fsref);
++            EINVAL
++        })?;
++
++        self.map.write(REG_PLL1, PLL1_PLLSEL | pll1_pval(p) | pll1_jval(j))?;
++        self.map.write(REG_PLL2, pll2_dval(d))
++    }
++}
++
++impl asoc::Codec for Codec {
++    fn probe(&self, component: &Component) -> Result {
++        component.init_regmap(&self.map);
++        DEFAULTS.iter().try_for_each(|&(r, v)| self.map.write(r, v))
++    }
++
++    fn remove(&self, component: &Component) {
++        let _ = self.map.update_bits(REG_POWER, POWER_PWDNC, POWER_PWDNC);
++        component.exit_regmap();
++    }
++
++    fn hw_params(&self, component: &Component, rate: u32, width: u32) -> Result {
++        let &(_, fsref, div) = RATES.iter().find(|r| r.0 == rate).ok_or(EINVAL)?;
++
++        let wlen = match width {
++            16 => CTRL1_WLEN_16,
++            20 => CTRL1_WLEN_20,
++            24 => CTRL1_WLEN_24,
++            32 => CTRL1_WLEN_32,
++            _ => return Err(EINVAL),
++        };
++
++        let mut state = self.state.lock();
++
++        if state.mclk == 0 {
++            pr_err!("MCLK rate not set\n");
++            return Err(EINVAL);
++        }
++
++        // The other direction is running with the same settings.
++        if component.active() > 1 && state.cur_rate == rate && state.cur_wlen == wlen {
++            return Ok(());
++        }
++
++        component.update_bits(
++            REG_AUDIO_CTRL1,
++            CTRL1_WLEN_MASK | CTRL1_DATFM_MASK | CTRL1_DACFS_MASK | CTRL1_ADCFS_MASK,
++            wlen | state.datfm | ctrl1_dacfs(div) | ctrl1_adcfs(div),
++        )?;
++
++        component.update_bits(
++            REG_AUDIO_CTRL3,
++            CTRL3_REFFS_44K1 | CTRL3_SLVMS,
++            (if fsref == 44100 { CTRL3_REFFS_44K1 } else { 0 })
++                | (if state.master { CTRL3_SLVMS } else { 0 }),
++        )?;
++
++        self.set_pll(state.mclk, fsref)?;
++
++        state.cur_rate = rate;
++        state.cur_wlen = wlen;
++
++        Ok(())
++    }
++
++    fn set_sysclk(&self, freq: u32) -> Result {
++        // MCLK range the PLL accepts.
++        if !(2000000..=50000000).contains(&freq) {
++            return Err(EINVAL);
++        }
++
++        let mut state = self.state.lock();
++        state.mclk = freq;
++        state.cur_rate = 0;
++
++        Ok(())
++    }
++
++    fn set_fmt(&self, fmt: u32) -> Result {
++        let mut state = self.state.lock();
++
++        state.master = match fmt & DAIFMT_CLOCK_PROVIDER_MASK {
++            DAIFMT_CBP_CFP => true,
++            DAIFMT_CBC_CFC => false,
++            _ => return Err(EINVAL),
++        };
++
++        state.datfm = match fmt & DAIFMT_FORMAT_MASK {
++            DAIFMT_I2S => CTRL1_DATFM_I2S,
++            DAIFMT_DSP_A => CTRL1_DATFM_DSP,
++            DAIFMT_RIGHT_J => CTRL1_DATFM_RIGHTJ,
++            DAIFMT_LEFT_J => CTRL1_DATFM_LEFTJ,
++            _ => return Err(EINVAL),
++        };
++
++        if fmt & DAIFMT_INV_MASK != DAIFMT_NB_NF {
++            return Err(EINVAL);
++        }
++
++        state.cur_rate = 0;
++
++        Ok(())
++    }
++}
++
++struct Tsc2100Codec;
++
++// The "codec" child of the TSC2100's node, which the MFD core passes on.
++kernel::of_device_table!(
++    OF_TABLE,
++    <Tsc2100Codec as platform::Driver>::IdInfo,
++    [(of::DeviceId::new(c"ti,tsc2100-codec"), ())]
++);
++
++impl platform::Driver for Tsc2100Codec {
++    type IdInfo = ();
++    type Data<'bound> = Self;
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = Some(&OF_TABLE);
++
++    fn probe<'bound>(
++        pdev: &'bound platform::Device<Core<'_>>,
++        _id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self, Error> + 'bound {
++        let dev = pdev.as_ref();
++
++        let map = Regmap::of_parent(dev).inspect_err(|_| {
++            dev_err!(dev, "no regmap from the TSC2100 core\n");
++        })?;
++
++        let codec = Arc::pin_init(
++            pin_init!(Codec {
++                map,
++                state <- new_mutex!(State {
++                    mclk: 0,
++                    master: true,
++                    datfm: CTRL1_DATFM_I2S,
++                    cur_rate: 0,
++                    cur_wlen: 0,
++                }),
++            }),
++            GFP_KERNEL,
++        )?;
++
++        let stream = |name| Stream {
++            name,
++            channels_min: 2,
++            channels_max: 2,
++            rates: PCM_RATES,
++            formats: PCM_FORMATS,
++        };
++
++        asoc::register_codec(
++            dev,
++            &CodecDesc {
++                dai_name: c"tsc2100-hifi",
++                playback: stream(c"Playback"),
++                capture: stream(c"Capture"),
++                controls: &[
++                    // The stock driver's control name, for userspace that expects it.
++                    // DAC: 0 to -63.5 dB attenuation.
++                    Control::Mixer {
++                        name: c"Master Playback Volume",
++                        reg: REG_DAC_GAIN,
++                        shift_l: DACGAIN_DALVL_SHIFT,
++                        shift_r: DACGAIN_DARVL_SHIFT,
++                        max: DACGAIN_VOL_MAX as i32,
++                        invert: true,
++                        db_scale: Some((-6350, 50)),
++                    },
++                    Control::Mixer {
++                        name: c"Master Playback Switch",
++                        reg: REG_DAC_GAIN,
++                        shift_l: 15,
++                        shift_r: 7,
++                        max: 1,
++                        invert: true,
++                        db_scale: None,
++                    },
++                    // ADC PGA: 0 to 59.5 dB gain.
++                    Control::Mixer {
++                        name: c"Capture Volume",
++                        reg: REG_ADC_GAIN,
++                        shift_l: ADCGAIN_ADPGA_SHIFT,
++                        shift_r: ADCGAIN_ADPGA_SHIFT,
++                        max: ADCGAIN_ADPGA_MAX as i32,
++                        invert: false,
++                        db_scale: Some((0, 50)),
++                    },
++                    Control::Mixer {
++                        name: c"Capture Switch",
++                        reg: REG_ADC_GAIN,
++                        shift_l: 15,
++                        shift_r: 15,
++                        max: 1,
++                        invert: true,
++                        db_scale: None,
++                    },
++                ],
++                widgets: &[
++                    Widget::Supply { name: c"Codec Power", reg: REG_POWER, shift: 15, invert: true },
++                    Widget::Dac { name: c"DAC", stream: c"Playback", reg: REG_POWER, shift: 10, invert: true },
++                    Widget::Adc { name: c"ADC", stream: c"Capture", reg: REG_POWER, shift: 9, invert: true },
++                    Widget::Output(c"HPL"),
++                    Widget::Output(c"HPR"),
++                    Widget::Input(c"MICIN"),
++                    Widget::Input(c"AUX"),
++                ],
++                routes: &[
++                    Route { sink: c"DAC", source: c"Codec Power" },
++                    Route { sink: c"ADC", source: c"Codec Power" },
++                    Route { sink: c"HPL", source: c"DAC" },
++                    Route { sink: c"HPR", source: c"DAC" },
++                    Route { sink: c"ADC", source: c"MICIN" },
++                    Route { sink: c"ADC", source: c"AUX" },
++                ],
++            },
++            codec,
++        )?;
++
++        Ok(Tsc2100Codec)
++    }
++}
++
++kernel::module_platform_driver! {
++    type: Tsc2100Codec,
++    name: "tsc2100-codec",
++    authors: ["John Merchant <john@johnmerchant.dev>"],
++    description: "ASoC TI TSC2100 codec driver",
++    license: "GPL",
++}
+--- a/sound/soc/fsl/Kconfig
++++ b/sound/soc/fsl/Kconfig
+@@ -292,6 +292,18 @@
+ 	  Say Y if you want to add support for the ES8328 audio codec connected
+ 	  via SSI/I2S over either SPI or I2C.
+ 
++config SND_SOC_IMX_TSC2100
++	bool "SoC Audio support for i.MX21 boards with a TSC2100"
++	depends on (SOC_IMX21 || COMPILE_TEST) && OF && RUST && SND_SOC=y
++	depends on MFD_TSC2100
++	select SND_SOC_TSC2100
++	select SND_SOC_FSL_SSI
++	select SND_SOC_IMX_AUDMUX
++	select SND_SOC_IMX_PCM_DMA
++	help
++	  Say Y here for audio on i.MX21 boards with the TI TSC2100
++	  codec on SSI1, such as the Chumby Classic.
++
+ config SND_SOC_IMX_SGTL5000
+ 	tristate "SoC Audio support for i.MX boards with sgtl5000"
+ 	depends on OF && I2C
+--- a/sound/soc/fsl/Makefile
++++ b/sound/soc/fsl/Makefile
+@@ -79,3 +79,4 @@
+ obj-$(CONFIG_SND_SOC_IMX_HDMI) += snd-soc-imx-hdmi.o
+ obj-$(CONFIG_SND_SOC_IMX_RPMSG) += snd-soc-imx-rpmsg.o
+ obj-$(CONFIG_SND_SOC_IMX_CARD) += snd-soc-imx-card.o
++obj-$(CONFIG_SND_SOC_IMX_TSC2100) += imx_tsc2100.o
+--- /dev/null
++++ b/sound/soc/fsl/imx_tsc2100.rs
+@@ -0,0 +1,177 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! ASoC machine driver for i.MX21 boards with a TI TSC2100 codec on the SSI (Chumby Classic):
++//!
++//! Wiring, from the stock Chumby 2.6.16 driver:
++//!  - SSI1 (fsl_ssi), synchronous, I2S slave: the TSC2100 is the bit and frame clock provider.
++//!    16-bit words in four slots per frame, slots 0 and 2 carrying left and right.
++//!  - AUDMUX: SSI1 (host port 1) takes its transmit clock and frame sync from the SSI2 pins
++//!    (peripheral port 2) and its receive clock, frame sync and data from the SSI1 pins (peripheral
++//!    port 1); both peripheral ports take their data from SSI1. That uses two peripheral ports,
++//!    which the fsl,mux-int-port/fsl,mux-ext-port pair of other i.MX cards can't describe, so the
++//!    routing is fixed here.
++//!  - The codec's MCLK is the board's 16 MHz oscillator. Unlike the C driver's module parameter,
++//!    it's fixed.
++//!  - The speaker amplifier is switched by a GPIO: "speaker-gpios", logically high when it's on.
++
++use kernel::{
++    device::Core,
++    of, platform,
++    prelude::*,
++    asoc::{self, CardDesc, Control, GpioOutput, OfNode, Route, Runtime, Substream, Widget},
++    sync::Arc,
++};
++
++const MCLK: u32 = 16000000;
++
++// The i.MX21 AUDMUX has the i.MX27's layout, so the MX27 port names apply.
++const HPCR1_SSI0: u32 = 0;
++const PPCR1_SSI_PINS_1: u32 = 3;
++const PPCR2_SSI_PINS_2: u32 = 4;
++
++const PCR_SYN: u32 = 1 << 12;
++const PCR_RCLKDIR: u32 = 1 << 24;
++const PCR_RFSDIR: u32 = 1 << 25;
++const PCR_TCLKDIR: u32 = 1 << 30;
++const PCR_TFSDIR: u32 = 1 << 31;
++
++const fn pcr_rxdsel(x: u32) -> u32 {
++    (x & 0x7) << 13
++}
++const fn pcr_rfcsel(x: u32) -> u32 {
++    (x & 0xf) << 20
++}
++const fn pcr_tfcsel(x: u32) -> u32 {
++    (x & 0xf) << 26
++}
++
++// `SND_SOC_DAIFMT_I2S | SND_SOC_DAIFMT_NB_NF | SND_SOC_DAIFMT_CBP_CFP`.
++const DAI_FMT: u32 = 1 | (0 << 8) | (1 << 12);
++
++// `SNDRV_PCM_FMTBIT_S16_LE`.
++const FMTBIT_S16_LE: u64 = 1 << 2;
++
++struct Card {
++    speaker: Option<GpioOutput>,
++}
++
++impl asoc::CardOps for Card {
++    fn speaker_event(&self, on: bool) -> Result {
++        // The C driver leaves a failure, and an absent GPIO, to gpiod: the same here.
++        if let Some(speaker) = &self.speaker {
++            let _ = speaker.set(on);
++        }
++        Ok(())
++    }
++
++    fn startup(&self, substream: &Substream) -> Result {
++        // The four 16-bit slot frame only carries 16-bit samples.
++        substream.constrain_formats(FMTBIT_S16_LE)
++    }
++
++    fn dai_init(&self, runtime: &Runtime) -> Result {
++        runtime.codec_set_sysclk(MCLK).inspect_err(|e| {
++            pr_err!("codec MCLK {} Hz rejected: {}\n", MCLK, e.to_errno());
++        })?;
++
++        // As the stock driver: DC = 3, STMSK/SRMSK = ~(slot 0 | slot 2). fsl_ssi, like imx-ssi
++        // before it, writes the inverse of the mask. The SSI is a clock consumer, so it needs no
++        // sysclk of its own.
++        runtime.cpu_set_tdm_slot(0x5, 0x5, 4, 16)
++    }
++}
++
++fn audmux() -> Result {
++    // SSI1: Tx clocks from the SSI2 pins, Rx clocks and data from SSI1's.
++    asoc::imx_audmux_v1_configure_port(
++        HPCR1_SSI0,
++        PCR_TFSDIR
++            | PCR_TCLKDIR
++            | PCR_RFSDIR
++            | PCR_RCLKDIR
++            | pcr_tfcsel(PPCR2_SSI_PINS_2)
++            | pcr_rfcsel(PPCR1_SSI_PINS_1)
++            | pcr_rxdsel(PPCR1_SSI_PINS_1),
++    )?;
++
++    // Both pin groups: clocks are inputs, data out from SSI1.
++    let pins = PCR_SYN | pcr_tfcsel(HPCR1_SSI0) | pcr_rfcsel(HPCR1_SSI0) | pcr_rxdsel(HPCR1_SSI0);
++    asoc::imx_audmux_v1_configure_port(PPCR1_SSI_PINS_1, pins)?;
++    asoc::imx_audmux_v1_configure_port(PPCR2_SSI_PINS_2, pins)
++}
++
++struct ImxTsc2100;
++
++kernel::of_device_table!(
++    OF_TABLE,
++    <ImxTsc2100 as platform::Driver>::IdInfo,
++    [(of::DeviceId::new(c"chumby,imx21-tsc2100-audio"), ())]
++);
++
++impl platform::Driver for ImxTsc2100 {
++    type IdInfo = ();
++    type Data<'bound> = Self;
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = Some(&OF_TABLE);
++
++    fn probe<'bound>(
++        pdev: &'bound platform::Device<Core<'_>>,
++        _id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self, Error> + 'bound {
++        let dev = pdev.as_ref();
++
++        let cpu = OfNode::from_phandle(dev, c"ssi-controller").inspect_err(|_| {
++            dev_err!(dev, "ssi-controller missing or invalid\n");
++        })?;
++        let codec = OfNode::from_phandle(dev, c"audio-codec").inspect_err(|_| {
++            dev_err!(dev, "audio-codec missing or invalid\n");
++        })?;
++
++        // Speaker off until DAPM turns it on.
++        let speaker = GpioOutput::optional_low(dev, c"speaker")?;
++
++        audmux().map_err(|e| {
++            // imx-audmux not probed yet.
++            if e == ENOSYS {
++                EPROBE_DEFER
++            } else {
++                dev_err!(dev, "AUDMUX setup failed: {}\n", e.to_errno());
++                e
++            }
++        })?;
++
++        asoc::register_card(
++            dev,
++            CardDesc {
++                name: c"TSC2100",
++                dai_fmt: DAI_FMT,
++                cpu,
++                codec,
++                codec_dai: c"tsc2100-hifi",
++                // Optional: the card keeps its 5.9 name without it.
++                model_property: c"model",
++                controls: &[
++                    Control::PinSwitch { name: c"Speaker Switch", pin: c"Speaker" },
++                    Control::PinSwitch { name: c"Headphone Switch", pin: c"Headphone" },
++                ],
++                widgets: &[Widget::Speaker(c"Speaker"), Widget::Headphone(c"Headphone")],
++                routes: &[
++                    Route { sink: c"Speaker", source: c"HPL" },
++                    Route { sink: c"Speaker", source: c"HPR" },
++                    Route { sink: c"Headphone", source: c"HPL" },
++                    Route { sink: c"Headphone", source: c"HPR" },
++                ],
++            },
++            Arc::new(Card { speaker }, GFP_KERNEL)?,
++        )?;
++
++        Ok(ImxTsc2100)
++    }
++}
++
++kernel::module_platform_driver! {
++    type: ImxTsc2100,
++    name: "imx-tsc2100",
++    authors: ["John Merchant <john@johnmerchant.dev>"],
++    description: "i.MX21 TSC2100 ASoC machine driver",
++    license: "GPL",
++}

@@ -1,6 +1,5 @@
 //! neochumby: the Chumby Classic's screen, inputs and speaker, for the
-//! launcher, the apps and the services (stock 2.6.16 kernel, static musl,
-//! ARM926).
+//! launcher, the apps and the services (Linux 7, on an ARM926).
 //!
 //! **Experimental and unstable**: any release may break anything. Built
 //! for [neochumby](https://github.com/johnmerchant/neochumby), and
@@ -8,6 +7,7 @@
 
 pub mod apps;
 pub mod audio;
+pub mod backlight;
 pub mod companion;
 pub mod conf;
 pub mod debug;
@@ -18,7 +18,6 @@ pub mod service;
 pub mod session;
 pub mod settings;
 pub mod term;
-pub mod verified;
 
 /// `companion!()`: the compiling app's companion, for [`companion::open`];
 /// an app whose Cargo.toml declares none does not compile.

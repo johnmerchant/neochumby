@@ -6,7 +6,7 @@ release included. This crate is built for
 stack for the original Chumby Classic, and is published to start an SDK
 for it, not as a general-purpose library.
 
-`delivery=sync`: a Chumby keeps a whole copy of its tree on its USB
+A Chumby keeps a whole copy of its tree on its USB
 stick, in step with its neochumbyd, and boots from it. Both sides'
 rounds, over neochumby-proto's session; they build and test on the host.
 

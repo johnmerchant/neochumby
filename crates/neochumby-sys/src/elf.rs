@@ -1,9 +1,9 @@
 //! What an app may run: an ARM ELF whose segments stay above the first
 //! user page, static, or naming as its interpreter the one loader the
-//! caller allows (the tree's musl, on Linux 5.9 and later: the session's
+//! caller allows (the tree's musl: the session's
 //! jail has it at that path).
 //!
-//! The ARM 2.6.16 `mmap` path rejects `MAP_FIXED` below `PAGE_SIZE`
+//! The ARM `mmap` path rejects `MAP_FIXED` below `PAGE_SIZE`
 //! (`FIRST_USER_ADDRESS` in `arch/arm/kernel/sys_arm.c`), but the ELF loader
 //! does not: a `PT_LOAD` at virtual address 0 is mapped at 0. That is the
 //! first half of a NULL-pointer kernel exploit (CVE-2009-2698, among
@@ -117,8 +117,8 @@ pub fn check(path: &Path, loader: Option<&str>) -> io::Result<Option<String>> {
         interpreter = Some(named);
     }
     // A position-independent executable (ET_DYN) that the allowed loader
-    // runs, which only Linux 5.9 and later allows, is placed by the kernel
-    // well above page 0 (and that kernel's mmap_min_addr keeps page 0
+    // runs is placed by the kernel
+    // well above page 0 (and its mmap_min_addr keeps page 0
     // unmapped anyway): its addresses start at 0 because they are offsets.
     let relocated = e_type == ET_DYN && interpreter.is_some();
     for i in 0..e_phnum as usize {

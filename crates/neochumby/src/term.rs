@@ -3,17 +3,9 @@
 //! screen in a console font (font.rs: Spleen, 5x8 by default, 64 by 30
 //! characters) and a colour scheme (colors.rs: GitHub Dark by default).
 //!
-//! It is shown one of two ways, and a program can't tell which:
-//!
-//! - **Drawn here** ([`grid`]), on the stock 2.6.16 kernel, which has no
-//!   console on the screen. It understands what the Linux console does,
-//!   and what xterm adds that programs use (256 colours, the alternate
-//!   screen, line drawing).
-//! - **On the kernel's console** ([`vt`]), where it has one (the dist
-//!   kernels, Linux 5.9 and 7.2): the font and the colours are loaded
-//!   there, and the program's output is passed to it as it comes.
-//!
-//! Either way `TERM` is `linux`, which neochumby-ncurses has compiled in.
+//! It is shown on the kernel's console ([`vt`]): the font and the colours are
+//! loaded there, and the program's output is passed to it as it comes. `TERM`
+//! is `linux`, which neochumby-ncurses has compiled in.
 //!
 //! There is no keyboard. The touchscreen is the mouse, for a program that
 //! asks for one (xterm's mouse reporting, as curses' mousemask does): a
@@ -26,28 +18,26 @@
 //! so that the app needs no access to the screen. [`run`] is for an app
 //! with the framebuffer that wants a terminal for a program of its own.
 
-mod boxes;
 pub mod colors;
 pub mod font;
-mod grid;
+mod mouse;
 pub mod vt;
 
 use std::fs::File;
-use std::io::{self, Read, Write};
+use std::io;
 use std::process::{Command, ExitStatus};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use neochumby_sys::pty;
 
 pub use colors::Scheme;
 pub use font::Font;
-use grid::{Button, Mouse};
+use mouse::{Button, Mouse};
 
-use crate::fb::{self, Fb};
-use crate::input::{Touch, Touchscreen};
+use crate::fb;
+use crate::input::Touch;
 
-/// How often the screen is redrawn while output arrives, and the touchscreen
-/// read.
+/// How often the touchscreen is read while no output arrives.
 const FRAME: Duration = Duration::from_millis(40);
 
 /// What the terminal's programs are told it is.
@@ -71,7 +61,7 @@ impl Default for Options {
 }
 
 /// The terminal's size in characters, columns then rows, in `font`: as many
-/// as fit on the screen, on either kind of terminal.
+/// as fit on the screen.
 pub fn size(font: &Font) -> (u16, u16) {
     ((fb::W / font.width).max(1) as u16, (fb::H / font.height).max(1) as u16)
 }
@@ -95,16 +85,25 @@ pub fn run_tapping(mut cmd: Command, keys: &[u8]) -> io::Result<ExitStatus> {
     // With the Command go our copies of the slave: the terminal closes when
     // the program's do.
     drop(cmd);
-    draw(master, &opts)?;
+    serve(master, &opts)?;
     child.wait()
 }
 
-/// Shows the terminal whose master end is `master` until it closes, on
-/// the kernel's console where there is one and it can take the font, else
-/// drawn on the screen here. The session runs it, as `neochumby
-/// terminal`, for each text-mode app.
+/// Shows the terminal whose master end is `master` on the kernel's console
+/// until it closes. A font the console can't take is logged, and the default
+/// used; the program's terminal then keeps the size it was given. The session
+/// runs it, as `neochumby terminal`, for each text-mode app.
 pub fn serve(master: File, opts: &Options) -> io::Result<()> {
-    if vt::present() && vt::fits(&opts.font) { vt::relay(master, opts) } else { draw(master, opts) }
+    if vt::fits(&opts.font) {
+        return vt::relay(master, opts);
+    }
+    eprintln!(
+        "neochumby: terminal: a font of {}x{} doesn't fit the kernel's console; using {}",
+        opts.font.width,
+        opts.font.height,
+        font::DEFAULT
+    );
+    vt::relay(master, &Options { font: Options::default().font, ..opts.clone() })
 }
 
 /// Touches, as a program on a terminal is to get them.
@@ -147,47 +146,6 @@ impl Touches {
             Some(report) => report,
             None if mouse.mode == 0 && button == Button::Release => tap.to_vec(),
             None => Vec::new(),
-        }
-    }
-}
-
-/// The terminal drawn here, on the screen, until `master` closes.
-fn draw(mut master: File, opts: &Options) -> io::Result<()> {
-    let mut fb = Fb::open()?;
-    let mut touch = Touchscreen::open();
-    let mut grid = grid::Grid::new(fb::W, fb::H, opts.font.clone(), &opts.scheme);
-    let mut touches = Touches::new(&opts.font);
-    let mut parser = vte::Parser::new();
-    let mut buf = [0u8; 4096];
-    let mut drawn = Instant::now();
-    fb.clear(grid.background());
-    loop {
-        let mut open = true;
-        if pty::readable(&master, FRAME.as_millis() as u16)? {
-            match master.read(&mut buf) {
-                Ok(n @ 1..) => parser.advance(&mut grid, &buf[..n]),
-                Err(e) if e.kind() == io::ErrorKind::Interrupted => {}
-                // Closed: EIO on Linux, end of file elsewhere.
-                _ => open = false,
-            }
-        }
-        let mut typed = std::mem::take(&mut grid.replies);
-        for t in touch.poll() {
-            typed.extend(touches.bytes(t, &grid.mouse, &opts.tap));
-        }
-        if !typed.is_empty() && open {
-            let _ = master.write_all(&typed);
-        }
-        if !open {
-            // Nothing will be typed: once it is over, no cursor.
-            grid.cursor_shown = false;
-        }
-        if !open || drawn.elapsed() >= FRAME {
-            let Ok(()) = grid.draw(&mut fb);
-            drawn = Instant::now();
-        }
-        if !open {
-            return Ok(());
         }
     }
 }

@@ -1,13 +1,14 @@
-//! neochumby-sync: the receiver for `delivery=sync`. The session runs it
-//! when this Chumby's settings say `delivery=sync`. It keeps the stick's
-//! standby set in step with the paired neochumbyd, over the paired session
-//! and nothing else, and makes the set live once it is complete
-//! (neochumby_sync has how). It is a program of its own so that a Chumby
-//! booting from a stick made by hand carries none of it.
+//! neochumby-sync: the receiver. The session runs it on a paired Chumby. It
+//! keeps the stick's standby set in step with the paired neochumbyd, over the
+//! paired session and nothing else, and makes the set live once it is
+//! complete (neochumby_sync has how). It is a program of its own so that the
+//! session stays small.
 //!
-//!   neochumby-sync            a round now and one a minute, while this
-//!                             Chumby is paired and its delivery is sync
-//!                             (the session's service; it doesn't exit)
+//!   neochumby-sync            a round now, one a minute, and one as soon as
+//!                             neochumbyd asks (`neochumbyd sync`, which the
+//!                             session passes on: conf::SYNC_NOW), while this
+//!                             Chumby is paired (the session's service; it
+//!                             doesn't exit)
 //!   neochumby-sync once       one round; exits 0 if the live set is then
 //!                             the tree
 //!   neochumby-sync status     the sets on the stick
@@ -15,14 +16,15 @@
 //!                             syncing, which would bring the tree back
 //!   neochumby-sync resume     syncs again after a rollback
 //!
-//! A new live set runs from the next boot: what is running stays as it is.
+//! A new live set runs from the next restart (`neochumbyd restart`) or boot:
+//! what is running stays as it is. Its kernel and initramfs, from the next
+//! boot only.
 
 use std::io;
 use std::path::Path;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use neochumby::{apps, conf, settings};
-use neochumby_proto::Delivery;
 use neochumby_sync::Timing;
 use neochumby_sync::receive::{self, Outcome};
 use neochumby_sync::stick::{Set, Stick};
@@ -30,8 +32,8 @@ use neochumby_sync::stick::{Set, Stick};
 /// Where the stock firmware mounts a USB stick, and the stick's neochumby
 /// directory: the only place this writes, and only while a stick is
 /// mounted there.
-const MOUNT: &str = "/mnt/usb";
-const DIR: &str = "/mnt/usb/neochumby";
+const MOUNT: &str = conf::STICK;
+const DIR: &str = conf::STICK_TREE;
 const EVERY: Duration = Duration::from_secs(60);
 /// The longest wait after failures that keep coming back.
 const MOST: Duration = Duration::from_secs(3600);
@@ -54,9 +56,8 @@ fn describe(o: &Outcome) -> String {
         Outcome::Held => "rolled back: held until `neochumby-sync resume`".into(),
         Outcome::WaitingForRestart(s) => format!("a new set is live; set {} is running, until a restart", s.name()),
         Outcome::UpToDate => "up to date".into(),
-        Outcome::Refused => "neochumbyd does not sync this Chumby".into(),
         Outcome::Flipped { to, files, received, bytes } => {
-            format!("set {} is live from the next boot: {received} of {files} files sent, {bytes} bytes", to.name())
+            format!("set {} is live from the next restart: {received} of {files} files sent, {bytes} bytes", to.name())
         }
     }
 }
@@ -75,27 +76,35 @@ impl Log {
 }
 
 /// Rounds over one session with neochumbyd: one now, then one every
-/// [`EVERY`] if `forever`, until something fails. None if this Chumby is
-/// not to sync: not paired, or its delivery is not sync. A round that goes
-/// through clears `failed`.
+/// [`EVERY`], or sooner if neochumbyd asks, if `forever`, until something
+/// fails. None if this Chumby is not paired. A round that goes through clears
+/// `failed`.
 fn rounds(forever: bool, log: &mut Log, failed: &mut Option<String>) -> io::Result<Option<Outcome>> {
     let stick = stick();
     stick.mounted()?;
     let Some(p) = conf::paired() else { return Ok(None) };
-    let (mut s, settings) = settings::connect(&p)?;
-    if settings.delivery != Some(Delivery::Sync) {
-        return Ok(None);
-    }
+    let (mut s, _) = settings::connect(&p)?;
     s.stream().set_write_timeout(Some(TIMING.step))?;
     loop {
         // Each round checks the stick is still there before it writes.
         let o = receive::round(&mut s, &stick, TIMING)?;
         *failed = None;
         log.say(describe(&o));
-        if !forever || o == Outcome::Refused {
+        if !forever {
             return Ok(Some(o));
         }
-        neochumby::sleep_ms(EVERY.as_millis() as u32);
+        wait(EVERY);
+    }
+}
+
+/// Waits for `d`, or until neochumbyd asks for a round.
+fn wait(d: Duration) {
+    let end = Instant::now() + d;
+    while Instant::now() < end {
+        if std::fs::remove_file(conf::SYNC_NOW).is_ok() {
+            return;
+        }
+        neochumby::sleep_ms(1000);
     }
 }
 
@@ -110,7 +119,7 @@ fn run() {
             // The session supervises this and would start it again at
             // once: it waits, and looks again in an hour.
             Ok(_) => {
-                log.say("not syncing: not paired, or delivery is not sync; looking again in an hour".into());
+                log.say("not syncing: not paired; looking again in an hour".into());
                 failed = None;
                 wait = MOST;
             }
@@ -124,7 +133,7 @@ fn run() {
                 failed = Some(e);
             }
         }
-        neochumby::sleep_ms(wait.as_millis() as u32);
+        self::wait(wait);
     }
 }
 
@@ -140,13 +149,16 @@ fn main() {
         Some("once") => match rounds(false, &mut Log::default(), &mut None) {
             Ok(Some(Outcome::UpToDate | Outcome::Flipped { .. })) => {}
             Ok(Some(_)) => std::process::exit(1),
-            Ok(None) => fail("not syncing: not paired, or delivery is not sync"),
+            Ok(None) => fail("not syncing: not paired"),
             Err(e) => fail(e),
         },
         Some("status") => print!("{}", stick().status()),
         Some("rollback") => match stick().rollback() {
             Ok(s) => {
-                println!("set {} is live from the next boot; syncing is held until `neochumby-sync resume`", s.name())
+                println!(
+                    "set {} is live from the next restart; syncing is held until `neochumby-sync resume`",
+                    s.name()
+                )
             }
             Err(e) => fail(e),
         },

@@ -196,7 +196,7 @@ fn a_catalog_app_runs_only_under_seccomp_unless_trusted() {
     let dir = app("catalog", "source=catalog\n", HELLO);
     let o = run(&dir);
     if stderr(&o).contains("neither seccomp nor Landlock") {
-        // A kernel like the Chumby's 2.6.16: refused, unless trusted.
+        // A kernel without them: refused, unless trusted.
         assert_eq!(o.status.code(), Some(2), "{}", stderr(&o));
         assert!(stderr(&o).contains("only on a kernel with seccomp"), "{}", stderr(&o));
         let o = runner(&dir).env("NEOCHUMBY_WASM_TRUSTED", "1").output().unwrap();

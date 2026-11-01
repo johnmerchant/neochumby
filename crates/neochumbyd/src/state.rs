@@ -1,23 +1,18 @@
 //! What neochumbyd keeps, in its state directory:
 //!
 //!   identity          its private key (0600; the daemon's alone)
-//!   paired/<key>      a paired Chumby: file named for its public key (hex),
-//!                     holding its name
-//!   pending/<id>      a Chumby asking to pair, under a random id: "code
-//!                     name key address". At most MAX_PENDING at once,
-//!                     none older than PENDING_TTL, and none kept from a
-//!                     daemon before this one
+//!   identity.pub      its public key, hex, for `neochumbyd add` run by an
+//!                     admin who can't read `identity`
+//!   paired/<key>      a Chumby: file named for its public key (hex), holding
+//!                     its name. `neochumbyd add` writes it, as a stick is
+//!                     made; no connection can
 //!   config/<name>     a Chumby's settings, key=value lines (`start=<app>`),
 //!                     sent to it on every connection (`Msg::Config`). Kept
-//!                     by name, so a Chumby paired again under its name
-//!                     keeps them
+//!                     by name, so a stick made again under its name keeps
+//!                     them
 //!   owner-token       the owner's token (0640, the state directory's
-//!                     group), which an app's server program such as the
-//!                     household web page must pass to change anything
-//!                     through the admin socket (admin.rs)
-//!   allow/<app>       what its owner allows an app's server program beyond
-//!                     its sandbox, a word a line: `pairing`, the admin
-//!                     socket (`neochumbyd allow <app> pairing`)
+//!                     group), which the command line's catalog commands
+//!                     pass to the admin protocol (admin.rs)
 //!   apps/<app>        each app's own directory, for its companions and its
 //!                     server program: the only part of the state directory
 //!                     they can reach (confine.rs); with --app-uids, the
@@ -28,65 +23,28 @@
 //! None of it is readable by other users (`secure`), as apps' programs may
 //! run under uids of their own.
 //!
-//! The daemon writes pending/; `neochumbyd approve CODE` (whoever is in
-//! the daemon's group), or a server program through the admin socket,
-//! turns one into paired/, which the daemon, waiting on the Chumby's
-//! connection, sees. The command line and the admin socket share these
-//! functions.
+//! The commands work on these files directly, so whoever is in the daemon's
+//! group can run them.
 
 use std::io::{self, Read};
 use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
-use std::time::Duration;
 
 use neochumby_proto::settings::{self, Settings};
-use neochumby_proto::{Identity, PublicKey, hex, parse_code, unhex_key, valid_name};
-
-/// The most Chumbys asking to pair at once: more are refused.
-pub const MAX_PENDING: usize = 8;
-/// How long a request waits to be approved or refused.
-pub const PENDING_TTL: Duration = Duration::from_secs(600);
-
-/// What the owner may allow an app's server program: the admin socket,
-/// with which it pairs Chumbys and changes their settings.
-pub const PAIRING: &str = "pairing";
-const GRANTS: &[&str] = &[PAIRING];
+use neochumby_proto::{Identity, PublicKey, hex, unhex_key, valid_name};
 
 #[derive(Clone)]
 pub struct State {
     dir: PathBuf,
 }
 
-/// A request to pair.
-pub struct Pending {
-    /// Its file's name in pending/: random, so that no one asking can
-    /// choose it or collide with another.
-    pub id: String,
-    /// The pairing code it showed (neochumby_proto::Unverified::code).
-    pub code: String,
-    pub name: String,
-    pub key: PublicKey,
-    pub addr: String,
-}
-
 fn bad(what: &str) -> io::Error {
     io::Error::new(io::ErrorKind::InvalidInput, what.to_string())
-}
-
-fn valid_id(id: &str) -> bool {
-    id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit() && !b.is_ascii_uppercase())
-}
-
-fn random_id() -> io::Result<String> {
-    let mut b = [0u8; 16];
-    std::fs::File::open("/dev/urandom")?.read_exact(&mut b)?;
-    Ok(hex(&b))
 }
 
 impl State {
     pub fn open(dir: PathBuf) -> io::Result<State> {
         std::fs::create_dir_all(dir.join("paired"))?;
-        std::fs::create_dir_all(dir.join("pending"))?;
         std::fs::create_dir_all(dir.join("config"))?;
         Ok(State { dir })
     }
@@ -103,12 +61,16 @@ impl State {
     /// as their owner, with a umask that keeps what it makes the same.
     pub fn secure(&self) -> io::Result<()> {
         let named = |path: &std::path::Path, e: io::Error| io::Error::new(e.kind(), format!("{}: {e}", path.display()));
-        for d in ["paired", "pending", "config", "allow", "logs", "dev"] {
+        for d in ["paired", "config", "logs", "dev"] {
             let path = self.dir.join(d);
             std::fs::create_dir_all(&path).map_err(|e| named(&path, e))?;
             let mode = std::fs::metadata(&path).map_err(|e| named(&path, e))?.permissions().mode();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o7770))
-                .map_err(|e| named(&path, e))?;
+            // Only if it changes anything: under systemd's RestrictSUIDSGID,
+            // a chmod that keeps a directory's setgid bit is refused.
+            if mode & 0o007 != 0 {
+                std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode & 0o7770))
+                    .map_err(|e| named(&path, e))?;
+            }
         }
         let key = self.dir.join("identity");
         match std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o600)) {
@@ -132,9 +94,25 @@ impl State {
         }
     }
 
+    /// Its public key, from `identity.pub` (which `serve` keeps, for those
+    /// who can't read `identity`), else from `identity`, made if need be.
+    pub fn public_key(&self) -> io::Result<PublicKey> {
+        match std::fs::read_to_string(self.dir.join("identity.pub")) {
+            Ok(s) => unhex_key(s.trim()),
+            Err(_) => Ok(self.identity()?.public()),
+        }
+    }
+
+    /// Keeps `identity.pub`, for [`State::public_key`]; run by `serve`.
+    pub fn publish_key(&self, key: &PublicKey) -> io::Result<()> {
+        let path = self.dir.join("identity.pub");
+        let tmp = path.with_extension("pub.new");
+        std::fs::write(&tmp, format!("{}\n", hex(key)))?;
+        std::fs::rename(tmp, path)
+    }
+
     /// The owner's token, made on first use: 16 random bytes as hex. The
-    /// owner reads it with `neochumbyd token` and gives it to the household
-    /// web page, which passes it on to approve or forget a pairing.
+    /// owner reads it with `neochumbyd token`.
     pub fn owner_token(&self) -> io::Result<String> {
         let path = self.dir.join("owner-token");
         match std::fs::read_to_string(&path) {
@@ -204,156 +182,11 @@ impl State {
         !a.is_empty() && a.len() == b.len() && a.iter().zip(b).fold(0, |d, (x, y)| d | (x ^ y)) == 0
     }
 
-    /// What the owner allows `app` (`pairing`), in the order allowed.
-    pub fn allowed(&self, app: &str) -> Vec<String> {
-        if !valid_name(app) {
-            return Vec::new();
-        }
-        let s = std::fs::read_to_string(self.dir.join("allow").join(app)).unwrap_or_default();
-        s.lines().filter(|w| GRANTS.contains(w)).map(str::to_string).collect()
-    }
-
-    /// Allows `app` `what`, or with `on` false, no longer.
-    pub fn allow(&self, app: &str, what: &str, on: bool) -> io::Result<()> {
-        if !valid_name(app) {
-            return Err(bad("not an app's name"));
-        }
-        if !GRANTS.contains(&what) {
-            return Err(bad(&format!("only {} can be allowed", GRANTS.join(", "))));
-        }
-        let mut words = self.allowed(app);
-        words.retain(|w| w != what);
-        if on {
-            words.push(what.into());
-        }
-        let dir = self.dir.join("allow");
-        std::fs::create_dir_all(&dir)?;
-        let path = dir.join(app);
-        if words.is_empty() {
-            return match std::fs::remove_file(&path) {
-                Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-                r => r,
-            };
-        }
-        let tmp = path.with_extension("new");
-        std::fs::write(&tmp, words.iter().map(|w| format!("{w}\n")).collect::<String>())?;
-        std::fs::rename(tmp, path)
-    }
-
-    /// Every app the owner has allowed something, and what.
-    pub fn allowances(&self) -> Vec<(String, Vec<String>)> {
-        let mut out: Vec<(String, Vec<String>)> = std::fs::read_dir(self.dir.join("allow"))
-            .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect::<Vec<_>>())
-            .unwrap_or_default()
-            .into_iter()
-            .map(|app| {
-                let w = self.allowed(&app);
-                (app, w)
-            })
-            .filter(|(_, w)| !w.is_empty())
-            .collect();
-        out.sort();
-        out
-    }
-
     /// The name `key` paired under, if it has.
     pub fn paired(&self, key: &PublicKey) -> Option<String> {
         let name = std::fs::read_to_string(self.dir.join("paired").join(hex(key))).ok()?;
         let name = name.trim();
         valid_name(name).then(|| name.to_string())
-    }
-
-    /// Keeps a request to pair, showing `code`: its id, for
-    /// [`State::decision`] and [`State::withdraw`]. Refused while
-    /// [`MAX_PENDING`] others wait.
-    /// `from` is where it came from, one word (api::Origin).
-    pub fn request(&self, code: &str, name: &str, key: &PublicKey, from: &str) -> io::Result<String> {
-        if parse_code(code).as_deref() != Some(code)
-            || !valid_name(name)
-            || from.is_empty()
-            || from.contains(char::is_whitespace)
-        {
-            return Err(bad("bad pairing request"));
-        }
-        if self.pending()?.len() >= MAX_PENDING {
-            return Err(bad("too many Chumbys asking to pair at once"));
-        }
-        let id = random_id()?;
-        let mut f =
-            std::fs::OpenOptions::new().write(true).create_new(true).open(self.dir.join("pending").join(&id))?;
-        io::Write::write_all(&mut f, format!("{code} {name} {} {from}\n", hex(key)).as_bytes())?;
-        Ok(id)
-    }
-
-    /// Some(true) once approved, Some(false) once refused, None meanwhile.
-    pub fn decision(&self, id: &str, key: &PublicKey) -> Option<bool> {
-        if self.paired(key).is_some() {
-            Some(true)
-        } else if !self.dir.join("pending").join(id).exists() {
-            Some(false)
-        } else {
-            None
-        }
-    }
-
-    /// Takes back the request `id`, as when no one answered it in time.
-    pub fn withdraw(&self, id: &str) -> io::Result<()> {
-        if !valid_id(id) {
-            return Err(bad("not a request"));
-        }
-        match std::fs::remove_file(self.dir.join("pending").join(id)) {
-            Err(e) if e.kind() == io::ErrorKind::NotFound => Ok(()),
-            r => r,
-        }
-    }
-
-    /// Forgets every request: on starting, as none of them has a connection
-    /// waiting on it any more.
-    pub fn clear_pending(&self) -> io::Result<()> {
-        for e in std::fs::read_dir(self.dir.join("pending"))?.flatten() {
-            std::fs::remove_file(e.path())?;
-        }
-        Ok(())
-    }
-
-    /// The requests waiting, removing any older than [`PENDING_TTL`].
-    pub fn pending(&self) -> io::Result<Vec<Pending>> {
-        let mut out = Vec::new();
-        for e in std::fs::read_dir(self.dir.join("pending"))?.flatten() {
-            let id = e.file_name().to_string_lossy().into_owned();
-            let age = e.metadata().and_then(|m| m.modified()).ok().and_then(|t| t.elapsed().ok());
-            if age.is_some_and(|a| a > PENDING_TTL) {
-                let _ = std::fs::remove_file(e.path());
-                continue;
-            }
-            if let Some(p) = self.read_pending(&id) {
-                out.push(p);
-            }
-        }
-        out.sort_by(|a, b| a.name.cmp(&b.name));
-        Ok(out)
-    }
-
-    fn read_pending(&self, id: &str) -> Option<Pending> {
-        if !valid_id(id) {
-            return None;
-        }
-        let s = std::fs::read_to_string(self.dir.join("pending").join(id)).ok()?;
-        let mut f = s.split_whitespace();
-        let (code, name, key, addr) = (f.next()?, f.next()?, f.next()?, f.next()?);
-        Some(Pending {
-            id: id.into(),
-            code: code.into(),
-            name: name.into(),
-            key: unhex_key(key).ok()?,
-            addr: addr.into(),
-        })
-    }
-
-    /// The request showing `code`, as someone typed it.
-    fn find(&self, code: &str) -> io::Result<Pending> {
-        let code = parse_code(code).ok_or_else(|| bad("not a pairing code: type the 32 digits the Chumby shows"))?;
-        self.pending()?.into_iter().find(|p| p.code == code).ok_or_else(|| bad("no Chumby is asking with that code"))
     }
 
     /// (name, key) of each paired Chumby.
@@ -371,28 +204,33 @@ impl State {
         Ok(out)
     }
 
-    /// Pairs the Chumby asking with `code`. A Chumby already paired under
-    /// its name with another key is unpaired for it only if `replace`.
-    pub fn approve(&self, code: &str, replace: bool) -> io::Result<String> {
-        let p = self.find(code)?;
-        let key = hex(&p.key);
-        if let Some((_, old)) = self.pairs()?.into_iter().find(|(n, k)| n == &p.name && k != &key)
-            && !replace
-        {
-            return Err(bad(&format!(
-                "{} is already paired, with key {old}; to pair this one in its place, approve it with --replace",
-                p.name
-            )));
+    /// Registers `key` as the Chumby `name`: how a stick gets in. Another
+    /// key under `name`, or `key` under another name, stays unless `replace`.
+    pub fn add(&self, name: &str, key: &PublicKey, replace: bool) -> io::Result<()> {
+        if !valid_name(name) {
+            return Err(bad("a Chumby's name is 1-32 of a-z, 0-9, _ and -"));
         }
-        self.forget(&p.name)?;
-        std::fs::write(self.dir.join("paired").join(key), format!("{}\n", p.name))?;
-        std::fs::remove_file(self.dir.join("pending").join(&p.id))?;
-        Ok(p.name)
-    }
-
-    pub fn refuse(&self, code: &str) -> io::Result<()> {
-        let p = self.find(code)?;
-        self.withdraw(&p.id)
+        let hexed = hex(key);
+        let pairs = self.pairs()?;
+        if !replace {
+            if let Some((_, old)) = pairs.iter().find(|(n, k)| n == name && *k != hexed) {
+                return Err(bad(&format!(
+                    "{name} is already registered, with key {old}; to put this one in its place, use --replace"
+                )));
+            }
+            if let Some((other, _)) = pairs.iter().find(|(n, k)| n != name && *k == hexed) {
+                return Err(bad(&format!("that key is already registered as {other}; --replace moves it to {name}")));
+            }
+        }
+        for (n, k) in &pairs {
+            if (n == name || *k == hexed) && !(n == name && *k == hexed) {
+                std::fs::remove_file(self.dir.join("paired").join(k))?;
+            }
+        }
+        let path = self.dir.join("paired").join(&hexed);
+        let tmp = path.with_extension("new");
+        std::fs::write(&tmp, format!("{name}\n"))?;
+        std::fs::rename(tmp, path)
     }
 
     pub fn forget(&self, name: &str) -> io::Result<()> {
@@ -464,17 +302,16 @@ mod tests {
         std::fs::write(dir.join("paired").join(hex(&key)), "kitchen\n").unwrap();
 
         st.set("kitchen", "start", "wx").unwrap();
-        st.set("kitchen", "delivery", "sync").unwrap();
+        st.set("kitchen", "theme", "dark").unwrap();
         st.set("kitchen", "start", "home").unwrap();
-        assert_eq!(st.config("kitchen"), [("delivery".into(), "sync".into()), ("start".into(), "home".into())]);
-        st.set("kitchen", "delivery", "").unwrap();
+        assert_eq!(st.config("kitchen"), [("theme".into(), "dark".into()), ("start".into(), "home".into())]);
+        st.set("kitchen", "theme", "").unwrap();
         assert_eq!(st.config("kitchen"), [("start".to_string(), "home".to_string())]);
 
         assert!(st.set("kitchen", "Home", "wx").is_err());
         assert!(st.set("kitchen", "start", "w x").is_err());
         assert!(st.set("kitchen", "start", "a\nb=c").is_err());
         // Typed settings take only their own values.
-        assert!(st.set("kitchen", "delivery", "usb").is_err());
         assert!(st.set("kitchen", "dev", "yes").is_err());
         st.set("kitchen", "dev", "on").unwrap();
         assert!(st.settings("kitchen").dev);
@@ -483,25 +320,6 @@ mod tests {
         st.set("kitchen", "theme", "dark").unwrap();
         assert_eq!(st.settings("kitchen").other, [("theme".to_string(), "dark".to_string())]);
         assert!(st.config("../kitchen").is_empty());
-        std::fs::remove_dir_all(&dir).unwrap();
-    }
-
-    #[test]
-    fn allowances() {
-        let dir = std::env::temp_dir().join(format!("neochumbyd-allow-test-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        let st = State::open(dir.clone()).unwrap();
-        assert!(st.allowed("web").is_empty());
-        st.allow("web", PAIRING, true).unwrap();
-        st.allow("web", PAIRING, true).unwrap();
-        assert_eq!(st.allowed("web"), [PAIRING]);
-        assert_eq!(st.allowances(), [("web".to_string(), vec![PAIRING.to_string()])]);
-        assert!(st.allow("web", "root", true).is_err());
-        assert!(st.allow("../x", PAIRING, true).is_err());
-        assert!(st.allowed("../allow/web").is_empty());
-        st.allow("web", PAIRING, false).unwrap();
-        assert!(st.allowed("web").is_empty() && st.allowances().is_empty());
-        st.allow("web", PAIRING, false).unwrap();
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -549,53 +367,47 @@ mod tests {
     }
 
     #[test]
-    fn pairing() {
-        let dir = std::env::temp_dir().join(format!("neochumbyd-pairing-test-{}", std::process::id()));
+    fn adding() {
+        let dir = std::env::temp_dir().join(format!("neochumbyd-add-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let st = State::open(dir.clone()).unwrap();
-        let addr = "192.0.2.7";
-        let code = |n: u8| format!("{n:02x}00-0000-0000-0000-0000-0000-0000-0000");
         let (k1, k2) = (Identity::generate().unwrap().public(), Identity::generate().unwrap().public());
+        assert!(st.add("Den!", &k1, false).is_err(), "not a name");
+        st.add("den", &k1, false).unwrap();
+        assert_eq!(st.paired(&k1).as_deref(), Some("den"));
+        // Again, the same: nothing changes.
+        st.add("den", &k1, false).unwrap();
+        assert_eq!(st.pairs().unwrap().len(), 1);
 
-        assert!(st.request("123456", "den", &k1, addr).is_err(), "a short code is no code");
-        let id = st.request(&code(1), "den", &k1, addr).unwrap();
-        assert!(valid_id(&id));
-        assert_eq!(st.decision(&id, &k1), None);
-        // Typed in capitals and without dashes, it is the same code.
-        assert!(st.approve(&code(9), false).is_err(), "no one asks with it");
-        assert_eq!(st.approve(&code(1).to_uppercase().replace('-', ""), false).unwrap(), "den");
-        assert_eq!(st.decision(&id, &k1), Some(true));
-
-        // Another key under the same name replaces it only when asked to.
-        st.request(&code(2), "den", &k2, addr).unwrap();
-        let e = st.approve(&code(2), false).unwrap_err().to_string();
+        // Another key under the name replaces it only when asked to.
+        let e = st.add("den", &k2, false).unwrap_err().to_string();
         assert!(e.contains("--replace") && e.contains(&hex(&k1)), "{e}");
         assert_eq!(st.paired(&k1).as_deref(), Some("den"));
-        st.approve(&code(2), true).unwrap();
+        st.add("den", &k2, true).unwrap();
         assert_eq!((st.paired(&k1), st.paired(&k2).as_deref()), (None, Some("den")));
 
-        // Refused, and then gone.
-        let id = st.request(&code(3), "attic", &k1, addr).unwrap();
-        st.refuse(&code(3)).unwrap();
-        assert_eq!(st.decision(&id, &k1), Some(false));
+        // The key under another name, likewise.
+        assert!(st.add("attic", &k2, false).unwrap_err().to_string().contains("as den"));
+        st.add("attic", &k2, true).unwrap();
+        assert_eq!(st.pairs().unwrap().len(), 1);
+        assert_eq!(st.paired(&k2).as_deref(), Some("attic"));
 
-        // At most MAX_PENDING wait, and none for longer than PENDING_TTL.
-        for n in 0..MAX_PENDING as u8 {
-            st.request(&code(10 + n), "attic", &k1, addr).unwrap();
-        }
-        assert!(st.request(&code(99), "attic", &k1, addr).is_err());
-        let old = std::time::SystemTime::now() - PENDING_TTL - Duration::from_secs(1);
-        let first = st.pending().unwrap().remove(0);
-        std::fs::File::options()
-            .write(true)
-            .open(dir.join("pending").join(&first.id))
-            .unwrap()
-            .set_modified(old)
-            .unwrap();
-        assert_eq!(st.pending().unwrap().len(), MAX_PENDING - 1);
-        st.request(&code(99), "attic", &k1, addr).unwrap();
-        st.clear_pending().unwrap();
-        assert!(st.pending().unwrap().is_empty());
+        st.forget("attic").unwrap();
+        assert!(st.pairs().unwrap().is_empty());
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn its_public_key() {
+        let dir = std::env::temp_dir().join(format!("neochumbyd-pub-test-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let st = State::open(dir.clone()).unwrap();
+        let id = st.identity().unwrap();
+        assert_eq!(st.public_key().unwrap(), id.public());
+        st.publish_key(&id.public()).unwrap();
+        // Whoever can't read `identity` reads this.
+        std::fs::remove_file(dir.join("identity")).unwrap();
+        assert_eq!(st.public_key().unwrap(), id.public());
         std::fs::remove_dir_all(&dir).unwrap();
     }
 
@@ -611,7 +423,7 @@ mod tests {
         let mode = |p: &str| std::fs::metadata(dir.join(p)).unwrap().permissions().mode() & 0o7777;
         assert_eq!(mode("paired"), 0o2770);
         assert_eq!(mode("identity"), 0o600);
-        for d in ["pending", "config", "allow", "logs", "dev"] {
+        for d in ["config", "logs", "dev"] {
             assert_eq!(mode(d) & 0o007, 0, "{d}");
         }
         std::fs::remove_dir_all(&dir).unwrap();

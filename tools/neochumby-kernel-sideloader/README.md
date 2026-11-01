@@ -1,138 +1,112 @@
-# neochumby-kernel-sideloader: stock 2.6.16 -> Linux 5.9.16 module handoff
+# neochumby-kernel-sideloader: from the stock 2.6.16 to Linux 7
 
-`neochumby-kernel-sideloader` boots a NAND-less Linux 5.9.16 on the Chumby
-Classic from the stock 2.6.16.  It is a 2.6.16 kernel module, loaded by root
-on the stock system: the module reserves three 4 MiB blocks in RAM, root
-writes the zImage and initramfs through `/proc`, and a final write builds
-the ATAGS, services the watchdog, flushes the caches and jumps with the MMU
-off.
+Linux 7 is the only kernel neochumby runs on, and it reaches it from the stock
+firmware, which it leaves as it is. `sideload.ko` is a 2.6.16 kernel module,
+loaded by root on the stock system: the module reserves four 4 MiB blocks in
+RAM, root writes the zImage and initramfs through `/proc`, and a final write
+builds the ATAGS, services the watchdog, flushes the caches and jumps with the
+MMU off.
 
-The target kernel has no MTD/NAND driver, no network, no USB, no sound and
-no storage.  It is the Chumby Classic's 5.9.16 board support from
-`dist/patches/linux/5.9.16`, trimmed by
-`kernel/chumby-classic-sideload.config`: the panel and its console, the
-watchdog, and nothing that touches NAND.  It boots to Tux and a 64x30 shell
-on the 320x240 panel.
-
-A power cycle returns to the stock firmware; the stock NAND is unchanged.
+The zImage and initramfs are `dist/build`'s; they have no NAND driver
+(`CONFIG_MTD=n`). A power cycle returns to the stock firmware; the stock NAND
+is unchanged.
 
 ## How it works
 
-The module takes three order-10 blocks (4 MiB each), sorts them by address,
-and uses the lowest as a guard, the middle for the initramfs and the highest
-for the zImage.  The stock page allocator owns them until the jump.
+The module takes four order-10 blocks (4 MiB each), sorts them by address,
+and uses:
 
-root writes:
+| block | use |
+| --- | --- |
+| `blocks[0]` | guard |
+| `blocks[1]` | unused |
+| `blocks[2]` | zImage (must stay above the decompressed Image) |
+| `blocks[3]` | initramfs |
+
+The stock page allocator owns them until the jump.  root writes:
 
 - `/proc/sideload-kernel` — the zImage, up to 4 MiB;
 - `/proc/sideload-initrd` — the initramfs, up to 4 MiB;
 - `/proc/sideload-go` — starts the handoff.
 
 `/proc/sideload-reserve` prints the kernel and initrd physical addresses.
-The zImage decompresses below `0xc0800000`, so an initramfs there is not
-overwritten.  The zImage must be under 4 MiB and the decompressed Image under
-8 MiB; the Chumby build is 1.54 MiB and 4.86 MiB.
+The zImage is in the third block (12 MiB) and the initrd in the fourth
+(16 MiB), so the decompressed Image can use the space between the kernel
+start and the zImage.
 
 The handoff builds ATAGS at `0xc3f00000`, copies the position-independent
 stub to `0xc3f80000`, writes the watchdog's timeout and service registers,
 disables interrupts, flushes the ARM926 caches, and jumps with the MMU off.
 The target kernel's `imx2-wdt` driver then services the watchdog.
 
+Linux 7 can't read the settings partition, so what it needs of `/psp` goes
+with the initramfs: `crates/neochumby-handoff` writes the initramfs, then the
+few files named from `/psp` as a second archive, to `/proc/sideload-initrd`.
+
 ## Build
 
-### The target kernel
-
-The kernel script downloads Linux 5.9.16, applies the Chumby board patches
-from `dist/patches/linux/5.9.16`, adds
-`chumby-classic-sideload.config`, and builds:
-
 ```sh
-tools/neochumby-kernel-sideloader/kernel/build.sh
+tools/neochumby-kernel-sideloader/build OUT    # OUT/sideload.ko
 ```
 
-The output is
-`tools/neochumby-kernel-sideloader/build/linux-5.9.16-chumby-zImage`.  The
-script checks the 4 MiB zImage and 8 MiB Image limits.
-`FRAGMENT=sideload-only.config` builds the smaller QEMU/no-display kernel
-instead.
-
-### The module
-
-Build against a 2.6.16 tree configured like the stock kernel:
-
-```sh
-KDIR=/path/to/linux-2.6.16 tools/neochumby-kernel-sideloader/module/build.sh
-```
-
-The script sets the module's vermagic to `2.6.16-csb ARMv5 gcc-4.3`, the
-stock kernel's.  `CROSS_COMPILE` and `TARGET_VERMAGIC` override the defaults.
-The result is `module/sideload.ko`.
-
-### The initramfs
-
-The module accepts any initramfs the target kernel can unpack.  `dist/build`
-produces `sideload-rootfs.cpio.gz`; a minimal shell initramfs works too.  The
-5.9.16 config has XZ and gzip decompressors.
+from a clean checkout, in a container (`Containerfile`, with Apple's
+`container`, docker or podman): it fetches the `linux` submodule, Chumby's GPL
+2.6.16 source, at the pinned commit, and Chumby's toolchain (gcc 4.3), pinned
+by its hash; configures the kernel as the stock one, with `patches/` for a
+newer make; and runs `module/build.sh`, which sets the module's vermagic to the
+stock kernel's, `2.6.16-csb ARMv5 gcc-4.3`.
 
 ## On the Chumby
 
-root is required to load a module.  The stock SSH server, enabled by the
-device's owner, or the stock boot hook on a stick, gives that root shell.
-With the files in `/tmp`:
+`boot/userhook2`, from a stick, does all of this at boot, from a tree whose
+`sideload/` holds `sideload.ko`, `zImage`, `initramfs.cpio.gz` and
+`neochumby-handoff` (`tools/stick --sideload DIR`). A device with a hook left in
+`/psp/rfs1/userhook2` from an older neochumby needs it deleted, on stock. Stock's
+own software goes first, as it holds the memory the blocks need:
 
 ```sh
-insmod /tmp/sideload.ko
-cat /tmp/linux-5.9.16-chumby-zImage > /proc/sideload-kernel
-cat /tmp/initramfs.cpio.gz > /proc/sideload-initrd
+/usr/chumby/scripts/stop_control_panel
+killall chumbhowld btplayd chumbalarmd crond
+sync; echo 3 > /proc/sys/vm/drop_caches
+insmod sideload.ko
+cat zImage > /proc/sideload-kernel
+neochumby-handoff initramfs.cpio.gz /psp network_config ts_settings hostname localtime neochumby-ssh .ssh/authorized_keys > /proc/sideload-initrd
 echo 1 > /proc/sideload-go
 ```
 
-The stock SSH connection drops at the jump; the 5.9.16 kernel has no
-network.  The panel shows Tux and a shell on tty1.  Power-cycle to return to
-stock.
-
-The boot hook form is the same three writes, run by the stock `userhook2`
-after `insmod`.
+Any failure before the jump unloads the module and returns to the stock boot.
 
 ## Safety
 
-- The module writes the three reserved RAM blocks, the ATAGS/stub region and
-  the two watchdog service registers.  It does not touch `/dev/mtd`, the NAND
-  controller or `/psp`.
+- The module writes the four reserved RAM blocks (one unused), the ATAGS/stub
+  region and the two watchdog service registers.  It does not touch
+  `/dev/mtd`, the NAND controller or `/psp`.
 - The target kernel has `CONFIG_MTD=n` and no NAND driver.
 - The stock NAND and the stock kernel are unchanged; a reboot runs them.
 
 ## Tested
 
-QEMU, against a stock 2.6.16 NAND image: the module loads, the 5.9.16 Chumby
-Classic kernel boots, the panel console switches to 64x30, `/proc/fb` shows
-`0 IMX` and `1 IMX`, and the shell answers:
+A real Chumby Classic, from its stock 2.6.16: Linux 7 boots, with the session,
+Wi-Fi from `/psp/network_config`, and touch. `dev/emulate-stock` runs the boot
+hook's way there on the emulated Chumby, from your own firmware.
 
-```text
-Linux (none) 5.9.16-mx21-sideload #1 PREEMPT ... armv5tejl GNU/Linux
-```
-
-A real Chumby Classic, from its stock 2.6.16: the same image boots to Tux and
-a `~ #` prompt on the panel.  The screen stays up and the watchdog is
-serviced.
+Evidence: `evidence/7.3.1-qemu.log` and `evidence/7.3.1-panel.jpg`, from the
+first boot of 7.3.1, whose panel was still badly artifacted.
 
 ## Layout
 
 | path | what |
 | --- | --- |
-| `module/sideload_module.c` | the 2.6.16 module: reserve, `/proc`, ATAGS, watchdog, jump |
+| `module/sideload_module.c` | the 2.6.16 module: four blocks, `/proc`, ATAGS, watchdog, jump |
 | `module/stub.S` | the position-independent MMU-off jump |
 | `module/build.sh` | builds the module and sets its stock vermagic |
-| `kernel/build.sh` | the 5.9.16 target kernel |
-| `kernel/chumby-classic-sideload.config` | the panel console, watchdog, no NAND/network/USB |
-| `kernel/sideload-only.config` | the smaller QEMU/no-display config |
-| `kernel/0001...patch`, `kernel/0002...patch` | the minimal kernel's NAND removal and macOS host build fix |
-| `dist/run-recovery-demo.py` | tests the dist image's flashed recovery path (not this handoff) |
+| `build`, `Containerfile`, `patches/` | the module's build from a clean checkout |
+| `linux` | Chumby's GPL 2.6.16 source, a submodule (`update = none`) |
+| `evidence/7.3.1-*` | the first 7.3.1 QEMU log and the hardware panel photo |
 
 ## Limits
 
-- The stock 2.6.16 must give root to load the module.
-- The target kernel is 5.9.16: i.MX21 was removed in 5.10.
-- The target kernel has no network, USB, sound or storage.  It is a display
-  console and a shell; the full neochumby session is the dist image's job.
+- The stock 2.6.16 must give root to load the module: the boot hook has it.
+- The stock allocator gives 4 MiB per block: the zImage and the initramfs, with
+  `/psp`, must each fit one, and the Image must end below the zImage at 12 MiB.
 - The jump is one-way until a power cycle.

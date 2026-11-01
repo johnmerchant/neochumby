@@ -1,33 +1,29 @@
 #!/bin/sh
-# neochumby-hook-version=3
-# (Raise it with every change: the session replaces an installed hook only
-# with a higher version, so a rollback to an older set never downgrades it.)
-# neochumby's boot hook. The same script goes in two places, and the stock
-# boot (/etc/init.d/rcS) runs both, in this order, once the network is up
-# and before the Chumby's own software starts:
+# neochumby's boot hook, at the root of a neochumby stick: the only way in.
+# The stock boot (/etc/init.d/rcS) runs /mnt/usb/userhook2 from a stick, once
+# the network is up and before the Chumby's own software starts; without a
+# stick it doesn't, and the Chumby boots as it always did. Nothing here, or
+# anywhere in neochumby, writes to the Chumby's flash: /psp is only read.
 #
-#   /mnt/usb/userhook2     on a neochumby stick: nothing on the Chumby changes
-#   /psp/rfs1/userhook2    on a paired Chumby (pairing writes it)
+# It runs twice. On stock (Linux 2.6.16) it finds the stick's tree, loads
+# sideload.ko from it, hands over the tree's zImage and initramfs with the few
+# settings Linux 7 needs from /psp (neochumby-handoff), and jumps to Linux 7.
+# In the image, ncinit mounts the stick again and runs this again, which runs
+# the session from the same tree.
 #
-# The first to run starts neochumby; the other sees that and returns. Apps
-# come from a set synced to the stick (delivery=sync, below) if there is a
-# complete one, else from the stick's neochumby/ tree if it has one,
-# otherwise from the paired neochumbyd over NFS. NFS is unauthenticated,
-# so once pairing or the session has installed /psp/neochumby-boot, the
-# tree is mounted noexec and that runs it instead: it checks the tree
-# against the manifest neochumbyd signed, and runs only what checks. The
-# neochumbyd (the stick's neochumby.conf,
-# else /psp/neochumby.conf) is passed on to the apps either way, for its
-# services. CHUMBY MODE, or any failure, returns and the stock boot carries
-# on.
+# The tree is the stick's newest whole synced set, a/ or b/ under neochumby/,
+# if this stick is paired (below); else the tree the stick was made with,
+# neochumby/. On stock, any failure returns and the stock boot carries on; a
+# reboot, from Linux 7, is the way back to it.
 #
-# Never blocks for long: a hook that hangs stops the boot. Skipped if
-# /psp/neochumby-off exists, or the stick holds neochumby-off.
+# Never blocks for long: a hook that hangs stops the boot. Skipped if the
+# stick holds neochumby-off.
 
 LOG=/tmp/neochumby.log
 RAN=/tmp/neochumby.ran
 STICK=/mnt/usb
-MNT=/mnt/neochumby
+SETS=$STICK/neochumby
+STATE=$SETS/state
 
 exec >>"$LOG" 2>&1
 echo "neochumby hook $0: $(date)"
@@ -36,10 +32,11 @@ echo "neochumby hook $0: $(date)"
   echo "neochumby already ran this boot"
   exit 0
 }
-[ -e /psp/neochumby-off ] || [ -e "$STICK/neochumby-off" ] && {
+[ -e "$STICK/neochumby-off" ] && {
   echo "disabled"
   exit 0
 }
+touch "$RAN"
 
 # Runs a command with a deadline in seconds: kills it and fails if it is
 # still running then. Everything that can block goes through this.
@@ -61,42 +58,35 @@ deadline() {
   wait "$pid"
 }
 
-# One value from a conf file of key=value lines. Never run as shell: the
-# /psp one is written from what a neochumbyd sent. Only characters an
-# address, port or path needs are accepted.
+# One value from a conf file of key=value lines. Never run as shell. Only
+# characters an address, port or path needs are accepted.
 conf_get() {
   sed -n "s/^$2=\([A-Za-z0-9._:/-]*\)\$/\1/p" "$1" | head -n 1
 }
 
-conf=
-for c in "$STICK/neochumby.conf" /psp/neochumby.conf; do
-  [ -f "$c" ] && {
-    conf=$c
-    break
-  }
-done
+# The pairing tools/stick wrote. A rename on FAT can tear: NAME.new stands in
+# for a NAME left empty or gone.
+conf=$STATE/neochumby.conf
+[ -s "$conf" ] || conf=$conf.new
 server=
-if [ -n "$conf" ]; then
+paired=
+if [ -s "$conf" ]; then
   server=$(conf_get "$conf" server)
-  nfs_port=$(conf_get "$conf" nfs_port)
-  mount_port=$(conf_get "$conf" mount_port)
-  path=$(conf_get "$conf" path)
   api_port=$(conf_get "$conf" api_port)
-  echo "neochumbyd: ${server:-none} (from $conf)"
+  [ -n "$(conf_get "$conf" server_key)" ] && paired=1
+  echo "neochumbyd: ${server:-none}"
 fi
 
-# delivery=sync (neochumby-sync): the stick's neochumby/ holds two whole
-# trees, a/ and b/, and `current` names the live one. Each set's marker,
-# <set>.complete, is written last and carries its manifest. A set runs only
-# if its marker is whole (its first and last lines are checked here) and
-# the set's own `neochumby check-set` finds every file the marker names, at
-# its size. Nothing is hashed at boot: the stick reads at under 1 MB/s.
-# `current` is not trusted alone, since a rename on FAT can tear: the other
-# set is tried next, and a flip cut short leaves current.new. check-set
-# runs the set's own session binary, so a set whose binary is damaged fails
-# too. Both sets share one 30-second budget for it, so a slow stick holds
-# up the boot by half a minute at most.
-SETS=$STICK/neochumby
+# The stick's neochumby/ holds two whole synced sets, a/ and b/, and `current`
+# names the live one. Each set's marker, <set>.complete, is written last and
+# carries its manifest. A set runs only if its marker is whole (its first and
+# last lines are checked here) and the set's own `neochumby check-set` finds
+# every file the marker names, at its size. Nothing is hashed at boot: the
+# stick reads at under 1 MB/s. `current` is not trusted alone, since a rename
+# on FAT can tear: the other set is tried next, and a flip cut short leaves
+# current.new. check-set runs the set's own session binary, so a set whose
+# binary is damaged fails too. Both sets share one 30-second budget for it, so
+# a slow stick holds up the boot by half a minute at most.
 budget=30
 set_complete() {
   m=$SETS/$1.complete
@@ -116,9 +106,7 @@ set_complete() {
 }
 
 root=
-# Only while this Chumby's settings, as its neochumbyd last sent them, say
-# sync: switched back to nfs, it mounts the tree again.
-if [ "$(conf_get /psp/neochumby.settings delivery 2>/dev/null)" = sync ]; then
+if [ -n "$paired" ]; then
   cur=$(sed -n '1s/^\([ab]\)$/\1/p' "$SETS/current" 2>/dev/null)
   [ -n "$cur" ] || cur=$(sed -n '1s/^\([ab]\)$/\1/p' "$SETS/current.new" 2>/dev/null)
   case "$cur" in
@@ -134,47 +122,76 @@ if [ "$(conf_get /psp/neochumby.settings delivery 2>/dev/null)" = sync ]; then
     echo "set $s: not complete"
   done
 fi
-
-if [ -n "$root" ]; then
-  :
-elif [ -x "$STICK/neochumby/neochumby" ]; then
-  root=$STICK/neochumby
-  echo "apps from the stick"
-elif [ "${server%%:*}" = serial ]; then
-  # A neochumbyd over the serial line (an emulated Chumby's) has no NFS:
-  # its trees come synced to the stick.
-  echo "no apps: no stick tree or synced set, and neochumbyd is over the serial line"
-  exit 0
-elif [ -n "$server" ]; then
-  deadline 20 sh -c "until ping -c 1 $server >/dev/null 2>&1; do sleep 1; done" || exit 0
-  mkdir -p "$MNT"
-  # No port mapper (ports given), no lock manager (nolock), TCP; soft with
-  # short timeouts so a lost network fails reads instead of hanging;
-  # nosuid,nodev: nothing in the tree hands out another uid, or a device.
-  # With neochumby-boot, noexec too: nothing on it runs but checked copies.
-  opts="ro,nosuid,nodev,nolock,tcp,nfsvers=3,port=${nfs_port:-2049},mountport=${mount_port:-20048},soft,timeo=30,retrans=2,retry=0"
-  [ -x /psp/neochumby-boot ] && opts="$opts,noexec"
-  deadline 15 mount -t nfs -o "$opts" \
-    "$server:${path:-/}" "$MNT" || {
-    echo "mount failed"
+if [ -z "$root" ]; then
+  [ -x "$SETS/neochumby" ] || {
+    echo "no apps: the stick has no tree"
     exit 0
   }
-  root=$MNT
-  echo "apps from $server"
-else
-  echo "no apps: no stick tree, and not paired"
+  root=$SETS
+  echo "apps from the stick"
+fi
+
+# Stock's way on: never returns if all goes well. Everything that can be
+# checked is checked before the Flash UI stops, so a stick that can't work
+# leaves the Chumby's own software untouched. Stock has no printf or cpio, and
+# its BusyBox is 1.6.1.
+sideload() {
+  # A set a neochumbyd without kernels synced has none: the stick's own.
+  dir=$root/sideload
+  [ -s "$dir/zImage" ] || dir=$SETS/sideload
+  for f in sideload.ko zImage initramfs.cpio.gz neochumby-handoff; do
+    [ -s "$dir/$f" ] || {
+      echo "no $dir/$f"
+      return 1
+    }
+  done
+  [ -x "$dir/neochumby-handoff" ] || {
+    echo "$dir/neochumby-handoff doesn't run"
+    return 1
+  }
+  # The module needs memory the Flash UI holds.
+  [ -x /usr/chumby/scripts/stop_control_panel ] && /usr/chumby/scripts/stop_control_panel
+  killall chumbhowld btplayd chumbalarmd crond 2>/dev/null
+  sleep 2
+  sync
+  echo 3 >/proc/sys/vm/drop_caches
+  deadline 20 insmod "$dir/sideload.ko" || return 1
+  [ -e /proc/sideload-go ] || {
+    echo "the module loaded, but no /proc/sideload-go"
+    return 1
+  }
+  deadline 30 sh -c 'cat "$1" >/proc/sideload-kernel' sh "$dir/zImage" || return 1
+  # What Linux 7 needs of /psp, which it can't read, and no more: the Wi-Fi
+  # network, the touchscreen's calibration, the Chumby's name and time zone,
+  # and the owner's SSH opt-in. The pairing is on the stick already.
+  deadline 30 sh -c '"$1/neochumby-handoff" "$1/initramfs.cpio.gz" /psp network_config ts_settings hostname localtime neochumby-ssh .ssh/authorized_keys >/proc/sideload-initrd' sh "$dir" || return 1
+  sync
+  echo "sideload: jumping to Linux 7"
+  echo 1 >/proc/sideload-go
+  echo "sideload: still here"
+  return 1
+}
+
+case $(uname -r) in
+2.6.*)
+  sideload
+  echo "sideload failed: on with the stock boot"
+  rmmod sideload 2>/dev/null
+  cd /
   exit 0
+  ;;
+esac
+
+# Linux 7. A paired Chumby's session asks its server for its settings as it
+# starts, so the network gets 60 seconds to reach it first; if it doesn't, the
+# session runs anyway, from the stick, on the last settings it kept. An
+# emulated Chumby's neochumbyd is over its serial line, which needs no wait.
+if [ -n "$paired" ] && [ -n "$server" ] && [ "${server%%:*}" != serial ]; then
+  deadline 60 sh -c "until ping -c 1 $server >/dev/null 2>&1; do sleep 1; done" || echo "no answer from $server: on without it"
 fi
 
-touch "$RAN"
 # The launcher owns the screen and inputs until it exits.
-if [ "$root" = "$MNT" ] && [ -x /psp/neochumby-boot ]; then
-  NEOCHUMBY_SERVER=$server NEOCHUMBY_API_PORT=$api_port /psp/neochumby-boot "$MNT"
-else
-  NEOCHUMBY_SERVER=$server NEOCHUMBY_API_PORT=$api_port "$root/neochumby"
-fi
+NEOCHUMBY_SERVER=$server NEOCHUMBY_API_PORT=$api_port "$root/neochumby"
 echo "neochumby exited: $?"
-
 cd /
-[ "$root" = "$MNT" ] && umount "$MNT"
 exit 0

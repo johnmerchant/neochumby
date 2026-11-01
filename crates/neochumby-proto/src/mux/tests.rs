@@ -1,5 +1,5 @@
 use super::*;
-use crate::{Identity, Msg, Session, Unverified};
+use crate::{Identity, Msg, Session};
 use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
@@ -281,16 +281,15 @@ fn a_session_runs_over_a_channel_as_over_tcp() {
     let (sp, cp) = (sid.public(), cid.public());
     let t = std::thread::spawn(move || {
         let c = server.accept().unwrap();
-        let mut u = Unverified::accept(c, &sid).unwrap();
-        assert_eq!(u.recv().unwrap(), Msg::Hello { name: "den".into() });
-        let mut s = u.verify(|k| k == &cp).unwrap();
+        let by = std::time::Instant::now() + Duration::from_secs(20);
+        let mut s = Session::accept(c, &sid, by, |k| k == &cp).unwrap();
+        assert_eq!(s.recv().unwrap(), Msg::Hello { name: "den".into() });
         s.send(&Msg::Data(bytes(60_000, 3))).unwrap();
         s.recv().unwrap()
     });
     let c = chumby.open(WAIT).unwrap();
-    let mut u = Unverified::connect(c, &cid).unwrap();
-    u.send(&Msg::Hello { name: "den".into() }).unwrap();
-    let mut s: Session = u.verify(|k| k == &sp).unwrap();
+    let mut s = Session::connect(c, &cid, &sp).unwrap();
+    s.send(&Msg::Hello { name: "den".into() }).unwrap();
     assert!(s.recv().unwrap() == Msg::Data(bytes(60_000, 3)));
     s.send(&Msg::Closed).unwrap();
     assert_eq!(t.join().unwrap(), Msg::Closed);

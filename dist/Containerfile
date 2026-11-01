@@ -3,6 +3,29 @@
 FROM docker.io/library/ubuntu:24.04
 RUN apt-get update -q \
  && DEBIAN_FRONTEND=noninteractive apt-get install -yq --no-install-recommends \
-      build-essential bc bzip2 ca-certificates cpio file git gzip patch perl \
-      python3 rsync unzip wget xz-utils libncurses-dev \
+      build-essential bc bzip2 ca-certificates cpio file git gzip libclang-dev \
+      patch perl python3 rsync unzip wget xz-utils libncurses-dev \
  && rm -rf /var/lib/apt/lists/*
+
+# What the stable and mainline kernels' drivers are built with
+# (external.mk passes it to the kernel): Buildroot's own Rust, which builds
+# ncinit, has no rust-src, which the kernel needs. A track's bump may need a
+# newer one (scripts/min-tool-version.sh).
+RUN set -eu; \
+    v=1.99.1; \
+    case $(uname -m) in \
+    x86_64) t=x86_64-unknown-linux-gnu; h=231fcae47ee950621374725b5fc3b5441d2fbda2955ac45dd7dc816d8876cfe7 ;; \
+    aarch64) t=aarch64-unknown-linux-gnu; h=a48fb1e853be56ce9b8e2751f5464dbd5e16440cd81e237920f3a5e7e806333e ;; \
+    *) echo "no Rust pinned for $(uname -m)" >&2; exit 1 ;; \
+    esac; \
+    cd /tmp; \
+    wget -nv "https://static.rust-lang.org/dist/rust-$v-$t.tar.xz" "https://static.rust-lang.org/dist/rust-src-$v.tar.xz"; \
+    echo "$h  rust-$v-$t.tar.xz" | sha256sum -c -; \
+    echo "e485a88c45db546b73571df7bebfcb4454ba4fb552c492e25fc5b00eeb5bf22d  rust-src-$v.tar.xz" | sha256sum -c -; \
+    tar xJf "rust-$v-$t.tar.xz"; \
+    tar xJf "rust-src-$v.tar.xz"; \
+    "rust-$v-$t/install.sh" --prefix=/opt/rust --without=rust-docs --disable-ldconfig >/dev/null; \
+    "rust-src-$v/install.sh" --prefix=/opt/rust --disable-ldconfig >/dev/null; \
+    rm -rf /tmp/rust-*; \
+    PATH=/opt/rust/bin:$PATH CARGO_HOME=/tmp/cargo cargo install --locked --root /opt/rust --version 0.73.2 bindgen-cli; \
+    rm -rf /tmp/cargo

@@ -3,7 +3,7 @@
 //! on the Chumby it is `neochumby::session::Pipe` (device.rs).
 //!
 //! classic is a start app. It opens other apps by asking the session
-//! (`open NAME`) and then exiting; Home's CHUMBY asks for `chumby-mode`.
+//! (`open NAME`) and then exiting.
 //! The top button belongs to the session: while classic is in front, a
 //! press arrives as a `button` line, and classic flips between the
 //! slideshow and Home as the button always did. If the line can't be
@@ -22,8 +22,6 @@ pub enum Heard {
 pub enum Ask {
     /// Run this app next (then the app exits).
     Open(String),
-    /// Hand the Chumby back to its own software (then the app exits).
-    ChumbyMode,
 }
 
 pub trait Session {

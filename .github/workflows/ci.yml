@@ -2,23 +2,21 @@
 # and tests on the host, and every binary built for both of its targets
 # (the Chumby's ARM926 and neochumbyd's x86_64). Noise (neochumby-proto's
 # noise` feature) is neither built nor tested here. The dist image (our
-# Linux: 5.9.16 and the stable track; mainline weekly, below) built, or
+# Linux: the stable track; mainline weekly, below) built, or
 # restored when its inputs haven't changed, and the end-to-end scenarios
-# run on it (5.9.16), on qemu-chumby's emulated Chumby. And,
-# when the image or the emulator changes (or on demand), the sideload
-# image's recovery path tested. The SDK crates packaged as
+# run on it, on qemu-chumby's emulated Chumby. The stock kernel's sideload
+# module built. The SDK crates packaged as
 # crates.io would take them; a crate's tag, <crate>-v<version>, publishes
 # it, and nothing else runs (see CONTRIBUTING.md).
 #
-# The images, prebuilt: the dist image for each kernel (5.9.16, stable,
-# and mainline from its own runs) and the classic image (2.6.16), each with
-# its corresponding source. The
+# The images, prebuilt: the dist image for each kernel (stable, and
+# mainline from its own runs), each with its corresponding source. The
 # package job packs them on every run; on main (a push, or a manual run
 # with `publish`), the prebuilt job attests them (actions/attest-build-
 # provenance) and puts the new ones on the rolling `dist-prebuilt`
 # prerelease, named after their inputs commit (the last commit that changed
-# what the image is built from: dist/fetch --inputs), which dist/fetch and
-# classic/fetch download and verify. Pull requests pack them and publish
+# what the image is built from: dist/fetch --inputs), which dist/fetch
+# downloads and verifies. Pull requests pack them and publish
 # nothing.
 #
 # A dated release (vYYYY.MM.N, on a commit on main) builds nothing: the
@@ -29,7 +27,7 @@
 # the release itself; then every other job is skipped.
 #
 # Weekly (schedule), or by hand with `mainline`, the mainline track alone:
-# built at the head of the branch, its recovery test and boot scenario run,
+# built at the head of the branch, its boot scenario run,
 # and on main published to `dist-prebuilt` as the others are; the jobs it
 # doesn't need are skipped. Pushes and pull requests leave mainline out,
 # but for a change to mainline alone (dist/kernel/mainline/, its defconfig)
@@ -110,7 +108,7 @@ env:
   CARGO_TERM_COLOR: always
   ZIG_VERSION: 0.17.0
   # The rolling release of prebuilt images, and how many builds of each
-  # image (dist 5.9.16, stable and mainline, classic) it keeps, with their
+  # image (dist stable and mainline) it keeps, with their
   # sources: each image's own newest, so mainline's weekly builds are kept
   # however many of the others come between.
   PREBUILT_TAG: dist-prebuilt
@@ -221,6 +219,8 @@ jobs:
       # No unsafe code but in the crates on .github/unsafe-allowed, and
       # those deny clippy's lints for documenting it (CONTRIBUTING.md).
       - run: python3 -I tools/check-unsafe
+      # Nothing writes to the Chumby's flash: /psp is only read (SECURITY.md).
+      - run: tools/check-psp
       # Ours, not the third-party crates in submodules that some apps build
       # from (they keep their own formatting).
       - run: cargo fmt --check $(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.manifest_path | contains("/third_party/") | not) | "-p " + .name')
@@ -233,7 +233,7 @@ jobs:
       # manifest tool, the system calls, the macros, WAMR (its
       # interpreter, on the host), the wasm runner (its hostile-module
       # suite, under the runner's kernel), AirPlay's companion, its screen
-      # and service's memory, and its messages for frontends, and
+      # and service's memory, its messages for frontends, and
       # neochumby-classic's engine (its host build renders frames to files).
       - run: cargo clippy --all-targets -p neochumby-proto -p neochumby-sync -p neochumbyd -p neochumby-manifest -p neochumby-sys -p neochumby-macros -p neochumby-classic -p neochumby-wamr -p neochumby-wasm -p neochumby-guest -p neochumby-clockwasm -- -D warnings
       - run: cargo clippy --all-targets -p neochumbyd --features wasm-companions -- -D warnings
@@ -253,9 +253,10 @@ jobs:
       - run: cargo fmt --check --manifest-path crates/neochumby-init/Cargo.toml
       - run: cargo clippy --all-targets --manifest-path crates/neochumby-init/Cargo.toml -- -D warnings
       - run: cargo test --manifest-path crates/neochumby-init/Cargo.toml
+      - run: cargo fmt --check --manifest-path crates/neochumby-handoff/Cargo.toml
+      - run: cargo clippy --all-targets --manifest-path crates/neochumby-handoff/Cargo.toml -- -D warnings
+      - run: cargo test --manifest-path crates/neochumby-handoff/Cargo.toml
       - run: cargo test -p neochumby-sys --features boot
-      - run: cargo clippy --all-targets -p neochumby-sys --features compat26 -- -D warnings
-      - run: cargo test -p neochumby-sys --features compat26
       - run: cargo test -p neochumby-logs
       # The session and its library, on the host: their unit tests (the
       # Chumby's devices and crash reports are ARM-only, and left out).
@@ -339,36 +340,23 @@ jobs:
             -p neochumby-airplay --bin neochumby-airplay-companion
           cargo build --release --target aarch64-unknown-linux-musl \
             -p neochumby-logs --bin neochumby-logs-companion
-      # For the stock 2.6, so classic's scenarios run it too; the apps
-      # that need a newer Linux are left out (tools/tree --linux).
+      # The apps that use curses linked against the tree's own shared musl
+      # and ncurses (tools/linux-libs), and nothing else.
       - name: A tree, as tools/tree lays it out
         run: |
-          tools/tree "$RUNNER_TEMP/tree" --linux 2.6 doom quake airplay fetch htop top \
-            cmatrix clock bonsai pipes aquarium genact classic logs clockwasm
+          tools/tree "$RUNNER_TEMP/tree" doom quake airplay fetch htop top \
+            cmatrix clock bonsai pipes aquarium genact ttfx classic logs clockwasm
           find "$RUNNER_TEMP/tree" -type f | sort
-          # Static, every one of the Chumby's binaries: 2.6.16 stays stock.
-          [ ! -e "$RUNNER_TEMP/tree/lib" ]
-          for f in $(find "$RUNNER_TEMP/tree" -type f -perm -u+x); do
-            if readelf -lW "$f" 2>/dev/null | grep -q 'program interpreter'; then
-              echo "$f: dynamically linked, in a tree for 2.6" >&2
-              exit 1
-            fi
-          done
-          cp target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/tree.neochumbyd"
-      # For the dist's Linux, the apps that use curses linked against the
-      # tree's own shared musl and ncurses (tools/linux-libs), and nothing
-      # else.
-      - name: A tree for Linux 5.9, with its shared libraries
-        run: |
-          tools/tree "$RUNNER_TEMP/tree-5.9" --linux 5.9 htop top cmatrix clock bonsai pipes
-          ls -l "$RUNNER_TEMP/tree-5.9/lib"
+          ls -l "$RUNNER_TEMP/tree/lib"
           interp() { readelf -lW "$1" | sed -n 's/.*program interpreter: \(.*\)]$/\1/p'; }
           for a in htop top cmatrix clock bonsai; do
-            [ "$(interp "$RUNNER_TEMP/tree-5.9/apps/$a/neochumby-$a")" = /lib/ld-musl-arm.so.1 ]
+            [ "$(interp "$RUNNER_TEMP/tree/apps/$a/neochumby-$a")" = /lib/ld-musl-arm.so.1 ]
           done
-          for f in neochumby neochumby-sync neochumby-boot apps/home/neochumby-home apps/pipes/neochumby-pipes; do
-            [ -z "$(interp "$RUNNER_TEMP/tree-5.9/$f")" ]
+          # What runs on the stock kernel, and what runs before /lib is there.
+          for f in neochumby neochumby-sync sideload/neochumby-handoff apps/home/neochumby-home apps/pipes/neochumby-pipes; do
+            [ -z "$(interp "$RUNNER_TEMP/tree/$f")" ]
           done
+          cp target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/tree.neochumbyd"
       # AirPlay's receiver for the emulator, which has no network.
       - name: The AirPlay stand-in
         run: |
@@ -429,11 +417,7 @@ jobs:
             printf '%s: %s files, %s bytes\n' "$c" "$(tar tzf "$c" | wc -l)" "$(stat -c %s "$c")"
           done
 
-  # Whether this run needs the sideload job's recovery test and the classic
-  # job's boot tests: only when what they test or build changed, on demand,
-  # or when there's nothing to compare with (a new branch's first push). A
-  # skipped job passes, as a required check too. And which kernels the dist
-  # image is built for, as a JSON list: 5.9.16 and stable; with mainline
+  # Which kernels the dist image is built for, as a JSON list: stable; with mainline
   # when the change is to it alone or is kernel-sync's bump of it; mainline
   # alone on its weekly (or `mainline`) run.
   changes:
@@ -442,8 +426,6 @@ jobs:
     if: github.event_name != 'release' && !inputs.release && github.event.schedule != '23 4 * * *' && !inputs.kernel_sync && !startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     outputs:
-      sideload: ${{ steps.diff.outputs.sideload }}
-      classic: ${{ steps.diff.outputs.classic }}
       kernels: ${{ steps.diff.outputs.kernels }}
       link: ${{ steps.diff.outputs.link }}
     steps:
@@ -458,26 +440,14 @@ jobs:
           MAINLINE_RUN: ${{ github.event.schedule == '17 6 * * 0' || inputs.mainline }}
         run: |
           if [ "$MAINLINE_RUN" = true ]; then
-            printf '%s\n' sideload=true classic=false 'kernels=["mainline"]' link=false >> "$GITHUB_OUTPUT"
+            printf '%s\n' 'kernels=["mainline"]' link=false >> "$GITHUB_OUTPUT"
             exit 0
           fi
           if [ "$BRANCH" = kernel-sync/mainline ] || { git cat-file -e "$BASE^{commit}" 2>/dev/null \
             && git diff --name-only "$BASE...$GITHUB_SHA" | grep -qE '^dist/(kernel/mainline/|configs/chumby_classic_mainline_defconfig$)'; }; then
-            echo 'kernels=["5.9.16","stable","mainline"]' >> "$GITHUB_OUTPUT"
+            echo 'kernels=["stable","mainline"]' >> "$GITHUB_OUTPUT"
           else
-            echo 'kernels=["5.9.16","stable"]' >> "$GITHUB_OUTPUT"
-          fi
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
-            || git diff --name-only "$BASE...$GITHUB_SHA" | grep -qE '^(dist/|emu/qemu/|\.github/workflows/ci\.yml$)'; then
-            echo sideload=true >> "$GITHUB_OUTPUT"
-          else
-            echo sideload=false >> "$GITHUB_OUTPUT"
-          fi
-          if [ "$GITHUB_EVENT_NAME" = workflow_dispatch ] || ! git cat-file -e "$BASE^{commit}" 2>/dev/null \
-            || git diff --name-only "$BASE...$GITHUB_SHA" | grep -qE '^(classic/|emu/qemu/|\.gitmodules$|\.github/workflows/ci\.yml$)'; then
-            echo classic=true >> "$GITHUB_OUTPUT"
-          else
-            echo classic=false >> "$GITHUB_OUTPUT"
+            echo 'kernels=["stable"]' >> "$GITHUB_OUTPUT"
           fi
           # The serial line's scenarios (the link job): on every push to
           # main, and on a pull request that touches what they cover.
@@ -517,7 +487,7 @@ jobs:
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: build/dist
-          key: neochumby-dist-${{ matrix.kernel }}-image-${{ hashFiles('dist/**', '!dist/README.md', '!dist/fetch', '!dist/kernel-sync', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
+          key: neochumby-dist-${{ matrix.kernel }}-image-${{ hashFiles('dist/**', '!dist/README.md', '!dist/fetch', '!dist/kernel-sync', 'boot/userhook2', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
 
       # Buildroot's work, in two: the downloads and ccache, restored from
       # the nearest earlier build whatever changed (this kernel's, else
@@ -534,7 +504,7 @@ jobs:
           path: |
             ${{ runner.temp }}/neochumby-dist/dl
             ${{ runner.temp }}/neochumby-dist/ccache
-          key: neochumby-dist-${{ matrix.kernel }}-ccache-${{ hashFiles('dist/**', '!dist/README.md', '!dist/fetch', '!dist/kernel-sync', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
+          key: neochumby-dist-${{ matrix.kernel }}-ccache-${{ hashFiles('dist/**', '!dist/README.md', '!dist/fetch', '!dist/kernel-sync', 'boot/userhook2', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
           restore-keys: |
             neochumby-dist-${{ matrix.kernel }}-ccache-
             neochumby-dist-
@@ -547,7 +517,7 @@ jobs:
           path: |
             ${{ runner.temp }}/neochumby-dist/buildroot-*
             ${{ runner.temp }}/neochumby-dist/output
-          key: neochumby-dist-${{ matrix.kernel }}-output-${{ hashFiles('dist/**', '!dist/README.md', '!dist/fetch', '!dist/kernel-sync', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
+          key: neochumby-dist-${{ matrix.kernel }}-output-${{ hashFiles('dist/**', '!dist/README.md', '!dist/fetch', '!dist/kernel-sync', 'boot/userhook2', 'crates/neochumby-init/**', 'crates/neochumby-sys/**') }}
 
       - name: Build the sideload image
         if: steps.image.outputs.cache-hit != 'true'
@@ -657,26 +627,19 @@ jobs:
   # profile; never the stock firmware, which runs only locally, on your own:
   # docs/legal.md). Only those that pass on dist so far:
   #   boot      the stick's hook runs the session, which opens home and draws
+  #   smoke     Doom from home, the corner hold, the top button and a touch
   #   airplay   AirPlay's text-mode screen, its touches and its sound, with
-  #             dev/airplay-standin as the receiver (on classic too)
-  # Pending on dist, and why:
-  #   smoke     the kernel's framebuffer console blinks its cursor over the
-  #             session's screen, so it seldom settles; and the session reads
-  #             touches from /dev/input/event0, which on 5.9.16 is the top
-  #             button (the touchscreen is event1), so no tap reaches it
-  #   classic   its pictures come from NEOCHUMBY_CLASSIC_PICTURES, and it needs
-  #             what smoke does, and /dev/switch, which 5.9.16 hasn't
+  #             dev/airplay-standin as the receiver
+  # Elsewhere:
   #   link, pairing, powercut   over the serial line: the link job, below
   #   stock     the stock firmware: local only
-  # The classic profile (Linux 2.6.16 from Chumby's GPL source) is to run
-  # them all once its image is built here. Where mainline is built, boot
-  # runs on it too; on mainline's own runs, only there.
+  # Where mainline is built, boot runs on it too; on mainline's own runs,
+  # only there.
   e2e:
-    name: End-to-end scenarios (dist, classic)
-    needs: [changes, cross, dist, classic]
+    name: End-to-end scenarios
+    needs: [changes, cross, dist]
     if: >-
       always() && needs.cross.result == 'success' && needs.dist.result == 'success'
-      && (needs.classic.result == 'success' || needs.classic.result == 'skipped')
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -732,22 +695,17 @@ jobs:
         with:
           name: tree
           path: ${{ runner.temp }}
-      # The scenarios run on 5.9.16, the default kernel.
-      - if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
+      # The scenarios run on stable, the default kernel.
+      - if: contains(fromJSON(needs.changes.outputs.kernels), 'stable')
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dist-image-5.9.16
+          name: dist-image-stable
           path: build/sideload-dist
       - if: contains(fromJSON(needs.changes.outputs.kernels), 'mainline')
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: dist-image-mainline
           path: build/sideload-dist-mainline
-      - if: needs.classic.result == 'success'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: classic-image
-          path: build/classic
 
       - name: The tree's modes
         run: |
@@ -755,11 +713,11 @@ jobs:
           chmod +x "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/tree.airplay-standin"
 
       - name: End-to-end scenarios on the dist profile
-        if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
+        if: contains(fromJSON(needs.changes.outputs.kernels), 'stable')
         timeout-minutes: 30
         env:
           NEOCHUMBY_EMU_PROFILE: dist
-          E2E_SCENARIOS: boot airplay
+          E2E_SCENARIOS: boot smoke airplay
           NEOCHUMBY_AIRPLAY_STANDIN: ${{ runner.temp }}/tree.airplay-standin
         run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/e2e"
 
@@ -772,17 +730,6 @@ jobs:
           E2E_SCENARIOS: boot
         run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/e2e-mainline"
 
-      # The same tree on Chumby's own 2.6.16 kernel, built from its GPL
-      # source with a BusyBox userspace (classic/): nothing proprietary.
-      - name: End-to-end scenarios on the classic profile
-        if: always() && needs.classic.result == 'success'
-        timeout-minutes: 30
-        env:
-          NEOCHUMBY_EMU_PROFILE: classic
-          E2E_SCENARIOS: boot smoke airplay
-          NEOCHUMBY_AIRPLAY_STANDIN: ${{ runner.temp }}/tree.airplay-standin
-        run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/e2e-classic"
-
       # Its screenshots are neochumby's own screens, never the stock software's.
       - if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -791,32 +738,30 @@ jobs:
           path: |
             ${{ runner.temp }}/e2e
             ${{ runner.temp }}/e2e-mainline
-            ${{ runner.temp }}/e2e-classic
           retention-days: 7
 
   # The scenarios over the serial line (dev/emulate start --server): the
   # emulated Chumby has no network, and reaches a neochumbyd run here over
   # its second UART, which qemu-chumby joins to neochumbyd's --listen-unix
   # socket.
-  #   link      PAIR pairs over the line; the next start has the developer
-  #             link and syncs the tree to its stick (delivery=sync); the
-  #             power is cut the moment the set is live, and the stick as it
-  #             was left boots that set
-  #   pairing   refusal, approval, --replace and forget, over the line
+  #   link      a stick made paired has the developer link and syncs the tree
+  #             to itself; the power is cut the moment the set is live, and the
+  #             stick as it was left boots that set; deploys by sync and restart
+  #   pairing   a stick made paired connects at once, syncs and survives a
+  #             reboot; an unknown key is refused; --replace and forget
   #   powercut  the power cut in the middle of a sync round
-  # All three on classic (Linux 2.6.16), link on dist (5.9.16) too. They
-  # sync only the session, its receiver and home, so a round over the line
+  # They sync only the session, its receiver and home, so a round over the line
   # (about 100 KB/s) takes a minute or two; even so the job takes the best
   # part of half an hour, so it runs beside e2e on every push to main, and
   # on a pull request only when it touches what these cover (the changes
   # job's `link`): the protocol, the session's line, neochumbyd's listener,
-  # sync, pairing, the boot hook, dev/emulate and the emulator.
+  # sync, a stick's pairing, the boot hook, dev/emulate and the emulator.
   link:
-    name: Serial-line scenarios (classic, dist)
-    needs: [changes, cross, dist, classic]
+    name: Serial-line scenarios
+    needs: [changes, cross, dist]
     if: >-
       always() && needs.changes.outputs.link == 'true' && needs.cross.result == 'success'
-      && needs.dist.result == 'success' && needs.classic.result == 'success'
+      && needs.dist.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 90
     steps:
@@ -857,34 +802,23 @@ jobs:
         with:
           name: tree
           path: ${{ runner.temp }}
-      - if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
+      - if: contains(fromJSON(needs.changes.outputs.kernels), 'stable')
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: dist-image-5.9.16
+          name: dist-image-stable
           path: build/sideload-dist
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: classic-image
-          path: build/classic
 
       - name: The tree's modes
         run: |
           find "$RUNNER_TEMP/tree" -type f -path '*/neochumby*' -exec chmod +x {} +
           chmod +x "$RUNNER_TEMP/tree.neochumbyd"
 
-      - name: Over the line on the classic profile
+      - name: Over the line
+        if: contains(fromJSON(needs.changes.outputs.kernels), 'stable')
         timeout-minutes: 60
         env:
-          NEOCHUMBY_EMU_PROFILE: classic
-          E2E_SCENARIOS: link pairing powercut
-        run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/link-classic"
-
-      - name: Over the line on the dist profile
-        if: always() && contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
-        timeout-minutes: 20
-        env:
           NEOCHUMBY_EMU_PROFILE: dist
-          E2E_SCENARIOS: link
+          E2E_SCENARIOS: link pairing powercut
         run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/link-dist"
 
       - if: always()
@@ -892,275 +826,23 @@ jobs:
         with:
           name: link
           path: |
-            ${{ runner.temp }}/link-classic
             ${{ runner.temp }}/link-dist
           retention-days: 7
 
-  # The sideload image's recovery path: the dist image (each kernel's
-  # built) booted on qemu-chumby's machine with a zeroed NAND image, to its
-  # shell with NAND loaded. Only when needed.
-  sideload:
-    name: Test the sideload image's recovery
-    needs: [changes, dist]
-    if: needs.changes.outputs.sideload == 'true'
+  # The stock kernel's sideload module, from a clean checkout, in its
+  # container, with Chumby's compiler. It runs only on your own Chumby, so
+  # nothing here boots it.
+  module:
+    name: Build the sideload module
+    if: github.event_name != 'release' && !inputs.release && github.event.schedule != '23 4 * * *' && !inputs.kernel_sync && !startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - run: git submodule update --init emu/qemu/qemu-chumby
-
-      # QEMU: qemu-chumby's own build of the commit pinned here, from its
-      # prebuilt release, with the SHA-256 committed here (emu/qemu/fetch).
-      # When there's none (a pull request moving the submodule without
-      # re-pinning, or to a commit not yet on qemu-chumby's main), built
-      # from source as before, with its build dependencies (its README has the
-      # list), and cached.
-      - name: Fetch QEMU
-        id: qemu
-        run: |
-          if emu/qemu/fetch; then
-            echo prebuilt=true >> "$GITHUB_OUTPUT"
-          else
-            echo prebuilt=false >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: QEMU build dependencies
-        if: steps.qemu.outputs.prebuilt != 'true'
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends \
-            build-essential python3 python3-venv ninja-build pkg-config \
-            libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
-            curl xz-utils patch
-
-      - name: Restore QEMU
-        id: qemu-cache
-        if: steps.qemu.outputs.prebuilt != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: emu/qemu/out
-          key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
-
-      - name: Build QEMU
-        if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
-        run: emu/qemu/build
-
-      - name: Save QEMU
-        if: steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: emu/qemu/out
-          key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
-
-      - if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: dist-image-5.9.16
-          path: build/sideload-dist
-      - if: contains(fromJSON(needs.changes.outputs.kernels), 'stable')
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: dist-image-stable
-          path: build/sideload-dist-stable
-      - if: contains(fromJSON(needs.changes.outputs.kernels), 'mainline')
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: dist-image-mainline
-          path: build/sideload-dist-mainline
-
-      - name: Recovery end-to-end
-        if: contains(fromJSON(needs.changes.outputs.kernels), '5.9.16')
-        run: |
-          QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
-          KERNEL=$PWD/build/sideload-dist/sideload-zImage \
-          python3 dist/run-recovery-demo.py
-
-      # The same on the stable and mainline images: each boots, loads NAND
-      # and reports its version, VERSION-mx21-sideload.
-      - name: Recovery end-to-end (stable)
-        if: always() && contains(fromJSON(needs.changes.outputs.kernels), 'stable')
-        run: |
-          QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
-          KERNEL=$PWD/build/sideload-dist-stable/sideload-zImage \
-          python3 dist/run-recovery-demo.py
-
-      - name: Recovery end-to-end (mainline)
-        if: always() && contains(fromJSON(needs.changes.outputs.kernels), 'mainline')
-        run: |
-          QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
-          KERNEL=$PWD/build/sideload-dist-mainline/sideload-zImage \
-          python3 dist/run-recovery-demo.py
-
-  # The open-source 2.6.16 image (classic/): Chumby's GPL kernel and our
-  # BusyBox initramfs. Every run uploads it as the classic-image artifact,
-  # for other jobs to boot: from a cache of the image itself when its
-  # inputs haven't changed (seconds), else built. When they have changed
-  # (or the image wasn't cached), it's also booted on the chumby-classic
-  # machine, its drivers and devices checked from QMP, then with a stick
-  # whose userhook2 it must run. No proprietary firmware anywhere.
-  classic:
-    name: Open-source 2.6.16 image
-    needs: changes
-    # Not on mainline's runs.
-    if: github.event_name != 'schedule' && !inputs.mainline
-    runs-on: ubuntu-latest
-    timeout-minutes: 120
-    steps:
-      # No submodules yet: QEMU's only if it's booted, and the kernel's at
-      # its pinned commit only if it's built (classic/build fetches it;
-      # `update = none` keeps it out of the other jobs' checkouts).
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - name: Inputs of the image
-        id: inputs
-        run: echo "linux=$(git ls-files -s classic/linux | awk '{print $2}')" >> "$GITHUB_OUTPUT"
-
-      # classic/build pins the zig it builds BusyBox with: the same as ours.
-      - name: The same zig
-        run: |
-          zig=$(sed -n 's/^ZIG_VERSION=//p' classic/build)
-          [ "$zig" = "$ZIG_VERSION" ] ||
-            { echo "::error::classic/build's ZIG_VERSION is $zig, ci.yml's $ZIG_VERSION"; exit 1; }
-
-      # The image alone (a few MB), for exactly these inputs.
-      - name: Restore the image
-        id: image-cache
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: build/classic
-          key: neochumby-classic-image-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init', 'classic/zig-cc', 'classic/*.c') }}
-
-      # classic/build's work (the toolchain, the downloads and the build
-      # trees), restored from the nearest earlier build whatever changed:
-      # the build checks its inputs and rebuilds what they touch.
-      - name: Restore the image's build
-        id: classic-cache
-        if: steps.image-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/neochumby-classic
-          key: neochumby-classic-${{ steps.inputs.outputs.linux }}-${{ hashFiles('classic/build', 'classic/Containerfile', 'classic/*.fragment', 'classic/initramfs.list', 'classic/patches/**', 'classic/rootfs/**', '!classic/rootfs/init', 'classic/zig-cc', 'classic/*.c') }}
-          restore-keys: neochumby-classic-
-
-      - name: Build the image
-        id: classic-build
-        if: steps.image-cache.outputs.cache-hit != 'true'
-        env:
-          NEOCHUMBY_CLASSIC_WORK: ${{ runner.temp }}/neochumby-classic
-        run: classic/build build/classic
-
-      # The container writes as root; the cache saves run as the runner.
-      - name: Make the build readable
-        if: always() && steps.image-cache.outputs.cache-hit != 'true'
-        run: sudo chown -R "$USER:$USER" "${{ runner.temp }}/neochumby-classic" build/classic || true
-
-      - name: Save the image's build
-        if: always() && steps.image-cache.outputs.cache-hit != 'true' && steps.classic-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: ${{ runner.temp }}/neochumby-classic
-          key: ${{ steps.classic-cache.outputs.cache-primary-key }}
-
-      - name: Save the image
-        if: steps.classic-build.outcome == 'success'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: build/classic
-          key: ${{ steps.image-cache.outputs.cache-primary-key }}
-
-      # Uploaded before it's tested, so that a later job can use it: the
-      # tests below fail this job if it doesn't boot.
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: classic-image
-          path: build/classic/
-          if-no-files-found: error
-
-      - name: Whether to boot it
-        id: test
-        run: |
-          if [ "${{ needs.changes.outputs.classic }}" = true ] || [ "${{ steps.image-cache.outputs.cache-hit }}" != true ]; then
-            echo boot=true >> "$GITHUB_OUTPUT"
-          else
-            echo boot=false >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: QEMU's submodule
-        if: steps.test.outputs.boot == 'true'
-        run: git submodule update --init emu/qemu/qemu-chumby
-
-      # The stick's tools.
-      - name: mtools and dosfstools
-        if: steps.test.outputs.boot == 'true'
-        run: |
-          sudo apt-get update -q
-          sudo apt-get install -yq --no-install-recommends mtools dosfstools
-
-      # QEMU as the e2e job gets it: prebuilt, else built (and cached).
-      - name: Fetch QEMU
-        id: qemu
-        if: steps.test.outputs.boot == 'true'
-        run: |
-          if emu/qemu/fetch; then
-            echo prebuilt=true >> "$GITHUB_OUTPUT"
-          else
-            echo prebuilt=false >> "$GITHUB_OUTPUT"
-          fi
-
-      - name: QEMU build dependencies
-        if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true'
-        run: |
-          sudo apt-get install -yq --no-install-recommends \
-            build-essential python3 python3-venv ninja-build pkg-config \
-            libglib2.0-dev libpixman-1-dev libpng-dev zlib1g-dev \
-            curl xz-utils patch
-
-      # The same cache as the other jobs' QEMU.
-      - name: Restore QEMU
-        id: qemu-cache
-        if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: emu/qemu/out
-          key: qemu-chumby-${{ hashFiles('emu/qemu/build', 'emu/qemu/qemu-chumby/**') }}
-
-      - name: Build QEMU
-        if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
-        run: emu/qemu/build
-
-      - name: Save QEMU
-        if: steps.test.outputs.boot == 'true' && steps.qemu.outputs.prebuilt != 'true' && steps.qemu-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: emu/qemu/out
-          key: ${{ steps.qemu-cache.outputs.cache-primary-key }}
-
-      - name: Boot it
-        if: steps.test.outputs.boot == 'true'
-        run: classic/boot-test emu/qemu/out/obj/qemu-system-arm build/classic/classic-zImage --log "$RUNNER_TEMP/console.log"
-
-      # A stick as tools/stick lays one out, with a userhook2 that only
-      # reports where it ran: the image's part of running a tree.
-      - name: Boot it with a stick
-        if: steps.test.outputs.boot == 'true'
-        run: |
-          printf '#!/bin/sh\necho "hook: on $(uname -r), from $0"\nls /mnt/usb\n' > "$RUNNER_TEMP/userhook2"
-          mkfs.vfat -C "$RUNNER_TEMP/stick.img" 16384
-          mcopy -i "$RUNNER_TEMP/stick.img" "$RUNNER_TEMP/userhook2" ::userhook2
-          classic/boot-test emu/qemu/out/obj/qemu-system-arm build/classic/classic-zImage \
-            --stick "$RUNNER_TEMP/stick.img" --want 'hook: on 2.6.16-csb, from /mnt/usb/userhook2' \
-            --log "$RUNNER_TEMP/console-stick.log"
-
-      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        if: failure() && steps.test.outputs.boot == 'true'
-        with:
-          name: classic-console
-          path: ${{ runner.temp }}/console*.log
-          if-no-files-found: ignore
+      - run: tools/neochumby-kernel-sideloader/build build/module
+      - run: file build/module/sideload.ko
 
   # The prebuilt images packed for publishing, on every run, so that a pull
   # request checks all of it but the publishing: for each image, its files
@@ -1168,14 +850,12 @@ jobs:
   # neochumby-IMAGE-INPUTS-KERNEL.tar.xz, and its corresponding source as
   # neochumby-IMAGE-INPUTS-KERNEL-source.tar, where INPUTS is the last
   # commit that changed what the image is built from (dist/fetch --inputs).
-  # The dist image for each kernel built, and the classic image but on
-  # mainline's runs.
+  # The dist image for each kernel built.
   package:
     name: Pack the prebuilt images
-    needs: [changes, dist, classic]
+    needs: [changes, dist]
     if: >-
       always() && needs.dist.result == 'success'
-      && (needs.classic.result == 'success' || needs.classic.result == 'skipped')
     runs-on: ubuntu-latest
     env:
       KERNELS: ${{ join(fromJSON(needs.changes.outputs.kernels), ' ') }}
@@ -1189,21 +869,15 @@ jobs:
 
       - name: Check the fetch scripts
         run: |
-          shellcheck dist/fetch classic/fetch dist/build
-          for k in 5.9.16 stable mainline; do
+          shellcheck dist/fetch dist/build
+          for k in stable mainline; do
             echo "dist $k: $(dist/fetch --inputs --kernel "$k"), Linux $(NEOCHUMBY_DIST_KERNEL=$k dist/build --linux-version)"
           done
-          echo "classic: $(dist/fetch --inputs --classic)"
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           pattern: dist-*
           path: ${{ runner.temp }}/in
-      - if: needs.classic.result == 'success'
-        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          name: classic-image
-          path: ${{ runner.temp }}/in/classic-image
 
       # Deterministic tarballs: sorted, owned by root, dated at the inputs
       # commit.
@@ -1240,92 +914,6 @@ jobs:
           done
           ls -l "$out"
 
-      # The classic image's corresponding source: the kernel at the commit
-      # classic/linux pins (Chumby's GPL source, as the build reads it,
-      # from git), classic/ (our patches, configuration fragments, rootfs
-      # and the build), BusyBox's release tarball, and the notices of what
-      # zig links into BusyBox (musl, zig's own libc, compiler-rt), from the
-      # zig release classic/build pins. The kernel's compiler (CodeSourcery
-      # 2008q3) builds nothing else, and none of it is in the image.
-      - name: Pack the classic image
-        if: needs.classic.result == 'success'
-        run: |
-          set -euo pipefail
-          in=$RUNNER_TEMP/in stage=$RUNNER_TEMP/stage
-          out=$RUNNER_TEMP/prebuilt
-          inputs=$(dist/fetch --inputs --classic)
-          t=$(git log -1 --format=%ct "$inputs")
-          stem=neochumby-classic-$inputs-2.6.16
-          src=$stage/$stem-source
-          mkdir "$stage/$stem" "$src"
-          cp "$in"/classic-image/classic-zImage "$in"/classic-image/classic-rootfs.cpio.gz \
-            "$in"/classic-image/classic-config "$stage/$stem/"
-          rev=$(git rev-parse HEAD:classic/linux)
-          bb=$(sed -n 's/^BUSYBOX_VERSION=//p' classic/build)
-          bbsha=$(sed -n 's/^BUSYBOX_SHA256=//p' classic/build)
-          zig=$(sed -n 's/^ZIG_VERSION=//p' classic/build)
-          zigsha=$(sed -n 's/^ZIG_SHA256_X86_64=//p' classic/build)
-          tc=$(sed -n 's/^TOOLCHAIN_URL=//p' classic/build)
-          git submodule update --init --checkout --depth 1 classic/linux
-          git -C classic/linux archive --format=tar --prefix="linux-2.6.16-chumby-$rev/" "$rev" |
-            xz -T0 -6 > "$src/linux-2.6.16-chumby-$rev.tar.xz"
-          mkdir "$src/neochumby"
-          git archive --format=tar HEAD classic | tar -x -C "$src/neochumby"
-          curl -fsSL --retry 3 -o "$src/busybox-$bb.tar.bz2" "https://busybox.net/downloads/busybox-$bb.tar.bz2"
-          echo "$bbsha  $src/busybox-$bb.tar.bz2" | sha256sum -c -
-          # The notices, from the zig release that built it (LLVM's licence
-          # is compiler-rt's, the same text as libunwind's beside it).
-          z=zig-x86_64-linux-$zig
-          curl -fsSL --retry 3 -o "$RUNNER_TEMP/$z.tar.xz" "https://ziglang.org/download/$zig/$z.tar.xz"
-          echo "$zigsha  $RUNNER_TEMP/$z.tar.xz" | sha256sum -c -
-          tar -xJf "$RUNNER_TEMP/$z.tar.xz" -C "$RUNNER_TEMP" "$z/LICENSE" "$z/lib/libc/musl/COPYRIGHT" \
-            "$z/lib/libunwind/LICENSE.TXT"
-          mkdir "$src/licenses"
-          cp "$RUNNER_TEMP/$z/LICENSE" "$src/licenses/zig-LICENSE"
-          cp "$RUNNER_TEMP/$z/lib/libc/musl/COPYRIGHT" "$src/licenses/musl-COPYRIGHT"
-          cp "$RUNNER_TEMP/$z/lib/libunwind/LICENSE.TXT" "$src/licenses/compiler-rt-LICENSE.TXT"
-          grep -q 'Apache License' "$src/licenses/compiler-rt-LICENSE.TXT"
-          grep -q 'LLVM Exceptions' "$src/licenses/compiler-rt-LICENSE.TXT"
-          {
-            echo "The corresponding source of neochumby's classic image (Linux 2.6.16)"
-            echo
-            echo "linux-2.6.16-chumby-$rev.tar.xz: the kernel, Chumby's GPL source for"
-            echo "  firmware 1.7.1, at the commit neochumby pins (classic/linux,"
-            echo "  https://github.com/johnmerchant/chumby-linux-2.6.16)"
-            echo "busybox-$bb.tar.bz2: BusyBox, as released (busybox.net)"
-            echo "neochumby/classic/: how they're built: classic/build, the patches"
-            echo "  (patches/linux, patches/busybox), the configuration fragments over the"
-            echo "  kernel's own .config and BusyBox's defconfig, the initramfs's files and"
-            echo "  device list, BusyBox's compiler (zig-cc) and atomics (kuser-atomics.c),"
-            echo "  and the build's container"
-            echo "licenses/: what BusyBox is linked with statically, by zig $zig"
-            echo "  (https://ziglang.org/download/$zig/, whose lib/ is their source):"
-            echo "  musl-COPYRIGHT           musl (MIT)"
-            echo "  zig-LICENSE              zig's own libc and runtime (MIT)"
-            echo "  compiler-rt-LICENSE.TXT  compiler-rt, as zig has it (Apache-2.0 WITH LLVM-exception)"
-            echo
-            echo "The kernel's compiler, which builds nothing else: $tc"
-          } > "$src/README"
-          {
-            echo "neochumby's classic image for the Chumby Classic, prebuilt by CI"
-            echo "image: classic"
-            echo "kernel: 2.6.16"
-            echo "inputs: $inputs"
-            echo "built-from: $GITHUB_SHA"
-            echo "linux: chumby-linux-2.6.16 $rev"
-            echo "busybox: $bb"
-            echo "zig: $zig"
-            echo "source: $stem-source.tar"
-            (cd "$stage/$stem" && sha256sum classic-zImage classic-rootfs.cpio.gz classic-config)
-          } > "$stage/$stem/MANIFEST"
-          cat "$stage/$stem/MANIFEST"
-          tar -C "$stage" --sort=name --mtime="@$t" --owner=0 --group=0 --numeric-owner \
-            -cf - "$stem" | xz -T0 -6 > "$out/$stem.tar.xz"
-          tar -C "$stage" --sort=name --mtime="@$t" --owner=0 --group=0 --numeric-owner \
-            -cf "$out/$stem-source.tar" "$stem-source"
-          tar -tvf "$out/$stem-source.tar"
-          ls -l "$out"
-
       # What a publish from here would add to the release.
       - name: Compare with the release
         env:
@@ -1354,17 +942,16 @@ jobs:
   # latest), from main only: a push, mainline's weekly run or a manual one
   # with `mainline`, or a manual run with `publish` on a commit on main
   # (which replaces what's there). Only when the images
-  # booted (e2e, and the recovery test where it ran). A build already there
+  # booted (e2e). A build already there
   # for the same inputs is left alone; a new one is attested (signed as
   # this workflow on main: what dist/fetch checks), uploaded source first,
   # and the release pruned to the newest PREBUILT_KEEP builds of each image,
   # each with its source.
   prebuilt:
     name: Publish the prebuilt images
-    needs: [package, e2e, sideload]
+    needs: [package, e2e]
     if: >-
       always() && needs.package.result == 'success' && needs.e2e.result == 'success'
-      && (needs.sideload.result == 'success' || needs.sideload.result == 'skipped')
       && github.ref == 'refs/heads/main'
       && (github.event_name == 'push' || github.event.schedule == '17 6 * * 0'
           || (github.event_name == 'workflow_dispatch' && (inputs.publish || inputs.mainline)))
@@ -1426,10 +1013,9 @@ jobs:
           cat > "$RUNNER_TEMP/notes" <<EOF
           Prebuilt images of neochumby's Linux for the Chumby Classic, built by CI on main (.github/workflows/ci.yml) and named after their inputs commit, the last commit that changed what the image is built from:
 
-          - \`neochumby-dist-INPUTS-KERNEL.tar.xz\`: the dist image (dist/build: \`sideload-zImage\`, \`sideload-rootfs.cpio.gz\`), KERNEL 5.9.16, stable or mainline (its MANIFEST's \`linux:\` says which version). Mainline is built weekly, so most inputs have none: \`dist/fetch --kernel mainline\` takes the newest then
-          - \`neochumby-classic-INPUTS-2.6.16.tar.xz\`: the classic image (classic/build: \`classic-zImage\`, \`classic-rootfs.cpio.gz\`, \`classic-config\`)
+          - \`neochumby-dist-INPUTS-KERNEL.tar.xz\`: the dist image (dist/build: \`sideload-zImage\`, \`sideload-rootfs.cpio.gz\`), KERNEL stable or mainline (its MANIFEST's \`linux:\` says which version). Mainline is built weekly, so most inputs have none: \`dist/fetch --kernel mainline\` takes the newest then
 
-          Each has a MANIFEST (its kernel and Linux version, inputs commit and what it was built with), and \`dist/fetch OUT\` (or \`classic/fetch OUT\`) in a checkout downloads the one for its inputs and verifies it. Every asset carries a GitHub artifact attestation; check one with
+          Each has a MANIFEST (its kernel and Linux version, inputs commit and what it was built with), and \`dist/fetch OUT\` in a checkout downloads the one for its inputs and verifies it. Every asset carries a GitHub artifact attestation; check one with
 
               gh attestation verify FILE --repo $GH_REPO --cert-identity https://github.com/$GH_REPO/.github/workflows/ci.yml@refs/heads/main
 
@@ -1459,7 +1045,7 @@ jobs:
           keep, builds = int(sys.argv[2]), {}
           for line in open(sys.argv[1]):
               _, asset, name = line.rstrip("\n").split("\t")
-              m = re.fullmatch(r"neochumby-(dist|classic)-([0-9a-f]{40})-([0-9.]+|stable|mainline)(-source\.tar|\.tar\.xz)", name)
+              m = re.fullmatch(r"neochumby-(dist)-([0-9a-f]{40})-(stable|mainline)(-source\.tar|\.tar\.xz)", name)
               if m:
                   family = builds.setdefault((m[1], m[3]), [])
                   if m[2] not in family:
@@ -1521,7 +1107,6 @@ jobs:
           {
             echo "commit=$commit"
             echo "dist=$(dist/fetch --inputs)"
-            echo "classic=$(dist/fetch --inputs --classic)"
             echo "qemu=$(git rev-parse "$commit:emu/qemu/qemu-chumby")"
           } | tee -a "$GITHUB_OUTPUT"
 
@@ -1529,9 +1114,8 @@ jobs:
         env:
           COMMIT: ${{ steps.version.outputs.commit }}
           DIST: ${{ steps.version.outputs.dist }}
-          CLASSIC: ${{ steps.version.outputs.classic }}
         run: |
-          want="neochumby-dist-$DIST-5.9.16 neochumby-dist-$DIST-stable neochumby-classic-$CLASSIC-2.6.16"
+          want="neochumby-dist-$DIST-stable"
           deadline=$(($(date +%s) + 180 * 60))
           while :; do
             # Runs of CI on the commit still going, but this one: checked
@@ -1568,7 +1152,6 @@ jobs:
       - name: Verify them
         env:
           DIST: ${{ steps.version.outputs.dist }}
-          CLASSIC: ${{ steps.version.outputs.classic }}
         run: |
           cd "$RUNNER_TEMP/assets"
           for f in *; do
@@ -1577,15 +1160,13 @@ jobs:
               --source-ref refs/heads/main --deny-self-hosted-runners
           done
           for s in $WANT; do
-            case $s in neochumby-dist-*) inputs=$DIST ;; *) inputs=$CLASSIC ;; esac
-            xz -dc "$s.tar.xz" | tar -xOf - "$s/MANIFEST" | grep -qxF "inputs: $inputs"
+            xz -dc "$s.tar.xz" | tar -xOf - "$s/MANIFEST" | grep -qxF "inputs: $DIST"
           done
 
       - name: Publish the release
         env:
           COMMIT: ${{ steps.version.outputs.commit }}
           DIST: ${{ steps.version.outputs.dist }}
-          CLASSIC: ${{ steps.version.outputs.classic }}
           QEMU: ${{ steps.version.outputs.qemu }}
         run: |
           if ! gh release view "$TAG" >/dev/null 2>&1; then

@@ -1,0 +1,136 @@
+Description: clk: imx: add the i.MX21 clock driver in Rust
+ Linux dropped the i.MX21's clocks with its board files. Its table is the one the C driver had.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- a/drivers/clk/imx/Kconfig
++++ b/drivers/clk/imx/Kconfig
+@@ -15,6 +15,10 @@
+ 	def_bool SOC_IMX25
+ 	select MXC_CLK
+ 
++config CLK_IMX21
++	def_bool SOC_IMX21 && RUST
++	select MXC_CLK
++
+ config CLK_IMX27
+ 	def_bool SOC_IMX27
+ 	select MXC_CLK
+--- a/drivers/clk/imx/Makefile
++++ b/drivers/clk/imx/Makefile
+@@ -45,6 +45,7 @@
+ 
+ obj-$(CONFIG_CLK_IMX1)   += clk-imx1.o
+ obj-$(CONFIG_CLK_IMX25)  += clk-imx25.o
++obj-$(CONFIG_CLK_IMX21)  += clk_imx21.o
+ obj-$(CONFIG_CLK_IMX27)  += clk-imx27.o
+ obj-$(CONFIG_CLK_IMX31)  += clk-imx31.o
+ obj-$(CONFIG_CLK_IMX35)  += clk-imx35.o
+--- /dev/null
++++ b/drivers/clk/imx/clk_imx21.rs
+@@ -0,0 +1,103 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! The i.MX21's clocks.
++
++use kernel::{
++    bindings as b,
++    imx_clk::{Ccm, OfNode},
++    prelude::*,
++};
++
++const CCM_CSCR: usize = 0x00;
++const CCM_MPCTL0: usize = 0x04;
++const CCM_SPCTL0: usize = 0x0c;
++const CCM_PCDR0: usize = 0x18;
++const CCM_PCDR1: usize = 0x1c;
++const CCM_PCCR0: usize = 0x20;
++const CCM_PCCR1: usize = 0x24;
++
++const LREF: u32 = 32768;
++// The Chumby's oscillator, not the 26 MHz of i.MX21 reference boards: at this
++// the stock boot's SPLL is 288 MHz and its USB divider gives 48 MHz.
++const HREF: u32 = 16000000;
++
++fn init(np: &OfNode) -> Result {
++    let mut ccm = Ccm::new(np, b::IMX21_CLK_MAX as usize)?;
++
++    ccm.fixed(b::IMX21_CLK_DUMMY, c"dummy", 0);
++    ccm.obtain_fixed(b::IMX21_CLK_CKIL, c"ckil", LREF);
++    ccm.obtain_fixed(b::IMX21_CLK_CKIH, c"ckih", HREF);
++    ccm.fixed_factor(b::IMX21_CLK_FPM, c"fpm", c"ckil", 512, 1);
++    ccm.fixed_factor(b::IMX21_CLK_CKIH_DIV1P5, c"ckih_div1p5", c"ckih_gate", 2, 3);
++    ccm.gate(b::IMX21_CLK_MPLL_GATE, c"mpll_gate", c"mpll", CCM_CSCR, 0);
++    ccm.gate(b::IMX21_CLK_SPLL_GATE, c"spll_gate", c"spll", CCM_CSCR, 1);
++    ccm.gate(b::IMX21_CLK_FPM_GATE, c"fpm_gate", c"fpm", CCM_CSCR, 2);
++    ccm.gate_dis(b::IMX21_CLK_CKIH_GATE, c"ckih_gate", c"ckih", CCM_CSCR, 3);
++    ccm.mux(b::IMX21_CLK_MPLL_OSC_SEL, c"mpll_osc_sel", CCM_CSCR, 4, 1, &[c"ckih_gate", c"ckih_div1p5"])?;
++    ccm.divider(b::IMX21_CLK_IPG, c"ipg", c"hclk", CCM_CSCR, 9, 1);
++    ccm.divider(b::IMX21_CLK_HCLK, c"hclk", c"fclk", CCM_CSCR, 10, 4);
++    ccm.mux(b::IMX21_CLK_MPLL_SEL, c"mpll_sel", CCM_CSCR, 16, 1, &[c"fpm_gate", c"mpll_osc_sel"])?;
++    ccm.mux(b::IMX21_CLK_SPLL_SEL, c"spll_sel", CCM_CSCR, 17, 1, &[c"fpm_gate", c"mpll_osc_sel"])?;
++    ccm.mux(b::IMX21_CLK_SSI1_SEL, c"ssi1_sel", CCM_CSCR, 19, 1, &[c"spll_gate", c"mpll_gate"])?;
++    ccm.mux(b::IMX21_CLK_SSI2_SEL, c"ssi2_sel", CCM_CSCR, 20, 1, &[c"spll_gate", c"mpll_gate"])?;
++    ccm.divider(b::IMX21_CLK_USB_DIV, c"usb_div", c"spll_gate", CCM_CSCR, 26, 3);
++    ccm.divider(b::IMX21_CLK_FCLK, c"fclk", c"mpll_gate", CCM_CSCR, 29, 3);
++    ccm.pllv1_imx21(b::IMX21_CLK_MPLL, c"mpll", c"mpll_sel", CCM_MPCTL0);
++    ccm.pllv1_imx21(b::IMX21_CLK_SPLL, c"spll", c"spll_sel", CCM_SPCTL0);
++    ccm.divider(b::IMX21_CLK_NFC_DIV, c"nfc_div", c"fclk", CCM_PCDR0, 12, 4);
++    ccm.divider(b::IMX21_CLK_SSI1_DIV, c"ssi1_div", c"ssi1_sel", CCM_PCDR0, 16, 6);
++    ccm.divider(b::IMX21_CLK_SSI2_DIV, c"ssi2_div", c"ssi2_sel", CCM_PCDR0, 26, 6);
++    ccm.divider(b::IMX21_CLK_PER1, c"per1", c"mpll_gate", CCM_PCDR1, 0, 6);
++    ccm.divider(b::IMX21_CLK_PER2, c"per2", c"mpll_gate", CCM_PCDR1, 8, 6);
++    ccm.divider(b::IMX21_CLK_PER3, c"per3", c"mpll_gate", CCM_PCDR1, 16, 6);
++    ccm.divider(b::IMX21_CLK_PER4, c"per4", c"mpll_gate", CCM_PCDR1, 24, 6);
++    ccm.gate(b::IMX21_CLK_UART1_IPG_GATE, c"uart1_ipg_gate", c"ipg", CCM_PCCR0, 0);
++    ccm.gate(b::IMX21_CLK_UART2_IPG_GATE, c"uart2_ipg_gate", c"ipg", CCM_PCCR0, 1);
++    ccm.gate(b::IMX21_CLK_UART3_IPG_GATE, c"uart3_ipg_gate", c"ipg", CCM_PCCR0, 2);
++    ccm.gate(b::IMX21_CLK_UART4_IPG_GATE, c"uart4_ipg_gate", c"ipg", CCM_PCCR0, 3);
++    ccm.gate(b::IMX21_CLK_CSPI1_IPG_GATE, c"cspi1_ipg_gate", c"ipg", CCM_PCCR0, 4);
++    ccm.gate(b::IMX21_CLK_CSPI2_IPG_GATE, c"cspi2_ipg_gate", c"ipg", CCM_PCCR0, 5);
++    ccm.gate(b::IMX21_CLK_SSI1_GATE, c"ssi1_gate", c"ipg", CCM_PCCR0, 6);
++    ccm.gate(b::IMX21_CLK_SSI2_GATE, c"ssi2_gate", c"ipg", CCM_PCCR0, 7);
++    ccm.gate(b::IMX21_CLK_SDHC1_IPG_GATE, c"sdhc1_ipg_gate", c"ipg", CCM_PCCR0, 9);
++    ccm.gate(b::IMX21_CLK_SDHC2_IPG_GATE, c"sdhc2_ipg_gate", c"ipg", CCM_PCCR0, 10);
++    ccm.gate(b::IMX21_CLK_GPIO_GATE, c"gpio_gate", c"ipg", CCM_PCCR0, 11);
++    ccm.gate(b::IMX21_CLK_I2C_GATE, c"i2c_gate", c"ipg", CCM_PCCR0, 12);
++    ccm.gate(b::IMX21_CLK_DMA_GATE, c"dma_gate", c"ipg", CCM_PCCR0, 13);
++    ccm.gate(b::IMX21_CLK_USB_GATE, c"usb_gate", c"usb_div", CCM_PCCR0, 14);
++    ccm.gate(b::IMX21_CLK_EMMA_GATE, c"emma_gate", c"ipg", CCM_PCCR0, 15);
++    ccm.gate(b::IMX21_CLK_SSI2_BAUD_GATE, c"ssi2_baud_gate", c"ipg", CCM_PCCR0, 16);
++    ccm.gate(b::IMX21_CLK_SSI1_BAUD_GATE, c"ssi1_baud_gate", c"ipg", CCM_PCCR0, 17);
++    ccm.gate(b::IMX21_CLK_LCDC_IPG_GATE, c"lcdc_ipg_gate", c"ipg", CCM_PCCR0, 18);
++    ccm.gate(b::IMX21_CLK_NFC_GATE, c"nfc_gate", c"nfc_div", CCM_PCCR0, 19);
++    ccm.gate(b::IMX21_CLK_SLCDC_HCLK_GATE, c"slcdc_hclk_gate", c"hclk", CCM_PCCR0, 21);
++    ccm.gate(b::IMX21_CLK_PER4_GATE, c"per4_gate", c"per4", CCM_PCCR0, 22);
++    ccm.gate(b::IMX21_CLK_BMI_GATE, c"bmi_gate", c"hclk", CCM_PCCR0, 23);
++    ccm.gate(b::IMX21_CLK_USB_HCLK_GATE, c"usb_hclk_gate", c"hclk", CCM_PCCR0, 24);
++    ccm.gate(b::IMX21_CLK_SLCDC_GATE, c"slcdc_gate", c"hclk", CCM_PCCR0, 25);
++    ccm.gate(b::IMX21_CLK_LCDC_HCLK_GATE, c"lcdc_hclk_gate", c"hclk", CCM_PCCR0, 26);
++    ccm.gate(b::IMX21_CLK_EMMA_HCLK_GATE, c"emma_hclk_gate", c"hclk", CCM_PCCR0, 27);
++    ccm.gate(b::IMX21_CLK_BROM_GATE, c"brom_gate", c"hclk", CCM_PCCR0, 28);
++    ccm.gate(b::IMX21_CLK_DMA_HCLK_GATE, c"dma_hclk_gate", c"hclk", CCM_PCCR0, 30);
++    ccm.gate(b::IMX21_CLK_CSI_HCLK_GATE, c"csi_hclk_gate", c"hclk", CCM_PCCR0, 31);
++    ccm.gate(b::IMX21_CLK_CSPI3_IPG_GATE, c"cspi3_ipg_gate", c"ipg", CCM_PCCR1, 23);
++    ccm.gate(b::IMX21_CLK_WDOG_GATE, c"wdog_gate", c"ipg", CCM_PCCR1, 24);
++    ccm.gate(b::IMX21_CLK_GPT1_IPG_GATE, c"gpt1_ipg_gate", c"ipg", CCM_PCCR1, 25);
++    ccm.gate(b::IMX21_CLK_GPT2_IPG_GATE, c"gpt2_ipg_gate", c"ipg", CCM_PCCR1, 26);
++    ccm.gate(b::IMX21_CLK_GPT3_IPG_GATE, c"gpt3_ipg_gate", c"ipg", CCM_PCCR1, 27);
++    ccm.gate(b::IMX21_CLK_PWM_IPG_GATE, c"pwm_ipg_gate", c"ipg", CCM_PCCR1, 28);
++    ccm.gate(b::IMX21_CLK_RTC_GATE, c"rtc_gate", c"ipg", CCM_PCCR1, 29);
++    ccm.gate(b::IMX21_CLK_KPP_GATE, c"kpp_gate", c"ipg", CCM_PCCR1, 30);
++    ccm.gate(b::IMX21_CLK_OWIRE_GATE, c"owire_gate", c"ipg", CCM_PCCR1, 31);
++
++    ccm.finish()
++}
++
++fn clocks_init(np: &OfNode) {
++    // Nothing runs without clocks, and there's nothing to go back to: as the C driver's BUG_ON.
++    if init(np).is_err() {
++        panic!("i.MX21 clocks failed");
++    }
++}
++
++kernel::clk_of_declare!(IMX21_CCM, c"fsl,imx21-ccm", clocks_init);

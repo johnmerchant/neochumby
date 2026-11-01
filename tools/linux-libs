@@ -1,6 +1,5 @@
 #!/bin/sh
-# The shared libraries a tree for the dist's Linux (5.9 and later) carries
-# in its lib/ (tools/tree --linux), and the sysroot its apps are linked
+# The shared libraries a tree carries in its lib/ (tools/tree), and the sysroot its apps are linked
 # against, made in DIR:
 #
 #   DIR/lib/ld-musl-arm.so.1        musl's libc.so, which is its own loader

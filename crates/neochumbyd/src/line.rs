@@ -3,7 +3,7 @@
 //! `--listen-unix PATH` instead (qemu-chumby's `--link`). Each connection
 //! there is one Chumby's line (neochumby_proto::mux), and each channel the
 //! Chumby opens on it is handled as a TCP connection is (api.rs): the same
-//! handshake, the same checks of its key, the same pairing, and the same
+//! handshake, the same checks of its key, and the same
 //! share of the connections, the line counting as one address.
 //!
 //! The socket reaches what the API port does, so it is made only by the
@@ -54,13 +54,13 @@ pub fn serve(listener: UnixListener, api: Arc<Api>, limits: Arc<Limits>) {
             let origin = Origin::Line(n);
             while let Some(chan) = line.accept() {
                 let Some(mut slot) = limits.admit(origin.clone()) else {
-                    eprintln!("neochumbyd: {origin}: too many connections; dropped");
+                    eprintln!("neochumbyd: serial line {n}: too many connections; dropped");
                     continue;
                 };
-                let (api, origin) = (api.clone(), origin.clone());
+                let api = api.clone();
                 std::thread::spawn(move || {
-                    if let Err(e) = api::handle(&api, chan, &origin, &mut slot) {
-                        eprintln!("neochumbyd: {origin}: {e}");
+                    if let Err(e) = api::handle(&api, chan, &mut slot) {
+                        eprintln!("neochumbyd: serial line {n}: {e}");
                     }
                 });
             }
@@ -73,13 +73,13 @@ pub fn serve(listener: UnixListener, api: Arc<Api>, limits: Arc<Limits>) {
 mod tests {
     use super::*;
     use crate::state::State;
-    use neochumby_proto::{Identity, Msg, Session, Unverified};
+    use neochumby_proto::{Identity, Msg, Session};
     use std::os::unix::net::UnixStream;
     use std::time::Duration;
 
-    /// A Chumby on a serial line pairs, and is then welcomed, as over TCP.
+    /// A registered Chumby on a serial line is welcomed, as over TCP.
     #[test]
-    fn a_chumby_pairs_over_a_line() {
+    fn a_chumby_connects_over_a_line() {
         let d = std::env::temp_dir().join(format!("neochumbyd-line-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         let state = State::open(d.clone()).unwrap();
@@ -88,7 +88,6 @@ mod tests {
         let api = Arc::new(Api {
             state,
             identity,
-            nfs_port: 2049,
             tree: d.join("tree"),
             state_dir: d.clone(),
             hashes: Default::default(),
@@ -106,25 +105,12 @@ mod tests {
         let wait = Duration::from_secs(10);
 
         let chumby = Identity::generate().unwrap();
-        let mut u = Unverified::connect(line.open(wait).unwrap(), &chumby).unwrap();
-        u.send(&Msg::Pair { name: "den".into() }).unwrap();
-        let code = u.code();
-        let pending = loop {
-            match api.state.pending().unwrap().pop() {
-                Some(p) => break p,
-                None => std::thread::sleep(Duration::from_millis(20)),
-            }
-        };
-        assert_eq!((pending.code.as_str(), pending.addr.as_str()), (code.as_str(), "serial-line-1"));
-        api.state.approve(&code, false).unwrap();
-        assert_eq!(u.recv().unwrap(), Msg::Paired { nfs_port: 2049, path: "/".into() });
-        assert_eq!(u.peer(), &server_key);
-
+        api.state.add("den", &chumby.public(), false).unwrap();
         let mut s = Session::connect(line.open(wait).unwrap(), &chumby, &server_key).unwrap();
         s.send(&Msg::Hello { name: "den".into() }).unwrap();
         assert_eq!(s.recv().unwrap(), Msg::Welcome);
-        // Another key, unpaired, is told so.
-        let mut u = Unverified::connect(line.open(wait).unwrap(), &Identity::generate().unwrap()).unwrap();
+        // Another key, not registered, is told so.
+        let mut u = Session::connect(line.open(wait).unwrap(), &Identity::generate().unwrap(), &server_key).unwrap();
         u.send(&Msg::Hello { name: "den".into() }).unwrap();
         assert_eq!(u.recv().unwrap(), Msg::Unpaired);
         std::fs::remove_dir_all(&d).unwrap();

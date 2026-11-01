@@ -156,6 +156,7 @@ fn config(name: &str, port: usize, udp_base: usize, pipe: &Path) -> String {
 /// ended between streams.
 fn read_metadata(pipe: PathBuf, tx: SyncSender<Event>) {
     let deadline = Instant::now() + PIPE_WAIT;
+    let mut warned = false;
     let mut f = loop {
         if std::fs::metadata(&pipe).is_ok_and(|m| m.file_type().is_fifo()) {
             match OpenOptions::new().read(true).write(true).open(&pipe) {
@@ -166,12 +167,14 @@ fn read_metadata(pipe: PathBuf, tx: SyncSender<Event>) {
                 }
             }
         }
-        if Instant::now() > deadline {
+        // It can come late, so this keeps looking: the track's details and
+        // remote control start whenever it does.
+        if !warned && Instant::now() > deadline {
             eprintln!(
-                "neochumby-airplay companion: shairport-sync made no metadata pipe (built without metadata?): \
-                 playing without the track's details or remote control"
+                "neochumby-airplay companion: no metadata pipe from shairport-sync yet (is it built with metadata?): \
+                 no track details or remote control until there is one"
             );
-            return;
+            warned = true;
         }
         std::thread::sleep(Duration::from_millis(100));
     };
