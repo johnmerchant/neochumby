@@ -41,6 +41,7 @@ pub fn serve(api: &Api, name: &str, mut s: Session, first: Msg) -> io::Result<()
 
 /// One round, answering `neochumbyd sync` if it asked before the round began.
 fn round(api: &Api, name: &str, s: &mut Session, live: [u8; 32]) -> io::Result<()> {
+    let _running = dev::round_runs(&api.state_dir, name);
     let asked = dev::sync_started(&api.state_dir, name);
     let r = send(api, name, s, live);
     if asked {

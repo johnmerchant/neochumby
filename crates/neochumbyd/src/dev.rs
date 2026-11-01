@@ -21,6 +21,8 @@
 //!                                  a time ([`input_line`]), taken as the
 //!                                  others are
 //!   dev/<name>/input.done, .err    the Chumby did it, or why not
+//!   dev/<name>/sync.round          a sync round is running ([`round_runs`]),
+//!                                  so a `neochumbyd sync` waits for the next
 //!
 //! Input goes only to a Chumby whose settings say `dev=on`
 //! (neochumby_proto::Settings::dev), checked by the command, by the
@@ -358,10 +360,12 @@ pub fn restart(state_dir: &Path, name: &str, wait: Duration) -> io::Result<()> {
     Ok(())
 }
 
-/// How long `neochumbyd sync` waits for a round to begin, once asked: the
-/// Chumby's receiver looks every second, unless its stick is gone.
+/// How long `neochumbyd sync` waits for a round to begin, once asked and with
+/// none running: the Chumby's receiver looks every second, unless its stick is
+/// gone.
 const SYNC_BEGINS: Duration = Duration::from_secs(180);
-/// And for it to end: the longest a round may take.
+/// And for it to end, or for one running when it asked to: the longest a round
+/// may take.
 const SYNC_ENDS: Duration = Duration::from_secs(3600);
 
 /// What a `neochumbyd sync` found.
@@ -375,8 +379,13 @@ pub enum Synced {
 
 /// Asks `name` for a sync round now, through the daemon, and waits for it to
 /// end. Only a round that begins after this asks can answer: one already
-/// running may have scanned an older tree.
+/// running may have scanned an older tree, so this waits for it, and the
+/// receiver, asked, starts the next as soon as it ends.
 pub fn sync(state_dir: &Path, name: &str, wait: Duration) -> io::Result<Synced> {
+    sync_within(state_dir, name, wait, SYNC_BEGINS)
+}
+
+fn sync_within(state_dir: &Path, name: &str, wait: Duration, begins: Duration) -> io::Result<Synced> {
     let asks = requests(state_dir, name);
     std::fs::create_dir_all(&asks)?;
     let (ask, begun, answer) = (asks.join("sync"), asks.join("sync.asked"), asks.join("sync.answer"));
@@ -395,8 +404,12 @@ pub fn sync(state_dir: &Path, name: &str, wait: Duration) -> io::Result<Synced> 
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    let deadline = Instant::now() + SYNC_BEGINS;
+    let running = asks.join(ROUND_RUNNING);
+    let (mut deadline, most) = (Instant::now() + begins, Instant::now() + SYNC_ENDS);
     while begun.exists() {
+        if running.exists() && Instant::now() < most {
+            deadline = Instant::now() + begins;
+        }
         if Instant::now() > deadline {
             return give_up(io::Error::other(format!("{name} didn't start a round: is its stick in?")));
         }
@@ -419,6 +432,37 @@ pub fn sync(state_dir: &Path, name: &str, wait: Duration) -> io::Result<Synced> 
             return Err(io::Error::other(format!("{name}'s round didn't end in time")));
         }
         std::thread::sleep(Duration::from_millis(200));
+    }
+}
+
+/// While a round runs, in `dev/<name>`.
+const ROUND_RUNNING: &str = "sync.round";
+
+/// Says a round is running for `name`, until this is dropped.
+pub struct RoundRuns(PathBuf);
+
+impl Drop for RoundRuns {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+/// A round starts for `name`. Not knowing is no reason to refuse it: a
+/// `neochumbyd sync` just gives up on the wait sooner.
+pub fn round_runs(state_dir: &Path, name: &str) -> RoundRuns {
+    let asks = requests(state_dir, name);
+    let _ = std::fs::create_dir_all(&asks);
+    let running = asks.join(ROUND_RUNNING);
+    let _ = std::fs::write(&running, "");
+    RoundRuns(running)
+}
+
+/// As neochumbyd starts, no round runs: what says so was left by one killed
+/// during a round.
+pub fn no_rounds_run(state_dir: &Path) {
+    let Ok(chumbys) = std::fs::read_dir(state_dir.join("dev")) else { return };
+    for c in chumbys.flatten() {
+        let _ = std::fs::remove_file(c.path().join(ROUND_RUNNING));
     }
 }
 
@@ -683,6 +727,47 @@ mod tests {
             assert!(parse_input(bad).is_err(), "{bad}");
         }
         assert!(input_line(&Msg::Shot).is_none());
+    }
+
+    /// A round running when `neochumbyd sync` asks can take longer than a
+    /// round may take to begin; it is the next one that answers.
+    #[test]
+    fn sync_waits_out_a_round_already_running() {
+        let d = dir("sync-running");
+        let asks = requests(&d, "den");
+        let begins = Duration::from_millis(200);
+        let asked = |d: &Path| {
+            let d = d.to_path_buf();
+            std::thread::spawn(move || sync_within(&d, "den", Duration::from_secs(5), begins))
+        };
+        let taken = || {
+            while !asks.join("sync").exists() {
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            assert!(take(&asks.join("sync")));
+        };
+
+        let running = round_runs(&d, "den");
+        let waiting = asked(&d);
+        taken();
+        std::thread::sleep(begins * 4);
+        assert!(!waiting.is_finished(), "gave up while a round was running");
+        assert!(asks.join("sync.asked").exists(), "the round running doesn't answer");
+        drop(running);
+        assert!(sync_started(&d, "den"), "the next one does");
+        sync_answer(&d, "den", true, "up to date");
+        assert_eq!(waiting.join().unwrap().unwrap(), Synced::Done("up to date".into()));
+
+        // With none running, and none beginning: as before.
+        let waiting = asked(&d);
+        taken();
+        let e = waiting.join().unwrap().unwrap_err();
+        assert!(e.to_string().contains("didn't start a round"), "{e}");
+
+        // One a killed neochumbyd left says nothing to the next.
+        std::mem::forget(round_runs(&d, "den"));
+        no_rounds_run(&d);
+        assert!(!asks.join(ROUND_RUNNING).exists());
     }
 
     /// A fake Chumby on a real session with a real daemon: its log kept,

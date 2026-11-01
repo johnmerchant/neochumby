@@ -493,6 +493,7 @@ fn serve(a: &Args, state: State, confine: confine::Confine) {
     state.owner_token().unwrap_or_else(|e| fail(format!("owner token: {e}")));
     // An admin socket left by an earlier neochumbyd (they had paths then).
     let _ = std::fs::remove_file(a.state.join("admin.sock"));
+    dev::no_rounds_run(&a.state);
 
     let listener = TcpListener::bind(&a.api).unwrap_or_else(|e| fail(format!("{}: {e}", a.api)));
     let lines = a.listen_unix.as_ref().map(|p| {
