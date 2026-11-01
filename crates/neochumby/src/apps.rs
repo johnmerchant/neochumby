@@ -36,6 +36,9 @@
 //!                              aot=, aot-key= and aot-sha256= for its
 //!                              compiled code (neochumby_wasm::aot)
 //!   source=catalog             installed from the catalog: untrusted
+//!   transition=neochumby-wipe  animates the switch from one app to the
+//!                              next, when `transition=` names this app
+//!                              (see the session)
 //!
 //! An app may have any of these. The session (neochumby) and the apps
 //! agree on the tree through NEOCHUMBY_ROOT.
@@ -59,7 +62,7 @@ pub enum Needs {
     Required,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct App {
     /// apps/<name>/ in the tree; `name` is how neochumbyd knows it.
     pub dir: PathBuf,
@@ -86,6 +89,10 @@ pub struct App {
     /// apps open for MUSIC (NEOCHUMBY_PLAYER). It promises that its service
     /// pauses and resumes on the session's `pause` and `resume` lines.
     pub player: bool,
+    /// Its transition: given the screen as one app leaves and as the next
+    /// has drawn, it streams the frames between them (the session's
+    /// transition.rs).
+    pub transition: Option<PathBuf>,
     /// What it reaches beyond its jail.
     pub access: Access,
     /// Its terminal's font in text mode, as its manifest names it: a
@@ -256,6 +263,7 @@ pub fn load(dir: &Path) -> Option<App> {
         interrupt: field("interrupt").as_deref() != Some("false"),
         button: field("button").as_deref() == Some("true"),
         player: field("player").as_deref() == Some("true"),
+        transition: file("transition"),
         access,
         font: field("font").filter(|f| !f.is_empty()),
         tap: field("tap").map(|t| unescape(&t)).unwrap_or_default(),

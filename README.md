@@ -57,6 +57,7 @@ binaries are static (musl), so they don't depend on its userland.
 | `apps/aquarium` | AQUARIUM: [asciiquarium-rs](https://github.com/cablehead/asciiquarium-rs) (beef5b7, a submodule), asciiquarium in Rust, until tapped | GPL-2.0-or-later |
 | `apps/genact` | GENACT: [genact](https://github.com/svenstaro/genact) (1.6.0, from crates.io), looking busy, until tapped | MIT |
 | `apps/ttfx` | TTFX: [ttfx](https://github.com/omacom/ttfx) (v0.5.1, a submodule), [TerminalTextEffects](https://github.com/ChrisBuilds/terminaltexteffects) by ChrisBuilds in Rust: "neochumby" and the time and date, through one effect after another, in Spleen 6x12, until tapped; Linux 5.9 and later | MIT (TerminalTextEffects' copyright kept in its LICENSE and NOTICE) |
+| `apps/transitions` | TRANSITIONS: nine animations between apps (slide, iris, dissolve, pixelate, blinds, melt, glitch, CRT, tiles), for `transition=transitions` | MIT |
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
@@ -115,6 +116,7 @@ font = "spleen-8x16"                 # text mode: its terminal's font
 tap = "q"                            # text mode: what a tap types until it asks for the mouse
 frontend = "airplay"                 # it shows that app, in its place, once the owner approves
 linux = "5.9"                        # the oldest Linux it runs on (tools/tree --linux); absent: any, the stock 2.6 too
+transition = "neochumby-transitions" # animates switching from one app to the next
 ```
 
 An app can use any of these keys:
@@ -236,6 +238,16 @@ An app can use any of these keys:
   `neochumbyd set NAME frontend_airplay=<app>`; it is then opened wherever
   AirPlay would be, and AirPlay's service talks to it
   ([CONTRIBUTING](CONTRIBUTING.md#writing-an-airplay-frontend)).
+- **`transition`:** a binary that animates the switch from one app to the
+  next, when this Chumby's settings name its app (`neochumbyd set NAME
+  transition=<app>`, else `transition=` in `/psp/neochumby.conf`; unset,
+  apps switch with no animation). As one app leaves, the session holds its
+  screen in the LCD controller's overlay (`/dev/fb1`) while the next app
+  draws underneath, then runs the binary, jailed as its app, with both
+  pictures on stdin (each 320x240 RGB565, little-endian), and shows each
+  frame it writes to stdout in the overlay, for up to 3 seconds. It needs a
+  kernel with the overlay: the stock 2.6.16 one and dist 5.9.16 have it.
+  [`apps/transitions`](apps/transitions) is one, with nine effects.
 
 ## Building
 

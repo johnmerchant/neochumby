@@ -142,7 +142,7 @@ impl<'a> Launch<'a> {
         }
         let terminal = self.terminal.as_ref().map(|t| t.as_raw_fd());
         let process = if jail::jailed(self.app) {
-            let given = jail::Given { storage: self.storage.as_deref(), terminal };
+            let given = jail::Given { storage: self.storage.as_deref(), terminal, stdio: None };
             jail::start(self.app, self.exe, self.role, self.root, self.env, &self.keep, given)?
         } else {
             // Root and unjailed: from its checked copy, in a checked tree

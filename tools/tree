@@ -336,7 +336,7 @@ for app in home "$@"; do
   # program. Linked dynamically in a tree for 5.9 and later if it uses
   # curses, in a target directory of their own (their flags differ).
   chumby_bin=$bin
-  if [ -n "$(field "$manifest" exec)$(field "$manifest" service)" ]; then
+  if [ -n "$(field "$manifest" exec)$(field "$manifest" service)$(field "$manifest" transition)" ]; then
     if at_least "$linux" 5.9 && uses_curses; then
       [ -n "$shared" ] || {
         tools/linux-libs "$libs"
@@ -351,7 +351,7 @@ for app in home "$@"; do
       build --target $chumby_t -p "$crate"
     fi
   fi
-  for key in exec service; do
+  for key in exec service transition; do
     f=$(field "$manifest" "$key")
     [ -z "$f" ] || cp "$chumby_bin/$chumby_t/release/$f" "$dest/"
   done

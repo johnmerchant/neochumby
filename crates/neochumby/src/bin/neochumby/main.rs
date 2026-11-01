@@ -48,8 +48,8 @@
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
 //! binary, paged in over NFS only when run. What it runs is described in
 //! child.rs. The default player is chosen as the session starts
-//! (player.rs), and so are the frontends the owner
-//! approved (frontend.rs).
+//! (player.rs), the frontends the owner approved (frontend.rs), and the
+//! transition between apps, if one is chosen (transition.rs).
 
 mod backlight;
 mod button;
@@ -66,6 +66,7 @@ mod services;
 mod start;
 mod storage;
 mod terminal;
+mod transition;
 
 use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
@@ -416,12 +417,15 @@ fn session() {
     let settings = settings::load();
     let core = core_services(&root, &settings);
     let (local, local_player) = (conf::get(conf::CONF, "start"), conf::get(conf::CONF, "player"));
+    let local_transition = conf::get(conf::CONF, "transition");
     let choice = chosen(settings.start.as_deref(), local.as_deref());
     let player = player::choose(&all, chosen(settings.player.as_deref(), local_player.as_deref()));
     match player {
         Some(m) => eprintln!("neochumby: the player is {}", m.name),
         None => eprintln!("neochumby: no player here (player = true in a manifest)"),
     }
+    let transition = transition::choose(&all, chosen(settings.transition.as_deref(), local_transition.as_deref()));
+    let transitions = transition.and_then(|t| transition::Transitions::new(t, &root, Default::default()));
     // The owner's font and colours for text-mode apps, as `start` is
     // chosen: names, checked as each terminal opens.
     let setting = |key: &str| {
@@ -470,7 +474,9 @@ fn session() {
             };
             // On either ending, the loop has closed the button, stopped the
             // services (neochumby-sync with them) and put the speaker back.
-            run::Session::new(&all, &core, &root, first, player, chumby, run::Timing::default()).run()
+            run::Session::new(&all, &core, &root, first, player, chumby, run::Timing::default())
+                .transitions(transitions)
+                .run()
         }
     };
 
@@ -534,6 +540,7 @@ fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
         frontend: None,
         wasm: None,
         catalog: false,
+        transition: None,
     }]
 }
 

@@ -2337,6 +2337,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "neochumby-transitions"
+version = "0.1.0"
+dependencies = [
+ "neochumby-sys",
+]
+
+[[package]]
 name = "neochumby-ttfx"
 version = "0.1.0"
 dependencies = [

@@ -54,6 +54,7 @@ const KEYS: &[&str] = &[
     "button",
     "interrupt",
     "player",
+    "transition",
     "access",
     "linux",
     "font",
