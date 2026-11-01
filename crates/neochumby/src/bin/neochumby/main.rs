@@ -367,6 +367,9 @@ impl run::Device for Chumby {
 }
 
 fn session() {
+    // What programs call this machine: the kernel starts with none. As root,
+    // and it's no matter if it can't: nothing depends on it.
+    let _ = std::fs::write("/proc/sys/kernel/hostname", neochumby::conf::name());
     // On a Chumby with no network, its serial line to neochumbyd: before
     // anything connects there.
     line::start();

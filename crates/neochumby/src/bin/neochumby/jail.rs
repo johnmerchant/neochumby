@@ -428,6 +428,10 @@ pub fn start(
 
     env.push(("NEOCHUMBY_ROOT".into(), path(root)?));
     env.push(("HOME".into(), "/tmp".into()));
+    // Who it is, for programs that say: a jail has no /etc/passwd to look its
+    // uid up in unless it has `system`, and that doesn't list it either.
+    env.push(("USER".into(), "neochumby".into()));
+    env.push(("LOGNAME".into(), "neochumby".into()));
     env.push(("PATH".into(), dir.clone()));
     // What the boot hook gave the session for its apps (the server, say),
     // and the time zone.
