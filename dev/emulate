@@ -425,6 +425,11 @@ def ready(profile, opts):
             skip(f"the {profile} profile needs {p['needs']}: {e} (or --kernel or {p['kernel'][0]})")
         except prebuilt.Failed as e:
             sys.exit(f"dev/emulate: {e}")
+    # dist's zImage has no initramfs built in: it is the file beside it.
+    if profile == "dist" and not images["initrd"]:
+        beside = os.path.join(os.path.dirname(images["kernel"]), "sideload-rootfs.cpio.gz")
+        if os.path.exists(beside):
+            images["initrd"] = beside
     return images, qemu
 
 

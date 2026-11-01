@@ -294,7 +294,7 @@ passes where, so far:
 | Scenario | dist | Why not |
 | --- | --- | --- |
 | `boot` | passes (CI) | |
-| `smoke` | not in CI | the kernel's framebuffer console blinks its cursor over the session's screen, so the screen seldom settles |
+| `smoke` | passes (CI) | |
 | `stock` | skipped | the sideload from the stock firmware: the stock profile only, local |
 | `link`, `pairing`, `powercut` | CI's link job | on every push to main and on pull requests touching what they cover (a round over the line takes minutes) |
 
@@ -1022,8 +1022,7 @@ are three ways, from quickest to most faithful:
    NEOCHUMBYD OUT` runs the scenarios, as CI does, or drive it by hand
    with `dev/emulate start`, `tap`, `button`, `shot` and `log` (see
    [Testing without a Chumby](#testing-without-a-chumby-devemulate)). It
-   runs on Linux and macOS without root, and needs no firmware; not every
-   scenario passes there yet.
+   runs on Linux and macOS without root, and needs no firmware.
 2. **The emulator on the stock profile**: the Chumby's stock firmware, from **your own device's** flash backup
    (qemu-chumby's README, "Images", says how to build the images; they
    never leave your machine), booting your tree from a USB stick as a

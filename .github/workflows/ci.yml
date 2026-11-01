@@ -625,11 +625,10 @@ jobs:
   # profile; never the stock firmware, which runs only locally, on your own:
   # docs/legal.md). Only those that pass on dist so far:
   #   boot      the stick's hook runs the session, which opens home and draws
+  #   smoke     Doom from home, the corner hold, the top button and a touch
   #   airplay   AirPlay's text-mode screen, its touches and its sound, with
   #             dev/airplay-standin as the receiver
-  # Pending on dist, and why:
-  #   smoke     the kernel's framebuffer console blinks its cursor over the
-  #             session's screen, so it seldom settles
+  # Elsewhere:
   #   link, pairing, powercut   over the serial line: the link job, below
   #   stock     the stock firmware: local only
   # Where mainline is built, boot runs on it too; on mainline's own runs,
@@ -716,7 +715,7 @@ jobs:
         timeout-minutes: 30
         env:
           NEOCHUMBY_EMU_PROFILE: dist
-          E2E_SCENARIOS: boot airplay
+          E2E_SCENARIOS: boot smoke airplay
           NEOCHUMBY_AIRPLAY_STANDIN: ${{ runner.temp }}/tree.airplay-standin
         run: dev/e2e "$RUNNER_TEMP/tree" "$RUNNER_TEMP/tree.neochumbyd" "$RUNNER_TEMP/e2e"
 
