@@ -25,6 +25,7 @@
 #                        iTerm2-Color-Schemes (a submodule, fetched here)
 #   OUT/colors.LICENSE   their licences
 #   OUT/apps/home/       neochumby-home, the app list, always
+#   OUT/apps/catalog/    neochumby-catalog, GET APPS, always
 #   OUT/apps/<name>/     each APP asked for
 #   OUT/lib/             the shared libraries its apps that use curses link
 #                        (tools/linux-libs): musl, as ld-musl-arm.so.1,
@@ -310,8 +311,12 @@ target/release/neochumby-colors crates/neochumby/themes crates/neochumby/third_p
 } > "$out/colors.LICENSE"
 work=$(mktemp -d)
 trap 'rm -rf "$work"' EXIT
+built_catalog=0
 
-for app in home "$@"; do
+for app in home catalog "$@"; do
+  # Always here, whether asked for or not: once is enough.
+  if [ "$built_catalog" = 1 ] && [ "$app" = catalog ]; then continue; fi
+  [ "$app" = catalog ] && built_catalog=1
   src=$(fetch "$app")
   [ -f "$src/Cargo.toml" ] || {
     echo "tools/tree: $app: no Cargo.toml at $src" >&2
