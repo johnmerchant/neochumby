@@ -11,11 +11,19 @@
 #include <linux/fs.h>
 #include <asm/uaccess.h>
 #include <linux/string.h>
+#include <linux/delay.h>
 #include <asm/io.h>
 #include <asm/system.h>
 
 #define KERNEL_ORDER 10
 #define INITRD_ORDER 10
+/* The kernel's fixed mapping of the i.MX21's registers. */
+#define IO_BASE 0xe0000000UL
+#define SIDELOAD_USBH_CTRL 0x24080UL
+#define SIDELOAD_DMA_DCR 0x01000UL
+#define GPIO_BASE 0x15000UL
+#define GPIO_IMR 0x30UL
+#define GPIO_ISR 0x34UL
 #define BLOCKS 2
 #define MAX_BLOCKS 16
 /*
@@ -137,6 +145,29 @@ static void handoff(void)
 	if (ioff < 6)
 		return;
 
+	/*
+	 * Nothing may run from here on: an interrupt would use the pages about
+	 * to be overwritten, which aren't reserved, and stock's DMA would write
+	 * received data over the images. The LCD's only reads, and stays on.
+	 */
+	local_irq_disable();
+	/* The USB host's schedule: its reset state, which ends its transfers. */
+	__raw_writel(0, (void __iomem *)(IO_BASE + SIDELOAD_USBH_CTRL));
+	/* The DMA controller, which audio and the rest go through. */
+	__raw_writel(0, (void __iomem *)(IO_BASE + SIDELOAD_DMA_DCR));
+	/*
+	 * Every GPIO port's interrupts, masked and cleared. The ports share one
+	 * line: Linux hooks it up at the first port it probes, and one that's
+	 * still pending on a port it hasn't reached fires for ever. Stock leaves
+	 * the pen's enabled, so a touch at the wrong moment hung the boot.
+	 */
+	for (i = 0; i < 6; i++) {
+		__raw_writel(0, (void __iomem *)(IO_BASE + GPIO_BASE + i * 0x100 + GPIO_IMR));
+		__raw_writel(~0U, (void __iomem *)(IO_BASE + GPIO_BASE + i * 0x100 + GPIO_ISR));
+	}
+	/* Long enough for a transfer under way to finish: a few USB frames. */
+	mdelay(5);
+
 	memcpy((void *)__va(stub), sideload_stub_start, len);
 	w = (u32 *)__va(stub);
 	for (i = 0; i < len / 4; i++) {
@@ -153,7 +184,6 @@ static void handoff(void)
 	}
 
 	build_atags(atags, INITRD_DEST, ioff);
-	local_irq_disable();
 	__raw_writew(0x7F34, (void __iomem *)0xe0002000);
 	__raw_writew(0x5555, (void __iomem *)0xe0002002);
 	__raw_writew(0xAAAA, (void __iomem *)0xe0002002);
