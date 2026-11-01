@@ -3,6 +3,9 @@
 Status: **agreed by John and Matt**, replacing the "shells" part of
 proposal 0001 (#1).
 
+> Since this was written, neochumby runs only on Linux 7, and CHUMBY MODE and the
+> `chumby-mode` request have gone: a reboot is the way back to the stock software.
+
 ## What neochumby is for
 
 neochumby doesn't set out to recreate the original Chumby experience. It's

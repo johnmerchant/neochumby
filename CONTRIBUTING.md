@@ -23,8 +23,8 @@ changes easy to take.
   and `tools/deploy`) checks out the submodules of the apps it builds, so a
   clone without `--recurse-submodules` works there; `cargo` alone needs
   `git submodule update --init` first.
-- **Patch files** (the kernels' and BusyBox's, under `dist/patches/`,
-  `dist/kernel/` and `classic/patches/`) are plain patches, applied with
+- **Patch files** (the kernels', under `dist/kernel/` and
+  `tools/neochumby-kernel-sideloader/patches/`) are plain patches, applied with
   `patch -p1`, with a DEP-3-style header before the diff: `Description:`
   (the summary, then the explanation indented one space, `.` for an empty
   line), `Author:`, `Upstream-Status:` (`Inappropriate [AI generated
@@ -52,8 +52,8 @@ function there, and uses std instead wherever std does the job safely. The
 games (Doom, Quake) and the terminal apps that link a C program (fetch, htop,
 top, cmatrix, clock, bonsai) are allowed it as FFI to their C, and
 `crates/neochumby-wamr` as FFI to WAMR, in its one module `runtime.rs`. We use libc
-rather than rustix: rustix calls the kernel directly and needs Linux 3.2,
-the Chumby runs 2.6.16, and its `ioctl` and `mmap` are `unsafe` too (see
+rather than rustix: neochumby-boot still runs on the stock 2.6.16, where rustix
+can't (it needs Linux 3.2), and its `ioctl` and `mmap` are `unsafe` too (see
 neochumby-sys's documentation).
 
 CI holds every crate to this: `tools/check-unsafe`, in the "Format, lint,
@@ -81,22 +81,21 @@ cargo chumby            # the session and neochumby-home, for the Chumby
 cargo neochumbyd        # the server, with wasm companions (--features wasm-companions)
 tools/tree /tmp/tree doom quake airplay fetch htop top logs   # a whole tree, with apps
 dev/emulate start /tmp/tree   # the tree on an emulated Chumby (Testing without a Chumby, below)
-# the end-to-end scenarios as CI runs them: boot on dist; boot and smoke on classic
+# the end-to-end scenarios as CI runs them
 cargo build --release -p neochumbyd --features wasm-companions
 E2E_SCENARIOS=boot dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e
-NEOCHUMBY_EMU_PROFILE=classic E2E_SCENARIOS='boot smoke' dev/e2e /tmp/tree target/release/neochumbyd /tmp/e2e-classic
 ```
 
 Without Nix, the tools are: Rust with the
 `armv5te-unknown-linux-musleabi`, `x86_64-unknown-linux-musl` and `wasm32-wasip1` targets
 (`rustup target add ...`), zig 0.17 on PATH (the C compiler, linker and
 musl: https://ziglang.org), CMake 3.21 or later (for fetch and WAMR), libclang (for WAMR's bindings), Python 3.9 or
-later, and gh, logged in (`gh auth login`: dist/fetch and classic/fetch
-verify CI's images' attestations with it). `dev/setup --check` says which
+later, and gh, logged in (`gh auth login`: dist/fetch
+verifies CI's images' attestations with it). `dev/setup --check` says which
 are missing and how to get them on this system. `git submodule update
 --init` checks out the third-party C (Doom, Quake, fastfetch, htop, procps,
 ncurses, and dev/wasmbench's CoreMark) and qemu-chumby, but not the 2.6.16 kernel (`update = none`), which
-only `classic/build` needs.
+only the sideload module's build needs.
 
 The server half (neochumbyd and companions) is built for x86_64 Linux by
 default. `tools/tree --server-target aarch64-unknown-linux-musl` (64-bit
@@ -106,7 +105,7 @@ runs. A companion must build for all three: keep anything
 platform-specific behind `cfg`, as neochumbyd does.
 
 CI runs the same checks on every pull request (and builds the dist image
-for 5.9.16 and stable; mainline weekly, or when a change is to it alone:
+for stable; mainline weekly, or when a change is to it alone:
 dist/README.md, "Mainline, weekly"). To run them yourself:
 `cargo fmt --all --check`, `cargo clippy -- -D warnings` (on the host
 crates and, with `--target armv5te-unknown-linux-musleabi`, on the Chumby's
@@ -197,7 +196,7 @@ not use it, until its owner says so. Then:
   or down and up again 300 ms later. It goes where a real press goes: a
   `button` line to the start app, or back to the start app with
   `NEOCHUMBY_REASON=button`. **Except to an app with `button = true`**:
-  such an app reads `/dev/switch` itself, so a press from neochumbyd can't
+  such an app reads the button itself, so a press from neochumbyd can't
   reach it, and the command says so. A scenario that needs the button in a
   game (FIRE in Doom) can't be run on a Chumby this way.
 
@@ -212,21 +211,21 @@ All emulation happens through qemu-chumby (the submodule
 `emu/qemu/qemu-chumby`): QEMU's `chumby-classic` machine, the whole
 Chumby, run and driven by its `chumby-machine` runner. `dev/emulate` is
 neochumby's side of it: it puts a tree on a USB stick image, laid out as
-`tools/stick` lays one out, boots one of three profiles with the stick in
+`tools/stick` lays one out, boots one of two profiles with the stick in
 the machine's USB port, and drives the result with the commands the
 scenarios use. It needs Python 3.9+ and QEMU with the machine. No root,
 no VM: it runs natively on Linux and macOS.
 
-QEMU and the dist and classic images come by themselves. When `start`
+QEMU and the dist image come by themselves. When `start`
 (or `dev/e2e`, once, before its scenarios) needs one that's missing, or
 was made from other inputs than the checkout's now, it fetches CI's
 prebuilt build and verifies it: QEMU by the qemu-chumby commit pinned here
-(`emu/qemu/fetch`), each image by its inputs commit and kernel
-(`dist/fetch`, `classic/fetch`). If there's none, or it can't be verified
+(`emu/qemu/fetch`), the image by its inputs commit and kernel
+(`dist/fetch`). If there's none, or it can't be verified
 or doesn't run here (the inputs have local changes, `gh` isn't logged in,
 CI hasn't published it, no network), it says why in one line and builds
 from source instead (`emu/qemu/build`, which needs qemu-chumby's README's
-build dependencies; `dist/build` and `classic/build`, which need a
+build dependencies; `dist/build`, which needs a
 container runtime). What it made, and from what, is recorded beside it, so
 the next `start` uses it as it is. One you made yourself, or give
 (`--kernel`, `$QEMU`, `--qemu`), is used as it is. `--build`
@@ -236,16 +235,15 @@ prepare` does just this part.
 
 | Profile | What boots | Needs |
 | --- | --- | --- |
-| `dist` (default) | neochumby's Linux 5.9.16 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=stable` or `mainline` for those kernel tracks (`build/sideload-dist-stable`, `-mainline`; CI builds mainline weekly, so that may be its newest build, not this checkout's) |
-| `stock` | The Chumby's own Linux 2.6.16 firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
-| `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook as the stock boot does | Its image (`NEOCHUMBY_EMU_CLASSIC_KERNEL`, else `build/classic`, fetched or built by itself) |
+| `dist` (default) | neochumby's Linux 7 with our own userspace: its `/init` mounts the stick and runs its hook | `build/sideload-dist`, fetched or built by itself (or `NEOCHUMBY_EMU_DIST_KERNEL`); `NEOCHUMBY_DIST_KERNEL=mainline` for that kernel track (`build/sideload-dist-mainline`; CI builds mainline weekly, so that may be its newest build, not this checkout's) |
+| `stock` | The Chumby's own firmware, unmodified: the stock boot mounts the stick on `/mnt/usb` and runs its hook, which hands over to Linux 7. For that handoff alone (`dev/emulate-stock`) | Your own flash backup: `NEOCHUMBY_EMU_KERNEL`, `_NAND` (from qemu-chumby's `chumby-image`) and `_PSP` (a factory-like settings directory). Local only, never in CI or an attachment (`docs/legal.md`) |
 
 `--profile NAME` or `NEOCHUMBY_EMU_PROFILE` picks one. Your own settings,
 such as where your firmware is, can go in `~/.config/neochumby/env.local`,
 shared by every checkout, or in `.env.local` at the top of a checkout
 (git ignores it), which wins over it. Without a profile's images or QEMU, `start` and
 the scenarios exit 77, skipped (the stock profile's images are yours and
-never fetched; for the others, when neither fetching nor building works
+never fetched; for dist, when neither fetching nor building works
 here).
 
 ```sh
@@ -269,25 +267,20 @@ dev/emulate stop
   written as the Chumby writes it.
 - **Settings:** `start --psp DIR` adds DIR's files to `/psp`: on stock, in
   the settings partition of a copy of your NAND image (yours is never
-  written); on dist and classic, through the stick.
-- **Pictures and the like:** `start --bind DIR:/tmp/classic` puts a host
+  written); on dist, through the stick.
+- **Pictures and the like:** `start --bind DIR:/tmp/pictures` puts a host
   directory on the stick and links it there. `dev/emulate compare RAW ...`
   says which 320x240 RGB565 picture the screen is most like.
 - **Its directory** is `neochumby-emulate-UID-PROFILE` in the temporary
   directory, or `--state DIR`: the stick, the NAND copy, the console's log
   and chumby-machine's sockets.
 - **No network.** The emulated Chumby never has one (QEMU runs with `-nic
-  none`). `start --server SOCK` joins its second UART (ttyS1 on 2.6.16,
-  ttymxc1 on dist) to SOCK, a neochumbyd's `--listen-unix` socket, and
+  none`). `start --server SOCK` joins its second UART (ttymxc1) to SOCK, a neochumbyd's `--listen-unix` socket, and
   writes `server=serial` in the stick's neochumby.conf: the session then
   reaches neochumbyd over that line, with the same TLS sessions as over TCP
   (neochumby-proto's `mux`). Pairing and `delivery=sync` work there; NFS
   doesn't. The pairing it keeps goes back in /psp at the next start
   (`dev/emulate kept` copies it out), and `--psp` starts afresh.
-- **Weak keys on 2.6.16.** With no network, an emulated 2.6.16 Chumby
-  (stock, classic) never gathers the entropy /dev/random waits for, so the
-  emulator's hook lowers the threshold. The keys it makes, its pairing key
-  included, are weak: for testing only. Pair real Chumbys on real ones.
 
 `python3 dev/test_emulate.py` (CI runs it) checks the images dev/emulate
 makes and its whole control path against a stub QEMU, without firmware.
@@ -298,54 +291,29 @@ makes and its whole control path against a stub QEMU, without firmware.
 summary to attach to a pull request; `E2E_SCENARIOS` picks some. What
 passes where, so far:
 
-| Scenario | stock | dist | Why not |
-| --- | --- | --- | --- |
-| `boot` | passes | passes (CI) | |
-| `smoke` | passes | fails | on 5.9.16 the kernel's framebuffer console blinks its cursor over the session's screen (`vt.global_cursor_default=0` stops it), so the screen seldom settles; and the session reads touches from `/dev/input/event0`, which there is the top button (the touchscreen is `event1`), so no tap reaches it; there is no `/dev/switch` either |
-| `stock` | passes | skipped | the stock firmware's own boot |
-| `classic` | not run yet | not run yet | it needs a renderer's pictures; on dist it needs what smoke does, and `/dev/switch` |
-| `link` | passes | passes (CI) | CI's link job runs it on classic and dist, with `pairing` and `powercut` on classic, on every push to main and on pull requests touching what they cover (a round over the line takes minutes) |
+| Scenario | dist | Why not |
+| --- | --- | --- |
+| `boot` | passes (CI) | |
+| `smoke` | not in CI | the kernel's framebuffer console blinks its cursor over the session's screen, so the screen seldom settles |
+| `stock` | skipped | the sideload from the stock firmware: the stock profile only, local |
+| `link`, `pairing`, `powercut` | CI's link job | on every push to main and on pull requests touching what they cover (a round over the line takes minutes) |
 
-The session on dist still uses the stock kernel's `/dev/switch` and
-`/dev/accel`, where 5.9.16 offers evdev and IIO: the scenarios that need
-devices pass there once the session (or dist) bridges the two. The
-backlight and the speaker's mute it already finds as each kernel has them:
-`/proc/sys/sense1` on 2.6.16, else the backlight class and the sound
-card's `Speaker Switch`.
+The session still opens `/dev/accel`, where the image offers IIO, so `neochumby
+sensors` has no accelerometer there yet.
 
 **boot** (`dev/emulate-boot TREE OUT`): the boot runs the stick's hook,
-the hook runs the session from the stick, and home opens and draws (with
-its CHUMBY MODE bar on the stock 2.6 kernel; on dist, where home has
-none, until its screen settles).
+the hook runs the session from the stick, and home opens and draws, until
+its screen settles.
 
 **smoke** (`dev/emulate-smoke TREE OUT`, a tree with doom): home draws, a
 tap on DOOM opens Doom (without game data it says so and exits, and home
 comes back), the corner hold restarts home, the top button reaches the
-session when it holds `/dev/switch`, `neochumby sensors` on the console
-sees a touch (dist, classic), and CHUMBY MODE ends the session cleanly.
+session when it holds it, and `neochumby sensors` on the console sees a
+touch.
 
-**stock** (`dev/emulate-stock TREE OUT`, a tree with `./dev/probe`, at
-most four apps; the stock profile only): the stock boot runs the hook,
-PROBE draws its pattern and sees a tap where it was made, the corner hold
-ends it and home stays, and after CHUMBY MODE the stock software carries
-on to its own screens (light and mostly pale blue; nothing of its artwork
-is compared or kept).
-
-**neochumby-classic** (`dev/emulate-classic TREE PICTURES OUT`; run by
-`dev/e2e` when `NEOCHUMBY_CLASSIC_PICTURES` names the pictures). classic is
-the start app (`start=classic` in `/psp/neochumby.conf`), with pictures
-from neochumby-classic's offline smoke render, made with
-`NEOCHUMBY_TREE=TREE` so that its APPS screen lists the tree's apps:
-made-up data and placeholder artwork. The script checks that:
-- classic draws a slideshow page;
-- the top button toggles Home and back without restarting classic;
-- Home's APPS, then the DOOM tile, opens Doom through the session's pipe,
-  and classic comes back when Doom exits;
-- classic's service starts once, hears that Doom is in front, and keeps
-  running;
-- CHUMBY on Home ends the session with exit 0.
-
-Where it taps comes from the pictures' own tap zones.
+**stock** (`dev/emulate-stock TREE OUT`, a tree from `tools/tree --sideload
+DIR`; the stock profile only): the stock boot runs the hook, the hook loads the
+module from the stick and jumps, and Linux 7 comes up and opens home.
 
 **link** (`dev/emulate-link TREE NEOCHUMBYD OUT`): a neochumbyd here, at
 the other end of the emulated Chumby's serial line. PAIR pairs over the
@@ -383,10 +351,8 @@ the profile's own kernel: an import not granted, compiled code passed off
 as bytecode and a catalog app asking for `system` are refused before they
 run; out-of-bounds accesses trap; a forged `.aot` is passed over; memory
 stops at its cap; a runaway loop runs until it is killed. With seccomp
-(dist) the runner locks itself down and a forbidden call kills it; on
-2.6.16 (classic, stock) a catalog app is refused unless trusted. It uses
-`dev/emulate exec`, so it runs on the dist and classic profiles, not on
-a real Chumby.
+the runner locks itself down and a forbidden call kills it. It uses
+`dev/emulate exec`, so it runs on the dist profile, not on a real Chumby.
 
 ### A real Chumby: --device NAME
 
@@ -455,7 +421,6 @@ player = true                        # optional: a player (below)
 font = "spleen-8x16"                 # optional, text mode: its terminal's font
 tap = "q"                            # optional, text mode: what a tap types
 frontend = "airplay"                 # optional: it shows another app (below)
-linux = "5.9"                        # optional: the oldest Linux it runs on (tools/tree --linux)
 ```
 
 `tools/tree` checks the table and writes the tree's `manifest` from it
@@ -489,17 +454,12 @@ Text mode is the default, and what a program written for a terminal wants:
   with `TERM=linux`, as many characters as its font fits on the screen
   (64x30 in Spleen 5x8). Its stderr is the session's log, as every app's
   is. It has no framebuffer and no touchscreen device of its own.
-- **The session shows it.** On the stock 2.6.16 kernel, which has no
-  console on the screen, the session draws it (`neochumby::term`: the
-  Linux console's escape sequences, and xterm's 256 colours, alternate
-  screen and line drawing besides). On the dist kernels (Linux 5.9 and
-  7.2), the session passes its output to the kernel's console, tty1, for
+- **The session shows it.** The session passes its output to the kernel's console, tty1, for
   the kernel to draw: the font is loaded there (BusyBox's `loadfont`) and
-  the colours go in its palette (`ESC ] P`). Either way the app never holds
-  the screen, so it behaves the same on both. Fonts taller or wider than
-  32 pixels (Spleen 32x64), which the console can't take, are drawn by the
-  session there too. The console has only 16 colours, so a scheme's
-  background and foreground take colours 0 and 7 there.
+  the colours go in its palette (`ESC ] P`). The app never holds the screen. A font
+  of an app's own taller or wider than 32 pixels, which the console can't take,
+  is logged, and the default used. The console has only 16 colours, so a
+  scheme's background and foreground take colours 0 and 7.
 - **Touches arrive on its stdin** as xterm's mouse reports, the left
   button, once the program asks for them (curses' `mousemask` does) with
   DECSET 9, 1000, 1002 or 1003, in the encoding it asked for. With 1006,
@@ -514,8 +474,7 @@ Text mode is the default, and what a program written for a terminal wants:
   waits), or nothing without one. A USB keyboard on a dist image types
   into it as well.
 - **Its font** is the manifest's **`font`**: `spleen-5x8` (the default),
-  `spleen-6x12`, `spleen-8x16`, `spleen-12x24`, `spleen-16x32` or
-  `spleen-32x64` (Spleen 2.2.0, `crates/neochumby/fonts`, BSD-2-Clause), or
+  `spleen-6x12`, `spleen-8x16`, `spleen-12x24` or `spleen-16x32` (Spleen 2.2.0, `crates/neochumby/fonts`, BSD-2-Clause), or
   a PSF file (`.psf`, `.psfu`) in the app's directory, from `files/`. The
   owner's `font=` setting overrides it for every app.
 - **Its colours** are the owner's (`colors=` in the settings): GitHub Dark
@@ -556,8 +515,7 @@ Every app is opened the same way, whoever asked for it.
 - with `touch`, sharing the touchscreen: every reader gets every touch.
   The session watches the top-left corner for the escape hatch, whatever
   the mode;
-- **the top button** only with `button = true`. Only one process at a time
-  can have `/dev/switch` open, and the session keeps it. An app with
+- **the top button** only with `button = true`. The session keeps it. An app with
   `button = true` is handed the open file as `NEOCHUMBY_BUTTON=<fd>`, and
   `neochumby::input::Squeeze::open` picks it up. A read returns the level
   now, so act on a 0 → 1 change.
@@ -569,8 +527,6 @@ speaker or the button.
 - **To open another app**, write `open <app>` (the app's name, its
   directory under `apps/`) to the request pipe, then exit. The session runs
   that app next.
-- **For CHUMBY MODE**, write `chumby-mode`, then exit. The session stops
-  the services and hands the Chumby back to its own software.
 - Lines end in `\n`. Each end ignores lines it doesn't know, and the
   session ignores an `open` for an app that isn't here or can't run. The
   last request before you exit counts.
@@ -581,8 +537,8 @@ speaker or the button.
   So handle SIGTERM by exiting promptly, and expect anything you started to
   be ended with you.
 - **The top button:** unless your app says `button = true`, a press ends
-  it the same way and opens the start app with `NEOCHUMBY_REASON=button`,
-  as the stock Chumby does. If your app is the start app, it gets a
+  it the same way and opens the start app with `NEOCHUMBY_REASON=button`.
+  If your app is the start app, it gets a
   `button` line on its pipe instead (below). There's no hold gesture: games hold the button
   to fire, and the corner hold is the way out of anything.
 - **A service** may end your app the same way, to open another: any
@@ -596,7 +552,7 @@ In Rust:
 use neochumby::session::Pipe;
 
 if let Some(mut pipe) = Pipe::from_env() {
-    let _ = pipe.open("doom"); // or pipe.chumby_mode()
+    let _ = pipe.open("doom");
 }
 std::process::exit(0);
 ```
@@ -645,12 +601,11 @@ else belongs in `/tmp`.
   but not grow. Write small files, and replace them whole (write a new
   one, then rename it over the old).
 - It's `nosuid,nodev,noexec`, as `/tmp` is: nothing your app writes there
-  runs. The jail remounts its bind of the directory so (Linux 2.6.16 and
-  5.9 both can). A kernel that can't leaves it as `/psp` is, executable,
+  runs. The jail remounts its bind of the directory so. A kernel that can't leaves it as `/psp` is, executable,
   and the session says so once.
 
-**Playing a stream.** The stock player (`btplay` and its daemon) can't
-run in a jail. An app with `speaker` may ask the session to run it, and
+**Playing a stream.** A stream player (`/usr/bin/btplay` and its daemon,
+which the image hasn't got yet) can't run in a jail. An app with `speaker` may ask the session to run it, and
 carry on:
 - `play <url>` plays an `http://` stream (no TLS) of at most 200 bytes.
   It may hold only the characters a URL may hold unescaped
@@ -667,32 +622,30 @@ yours. The session also stops your stream:
   `audio::Unmuted` first, then `play`, and `play off` when asked to yield.
   A stream played without the speaker plays muted, and the session leaves
   it;
-- at CHUMBY MODE.
+- as the session ends.
 
 **The backlight.** Only root may set it. The start app and its service
 may write `brightness <n>` (0, off, to 65535, full), and carry on. The
-session writes `/proc/sys/sense1/brightness` (on a newer kernel without
-it, the first `/sys/class/backlight` device, scaled to its
-`max_brightness`), and puts back the level the Chumby booted with at
-CHUMBY MODE. From any other app it's refused and logged.
+session writes the first `/sys/class/backlight` device, scaled to its
+`max_brightness`, and puts back the level the Chumby booted with as it ends.
+From any other app it's refused and logged.
 
 In Rust: `Pipe::play(Some(url))`, `Pipe::play(None)` and
 `Pipe::brightness(n)`.
 
 **Your binaries.** Each `exec` and `service` must be a static ARM ELF,
-but in a tree for Linux 5.9 and later: there, if your crate links
+but if your crate links
 neochumby-ncurses, `tools/tree` links it dynamically against the tree's
 own musl and ncurses (in its `lib/`, from `tools/linux-libs`), and its
 jail has them at `/lib`. Before it starts one, the session refuses a file
-with a `PT_LOAD` below `0x1000` (page zero), a `PT_INTERP` (on 5.9 and
-later, any but `/lib/ld-musl-arm.so.1`), or a non-ARM ELF, and it checks
+with a `PT_LOAD` below `0x1000` (page zero), a `PT_INTERP` (any but `/lib/ld-musl-arm.so.1`), or a non-ARM ELF, and it checks
 every executable file in your app's directory the same way. Page zero is where
 the ARM `mmap` check doesn't reach the ELF loader. Put helper programs in
 the app's directory, not in `/tmp`: `/tmp`, `storage` and the speaker
 handover are `noexec`.
 
-**The network.** The stock kernel can't take the network away from a
-process. Instead, once a second, the session looks for internet sockets in
+**The network.** The session doesn't take the network away from a process.
+Instead, once a second, the session looks for internet sockets in
 `/proc/net`, which lists each socket with its owner's uid. If it finds one
 owned by an app whose `access` doesn't list `network`, it ends the app,
 `exec` or `service`, as if it had crashed. Unix sockets aren't counted.
@@ -709,8 +662,7 @@ back to. The owner picks it (`start=<app>`), and it defaults to
 `neochumby-home`. Declaring `start = true` lets your app be picked, and
 promises:
 - it **opens other apps** through the request pipe;
-- it offers **CHUMBY MODE**, and the owner's settings, or at least points
-  to where they are;
+- it offers the owner's settings, or at least points to where they are;
 - it handles **the top button**, for example by showing its own main
   screen. A press while it's in front arrives as a `button` line on its
   pipe (read it with `Pipe::receive` and `Notice::parse`, without waiting).
@@ -788,15 +740,15 @@ neochumby runs:
 - **told what's in front:** `front <app>` on its pipe as it starts, and
   whenever another app comes to the front. Reading these is optional. A
   line is never cut; while the pipe is full, only the latest notice waits;
-- **stopped at CHUMBY MODE:** SIGTERM to its process group, then SIGKILL 5
+- **stopped as the session ends:** SIGTERM to its process group, then SIGKILL 5
   seconds later.
 
-A service may write `open <app>` or `chumby-mode` to its pipe, like an
+A service may write `open <app>` to its pipe, like an
 app, but it doesn't exit after. That ends the app in front, so the session
 takes it only:
 - over the start app, from **any service** (an alarm, say); over any other
   app, only from the **start app's service**, so services don't fight over
-  the screen. `chumby-mode` only from the start app's service;
+  the screen;
 - when the app in front doesn't say `interrupt = false`;
 - not after the escape hatch, until an app is opened by hand (an `open`
   from the app in front), so a service can't trap the Chumby in an app gone
@@ -1066,21 +1018,18 @@ approved only once its description, or a comment, shows it running. There
 are three ways, from quickest to most faithful:
 
 1. **The emulator on the dist profile** (qemu-chumby's machine booting
-   neochumby's Linux 5.9.16, with your tree on a USB stick): `dev/e2e TREE
+   neochumby's Linux 7, with your tree on a USB stick): `dev/e2e TREE
    NEOCHUMBYD OUT` runs the scenarios, as CI does, or drive it by hand
    with `dev/emulate start`, `tap`, `button`, `shot` and `log` (see
    [Testing without a Chumby](#testing-without-a-chumby-devemulate)). It
    runs on Linux and macOS without root, and needs no firmware; not every
    scenario passes there yet.
-2. **The emulator on the stock profile**: the Chumby's stock 2.6.16
-   kernel and firmware, from **your own device's** flash backup
+2. **The emulator on the stock profile**: the Chumby's stock firmware, from **your own device's** flash backup
    (qemu-chumby's README, "Images", says how to build the images; they
    never leave your machine), booting your tree from a USB stick as a
-   Chumby does. Use it for anything that depends on the stock kernel, the
-   boot or the handover to the stock software:
-   `NEOCHUMBY_EMU_PROFILE=stock dev/e2e TREE NEOCHUMBYD OUT` runs the
-   scenarios on it, with `dev/emulate-stock`, which only it can: neochumby
-   inside the stock boot, handing back to the stock software. Put where
+   Chumby does. Use it for anything that depends on the sideload from the stock
+   boot: `NEOCHUMBY_EMU_PROFILE=stock E2E_SCENARIOS=stock dev/e2e TREE
+   NEOCHUMBYD OUT` runs `dev/emulate-stock`. Put where
    your images are in `~/.config/neochumby/env.local`, which every
    checkout and worktree shares, or in `.env.local` at a checkout's root,
    which wins over it (git ignores it): `NEOCHUMBY_EMU_KERNEL=`, `_NAND=`,
@@ -1116,11 +1065,11 @@ yet), say which and why. A reviewer may run it on a Chumby for you.
 ### Scenarios run everywhere
 
 The automated scenarios (`dev/emulate-boot`, `dev/emulate-smoke`,
-`dev/emulate-pairing`, `dev/emulate-powercut`, `dev/emulate-classic`,
+`dev/emulate-pairing`, `dev/emulate-powercut`,
 `dev/emulate-stock`, and any you add to `dev/e2e`) use only
 `dev/emulate`'s verbs, `start`, `log`/`wait log`, `shot`, `tap`, `button`
 and `stop`, so the same scenario runs on each of the emulator's profiles
-(`--profile stock|dist|classic`) and on a real Chumby (`--device NAME`,
+(`--profile dist|stock`) and on a real Chumby (`--device NAME`,
 through `neochumbyd`; remote input needs that Chumby set `dev=on`). Write
 them so they pass on all of them:
 

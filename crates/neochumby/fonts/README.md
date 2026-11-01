@@ -17,7 +17,6 @@ PSF files its release ships for the Linux console, unchanged.
 | `spleen-8x16.psfu` | 8x16 | 40x15 | `5c894ef5250e9429ea4a22793bfa563cd923f86b9724194802f6acad67dae7b0` |
 | `spleen-12x24.psfu` | 12x24 | 26x10 | `ba7490188ae7dde9934bab24498cff71ff48c89ebd8a244d4f8c642b354bb57c` |
 | `spleen-16x32.psfu` | 16x32 | 20x7 | `b3b6067d4c00c2e8acae1df68c04ab35d23b6bec47120cb29ffa7bc9b975baad` |
-| `spleen-32x64.psfu` | 32x64 | 10x3 | `4d023b23fc561903b738fd3a94d81096da0161edf09808372a1e4fe63b16467d` |
 
 8x16 is PSF version 1, the others version 2; each has 512 glyphs and a
 Unicode table. The dist kernels also have Spleen 5x8 built in as the

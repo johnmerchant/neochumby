@@ -2,9 +2,9 @@
 
 ## What neochumby protects, and what it doesn't
 
-**Treat anything that runs on a Chumby as able to get root.** Its stock
-kernel, Linux 2.6.16, gets no fixes, and it has local privilege
-escalations that will never be fixed on it. The jail below is there to
+**Treat anything that runs on a Chumby as able to get root.** Its kernel is
+Linux 7 on a board nothing else tests, with out-of-tree drivers of ours, on a
+CPU with few hardening features. The jail below is there to
 keep an app that misbehaves from disrupting the others and the Chumby's
 normal running. It is not a security boundary.
 
@@ -34,20 +34,17 @@ neochumbyd delivered.
   nothing tells them apart.
 - **The jail refuses page-zero ELFs.** An ARM ELF with a `PT_LOAD`
   below `0x1000`, or one that needs an interpreter, is refused, as is one
-  hidden among the app directory's executable files. On Linux 5.9 and
-  later one interpreter is allowed: the tree's own musl, which the jail
+  hidden among the app directory's executable files. One interpreter is allowed: the tree's own musl, which the jail
   of an app that names it binds at `/lib/ld-musl-arm.so.1` with the
   tree's other libraries (`lib/`). They are files of the tree like any
   other: in its manifest, and in a checked tree each is bound from its
   checked copy. An app's `/tmp`, its `storage` and the speaker handover
   are `noexec`. That closes one NULL-pointer family (the ARM ELF loader
-  can map page zero even though `mmap` refuses it); it does not fix the
-  2.6.16 kernel.
+  can map page zero even though `mmap` refuses it).
 - **That stops apps that are buggy or careless, not ones written to
-  attack.** The stock kernel (Linux 2.6.16, from 2006) has no user, pid
-  or network namespaces, no seccomp, no cgroups and no netfilter, and it
-  has known local privilege escalations that will never be fixed on it.
-  Native code written to get root there probably can. **An app is still
+  attack.** The jail uses a mount namespace, a uid of the app's own and
+  rlimits, not user, pid or network namespaces, seccomp or cgroups, and the
+  kernel has no netfilter. Native code written to get root probably can. **An app is still
   trusted code: install apps only from sources you trust.** What the
   Chumby runs comes from the paired neochumbyd: guard that, and the tree
   it serves.
@@ -60,9 +57,9 @@ neochumbyd delivered.
   system, TCP or signals outside). Its compiled code is only ever compiled
   by `tools/tree` or neochumbyd, never taken from its author, and in a
   checked tree (`delivery=nfs`) the session gives it checked copies of its
-  module, its compiled code and its manifest. On 2.6.16 there is no
-  seccomp, and a WAMR bug there is plausibly root, so an app from the
-  catalog (`source=catalog`) runs there only if its owner trusts it
+  module, its compiled code and its manifest. On a kernel without
+  seccomp a WAMR bug is plausibly root, so an app from the catalog
+  (`source=catalog`) runs there only if its owner trusts it
   (`trusted=APP:APP` in its settings); a catalog app is never given
   `root`, `system`, `terminal`, `logs` or `network`.
 - **The network can't be taken from an app.** An app whose `access`
@@ -71,16 +68,20 @@ neochumbyd delivered.
   second). That finds a socket; it doesn't stop one. A packet sent between
   two looks goes unseen.
 - **What the session does as root for an app** is narrow: the mute and
-  volume, the backlight (the start app only), and the stock player
-  `btplay`, run with an `http://` URL checked character by character as
+  volume, the backlight (the start app only), and the player
+  `btplay`, where there is one, run with an `http://` URL checked character by character as
   one argument, never through a shell. `storage` is capped by measuring
   (every 2 seconds), not by the kernel, so an app can overshoot its 64 KiB
   briefly before it's ended. **`storage` is `noexec`, `nosuid` and
   `nodev`:** it's a bind mount from `/psp`, which the jail remounts so in
-  its own namespace, on 2.6.16 as on 5.9 (2.6.16 does it by remounting
-  `/psp` itself with the flags it has; the bind alone gets the three). A
-  kernel that refuses (EINVAL) leaves it as `/psp` is, executable, and the
+  its own namespace. A kernel that refuses (EINVAL) leaves it as `/psp` is, executable, and the
   session logs that once; any other failure, and the app doesn't start.
+- **The stock firmware runs first.** Linux 2.6.16 gets no fixes, and it has
+  local privilege escalations that will never be fixed on it. It runs no app:
+  only the boot hook, which hands over to Linux 7. From NFS the module, kernel,
+  initramfs and handoff program are each checked against the signed manifest
+  by `/psp/neochumby-boot`, or nothing is sideloaded; from a stick they're
+  whatever is on the stick, as a stick's tree always is.
 - **What each delivery guarantees** (README, "Delivery: NFS or sync"):
   - **`sync`:** every file comes over the pinned session, hashed as it
     arrives, and the Chumby boots the stick's set without the network. Its
@@ -115,10 +116,7 @@ neochumbyd delivered.
   Unix socket, and each connection on the line is handled as one over TCP:
   the same handshake, keys and pairing. The line only carries bytes, so
   anyone who can connect to that socket can ask to pair, as anyone on the
-  network can: keep it in a directory only you can reach. An emulated
-  2.6.16 Chumby's keys are weak (dev/emulate-userhook2 lowers
-  /dev/random's threshold, as it gathers almost no entropy): pair with it
-  for testing only.
+  network can: keep it in a directory only you can reach.
 - **A Chumby pairing trusts whoever answers.** It can't tell neochumbyd's
   approval from an impostor's, so someone in the middle while it pairs
   can have it pin their key, even though neochumbyd never approves them.
