@@ -141,7 +141,7 @@ pub fn run(tree: &Path, state: &Path, confine: &Confine, chumby: &str, app: &str
     // the app's uid as a native one is, with Wasmtime inside (wasm.rs).
     let program = if wasm { own_exe()? } else { exe.clone() };
     let mut cmd = plan.command(&program, state, tree, &home, None)?;
-    let home = plan.prepare(&mut cmd, &home, None)?;
+    let home = plan.prepare(&mut cmd, &home)?;
     if wasm {
         cmd.arg("wasm-companion").arg("--home").arg(&home).arg("--app").arg(app);
         let dir = tree.join("apps").join(app);

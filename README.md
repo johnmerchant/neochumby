@@ -1,13 +1,16 @@
 # neochumby
 
-New software for the original Chumby (the Chumby Classic, 2008): apps in
-Rust, booted from a stick or over the network, with the Chumby's own
+New software for the original Chumby (the Chumby Classic, 2008): Linux 7 and
+apps in Rust, booted from a USB stick, with the Chumby's own
 firmware left as it is.
 
-Nothing is flashed. The stock boot script runs a hook from a stick or from
-the Chumby's writable settings partition, and the hook runs neochumby from
-the stick or from an NFS export. **CHUMBY MODE** in the app list hands
-the Chumby back to its stock software, and a reboot brings neochumby back.
+Nothing is flashed, and nothing on the Chumby is ever written: a USB stick is
+the only way in. The stock boot script runs a hook from a stick, and the hook,
+on the stock kernel, loads a module that hands over to Linux 7 in RAM
+(`tools/neochumby-kernel-sideloader`). Linux 7 has no NAND driver, and runs
+neochumby from the stick, which also holds the Chumby's pairing and settings.
+To go back to the stock software, take the stick out, or put a file named
+`neochumby-off` on it, and reboot.
 Every binary is paged in as it runs, so apps cost the Chumby nothing until
 opened.
 
@@ -19,10 +22,10 @@ here: see [docs/legal.md](docs/legal.md).
 ## The hardware
 
 Freescale i.MX21: an ARM926EJ-S at about 266 MHz, with no FPU and 64 MB of
-RAM. The screen is 320x240 RGB565 (`/dev/fb0`), with a resistive touchscreen
-(`/dev/input/event0`), a squeeze switch in the case (`/dev/switch`) and an
-accelerometer (`/dev/accel`). It runs Linux 2.6.16 with glibc 2.8. Our
-binaries are static (musl), so they don't depend on its userland.
+RAM. The screen is 320x240 RGB565 (`/dev/fb0`), with a resistive touchscreen, a
+squeeze switch in the case and an accelerometer. Its firmware is Linux 2.6.16
+with glibc 2.8, which neochumby leaves behind at boot: neochumby's own kernel
+is Linux 7 (`dist/`).
 
 ## What's here
 
@@ -35,13 +38,13 @@ binaries are static (musl), so they don't depend on its userland.
 | `crates/neochumby/third_party/themes` | Schemes from their own repositories, over iTerm2-Color-Schemes' copies of them: [Catppuccin](https://github.com/catppuccin/ghostty) (b0b03cc: Frappé, Latte, Macchiato, Mocha), [Dracula](https://github.com/dracula/ghostty) (b0e6459), [Rosé Pine](https://github.com/rose-pine/ghostty) (d8b4ec0: and Dawn, Moon) and [Tokyo Night](https://github.com/folke/tokyonight.nvim) (cdc07ac: Day, Moon, Night, Storm), their Ghostty themes as they are; each one's `SOURCE` has its repository, commit and files | MIT (Catppuccin, Dracula, Rosé Pine) and Apache-2.0 (Tokyo Night), each `LICENSE` beside it |
 | `crates/neochumby-softfloat` | libgcc's hand-written ARM soft float, which the library links into every app: float maths about twice as fast as the generic routines | GPL-3.0 with the GCC Runtime Library Exception |
 | `crates/neochumby-proto` | How a Chumby and neochumbyd talk: TLS 1.3 with pinned keys, over TCP or a serial line | MIT |
-| `crates/neochumby-sync` | `delivery=sync`: the rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
+| `crates/neochumby-sync` | The rounds that keep a copy of a Chumby's tree on its stick, both ends, and the checks the boot hook relies on. The receiver, `neochumby-sync`, is a binary of `crates/neochumby` | MIT |
 | `crates/neochumby-guest` | The wasm runner's host API for apps built as WebAssembly: the screen, touches, the accelerometer, time and the session, as safe functions | MIT |
 | `crates/neochumby-wasm` | `neochumby-wasm`, the runner for apps built as WebAssembly: WAMR in the app's jail, a host API that grants only what its manifest lists, and seccomp and Landlock where the kernel has them | MIT |
 | `crates/neochumby-wamr` | [WAMR](https://github.com/bytecodealliance/wasm-micro-runtime), the WebAssembly Micro Runtime (WAMR-2.4.5, built by `wamr-sys` from [our fork of wamr-rust-sdk](https://github.com/johnmerchant/wamr-rust-sdk), pinned, with its patches), for the Chumby: its AOT loader and fast interpreter, with a small safe interface, for apps as WebAssembly (proposal 0003) | MIT; WAMR and wamr-sys are Apache-2.0 WITH LLVM-exception |
-| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses (or, for Linux 5.9 and later, the same built shared, by `tools/linux-libs`) | MIT, and ncurses' own X11-style licence |
-| `crates/neochumbyd` | The server a Chumby pairs with: its apps over NFS or synced to its stick, pairing, and the apps' server halves, native or WebAssembly under [Wasmtime](https://wasmtime.dev) (the `wasm-companions` feature, which release builds have) | MIT; Wasmtime is Apache-2.0 WITH LLVM-exception |
-| `apps/home` | neochumby-home, the app list, in text mode: the installed apps, pairing, the time, and CHUMBY MODE on the stock 2.6 kernel (the dist's Linux has no stock software to go back to) | MIT |
+| `crates/neochumby-ncurses` | [ncurses](https://invisible-island.net/ncurses/) (6.6, a submodule), built static with the terminal's `linux` (and xterm-256color) compiled in, for the apps whose programs use curses (or, in a tree, the same built shared, by `tools/linux-libs`) | MIT, and ncurses' own X11-style licence |
+| `crates/neochumbyd` | The server a stick is paired with: its apps synced to the stick, and the apps' server halves, native or WebAssembly under [Wasmtime](https://wasmtime.dev) (the `wasm-companions` feature, which release builds have) | MIT; Wasmtime is Apache-2.0 WITH LLVM-exception |
+| `apps/home` | neochumby-home, the app list, in text mode: the installed apps, the time | MIT |
 | `apps/airplay` | AirPlay: a receiver per Chumby on neochumbyd, played on the Chumby's speaker, with a now-playing screen in text mode; and `neochumby-airplay-proto`, its messages, for frontends of other apps | MIT |
 | `apps/catalog` | GET APPS: the catalog on the Chumby, in text mode, from its neochumbyd, which installs an app only once its owner has approved it on the Chumby and on the server | MIT |
 | `apps/logs` | LOGS: the Chumby's logs (the session's, the kernel's, /tmp and /var/log), and with a neochumbyd the host's, followed and scrolled by touch | MIT |
@@ -61,8 +64,8 @@ binaries are static (musl), so they don't depend on its userland.
 | `apps/quake` | neochumby-quake: id's WinQuake software renderer ([id-Software/Quake](https://github.com/id-Software/Quake), a submodule), made fast on the ARM926 (below) | GPL-2.0-or-later |
 | `boot/userhook2` | The boot hook | MIT |
 | `tools/` | The cross-compiling wrappers and `deploy` | MIT |
-| `dist/` | The sideload image: a Buildroot build of Linux 5.9.16 with an initramfs built in (`sideload-zImage`), and the same initramfs on its own (`sideload-rootfs.cpio.gz`) | MIT |
-| `tools/neochumby-kernel-sideloader` | Stock 2.6.16 -> Linux 5.9.16 module handoff (draft) | MIT |
+| `dist/` | The image: a Buildroot build of Linux 7 (`sideload-zImage`), and its initramfs (`sideload-rootfs.cpio.gz`) | MIT |
+| `tools/neochumby-kernel-sideloader` | From the stock 2.6.16 to Linux 7: the module, and its build | MIT |
 | `dev/` | Device-side test helpers: framebuffer capture to PNG, touch injection, mount test | MIT |
 | `dev/wasmbench` | Proposal 0003's benchmark of WebAssembly runtimes on a Chumby: its workloads in Rust, and EEMBC's [CoreMark](https://github.com/eembc/coremark) (1f483d5, a submodule) | MIT; CoreMark Apache-2.0, with EEMBC's terms for its name |
 | `emu/` | The emulator: [qemu-chumby](https://github.com/johnmerchant/qemu-chumby) at a pinned commit (a submodule), QEMU's `chumby-classic` machine with its runner and image tool, and the script that builds it | GPL-2.0-or-later, like QEMU (its image tool: MIT) |
@@ -115,7 +118,6 @@ player = true                        # a player: MUSIC buttons may open it (need
 font = "spleen-8x16"                 # text mode: its terminal's font
 tap = "q"                            # text mode: what a tap types until it asks for the mouse
 frontend = "airplay"                 # it shows that app, in its place, once the owner approves
-linux = "5.9"                        # the oldest Linux it runs on (tools/tree --linux); absent: any, the stock 2.6 too
 transition = "neochumby-transitions" # animates switching from one app to the next
 ```
 
@@ -139,8 +141,7 @@ An app can use any of these keys:
   Chumbys, rather than once per Chumby as a companion does, such as a
   household web page. neochumbyd starts it when it starts, starts it again
   if it exits, and stops it when neochumbyd stops. It may bind the TCP
-  ports `listen` names. With its owner's leave, it reaches neochumbyd
-  through the admin socket (below).
+  ports `listen` names.
 
   | Key | Runs | How many |
   | --- | --- | --- |
@@ -152,17 +153,16 @@ An app can use any of these keys:
   Companions and server programs run sandboxed: see
   [SECURITY](SECURITY.md).
 - **`exec`:** what runs, full-screen, when the app is opened. The session
-  (`neochumby`) runs one app at a time in front. An app opens another, or
-  CHUMBY MODE, by asking the session over its request pipe
+  (`neochumby`) runs one app at a time in front. An app opens another by asking the session over its request pipe
   (`NEOCHUMBY_SESSION`) and exiting. When an app exits, the session goes
   back to the start app. [CONTRIBUTING](CONTRIBUTING.md#the-app-contract)
   has the details.
 - **`start`:** the start app is the one a Chumby opens first and comes back
   to. It's named by `start=<app>` in this Chumby's settings from its
   neochumbyd (`neochumbyd set NAME start=<app>`, kept in
-  `/psp/neochumby.settings`), else in `/psp/neochumby.conf`, or else it's
+  the stick's `neochumby/state/neochumby.settings`), else in its `neochumby.conf` beside it, or else it's
   `home` (neochumby-home). Only an app with `start = true` may be the start
-  app; the session refuses any other, logs why, and uses `home`. `neochumbyd pairing`
+  app; the session refuses any other, logs why, and uses `home`. `neochumbyd list`
   names the start apps in the tree, and suggests one to a Chumby whose
   `start` isn't set; `neochumbyd set NAME start=<app>` warns about a name
   that isn't one. **Holding the top-left
@@ -173,32 +173,29 @@ An app can use any of these keys:
   service may open an app over the start app, and the start app's service
   over any app, unless the one in front says **`interrupt = false`**, as
   Doom and Quake do.
-- **`button`:** the session keeps the top button (`/dev/switch`, which only
-  one process can have open). A press returns to the start app, as on the
-  stock Chumby, unless the app in front says `button = true`: then it has
+- **`button`:** the session keeps the top button. A press returns to the start
+  app, unless the app in front says `button = true`: then it has
   the button. Doom and Quake fire with it. With the start app in front, a
   press is a `button` line on its pipe.
 - **`access`:** each app runs as a user of its own, jailed in a directory
   holding only its own files, a `/tmp` of its own and what `access` lists:
   `fb`, `touch`, `speaker`, `accel`, `system` (`/proc`, `/sys`, `/etc`)
   `network`, `terminal`, `logs` (the Chumby's logs, read-only) and `storage`
-  (a small directory of its own in `/psp`, kept across boots). The session
-  does for it what only root may: the mute and volume, the stock stream
-  player (`play`), and, for the start app, the backlight (`brightness`). It
+  (a small directory of its own, kept on the stick across boots). The session
+  does for it what only root may: the mute and volume, the stream player
+  (`play`, `/usr/bin/btplay` where there is one: the image has none yet), and, for the start app, the backlight (`brightness`). It
   never sees the Chumby's key. `root`, listed alone or with `fb`, runs it
-  unjailed, as root: `home` does, as it pairs the Chumby (in text mode), and
+  unjailed, as root: `home` does (in text mode), and
   neochumby-classic (with `fb`).
   [SECURITY](SECURITY.md) says what that protects, and what it doesn't.
 - **Text mode, or `fb`:** an app's `exec` runs in text mode unless its
   `access` lists `fb`. In text mode it has no framebuffer: its stdin and
   stdout are a terminal (`TERM=linux`), which the session shows on the
   screen, and a touch arrives on its stdin as a mouse click
-  ([CONTRIBUTING](CONTRIBUTING.md#text-mode) has the encoding). On the
-  stock 2.6.16 kernel the session draws the terminal itself; on the dist
-  kernels (5.9, 7.2) the kernel's console does. Games and anything that
+  ([CONTRIBUTING](CONTRIBUTING.md#text-mode) has the encoding). The kernel's console draws it. Games and anything that
   draws its own screen (Doom, Quake, LOGS) list `fb`. **`font`** picks the
   terminal's font, one of Spleen's six sizes (`spleen-5x8`, the default,
-  64x30 characters; `spleen-6x12`, `-8x16`, `-12x24`, `-16x32`, `-32x64`)
+  64x30 characters; `spleen-6x12`, `-8x16`, `-12x24`, `-16x32`)
   or a PSF file in the app's directory; **`tap`** what a tap types while
   the program hasn't asked for the mouse (`q` quits top).
 - **The owner's font and colours:** `neochumbyd set NAME font=spleen-8x16`
@@ -214,11 +211,10 @@ An app can use any of these keys:
   `foreground = ...`, `cursor-color = ...`, `palette = N=#rrggbb`), which
   most theme sites offer; or 18 hex colours joined by `:` (background,
   foreground, then colours 0 to 15). A name it can't find is logged, and
-  GitHub Dark used. Each scheme is its 16 colours, background, foreground
-  and cursor: on 2.6.16 the cursor is drawn in its colour, and on the
-  dist kernels in reverse video, as the Linux console draws it; a theme's
-  other colours (the selection's, the cursor's text) aren't used. Without
-  a neochumbyd, the same lines go in `/psp/neochumby.conf`.
+  GitHub Dark used. Each scheme is its 16 colours, background and foreground;
+  the cursor is drawn in reverse video, as the Linux console draws it; a
+  theme's other colours (the selection's, the cursor's text) aren't used. Without
+  a neochumbyd, the same lines go in the stick's `neochumby/state/neochumby.conf`.
 - **`wasm`:** in place of `exec`, a binary that `tools/tree` builds for
   `wasm32-wasip1` and compiles for the Chumby (`tools/wamrc`, when LLVM 18
   is there: `nix develop .#wasm`; else it runs interpreted, slowly). The
@@ -231,7 +227,7 @@ An app can use any of these keys:
   button opens (`NEOCHUMBY_PLAYER`), and its MUTE button pauses and resumes
   (the start app asks the session, which tells the player's service).
   It's named by `player=<app>` (`neochumbyd set NAME player=<app>`), else it's
-  `somafm`, else the first app with `player = true`. `neochumbyd pairing`
+  `somafm`, else the first app with `player = true`. `neochumbyd list`
   names the players in the tree.
 - **`frontend`:** an app that shows another, through that app's service:
   an AirPlay screen of your own, say. The owner approves it with
@@ -246,7 +242,8 @@ An app can use any of these keys:
   draws underneath, then runs the binary, jailed as its app, with both
   pictures on stdin (each 320x240 RGB565, little-endian), and shows each
   frame it writes to stdout in the overlay, for up to 3 seconds. It needs a
-  kernel with the overlay: the stock 2.6.16 one and dist 5.9.16 have it.
+  kernel with the overlay, which Linux 7 doesn't have yet: until then, apps
+  switch with no animation.
   [`apps/transitions`](apps/transitions) is one, with nine effects.
 
 ## Building
@@ -283,8 +280,7 @@ A Chumby runs neochumby from a tree of the session and its apps:
 
 ```
 neochumby                  the session
-neochumby-sync             the receiver for delivery=sync (not on a stick made by hand)
-userhook2                  the boot hook, which pairing installs
+neochumby-sync             the receiver, which keeps a paired stick's synced sets in step
 colors, colors.LICENSE     the colour schemes text-mode apps can be drawn in (colors=), and their licences
 themes/                    your own schemes, if any (colors=)
 apps/home/                 neochumby-home, manifest
@@ -296,10 +292,11 @@ apps/fetch/                neochumby-fetch, manifest, fastfetch.jsonc, chumby.tx
 apps/htop/                 neochumby-htop, manifest
 apps/top/                  neochumby-top, manifest
 apps/cmatrix/              neochumby-cmatrix, manifest (and so on for clock, bonsai, pipes, aquarium, genact)
-lib/                       for Linux 5.9 and later: ld-musl-arm.so.1, libncursesw.so.6, libpanelw.so.6
+lib/                       ld-musl-arm.so.1, libncursesw.so.6, libpanelw.so.6
+sideload/                  what the hook needs on stock: neochumby-handoff; with --sideload DIR, sideload.ko, zImage, initramfs.cpio.gz
 ```
 
-`tools/tree OUT [-d DATA] [--pinned] [APP ...]` builds that tree. It always includes
+`tools/tree OUT [-d DATA] [--sideload DIR] [--pinned] [APP ...]` builds that tree. It always includes
 the session and neochumby-home, plus the apps you name, from wherever
 they are:
 
@@ -321,39 +318,75 @@ Each app's binaries are built for the Chumby, and its companion and server
 program for the server, with the toolchain above. Its manifest is made from its
 `Cargo.toml`, and its `files/` directory, if it has one, is copied as it
 is. Game data is added from `DATA`, your own copies laid out the same way.
-Every binary is static, but in a tree for the dist's Linux (`--linux 5.9`
-and later) the apps that use curses (htop, top, cmatrix, clock, bonsai)
+Every binary is static, but the apps that use curses (htop, top, cmatrix, clock, bonsai)
 link musl and ncurses dynamically, from the tree's `lib/`
 (`tools/linux-libs` builds them, with zig, and `pkg-config` finds them).
-The jail puts those at `/lib` for such an app; the dist's image itself
-stays static, and a tree for the stock 2.6 has no `lib/`.
-The tree can come from a stick or from a server.
+The jail puts those at `/lib` for such an app; the image itself stays
+static. `--sideload DIR` adds what the hook needs to leave the stock firmware,
+from `DIR/sideload.ko` (`tools/neochumby-kernel-sideloader/build DIR`) and
+`DIR/sideload-zImage` and `sideload-rootfs.cpio.gz` (`dist/fetch DIR`, or
+`dist/build DIR`).
 
-### From a stick
+### A stick
 
-```sh
-tools/stick /Volumes/STICK [-d DATA] [APP ...]
-```
-
-Any FAT-formatted USB stick works. Plug it into a Chumby and power on:
-neochumby boots with the stick's apps. **Nothing on the Chumby changes**:
-its stock boot runs the stick's `userhook2`. Without the stick it boots
-as it always did.
-
-### From a server: neochumbyd
-
-neochumbyd serves the tree read-only over NFSv3, with NFS and MOUNT on
-one TCP port. It also pairs Chumbys and runs their services:
+A stick is the only way a Chumby runs neochumby. Any FAT-formatted USB stick
+works.
 
 ```sh
-neochumbyd serve --state /var/lib/neochumbyd --shairport $(command -v shairport-sync)
+dist/fetch build/sideload                                  # or dist/build
+tools/neochumby-kernel-sideloader/build build/sideload
+tools/stick /Volumes/STICK --sideload build/sideload [-d DATA] [APP ...]
 ```
+
+Plug it into a Chumby and power on: neochumby boots with the stick's apps.
+**Nothing on the Chumby changes**: its stock boot runs the stick's `userhook2`,
+which stops the stock software's UI and hands over to Linux 7. Without the
+stick it boots as it always did. Made like this, a stick is not paired: it runs
+the tree it was made with, and needs no server.
+
+On the stick:
+
+```
+userhook2                   the boot hook
+neochumby-off               if you put one there: the hook does nothing
+neochumby/                  the tree it was made with: the session, home, apps
+neochumby/sideload/         sideload.ko, zImage, initramfs.cpio.gz, neochumby-handoff
+neochumby/state/            with --pair: neochumby.key, neochumby.conf; as it
+                            runs: neochumby.settings, what apps keep
+neochumby/a/ b/ current ... the synced sets, once a paired Chumby has them
+```
+
+### Pairing a stick: neochumbyd
+
+neochumbyd keeps a copy of the app tree on each paired stick, and runs the
+apps' server halves. Pairing happens when the stick is made, on the machine
+making it; nothing is asked of the Chumby:
+
+```sh
+neochumbyd serve --state /var/lib/neochumbyd --shairport $(command -v shairport-sync)   # on the server
+tools/stick /Volumes/STICK --sideload build/sideload --pair HOST --name kitchen [APP ...]
+```
+
+This makes the Chumby's key on your machine, writing the private key straight
+to the stick (`neochumbyd keygen`: no temporary file, and it is never sent
+anywhere), registers its public key and `kitchen` with the neochumbyd on HOST
+over ssh (`neochumbyd add`), and writes the server's key and address to the
+stick. `--server ADDR` is the address a Chumby reaches the server at (by
+default HOST), `--state DIR` neochumbyd's state directory there, `--pair local`
+the neochumbyd on this machine, and `--replace` puts this stick in the place of
+another already registered as `kitchen`. A stick made again keeps its key. Put
+the stick in the Chumby and power on: it connects at once, and any other key is
+turned away.
+
+**The pair of stick and Chumby is what's paired**, and the stick is the
+identity: it moves with the stick. In another Chumby the same stick is the same
+Chumby to the server. If a stick is lost, `neochumbyd forget kitchen` revokes it
+at once; then make another with `--name kitchen`. `neochumbyd list` shows each
+Chumby's name, key and settings. [SECURITY](SECURITY.md) says what a stolen
+stick gives.
 
 `tools/deploy HOST [APP ...]` installs the tree and neochumbyd in the server's
 state directory (`/var/lib/neochumbyd`), leaving game data alone.
-BusyBox's `mount` asks the port mapper on port 111 even when given the
-ports, so the server should refuse port 111 rather than drop it. Otherwise
-the mount hangs.
 
 **A sandbox for apps' programs.** neochumbyd runs no companion or server
 program without one, and it says at start which sandbox they get and
@@ -407,37 +440,9 @@ RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
 Restart=on-failure
 ```
 
-**Pairing** makes a Chumby boot from neochumbyd with no stick:
-
-1. Put a `neochumby.conf` holding `server=<neochumbyd's address>` on a
-   neochumby stick, and boot the Chumby from it.
-2. The app list shows **PAIR**. Tap it: the Chumby shows a code of 32
-   hex digits, in eight groups of four.
-3. On the server, `neochumbyd pairing` lists the request with the same
-   code. If it matches, run `neochumbyd approve CODE`, typing the code
-   from the Chumby's screen (case, dashes and spaces don't matter). If
-   another Chumby is already paired under the same name, `approve` says
-   so, and pairs this one in its place only with `--replace`.
-4. The Chumby writes its key, the server's key and the boot hook to
-   `/psp`. Remove the stick and restart.
-
-The code comes from the connection itself and both ends' keys, so it
-matches on both screens only if nothing sits between them, and it is too
-long for anyone in the middle to find a connection that makes it match.
-A request waits ten minutes; at most eight wait at once. After pairing,
-each end checks the other's key on every connection.
-
-**The admin socket** lets an app's server program, such as a household
-web page, do what the commands above do: list the Chumbys paired and
-asking, approve or refuse a request (`replace` approves as `--replace`
-does), forget a Chumby, and set its settings
-(`neochumbyd set`). Only an app you allow gets it: `neochumbyd allow
-<app> pairing` (`disallow` to take it back; `allow` alone lists what's
-allowed). A web page that pairs Chumbys, such as neochumby-classic's when
-it becomes a server program, needs this. Every change through it needs
-the **owner's token**, which `neochumbyd token` prints: give it to the web
-page when it asks. `neochumbyd token new` replaces it. The protocol is
-described in `crates/neochumbyd/src/admin.rs`.
+**The owner's token**, which `neochumbyd token` prints and `neochumbyd token new`
+replaces, is what the catalog's commands pass to neochumbyd's admin protocol
+(`crates/neochumbyd/src/admin.rs`), which only the command line speaks.
 
 **AirPlay** (the airplay app): while a paired Chumby is connected, its
 companion on neochumbyd runs an AirPlay receiver named after it ("Kitchen
@@ -496,7 +501,7 @@ exactly what it asks, its access words and its companion's hosts
 discovery.
 
 Installing and removing are the owner's: the command line does them
-through the admin socket's protocol (`install`, `uninstall`), with the
+through the admin protocol (`install`, `uninstall`), with the
 owner's token from the state directory, as a page given the socket does
 with the token its owner types.
 
@@ -537,49 +542,32 @@ allows the access on the Chumby; neochumbyd checks the app again and
 waits, and the Chumby shows a code:
 
 ```sh
-neochumbyd pairing                 # lists what Chumbys ask to install or remove
-neochumbyd approve ABCD-EF23       # shows it, and lets it go ahead (the admin socket's approve, with the owner's token)
+neochumbyd list                    # lists what Chumbys ask to install or remove
+neochumbyd approve ABCD-EF23       # shows it, and lets it go ahead (the admin protocol's approve, with the owner's token)
 neochumbyd refuse ABCD-EF23
 ```
 
 A request lapses after ten minutes, or when the Chumby leaves GET APPS.
 Once approved, the Chumby shows the install's progress and where home
-lists the new app; when it leaves GET APPS, neochumbyd restarts its
-session, so that the session knows the new app (on `delivery=sync`, the
-next round brings it). The installed catalog apps can be updated or
+lists the new app: its next sync round brings it to the stick, and its next
+restart runs it. The installed catalog apps can be updated or
 removed. An update that asks for nothing new goes ahead on the Chumby's
 say, as serve's own updates do, unless automatic updates are off; one
 that asks for more, and a removal, are approved the same way.
 
-### Delivery: NFS or sync
+### Sync
 
-Each paired Chumby gets its tree one of two ways, chosen on the server:
-
-```sh
-neochumbyd set kitchen delivery=sync   # or nfs, the default
-```
-
-- **`nfs`:** the boot hook mounts the tree from neochumbyd on every boot.
-  NFS is unauthenticated, so the Chumby checks what it mounted:
-  neochumbyd serves the tree's manifest signed with its key, and
-  `neochumby-boot` (installed in `/psp` by pairing, or by the session)
-  checks it against the key the Chumby pinned, then copies each program it
-  runs out of the tree into RAM, checked against the manifest. The tree is
-  mounted `noexec`, so nothing else on it runs. A file that doesn't match
-  isn't run: the app doesn't start, and if the session itself doesn't
-  match, the Chumby boots its own software. A Chumby that has checked a
-  tree once boots only checked trees after that: to go back to a
-  neochumbyd from before this, remove `/psp/neochumby-boot`.
-- **`sync`:** the Chumby keeps a whole copy of its tree on its USB stick,
-  in step with neochumbyd, and boots from it. A Chumby on sync boots
-  without the server, and loads from the stick rather than the network.
-  Plug in any FAT stick; the first sync fills it.
+A paired Chumby keeps a whole copy of its tree on its USB stick, in step with
+neochumbyd, and boots from it, so it boots without the server. Unpaired, it runs
+the tree the stick was made with. The stick needs room for that tree and two
+whole copies of the server's: a round refuses a tree two copies of which won't
+fit, saying so, before it touches anything.
 
 Sync works like an A/B update. The stick's `neochumby/` holds two whole
-sets, `a/` and `b/`, and `current` names the live one. While its settings
-say sync, the session runs `neochumby-sync` as a service of its own,
-restarted like the apps' services but never part of the interruption
-rules (it opens no app). Once a minute, it:
+sets, `a/` and `b/`, and `current` names the live one. On a paired Chumby,
+the session runs `neochumby-sync` as a service of its own, restarted like the
+apps' services but never part of the interruption rules (it opens no app). Once
+a minute, or at once when asked (`neochumbyd sync NAME`), it:
 
 1. sends neochumbyd the digest of its live set's manifest. If it matches
    the tree, nothing is written;
@@ -591,7 +579,7 @@ rules (it opens no app). Once a minute, it:
    in the set's journal only after it is on the stick;
 4. hashes any file kept from a round that was cut short, then writes the
    set's completion marker (`a.complete`, carrying its manifest) last, and
-   rewrites `current` to make it live from the next boot. Both are synced
+   rewrites `current` to make it live from the next restart or boot. Both are synced
    to the stick before the round says so.
 
 Files arrive only over the paired session, from the pinned neochumbyd key,
@@ -603,20 +591,25 @@ live set is never written. A rename on FAT can tear in a power cut, so the
 boot hook doesn't trust `current` alone. It runs the set `current` names
 only if that set's marker is whole and every file it lists is there at its
 size (`neochumby check-set`, 30 seconds at most for both sets), else the
-other set, else it boots as before. A power cut at any point leaves a
-complete set to boot. The session keeps the boot hook in `/psp` up to date
-with the tree's, so Chumbys paired before sync boot their sets too.
+other set, else the tree the stick was made with. A power cut at any point
+leaves a complete set to boot. The hook itself isn't synced: it is what
+`tools/stick` put there, and a new one needs the stick made again.
+
+A restart (`neochumbyd restart NAME`) runs the live set: the session finds it
+as the hook does, and runs that set's `neochumby` in its own place. A new kernel
+or initramfs in the set takes a reboot. While a Chumby is running the set the
+next round would write (it has made another live, and not restarted),
+`neochumbyd sync` exits 3 and says to restart first.
 
 On the Chumby (with SSH enabled by its owner):
 
 ```sh
 neochumby-sync status     # the sets, which is live
-neochumby-sync rollback   # the other set is live from the next boot; syncing holds
+neochumby-sync rollback   # the other set is live from the next restart or boot; syncing holds
 neochumby-sync resume     # sync again
 ```
 
-A Chumby on sync is sent the tree NFS serves. `neochumbyd manifest`
-prints it, with anything a Chumby couldn't take. Files for one Chumby only
+`neochumbyd manifest` prints the tree a Chumby is sent, with anything a Chumby couldn't take. Files for one Chumby only
 (a renderer's output, say) would be laid over the tree where neochumbyd's
 `sync.rs` scans it; that isn't built yet.
 
@@ -626,9 +619,10 @@ pinned-key session as everything else:
 
 ```sh
 neochumbyd log den [-f]          # its log: the session's, its apps' and services' output
-neochumbyd restart den           # end its apps and start its session again from the tree
+neochumbyd sync den              # a sync round now, waiting for it to end
+neochumbyd restart den           # end its apps and start its session again from its live set
 neochumbyd shot den den.png      # its screen
-tools/deploy HOST doom --restart den    # deploy, then restart den on the new tree
+tools/deploy HOST doom --restart den    # deploy, sync den, then restart it on the new set
 ```
 
 Once its owner allows it (`neochumbyd set den dev=on`; off by default),
@@ -642,25 +636,25 @@ neochumbyd button den press|release|tap    # the top button
 
 neochumbyd keeps the last 2000 lines of each Chumby's log in its state
 directory (`logs/`), and limits what a Chumby may send. The commands work
-through the state directory as `approve` does, so they need no port of
-their own. A restart ends the app in front and the services as CHUMBY
-MODE does, then runs the tree's `neochumby` again in the same process.
+through the state directory, so they need no port of their own. A restart ends
+the app in front and the services, then runs the live set's `neochumby` in the
+same process.
 
 `neochumbyd mcp` serves the same as an [MCP](https://modelcontextprotocol.io)
 server on stdin and stdout, so Claude Code (or any MCP client) can read a
-Chumby's log, restart it and look at its screen while working on an app.
-Its tools are `chumbys` (the pairing list and settings), `log`, `restart`,
-`screenshot` and `set`. Pairing itself is left to a person. Run it on the
+Chumby's log, sync and restart it and look at its screen while working on an
+app. Its tools are `chumbys` (the list and settings), `log`, `sync`, `restart`,
+`screenshot` and `set`. Adding and forgetting a Chumby are left to a person. Run it on the
 server, over SSH from wherever the client is:
 
 ```sh
 claude mcp add neochumby -- ssh HOST neochumbyd mcp
 ```
 
-When a stick and a server are both available, the stick wins. The hook
-times out every step that could block, and returns to the stock boot if
-anything fails. To skip it, create `/psp/neochumby-off`, or put a file
-named `neochumby-off` on a stick. neochumby never starts SSH; enable it
+The hook times out every step that could block, and, on the stock kernel,
+returns to the stock boot if anything fails, stopping the stock software's UI
+only once everything is checked. To skip it, put a file named `neochumby-off`
+on the stick. neochumby never starts SSH; enable it
 yourself from the Chumby's settings (Chumby info → π) when you need it.
 
 ## The emulator
@@ -674,13 +668,12 @@ flash and USB host working), `chumby-machine`, which runs it headless and
 drives it, and `chumby-image`, which makes its NAND image from a flash
 backup. Its README documents all three. neochumby's side is
 `dev/emulate`, which boots a neochumby tree on the machine as a Chumby
-would boot it from a stick, in one of three profiles:
+would boot it from a stick, in one of two profiles:
 
 | Profile | Boots | Where |
 | --- | --- | --- |
-| `stock` | The Chumby's own Linux 2.6.16 firmware from your own flash backup, unmodified, with neochumby's tree on a USB stick: the stock boot runs the stick's hook | Your machine only, never CI ([legal](docs/legal.md)) |
-| `dist` | neochumby's Linux 5.9.16 (`dist/build`, below) with our own userspace, the tree on a USB stick that its `/init` mounts and runs | Anywhere: CI runs it |
-| `classic` | Linux 2.6.16 built from Chumby's GPL source, with an open-source busybox initramfs that runs the stick's hook | Anywhere, once its image is built (to come) |
+| `dist` | neochumby's Linux 7 (`dist/build`, below) with our own userspace, the tree on a USB stick that its `/init` mounts and runs | Anywhere: CI runs it |
+| `stock` | The Chumby's own firmware from your own flash backup, unmodified, with neochumby's tree on a USB stick: the stock boot runs the stick's hook, which hands over to Linux 7. For that handoff alone | Your machine only, never CI ([legal](docs/legal.md)) |
 
 ```sh
 dev/emulate --profile dist start TREE           # TREE from tools/tree
@@ -691,12 +684,11 @@ dev/emulate --profile dist stop
 dev/e2e TREE NEOCHUMBYD OUT                     # the scenarios, on NEOCHUMBY_EMU_PROFILE (dist)
 ```
 
-`dev/emulate` gets QEMU and the dist and classic images itself, the
+`dev/emulate` gets QEMU and the dist image itself, the
 first time and whenever what they're built from changes: CI's prebuilt
-QEMU and images, verified (`emu/qemu/fetch`, `dist/fetch`,
-`classic/fetch`), or, when there's none for this checkout (it has local
+QEMU and images, verified (`emu/qemu/fetch`, `dist/fetch`), or, when there's none for this checkout (it has local
 changes, say) or it can't be verified or run here, built from source
-(`emu/qemu/build`, `dist/build`, `classic/build`), with a line saying why.
+(`emu/qemu/build`, `dist/build`), with a line saying why.
 `--build` (or `NEOCHUMBY_BUILD=1`) always builds them from source, and
 `--no-fetch` (`NEOCHUMBY_NO_FETCH=1`) builds without trying to fetch;
 `dev/emulate prepare` does it without booting anything. Without either,
@@ -716,17 +708,17 @@ and its session carries the same TLS sessions over that line as over TCP:
 
 ```sh
 neochumbyd serve --state /tmp/nd --tree TREE --listen-unix /tmp/nd.sock
-dev/emulate start --server /tmp/nd.sock TREE   # the stick's neochumby.conf says server=serial
-neochumbyd pairing; neochumbyd approve CODE      # after tapping PAIR
-neochumbyd set chumby delivery=sync              # then dev/emulate stop and start again
+mkdir made; pub=$(neochumbyd keygen made/neochumby.key)
+{ neochumbyd add chumby $pub --address serial --state /tmp/nd; echo name=chumby; } > made/neochumby.conf
+dev/emulate start --psp made --server /tmp/nd.sock TREE   # a stick as tools/stick --pair makes one
 ```
 
 It stays paired from one start to the next. The line carries about 100
-KB/s, so NFS doesn't run over it: `delivery=sync` does.
+KB/s.
 
-## The sideload image
+## The image
 
-`dist/build` builds the Linux 5.9.16 sideload image with Buildroot.
+`dist/build` builds the Linux 7 image with Buildroot.
 Buildroot needs Linux, so it runs in a
 container, which can be Apple's `container`, `docker` or `podman`:
 `dist/build` uses the first it finds, in that order, and
@@ -746,7 +738,7 @@ Or take CI's build of it, for exactly this checkout's inputs, from the
 needs `gh`, logged in) before anything is unpacked:
 
 ```sh
-dist/fetch build/sideload-dist   # the same files; --kernel stable or mainline for those kernels
+dist/fetch build/sideload-dist   # the same files; --kernel mainline for that kernel
 ```
 
 It refuses when the inputs have local changes or have no published build
@@ -757,29 +749,17 @@ If the downloads fail with `unable to resolve host address`, the
 container's nameserver isn't answering (seen with Apple's `container`):
 give it one with `NEOCHUMBY_DIST_DNS=1.1.1.1 dist/build ...`.
 
-The initramfs's `/init` is a plain one: it mounts proc, sysfs and devtmpfs,
-logs to the kernel log, and starts busybox's shell (prompt `~ # `). The
-kernel has no NAND driver built in, and `/init` never loads the NAND
-modules, flashed or sideloaded: only root does (`modprobe mxc_nand`).
+The initramfs's `/init` mounts proc, sysfs and devtmpfs, logs to the kernel
+log, joins the network the stock software was on, and keeps a shell on the
+console. The kernel has no NAND driver, so nothing in the image can reach the
+flash; `dist/build` fails if a NAND module gets into it.
 
-The initramfs's `/init` also runs a neochumby stick, as the stock boot
-does: it waits a few seconds for one, mounts its first partition on
-`/mnt/usb`, and runs its `userhook2` beside the console's shell. That is
-how `dev/emulate`'s dist profile boots a tree (above).
+It also runs a neochumby stick, as the stock boot does: it waits a few seconds
+for one, mounts its first partition on `/mnt/usb`, and runs its `userhook2`
+beside the console's shell. That is how `dev/emulate`'s dist profile boots a
+tree (above).
 
-The dist image's flashed recovery path is tested on the emulator
-(`dev/emulate prepare` fetches or builds QEMU and the image, above) through
-qemu-chumby's `chumby-machine`. It boots the image with a zeroed NAND image,
-waits for the busybox prompt, and checks `uname -a` for
-`5.9.16-mx21-sideload` and that NAND stays unloaded until root asks:
-
-```sh
-QEMU=$PWD/emu/qemu/out/obj/qemu-system-arm \
-KERNEL=$PWD/build/sideload-dist/sideload-zImage \
-python3 dist/run-recovery-demo.py
-```
-
-The module handoff from the stock 2.6.16 is in
+The handoff from the stock firmware is in
 `tools/neochumby-kernel-sideloader`; its
 [README](tools/neochumby-kernel-sideloader/README.md) has the build and
 hardware steps.

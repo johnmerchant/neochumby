@@ -27,9 +27,8 @@ control panel are proprietary. This project ships none of it, in any form:
   proportions), not pinned pictures;
 - no code copied from the stock software.
 
-neochumby itself runs beside the stock firmware without changing it: the
-boot hook in the settings partition is its only write to the device's
-flash, and CHUMBY MODE hands back to the stock software.
+neochumby itself leaves the stock firmware as it is: it never writes to the
+device's flash, and a reboot without the stick runs the stock software.
 
 ## The emulator
 

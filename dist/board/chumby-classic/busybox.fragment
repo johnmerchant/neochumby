@@ -1,0 +1,2 @@
+# The clock: the Chumby has none that keeps time when it's off.
+CONFIG_NTPD=y

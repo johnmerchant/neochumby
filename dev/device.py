@@ -22,7 +22,7 @@ neochumbyd, from before `tap` and `button`, makes those steps skip (exit
 77). A remote press goes where a real one would, so it can't reach an app
 that reads the switch itself (`button = true`, Doom's FIRE): scenarios that
 need that skip on a device.
-The session's end is its "neochumby: CHUMBY MODE" line: the boot hook's
+The session's end is its "neochumby: the session ends" line: the boot hook's
 exit status isn't on the link.
 """
 
@@ -42,8 +42,8 @@ MACHINE = "device"
 SKIPPED = 77
 W, H = 320, 240
 NAME = re.compile(r"[a-z0-9_-]{1,32}")
-# The session's last line before it hands the Chumby back.
-ENDED = re.compile(rb"neochumby: CHUMBY MODE")
+# The session's last line, when it gives up: the hook then returns.
+ENDED = re.compile(rb"neochumby: the session ends")
 # How long the log's history takes to arrive before following starts.
 SETTLE = 1.0
 
@@ -134,6 +134,12 @@ def start(state, opts, tree, write, read, remove):
                                 os.path.join(server.dir, "tree") + "/"])
         if r.returncode:
             sys.exit("dev/emulate: deploying the tree failed")
+    # The tree reaches it by its stick; a set it is running needs a restart
+    # before it can be replaced (status 3).
+    if subprocess.run(server.argv("sync", name)).returncode == 3:
+        server.run("restart", name)
+        time.sleep(10)
+        server.run("sync", name)
     server.run("restart", name)
     print(f"dev/emulate: {name} restarting (via {server.host or 'this machine'}); its log: dev/emulate log")
 

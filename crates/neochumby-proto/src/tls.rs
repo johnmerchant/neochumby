@@ -2,7 +2,7 @@
 //! X25519, and both sides authenticated by Ed25519 raw public keys (RFC
 //! 7250). The handshake proves each side holds the private half of the key
 //! it presents; whether that key is one we are paired with is checked
-//! before the connection carries anything else ([`crate::Unverified`]). Resumption is off: a resumed session would
+//! before the connection carries anything else ([`Session::accept`], [`Session::connect`]). Resumption is off: a resumed session would
 //! not present the client's key again. Messages are a u32 big-endian length
 //! and a [`Msg`].
 
@@ -26,9 +26,7 @@ use rustls::{
     SignatureScheme, StreamOwned,
 };
 
-use crate::{MAX_MSG, Msg, PublicKey, Stream as Transport, hex, invalid, pairing_code, unhex};
-
-const PAIRING_LABEL: &[u8] = b"EXPORTER-neochumby-pairing";
+use crate::{MAX_MSG, Msg, PublicKey, Stream as Transport, hex, invalid, unhex};
 
 /// An Ed25519 SubjectPublicKeyInfo: this prefix, then the 32-byte key.
 const ED25519_SPKI: [u8; 12] = [0x30, 0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00];
@@ -94,7 +92,7 @@ impl Identity {
 }
 
 /// Accepts any Ed25519 key whose holder signs the handshake: who it
-/// belongs to is checked against the pairings afterwards.
+/// belongs to is checked against the registered keys afterwards.
 #[derive(Debug)]
 struct AnyEd25519Key(WebPkiSupportedAlgorithms);
 
@@ -207,7 +205,6 @@ enum Stream {
 pub struct Session {
     stream: Stream,
     peer: PublicKey,
-    code: String,
     /// Received and not yet a whole message.
     rbuf: Vec<u8>,
     /// The protocol version agreed with the peer (crate::version).
@@ -228,8 +225,8 @@ impl Session {
         let conn = ClientConnection::new(Arc::new(config), name).map_err(invalid)?;
         let mut s = StreamOwned::new(conn, tcp);
         handshake(&mut s.conn, s.sock.as_mut(), None)?;
-        let (peer, code) = finish(&s.conn, me.public, true)?;
-        Ok(Session { stream: Stream::Client(s), peer, code, rbuf: Vec::new(), version: 0 })
+        let peer = finish(&s.conn)?;
+        Ok(Session { stream: Stream::Client(s), peer, rbuf: Vec::new(), version: 0 })
     }
 
     /// neochumbyd's side, its peer's key not yet checked; the handshake by
@@ -244,19 +241,13 @@ impl Session {
         let conn = ServerConnection::new(Arc::new(config)).map_err(invalid)?;
         let mut s = StreamOwned::new(conn, tcp);
         handshake(&mut s.conn, s.sock.as_mut(), deadline)?;
-        let (peer, code) = finish(&s.conn, me.public, false)?;
-        Ok(Session { stream: Stream::Server(s), peer, code, rbuf: Vec::new(), version: 0 })
+        let peer = finish(&s.conn)?;
+        Ok(Session { stream: Stream::Server(s), peer, rbuf: Vec::new(), version: 0 })
     }
 
     /// The other side's public key, proven in the handshake.
     pub fn peer(&self) -> &PublicKey {
         &self.peer
-    }
-
-    /// The pairing code both sides derive from this handshake
-    /// ([`crate::Unverified::code`]).
-    pub(crate) fn code(&self) -> String {
-        self.code.clone()
     }
 
     /// What the session runs over.
@@ -371,12 +362,8 @@ fn handshake<D>(
     r
 }
 
-/// The peer's key, and the pairing code: keying material exported from
-/// this handshake, bound to both keys (the Chumby's, then neochumbyd's).
-fn finish<D>(conn: &rustls::ConnectionCommon<D>, me: PublicKey, client: bool) -> io::Result<(PublicKey, String)> {
+/// The peer's key, proven in this handshake.
+fn finish<D>(conn: &rustls::ConnectionCommon<D>) -> io::Result<PublicKey> {
     let spki = conn.peer_certificates().and_then(|c| c.first()).ok_or_else(|| invalid("no peer key"))?;
-    let peer = ed25519_key(spki.as_ref()).map_err(invalid)?;
-    let keys = if client { [me, peer] } else { [peer, me] }.concat();
-    let code = conn.export_keying_material([0u8; 16], PAIRING_LABEL, Some(&keys)).map_err(invalid)?;
-    Ok((peer, pairing_code(code)))
+    ed25519_key(spki.as_ref()).map_err(invalid)
 }

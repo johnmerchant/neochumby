@@ -4,6 +4,18 @@
 //! FAILED, yellow for a step skipped. The kernel's log gets none of this:
 //! it keeps ncinit's plain lines.
 
+/// The console's blinking cursor says nothing while a boot waits: [`working`]
+/// says it, and the cursor comes back for whatever wants one.
+pub const HIDE_CURSOR: &str = "\x1b[?25l";
+pub const SHOW_CURSOR: &str = "\x1b[?25h";
+
+/// A step `what` still going, on the line it's on: a spinner of `tick` and the
+/// seconds so far. Back at the line's start, ending the line after them.
+pub fn working(what: &str, tick: u128, secs: u64) -> String {
+    const FRAMES: [char; 4] = ['|', '/', '-', '\\'];
+    format!("\r{what}  {} {secs}s\x1b[K", FRAMES[(tick % 4) as usize])
+}
+
 /// How a step ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Status {
@@ -46,6 +58,13 @@ pub fn line(what: &str, status: Status, cols: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn working_stays_on_its_line() {
+        assert_eq!(working("Joining", 1, 12), "\r\x1b[0m".replace("\x1b[0m", "") + "Joining  / 12s\x1b[K");
+        assert_eq!(working("Joining", 7, 3), "\rJoining  \\ 3s\x1b[K");
+        assert!(!working("Joining", 0, 0).contains('\n'));
+    }
 
     #[test]
     fn as_red_hat_has_it() {

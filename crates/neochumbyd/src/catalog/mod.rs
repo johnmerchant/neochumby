@@ -27,9 +27,7 @@
 //! Installing, removing and the setting are the owner's: they go through
 //! the admin socket's protocol (admin.rs: `install`, `uninstall`,
 //! `auto-update`), with the owner's token, which the command line reads
-//! from the state directory as the server's admin. A page given the admin
-//! socket (`neochumbyd allow APP pairing`) does the same with the token
-//! its owner types.
+//! from the state directory as the server's admin.
 //!
 //! For any page: [`Catalog`] and [`load`] read the cache; [`prepare`],
 //! [`Plan::summary`], [`Plan::approve`] and [`Plan::write`] are an install,

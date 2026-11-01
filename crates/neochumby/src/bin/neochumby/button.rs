@@ -1,6 +1,5 @@
-//! The top button (/dev/switch; on the dist kernels, which have none, its
-//! input device: neochumby::input::open_button). Only one process at a
-//! time can have /dev/switch open, so the session opens it once and decides who gets each press:
+//! The top button, an input device (neochumby::input::open_button). The
+//! session opens it once and decides who gets each press:
 //! - an app whose manifest says `button = true` (Doom and Quake fire with
 //!   it) inherits the open file while it's in front, as NEOCHUMBY_BUTTON,
 //!   and the session doesn't read it meanwhile;
@@ -8,22 +7,20 @@
 //!   so it can show its main screen without starting again; if the line
 //!   can't be written, it's opened again as below;
 //! - for any other app, a press ends the app in front and opens the start
-//!   app with NEOCHUMBY_REASON=button, as the stock Chumby does.
+//!   app with NEOCHUMBY_REASON=button.
 //!
-//! If /dev/switch can't be opened as the session starts (another process
-//! has it), the session tries again every 5 s.
+//! If the button can't be opened as the session starts (its module not
+//! loaded yet), the session tries again every 5 s.
 //!
 //! On a paired Chumby whose owner allows it, neochumbyd can hold the button
 //! down too (devlink.rs): the session goes by either ([`level`]), so such a
 //! press goes where a real one would, except to an app with `button =
-//! true`, which reads /dev/switch itself and never sees it.
+//! true`, which reads the button itself and never sees it.
 //!
 //! There's no hold gesture, since games hold the button to fire: the corner
-//! hold is the way out of anything. On CHUMBY MODE the session closes it,
-//! so the Chumby's own software can open it.
+//! hold is the way out of anything.
 //!
-//! A read returns the button's level now (1 pressed, 0 not), never "no
-//! data", so the session reads it once a tick and acts on a 0 -> 1 edge.
+//! A read gives the button's level now, so the session reads it once a tick and acts on a 0 -> 1 edge.
 
 /// The level the session goes by: down if the button is, or neochumbyd
 /// holds it down (`remote`, while the developer link is up); None with

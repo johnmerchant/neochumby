@@ -2,16 +2,14 @@
 //! `server=serial` (an emulated Chumby, which has no network; the device
 //! is its second UART, neochumby_proto::server). The session owns the line
 //! and shares it out: every connection to neochumby::line::SOCKET (from
-//! the session itself, neochumby-home pairing, neochumby-sync) becomes a
+//! the session itself, neochumby-sync) becomes a
 //! channel on it (neochumby_proto::mux), and neochumbyd handles each as a
 //! TCP connection, with the same TLS session inside. The line carries
 //! bytes and nothing else: it needs no key, and adds no trust.
 //!
 //! One thread, around poll(2): it reads the line whenever there is
 //! anything, so neochumbyd is never held up, and moves bytes between each
-//! connection and its channel as the channel's window allows. std's
-//! blocking waits use futex flags the stock 2.6.16 kernel lacks, so it
-//! uses none. The socket and the device are close-on-exec, so a restart
+//! connection and its channel as the channel's window allows. The socket and the device are close-on-exec, so a restart
 //! (which replaces this process) starts the line afresh, and neochumbyd
 //! sees a new incarnation and ends the old sessions.
 
@@ -37,7 +35,7 @@ const OPEN_WAIT: Duration = Duration::from_secs(5);
 const CHUNK: usize = 8192;
 
 /// Starts the line if this Chumby's server is `serial` (as the boot hook
-/// passed it on, else as /psp/neochumby.conf says). Logs why not if it
+/// passed it on, else as the stick's neochumby.conf says). Logs why not if it
 /// can't.
 pub fn start() {
     let server =

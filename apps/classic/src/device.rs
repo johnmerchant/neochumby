@@ -1,6 +1,6 @@
 //! The engine on the Chumby: the screen and touch through the neochumby
-//! crate, the backlight through /proc, settings in /psp, and the session's
-//! pipe (opening apps, CHUMBY MODE, the top button). The music plays in the
+//! crate, the backlight through /sys, settings on the stick, and the session's
+//! pipe (opening apps, the top button). The music plays in the
 //! classic service (service.rs), which follows the settings this app
 //! writes, so it carries on while another app is in front.
 
@@ -15,7 +15,7 @@ use crate::engine::Engine;
 use crate::plat::{Plat, Touch, wall_now};
 use crate::session::{Ask, Heard, Session};
 
-/// /proc/sys/sense1/brightness, 0..65535; 12000 already looks very dark.
+/// 0..65535; 12000 already looks very dark.
 const NIGHT_BRIGHTNESS: u32 = 9000;
 
 pub struct Device {
@@ -64,7 +64,9 @@ impl Plat for Device {
 
     fn backlight(&mut self, night: bool) {
         let v = if night { NIGHT_BRIGHTNESS } else { 65535 };
-        let _ = std::fs::write("/proc/sys/sense1/brightness", format!("{v}\n"));
+        if let Some(b) = neochumby::backlight::Backlight::find() {
+            let _ = b.set(v);
+        }
     }
 
     fn music(&mut self, _url: Option<&str>, _vol: i32) {
@@ -75,7 +77,7 @@ impl Plat for Device {
     fn volume(&mut self, _vol: i32) {}
 
     fn state_path(&self, name: &str) -> PathBuf {
-        Path::new("/psp").join(name)
+        neochumby::conf::state_dir("classic").join(name)
     }
 
     fn now_us(&self) -> i64 {
@@ -163,10 +165,7 @@ impl Session for SessionPipe {
     }
 
     fn ask(&mut self, a: &Ask) -> bool {
-        match a {
-            Ask::Open(app) => self.0.open(app),
-            Ask::ChumbyMode => self.0.chumby_mode(),
-        }
-        .is_ok()
+        let Ask::Open(app) = a;
+        self.0.open(app).is_ok()
     }
 }

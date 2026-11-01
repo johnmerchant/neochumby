@@ -1,13 +1,10 @@
 #!/bin/sh
 # fetch: puts the image CI built from exactly this checkout's inputs in OUT,
-# in the layout dist/build OUT (or classic/build OUT) writes, instead of
-# building it:
+# in the layout dist/build OUT writes, instead of building it:
 #
-#   dist/fetch [--kernel 5.9.16|stable|mainline] OUT   OUT/sideload-zImage, OUT/sideload-rootfs.cpio.gz
-#   dist/fetch --classic OUT                  OUT/classic-zImage, OUT/classic-rootfs.cpio.gz,
-#                                             OUT/classic-config (what classic/fetch runs)
-#   dist/fetch --inputs [--classic]           prints the inputs commit, and nothing else
-#   dist/fetch --pathspecs [--classic]        prints the inputs' git pathspecs, one a line
+#   dist/fetch [--kernel stable|mainline] OUT   OUT/sideload-zImage, OUT/sideload-rootfs.cpio.gz
+#   dist/fetch --inputs [--kernel K]          prints the inputs commit, and nothing else
+#   dist/fetch --pathspecs                    prints the inputs' git pathspecs, one a line
 #                                             (how dev/emulate sees local changes to them)
 #
 # CI (.github/workflows/ci.yml) builds each image on every push to main
@@ -17,8 +14,7 @@
 # what the image is built from (the pathspecs below). Any later commit that
 # leaves those alone has the same inputs commit, and so the same image:
 #
-#   neochumby-dist-<inputs>-<kernel>.tar.xz          (5.9.16, stable, mainline)
-#   neochumby-classic-<inputs>-2.6.16.tar.xz
+#   neochumby-dist-<inputs>-<kernel>.tar.xz          (stable, mainline)
 #   ... and each one's -source.tar, its corresponding source
 #
 # A build is made after the commit that defines it, so its digest can't be
@@ -49,7 +45,7 @@
 # inputs have local changes (the prebuilt image wouldn't match them), when
 # there is no build for these inputs (they changed on a branch, or CI
 # hasn't published main's yet), or when the download fails to verify: then
-# build it with dist/build OUT (or classic/build OUT). 2 for bad arguments.
+# build it with dist/build OUT. 2 for bad arguments.
 #
 # NEOCHUMBY_PREBUILT overrides where the tarballs are downloaded from (a
 # mirror, or a file:// directory): safe, since only the attestation is
@@ -66,10 +62,9 @@ base=${NEOCHUMBY_PREBUILT:-https://github.com/$repo/releases/download/$tag}
 signer=https://github.com/$repo/.github/workflows/ci.yml@refs/heads/main
 
 usage() {
-    echo "usage: dist/fetch [--kernel 5.9.16|stable|mainline] OUT"
-    echo "       dist/fetch --classic OUT"
-    echo "       dist/fetch --inputs [--classic | --kernel K]"
-    echo "       dist/fetch --pathspecs [--classic]"
+    echo "usage: dist/fetch [--kernel stable|mainline] OUT"
+    echo "       dist/fetch --inputs [--kernel K]"
+    echo "       dist/fetch --pathspecs"
 }
 
 image=dist
@@ -80,7 +75,6 @@ while [ $# -gt 0 ]; do
     case $1 in
         --kernel) [ $# -ge 2 ] || { usage >&2; exit 2; }; kernel=$2; shift 2 ;;
         --kernel=*) kernel=${1#*=}; shift ;;
-        --classic) image=classic; shift ;;
         --inputs) inputs_only=1; shift ;;
         --pathspecs) inputs_only=1; pathspecs=1; shift ;;
         -h | --help) usage; exit 0 ;;
@@ -89,11 +83,10 @@ while [ $# -gt 0 ]; do
         *) break ;;
     esac
 done
-case $image-$kernel in
-    dist-) kernel=5.9.16 ;;
-    dist-5.9.16 | dist-stable | dist-mainline | classic-2.6.16) ;;
-    classic-) kernel=2.6.16 ;;
-    *) echo "fetch: no $image image for kernel $kernel (dist: 5.9.16, stable or mainline; --classic: 2.6.16)" >&2; exit 2 ;;
+case $kernel in
+    '') kernel=stable ;;
+    stable | mainline) ;;
+    *) echo "fetch: no image for kernel $kernel (stable or mainline)" >&2; exit 2 ;;
 esac
 if [ -n "$inputs_only" ]; then
     [ $# = 0 ] || { usage >&2; exit 2; }
@@ -102,23 +95,15 @@ else
     out=$1
 fi
 
-# What each image is built from: everything its build reads. Keep these in
-# step with the image cache keys in ci.yml's dist and classic jobs. dist's
-# packages (dist/package/) may build crates/neochumby-init, which uses
-# crates/neochumby-sys. classic/linux is the kernel's submodule: its pinned
-# commit is part of classic/.
-if [ "$image" = dist ]; then
-    set -- dist ':(exclude)dist/README.md' ':(exclude)dist/fetch' ':(exclude)dist/kernel-sync' \
-        crates/neochumby-init crates/neochumby-sys
-    files="sideload-zImage sideload-rootfs.cpio.gz"
-    build="dist/build"
-    [ "$kernel" = 5.9.16 ] || build="NEOCHUMBY_DIST_KERNEL=$kernel dist/build"
-else
-    set -- classic ':(exclude)classic/README.md' ':(exclude)classic/boot-test' \
-        ':(exclude)classic/fetch'
-    files="classic-zImage classic-rootfs.cpio.gz classic-config"
-    build="classic/build"
-fi
+# What the image is built from: everything its build reads. Keep these in
+# step with the image cache key in ci.yml's dist job. dist's packages
+# (dist/package/) may build crates/neochumby-init, which uses
+# crates/neochumby-sys, and install boot/userhook2.
+set -- dist ':(exclude)dist/README.md' ':(exclude)dist/fetch' ':(exclude)dist/kernel-sync' \
+    boot/userhook2 crates/neochumby-init crates/neochumby-sys
+files="sideload-zImage sideload-rootfs.cpio.gz"
+build="dist/build"
+[ "$kernel" = stable ] || build="NEOCHUMBY_DIST_KERNEL=$kernel dist/build"
 
 if [ -n "$pathspecs" ]; then
     printf '%s\n' "$@"

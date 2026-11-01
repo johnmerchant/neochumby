@@ -1,8 +1,7 @@
 //! GET APPS on the Chumby: the terminal the session gave it, the touches
 //! on it, and the companion, neochumbyd's catalog.
 //!
-//! The terminal is put in raw mode for as long as it runs (rustix: this
-//! app is for Linux 5.9 and later only), so that touch reports arrive as
+//! The terminal is put in raw mode for as long as it runs (rustix), so that touch reports arrive as
 //! they are typed and aren't echoed. Taps act on release, on the target
 //! they were pressed on, which is lit while held.
 

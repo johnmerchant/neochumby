@@ -1,0 +1,357 @@
+ArchID=0x00000353
+output_data: 0xc0184170
+Uncompressing Linux............................................................................................. done, booting the kernel.
+[    0.000000] Linux version 2.6.16-csb (builder@stormbuild) (gcc version 4.3.2 (Sourcery G++ Lite 2008q3-72) ) #1 Mon Nov 14 16:42:16 PST 2011
+[    0.000000] CPU: ARM926EJ-Sid(wb) [41069264] revision 4 (ARMv5TEJ)
+[    0.000000] Machine: Freescale MX21ADS
+[    0.000000] Memory policy: ECC disabled, Data cache writeback
+[    0.000000] CPU0: D VIVT write-through cache
+[    0.000000] CPU0: I cache: 4096 bytes, associativity 4, 32 byte lines, 32 sets
+[    0.000000] CPU0: D cache: 65536 bytes, associativity 4, 32 byte lines, 512 sets
+[    0.000000] Built 1 zonelists
+[    0.000000] Kernel command line: console=ttyS0,38400 root=/dev/mtdblock5 rootfstype=cramfs init=/linuxrc chumby_hwversion=3.8
+[    0.000000] Chumby hardware version (from kernel command line): 38
+[    0.000000] PID hash table entries: 512 (order: 9, 8192 bytes)
+[    0.000000] Console: colour dummy device 80x30
+[    0.000000] enabling PU's on UART3
+[    0.000000] Dentry cache hash table entries: 16384 (order: 4, 65536 bytes)
+[    0.000000] Inode-cache hash table entries: 8192 (order: 3, 32768 bytes)
+[    0.000000] Memory: 64MB = 64MB total
+[    0.000000] Memory: 61824KB available (2405K code, 511K data, 100K init)
+[    0.260000] Mount-cache hash table entries: 512
+[    0.260000] CPU: Testing write buffer coherency: ok
+[    0.260000] NET: Registered protocol family 16
+[    0.260000] Initializing system clocks
+[    0.260000] CSCR: 0x14010607
+[    0.260000] MPCTL0: 0x00191403
+[    0.260000] MPCTL1: 0x00008000
+[    0.260000] SPCTL0: 0x000c1407
+[    0.260000] SPCTL1: 0x00008000
+[    0.260000] OSC26MCTL: 0x00003f00
+[    0.260000] PCDR0: 0x5c160000
+[    0.260000] PCDR1: 0x04070a15
+[    0.260000] PCCR0: 0xffffffff
+[    0.260000] PCCR1: 0x6e000000
+[    0.260000] CCSR: 0x00000000
+[    0.260000] WKGDCTL: 0x00000000
+[    0.260000] mx21ads_init:290
+[    0.260000] ...usb
+[    0.260000] DDIR(1): 3E000000
+[    0.260000] OCR2(1): 00000000
+[    0.260000] ICONFA2(1): 00000000
+[    0.260000] GIUS(1): 00000000
+[    0.260000] PUEN(1): FA800000
+[    0.260000] GPR(1): 00000000
+[    0.260000] PUEN(3): 01F80000
+[    0.260000] PUEN(2): 00003F00
+[    0.260000] SCSI subsystem initialized
+[    0.260000] usbcore: registered new driver usbfs
+[    0.260000] usbcore: registered new driver hub
+[    0.260000] NetWinder Floating Point Emulator V0.97 (double precision)
+[    0.260000] JFFS2 version 2.2. (NAND) (SUMMARY)  (C) 2001-2003 Red Hat, Inc.
+[    0.260000] Initializing Cryptographic API
+[    0.260000] io scheduler noop registered
+[    0.260000] io scheduler anticipatory registered (default)
+[    0.260000] io scheduler deadline registered
+[    0.260000] io scheduler cfq registered
+[    0.260000] i.MX Framebuffer driver
+[    0.260000] imxfb_init_fbinfo
+[    0.260000] imxfbov_init_fbinfo
+[    0.260000] var->bits_per_pixel=16
+[    0.260000] RGBT length = 5:6:5:0
+[    0.260000] RGBT offset = 11:5:0:0
+[    0.260000] var->bits_per_pixel=16
+[    0.260000] RGBT length = 5:6:5:0
+[    0.260000] RGBT offset = 11:5:0:0
+[    0.260000] set_par
+[    0.260000] imxfb_activate_var!
+[    0.260000] var: xres=320 hslen=1 lm=15 rm=6
+[    0.260000] var: yres=240 vslen=1 um=9 bm=7
+[    0.260000] set_par
+[    0.260000] imxfbov_activate_var
+[    0.260000] Enabling LCD controller
+[    0.260000] LCDC register set:
+[    0.260000] LCDbase + 0x00: C3D40000
+[    0.260000] LCDbase + 0x04: 014000F0
+[    0.260000] LCDbase + 0x08: 000000A0
+[    0.260000] LCDbase + 0x0C: 00000000
+[    0.260000] LCDbase + 0x10: 00000000
+[    0.260000] LCDbase + 0x14: 00000000
+[    0.260000] LCDbase + 0x18: CAD80084
+[    0.260000] LCDbase + 0x1C: 0800133E
+[    0.260000] LCDbase + 0x20: 10001204
+[    0.260000] LCDbase + 0x24: 00000000
+[    0.260000] LCDbase + 0x28: 00000000
+[    0.260000] LCDbase + 0x2C: 00A903C0
+[    0.260000] LCDbase + 0x30: 00030008
+[    0.260000] LCDbase + 0x34: 00000000
+[    0.260000] LCDbase + 0x38: 00000000
+[    0.260000] LCDbase + 0x3C: 00000000
+[    0.260000] LCDbase + 0x40: 00000021
+[    0.260000] LCDbase + 0x44: 00000000
+[    0.260000] LCDbase + 0x48: 00000000
+[    0.260000] LCDbase + 0x4C: 00000000
+[    0.260000] LCDbase + 0x50: 00000000
+[    0.260000] LCDbase + 0x54: 014000F0
+[    0.260000] LCDbase + 0x58: 00000000
+[    0.260000] LCDbase + 0x5C: 00000000
+[    0.260000] LCDbase + 0x60: 00000000
+[    0.260000] LCDbase + 0x64: 00000000
+[    0.260000] Enabling LCD controller
+[    0.260000] imxfb_setup_gpio
+[    0.280000] Serial: IMX driver
+[    0.280000] imx-uart.0: ttyS0 at MMIO 0xa000 (irq = 20) is a IMX
+[    0.280000] imx-uart.1: ttyS1 at MMIO 0xb000 (irq = 19) is a IMX
+[    0.280000] imx-uart.2: ttyS2 at MMIO 0xc000 (irq = 18) is a IMX
+[    0.280000] RAMDISK driver initialized: 16 RAM disks of 8192K size 1024 blocksize
+[    0.280000] loop: loaded (max 8 devices)
+[    0.280000] SCSI Media Changer driver v0.25
+[    0.280000] NFTL driver: nftlcore.c $Revision: 1.98 $, nftlmount.c $Revision: 1.41 $
+[    0.280000] MX2 NAND: 8-bit i/o mode
+[    0.280000] NAND device: Manufacturer ID: 0xad, Chip ID: 0x76 (Hynix NAND 64MiB 3,3V 8-bit)
+[    0.280000] Scanning device for bad blocks
+[    0.370000] Creating 8 MTD partitions on "mx21ads-nand":
+[    0.370000] 0x00000000-0x00100000 : "Boot Loader"
+[    0.370000] ftl_cs: FTL header not found.
+[    0.370000] 0x00100000-0x00300000 : "PSP"
+[    0.380000] ftl_cs: FTL header not found.
+[    0.380000] 0x00300000-0x00580000 : "Kernel2"
+[    0.380000] ftl_cs: FTL header not found.
+[    0.380000] 0x00580000-0x00d80000 : "Root Disk2"
+[    0.380000] ftl_cs: FTL header not found.
+[    0.380000] 0x00d80000-0x01080000 : "Kernel1"
+[    0.380000] ftl_cs: FTL header not found.
+[    0.380000] 0x01080000-0x02680000 : "Root Disk1"
+[    0.390000] ftl_cs: FTL header not found.
+[    0.390000] 0x02680000-0x03e80000 : "Cache"
+[    0.390000] ftl_cs: FTL header not found.
+[    0.390000] 0x03f80000-0x04000000 : "MSP"
+[    0.390000] ftl_cs: FTL header not found.
+[    0.390000] usbmon: debugfs is not available
+[    0.390000] imx21-hc imx21-hc.0: IMX21 USB Host Controller
+[    0.390000] imx21-hc imx21-hc.0: new USB bus registered, assigned bus number 1
+[    0.390000] imx21-hc imx21-hc.0: irq 55, io base 0x00000000
+[    0.390000] usb usb1: configuration #1 chosen from 1 choice
+[    0.390000] hub 1-0:1.0: USB hub found
+[    0.390000] hub 1-0:1.0: 3 ports detected
+[    0.500000] imx21_probe(): round robin USB ETD scheduling, immediate interrupts and one copy transfer.
+[    0.500000] Initializing USB Mass Storage driver...
+[    0.780000] usb 1-1: new full speed USB device using imx21-hc and address 2
+[    0.940000] usb 1-1: configuration #1 chosen from 1 choice
+[    0.940000] scsi0 : SCSI emulation for USB Mass Storage devices
+[    0.940000] usbcore: registered new driver usb-storage
+[    0.940000] USB Mass Storage support registered.
+[    0.940000] usbcore: registered new driver libusual
+[    0.940000] ts: Compaq touchscreen protocol output
+[    0.940000] i2c /dev entries driver
+[    0.940000] Advanced Linux Sound Architecture Driver Version 1.0.11rc2 (Wed Jan 04 08:57:20 2006 UTC).
+[    0.940000] ALSA device list:
+[    0.940000]   No soundcards found.
+[    0.940000] NET: Registered protocol family 2
+[    1.030000] IP route cache hash table entries: 1024 (order: 0, 4096 bytes)
+[    1.030000] TCP established hash table entries: 4096 (order: 2, 16384 bytes)
+[    1.030000] TCP bind hash table entries: 4096 (order: 2, 16384 bytes)
+[    1.030000] TCP: Hash tables configured (established 4096 bind 4096)
+[    1.030000] TCP reno registered
+[    1.030000] TCP bic registered
+[    1.030000] NET: Registered protocol family 1
+[    1.030000] NET: Registered protocol family 17
+[    1.030000] ieee80211: 802.11 data/management/control stack, git-1.1.7
+[    1.030000] ieee80211: Copyright (C) 2004-2005 Intel Corporation <jketreno@linux.intel.com>
+[    1.030000] cramfs with NAND flash bad block extensions.
+[    1.030000] Please remember to size your partitions with adequate margins for bad blocks.
+[    1.030000] cramfs_init_badblock: found start of cramfs at addr 0x0
+[    1.030000] VFS: Mounted root (cramfs filesystem) readonly.
+[    1.030000] Freeing init memory: 100K
+/linuxrc v0.41 $Rev: 662 $
+Parsing /etc/init.d/linuxrc.config
+Executing scripted actions (including 7 setenv statements)
+[MOUNT] proc (type proc) on /proc
+[MOUNT] sysfs (type sysfs) on /sys
+Scripted execution complete, 2 actions with 0 failures
+environ[0]: HOME=/
+environ[1]: TERM=linux
+Adding /psp/bin:/usr/bin:/bin:/usr/sbin:/sbin:/usr/chumby/scripts
+[SETENV] CNPLATFORM=ironforge
+[SETENV] CONFIGNAME=ironforge
+[SETENV] VIDEO_RES=320x240
+[SETENV] VIDEO_X_RES=320
+[SETENV] VIDEO_Y_RES=240
+[SETENV] HAS_CP=1
+[SETENV] LANGUAGE=en_US
+Starting /sbin/init (cwd=/) (envcount=10)
+Chumby Rootdisk - RFS1 (ken@chumby.com)
+makedevs : 1.1.1.1 $
+makedevs: creating device nodes at /dev using mknod
+Alarm was set for 2147483647 seconds from now
+Starting udevd as daemon
+waiting for USB subsystem: [    5.940000]   Vendor: QEMU      Model: QEMU HARDDISK     Rev: 2.5+
+[    5.940000]   Type:   Direct-Access                      ANSI SCSI revision: 05
+[    5.950000] SCSI device sda: 131072 512-byte hdwr sectors (67 MB)
+[    5.950000] sda: Write Protect is off
+[    5.950000] sda: assuming drive cache: write through
+[    5.960000] SCSI device sda: 131072 512-byte hdwr sectors (67 MB)
+[    5.960000] sda: Write Protect is off
+[    5.960000] sda: assuming drive cache: write through
+[    5.960000]  sda: sda1
+[    5.960000] sd 0:0:0:0: Attached scsi disk sda
+[    5.960000] sd 0:0:0:0: Attached scsi generic sg0 type 0
+timed out
+Starting mountmon as daemon
+[   13.090000] input: tsc2100_ts as /class/input/input0
+[   13.100000] Chumby TI-TSC2100 TouchScreen Driver v1.01 initialized (hw 1.8)
+[   13.100000] Chumby TI-TSC2100 ALSA Audio Driver v1.02 initialized
+[   13.100000] Chumby sensor suite 1 driver version 2.1-Ironforge (HW-v3.8) initializing (bunnie@chumby.com)...
+[   13.110000] UserDMA device major=253, allocated 1572864 bytes. (buf_addr=c3200000, dma_addr=c3200000, cached=1)
+[   14.380000] usbcore: registered new driver snd-usb-audio
+[   14.390000] usbcore: registered new driver hiddev
+[   14.390000] usbcore: registered new driver usbhid
+[   14.390000] drivers/usb/input/hid-core.c: v2.6:USB HID core driver
+Restoring mute setting: 0
+Restoring volume setting: 50
+Restoring speaker pan setting: 0
+[   14.480000] Chumby timerx[2] driver version 2.1-Ironforge initializing (bunnie@chumby.com)...show me your jiffies!!!
+[   14.490000] Chumby accelerometer driver version 2.1-Kionix-Ironforge initializing (bunnie@chumby.com)...
+[   14.490000] Chumby DC ID EEPROM driver version 1.0-Atmel-25080A-Ironforge initializing (bunnie@chumby.com)...
+Triggering udevd events for usb devices
+Adobe FlashLite 4.0.2 Release (Version 10,1,48,3)- Chumby Industries (version 10 build 62-4094 [GCC 4.3.2])
+Portions copyright (C) 2005-2010 Chumby Industries, Inc.
+Built for: ironforge; Features: Video ALSA ARM-optimizations
+Build time: Mon 14Nov2011 1648
+headphone_mgr v1.18 (built for ironforge)
+[   14.860000] imxfb_proc_write_enable
+[   14.860000] imxfb_proc_write_alpha
+[   15.100000] usbcore: registered new driver asix
+[   15.240000] usbcore: registered new driver rt73
+ifconfig: SIOCGIFFLAGS: No such device
+Restoring time... time cannot be restored; no previous time record found.
+ifconfig: rausb0: error fetching interface information: Device not found
+Network is down.  Network time not updated.
+Creating default hostname:
+ifconfig: rausb0: error fetching interface information: Device not found
+New hostname: Chumby []
+Starting zeroconf service
+Started mDNSResponder
+Started mDNSPublish
+Starting chumbhowld service
+Started chumbhowld
+Clearing paranoid boot flag
+Erasing 16 Kibyte @ 0 --  0 % complete.Erasing 16 Kibyte @ 28000 -- 31 % complete.Erasing 16 Kibyte @ 50000 -- 62 % complete.Erasing 16 Kibyte @ 78000 -- 93 % complete.
+Notice: this version of nandwrite does not expect or modify OOB data.
+wrote 0x80000 bytes.
+Starting btplay daemon
+sideload7-full hook: loading module
+[   18.780000] sideload: guard=c0c00000
+[   18.780000] sideload: kernel=c1400000 initrd=c1800000
+sideload7-full hook: jumping
+[    0.000000] Booting Linux on physical CPU 0x0
+[    0.000000] Linux version 7.3.1-mx21-sideload (john@citadel) (arm-none-eabi-gcc (GCC) 13.3.0, GNU ld (GNU Binutils) 2.43.1) #1 PREEMPT Sun Nov  1 18:50:13 ACDT 2026
+[    0.000000] CPU: ARM926EJ-S [41069264] revision 4 (ARMv5TEJ), cr=00053177
+[    0.000000] CPU: VIVT data cache, VIVT instruction cache
+[    0.000000] OF: fdt: Machine model: Chumby Classic
+[    0.000000] Memory policy: Data cache writeback
+[    0.000000] OF: reserved mem: Reserved memory: No reserved-memory node in the DT
+[    0.000000] Zone ranges:
+[    0.000000]   Normal   [mem 0x00000000c0000000-0x00000000c3ffffff]
+[    0.000000] Movable zone start for each node
+[    0.000000] Early memory node ranges
+[    0.000000]   node   0: [mem 0x00000000c0000000-0x00000000c3ffffff]
+[    0.000000] Initmem setup node 0 [mem 0x00000000c0000000-0x00000000c3ffffff]
+[    0.000000] Kernel command line: console=ttymxc0,115200 rdinit=/init neochumby.sideloaded=1
+[    0.000000] printk: log buffer data + meta data: 16384 + 51200 = 67584 bytes
+[    0.000000] Dentry cache hash table entries: 8192 (order: 3, 32768 bytes, linear)
+[    0.000000] Inode-cache hash table entries: 4096 (order: 2, 16384 bytes, linear)
+[    0.000000] Built 1 zonelists, mobility grouping on.  Total pages: 16384
+[    0.000000] mem auto-init: stack:all(zero), heap alloc:off, heap free:off
+[    0.000000] SLUB: HWalign=32, Order=0-3, MinObjects=0, CPUs=1, Nodes=1
+[    0.000000] rcu: Preemptible hierarchical RCU implementation.
+[    0.000000] rcu: 	RCU event tracing is enabled.
+[    0.000000] 	Trampoline variant of Tasks RCU enabled.
+[    0.000000] 	Tracing variant of Tasks RCU enabled.
+[    0.000000] rcu: RCU calculated value of scheduler-enlistment delay is 10 jiffies.
+[    0.000000] RCU Tasks: Setting shift to 0 and lim to 1 rcu_task_cb_adjust=1 rcu_task_cpu_ids=1.
+[    0.000000] NR_IRQS: 16, nr_irqs: 16, preallocated irqs: 16
+[    0.000000] MXC IRQ initialized
+[    0.000000] rcu: srcu_init: Setting srcu_struct sizes based on contention.
+[    0.000000] clocksource: jiffies: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 19112604462750000 ns
+[    0.000000] Switching to timer-based delay loop, resolution 82ns
+[    0.000000] sched_clock: 32 bits at 12MHz, resolution 82ns, wraps every 177611416534ns
+[    0.000033] clocksource: mxc_timer1: mask: 0xffffffff max_cycles: 0xffffffff, max_idle_ns: 158074160411 ns
+[    0.001421] Console: colour dummy device 80x30
+[    0.001452] Calibrating delay loop (skipped), value calculated using timer frequency.. 24.18 BogoMIPS (lpj=120909)
+[    0.001474] CPU: Testing write buffer coherency: ok
+[    0.001499] pid_max: default: 32768 minimum: 301
+[    0.001747] landlock: Up and running.
+[    0.001914] Mount-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.001938] Mountpoint-cache hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.002518] VFS: Finished mounting rootfs on nullfs
+[    0.005244] Setting up static identity map for 0xc0008400 - 0xc000847c
+[    0.005477] rcu: Hierarchical SRCU implementation.
+[    0.005484] rcu: 	Max phase no-delay instances is 1000.
+[    0.006454] Memory: 50292K/65536K available (6820K kernel code, 506K rwdata, 1396K rodata, 252K init, 111K bss, 13964K reserved, 0K cma-reserved)
+[    0.006943] devtmpfs: initialized
+[    0.013888] posixtimers hash table entries: 512 (order: 0, 2048 bytes, linear)
+[    0.013919] futex hash table entries: 256 (3072 bytes on 1 NUMA nodes, total 3 KiB, linear).
+[    0.016097] NET: Registered PF_NETLINK/PF_ROUTE protocol family
+[    0.016464] DMA: preallocated 256 KiB pool for atomic coherent allocations
+[    0.032454] imx21-pinctrl 10015000.pinmux: initialized IMX pinctrl driver
+[    0.037775] kprobes: kprobe jump-optimization is enabled. All kprobes are optimized if possible.
+[    0.044252] gpio gpiochip0: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.053444] gpio gpiochip1: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.063172] gpio gpiochip2: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.066393] gpio gpiochip3: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.073229] gpio gpiochip4: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.083207] gpio gpiochip5: Static allocation of GPIO base is deprecated, use dynamic allocation.
+[    0.085333] pps_core: LinuxPPS API ver. 1 registered
+[    0.085343] pps_core: Software ver. 5.3.6 - Copyright 2005-2007 Rodolfo Giometti <giometti@linux.it>
+[    0.085375] PTP clock support registered
+[    0.090360] clocksource: Switched to clocksource mxc_timer1
+[    0.122603] NET: Registered PF_INET protocol family
+[    0.122918] IP idents hash table entries: 2048 (order: 2, 16384 bytes, linear)
+[    0.124409] tcp_listen_portaddr_hash hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.124467] Table-perturb hash table entries: 65536 (order: 6, 262144 bytes, linear)
+[    0.124495] TCP established hash table entries: 1024 (order: 0, 4096 bytes, linear)
+[    0.124548] TCP bind hash table entries: 1024 (order: 1, 8192 bytes, linear)
+[    0.124601] TCP: Hash tables configured (established 1024 bind 1024)
+[    0.124672] UDP hash table entries: 256 (order: 1, 8192 bytes, linear)
+[    0.124908] NET: Registered PF_UNIX/PF_LOCAL protocol family
+[    0.126242] Initialise system trusted keyrings
+[    0.126731] Unpacking initramfs...
+[    0.130678] workingset: timestamp_bits=14 (anon: 9) max_order=14 bucket_order=0 (anon: 5)
+[    0.131256] Key type asymmetric registered
+[    0.131266] Asymmetric key parser 'x509' registered
+[    0.131337] io scheduler mq-deadline registered
+[    0.131347] io scheduler kyber registered
+[    0.131384] io scheduler bfq registered
+[    0.154706] 1000a000.serial: ttymxc0 MMIO:0x1000a000 (irq = 36, base_baud = 755681) is a IMX
+[    0.154958] printk: console [ttymxc0] enabled
+[    0.166549] 1000b000.serial: ttymxc1 MMIO:0x1000b000 (irq = 35, base_baud = 755681) is a IMX
+[    0.167734] 1000c000.serial: ttymxc2 MMIO:0x1000c000 (irq = 34, base_baud = 755681) is a IMX
+[    0.192596] NET: Registered PF_PACKET protocol family
+[    0.224441] Loading compiled-in X.509 certificates
+[    0.284375] imx-fb 10021000.fb: i.MX Framebuffer driver
+[    0.288328] Console: switching to colour frame buffer device 64x30
+[    0.900425] clk: Disabling unused clocks
+[    1.325673] Freeing initrd memory: 3964K
+[    1.326871] Freeing unused kernel image (initmem) memory: 252K
+[    1.326884] Kernel memory protection not selected by kernel config.
+[    1.326900] Run /init as init process
+### sideload: Linux 5.9.16 from the reserved module pages ###
+sh: can't access tty; job control turned off
+~ #
+~ # [  312.170423] random: crng init done
+uname -a; cat /proc/cmdline; cat /proc/fb; cat /proc/mtd; echo MTD_RC=$?; dm
+esg | grep -iE "Linux version 7|initramfs|initrd|imxfb|Console:|imx2-wdt|panic|A
+iee" | tail -30; echo @@241373c6''END $?
+Linux (none) 7.3.1-mx21-sideload #1 PREEMPT Sun Nov  1 18:50:13 ACDT 2026 armv5tejl GNU/Linux
+console=ttymxc0,115200 rdinit=/init neochumby.sideloaded=1
+0 IMX
+cat: can't open '/proc/mtd': No such file or directory
+MTD_RC=1
+[    0.000000] Linux version 7.3.1-mx21-sideload (john@citadel) (arm-none-eabi-gcc (GCC) 13.3.0, GNU ld (GNU Binutils) 2.43.1) #1 PREEMPT Sun Nov  1 18:50:13 ACDT 2026
+[    0.001421] Console: colour dummy device 80x30
+[    0.126731] Unpacking initramfs...
+[    0.288328] Console: switching to colour frame buffer device 64x30
+[    1.325673] Freeing initrd memory: 3964K
+@@241373c6END 0
+~ #

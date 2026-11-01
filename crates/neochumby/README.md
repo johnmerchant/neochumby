@@ -9,8 +9,7 @@ for it, not as a general-purpose library.
 The Chumby Classic's session and device library: its screen, inputs and
 speaker, for the launcher, the apps and the services. Every neochumby app
 written in Rust depends on it. It builds only for the Chumby
-(`armv5te-unknown-linux-musleabi`): stock Linux 2.6.16, static musl,
-ARM926.
+(`armv5te-unknown-linux-musleabi`): Linux 7, static musl, ARM926.
 
 ## Building
 

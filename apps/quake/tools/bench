@@ -1,5 +1,5 @@
 #!/bin/sh
-# Runs on the Chumby: Quake's timedemo demo1 from the NFS export, with
+# Runs on the Chumby: Quake's timedemo demo1 from the stick, with
 # nothing else drawing or busy (the stock UI and its alarm daemon, which
 # restarts it, stopped; the launcher paused). Prints the result, or the log
 # on failure. $1: extra Quake arguments.

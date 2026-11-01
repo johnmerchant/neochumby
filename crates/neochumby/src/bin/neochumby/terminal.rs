@@ -41,7 +41,14 @@ pub struct Terminal {
 fn font_for(app: &App, look: &Look) -> (String, Font) {
     for name in [look.font.as_deref(), app.font.as_deref()].into_iter().flatten() {
         match Font::named(name, &app.dir) {
-            Ok(f) => return (name.to_string(), f),
+            Ok(f) if neochumby::term::vt::fits(&f) => return (name.to_string(), f),
+            Ok(f) => eprintln!(
+                "neochumby: {}: font {name}: {}x{} doesn't fit the kernel's console; using {}",
+                app.name,
+                f.width,
+                f.height,
+                font::DEFAULT
+            ),
             Err(e) => eprintln!("neochumby: {}: font {name}: {e}; using {}", app.name, font::DEFAULT),
         }
     }

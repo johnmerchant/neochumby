@@ -18,8 +18,7 @@ neochumby-proto.workspace = true
 # either.
 [target.'cfg(target_arch = "arm")'.dependencies]
 neochumby.workspace = true
-# Raw mode and the terminal's size: this app is for Linux 5.9 and later
-# only, where rustix's direct system calls are safe to make.
+# Raw mode and the terminal's size.
 rustix = { version = "1", features = ["termios"] }
 
 [package.metadata.neochumby]
@@ -30,8 +29,6 @@ color = "2ea043"
 companion = "neochumbyd:catalog"
 neochumbyd = "required"
 font = "spleen-6x12"
-# Not on the stock 2.6.16: rustix (above) needs Linux 3.2.
-linux = "5.9"
 
 [lints]
 workspace = true

@@ -1,11 +1,12 @@
 //! ncinit: the dist image's /init, process 1.
 //!
-//! It mounts the kernel's file systems, runs a neochumby stick's boot hook,
-//! and keeps a shell on the console and one on the screen. Throughout, it
+//! It mounts the kernel's file systems, joins the network the stock software
+//! was on (handed over at /psp, in RAM: network.rs), runs the stick's boot
+//! hook, the one hook there is, and keeps a shell on the console and one on
+//! the screen. With no stick there is nothing to run but the shells. Throughout, it
 //! loads the module for each device the kernel announces (its modalias,
 //! matched against depmod's modules.alias), for the devices there at boot
-//! too, except the NAND's drivers, which only root loads (modprobe), and
-//! reaps every process the kernel hands it.
+//! too, and reaps every process the kernel hands it.
 //!
 //! Process 1 must not exit: the kernel panics when it does. Nothing here
 //! unwraps; what fails is logged and skipped. A panic all the same, or the
@@ -15,6 +16,7 @@
 
 mod logo;
 mod modules;
+mod network;
 mod status;
 mod uevent;
 
@@ -33,20 +35,30 @@ use neochumby_sys::boot::{self, MountFlags};
 use crate::modules::Db;
 use crate::status::Status;
 
+const STARTING: &str = "Starting neochumby";
 const PATH: &str = "/bin:/sbin:/usr/bin:/usr/sbin";
 /// How long the stick gets to show up: several seconds, more when a
 /// control transfer times out and the hub tries it again.
 const STICK_WAIT: Duration = Duration::from_secs(15);
+/// How long the network adapter gets to show up, once it has a stick's
+/// wait behind it.
+const ADAPTER_WAIT: Duration = Duration::from_secs(20);
+/// What the session leaves just before it opens its first app, which then has
+/// the screen: nothing more is drawn on it from here.
+const SESSION_STARTED: &str = "/tmp/neochumby.started";
+/// Waited this long for the session, it's the server that's being waited for.
+const SERVER_SLOW: Duration = Duration::from_secs(25);
+/// The zone, as the sideload handed it over.
+const LOCALTIME: &str = "/psp/localtime";
+/// Where the time comes from.
+const NTP_SERVER: &str = "pool.ntp.org";
+/// The stock software's network, as the sideload handed it over.
+const NETWORK_CONFIG: &str = "/psp/network_config";
 /// A shell that exits sooner than this after it started is restarted only
 /// once this has passed, not in a loop.
 const RESPAWN_GAP: Duration = Duration::from_secs(1);
 /// How long the loop waits for an event before reaping.
 const TICK_MS: u16 = 500;
-/// The NAND's drivers, which ncinit never loads, whatever device asks for
-/// them, flashed or sideloaded: writing the flash is root's deliberate act
-/// (modprobe mxc_nand), never the boot's. Sideloaded, the flash is the
-/// stock firmware's.
-const NAND_DRIVERS: &str = "kernel/drivers/mtd/";
 
 fn main() {
     std::panic::set_hook(Box::new(|info| {
@@ -59,8 +71,6 @@ fn main() {
 
 /// What ncinit keeps track of.
 struct Init {
-    /// Handed off from the stock 2.6.16 by the sideloader, not flashed.
-    sideloaded: bool,
     db: Db,
     loaded: HashSet<String>,
     events: Option<OwnedFd>,
@@ -92,14 +102,17 @@ impl Init {
                 None
             }
         };
-        let cmdline = fs::read_to_string("/proc/cmdline").unwrap_or_default();
-        let sideloaded = cmdline.split_whitespace().any(|w| w == "neochumby.sideloaded=1");
-        let mut init = Init { sideloaded, db, loaded, events, shells: Vec::new(), hook: None };
+        let mut init = Init { db, loaded, events, shells: Vec::new(), hook: None };
 
-        init.nand();
         // The devices already there, whose announcements nobody heard.
         init.coldplug();
-        init.stick();
+        let stick_hook = init.stick();
+        install_timezone();
+        init.network();
+        match stick_hook {
+            Some(hook) => init.hook("the stick's userhook2", hook),
+            None => log("no neochumby stick: nothing to run. A reboot without one is the stock firmware's"),
+        }
 
         // A shell on the console the kernel was given, the serial port,
         // and one on the screen (a USB keyboard types into it), unless a
@@ -115,15 +128,32 @@ impl Init {
     }
 
     fn run(&mut self) -> ! {
+        // How long the session has been coming, while it is.
+        let mut coming = self.hook.map(|_| Instant::now());
         loop {
             for shell in &mut self.shells {
                 shell.keep_running();
             }
             self.service(TICK_MS);
+            if let Some(since) = coming {
+                let started = Path::new(SESSION_STARTED).exists();
+                if started || self.hook.is_none() {
+                    let what = if started { STARTING } else { "Starting neochumby: its hook gave up" };
+                    screen_step(what, if started { Status::Ok } else { Status::Failed });
+                    coming = None;
+                } else {
+                    let what = if since.elapsed() < SERVER_SLOW { STARTING } else { "Waiting for the server" };
+                    spin(what, since);
+                }
+            }
             while let Some(pid) = boot::reap() {
                 if self.hook == Some(pid) {
                     log("userhook2 exited");
                     self.hook = None;
+                    // The screen is free again: a shell on it, for a keyboard.
+                    if is_char_device("/dev/tty1") && !self.shells.iter().any(|s| s.tty == "/dev/tty1") {
+                        self.shells.push(Shell::new("/dev/tty1"));
+                    }
                 }
                 for shell in &mut self.shells {
                     if shell.pid == Some(pid) {
@@ -131,18 +161,6 @@ impl Init {
                     }
                 }
             }
-        }
-    }
-
-    /// Says how the kernel was started: sideloaded (the sideloader's
-    /// marker) or flashed. Either way the NAND's drivers stay unloaded until
-    /// root loads them.
-    fn nand(&mut self) {
-        if self.sideloaded {
-            log("sideloaded; NAND modules stay unloaded");
-        } else {
-            log("no sideload marker; this kernel was flashed");
-            log("NAND modules stay unloaded; root loads them (modprobe mxc_nand)");
         }
     }
 
@@ -165,37 +183,92 @@ impl Init {
         self.service(0);
     }
 
-    /// A neochumby stick, as the stock boot runs one: its first partition
-    /// on /mnt/usb, and its boot hook, userhook2, beside the shells.
-    fn stick(&mut self) {
-        let until = Instant::now() + STICK_WAIT;
+    /// The neochumby stick, as the stock boot has one: its first partition on
+    /// /mnt/usb, read-write, for what the Chumby keeps there. Its boot hook,
+    /// if it has one.
+    fn stick(&mut self) -> Option<&'static str> {
+        let since = Instant::now();
+        let until = since + STICK_WAIT;
         while !is_block_device("/dev/sda1") && Instant::now() < until {
+            spin("Looking for a neochumby stick", since);
             self.service(TICK_MS);
         }
         if !is_block_device("/dev/sda1") {
             screen_step("Looking for a neochumby stick", Status::Skipped);
-            return;
+            return None;
         }
         let _ = fs::create_dir_all("/mnt/usb");
         if let Err(e) = boot::mount("/dev/sda1", Path::new("/mnt/usb"), "vfat", MountFlags::default()) {
             step("Mounting the stick on /mnt/usb", Status::Failed, &format!("/dev/sda1: {e}"));
-            return;
+            return None;
         }
         step("Mounting the stick on /mnt/usb", Status::Ok, "stick mounted on /mnt/usb");
-        if !is_executable("/mnt/usb/userhook2") {
+        is_executable("/mnt/usb/userhook2").then_some("/mnt/usb/userhook2")
+    }
+
+    /// Joins the network the stock software was on. Doesn't wait for an
+    /// address: the hook does, with a deadline, and the shells needn't.
+    fn network(&mut self) {
+        const WHAT: &str = "Joining the network";
+        let Ok(text) = fs::read_to_string(NETWORK_CONFIG) else {
+            screen_step(WHAT, Status::Skipped);
+            return;
+        };
+        // Never logs the configuration or wpa_supplicant's, which hold the key.
+        let config = match network::Config::parse(&text) {
+            Ok(c) => c,
+            Err(e) => {
+                step(WHAT, Status::Failed, &format!("{NETWORK_CONFIG}: {e}"));
+                return;
+            }
+        };
+        let interface = if config.wireless { "wlan0" } else { "eth0" };
+        let since = Instant::now();
+        let until = since + ADAPTER_WAIT;
+        let present = |i: &str| Path::new("/sys/class/net").join(i).exists();
+        while !present(interface) && Instant::now() < until {
+            spin(WHAT, since);
+            self.service(TICK_MS);
+        }
+        if !present(interface) {
+            network_failed(&format!("no {interface}"));
             return;
         }
-        let mut hook = Command::new("/mnt/usb/userhook2");
+        run_quietly(Command::new("/bin/ifconfig").args(["lo", "127.0.0.1", "up"]).env("PATH", PATH));
+        if config.wireless
+            && let Err(e) = start_wpa_supplicant(&config, interface)
+        {
+            network_failed(&e);
+            return;
+        }
+        match configure_address(&config.address, interface) {
+            Ok(()) => {
+                step(WHAT, Status::Ok, &format!("network: {interface}, {}", config.ssid));
+                start_ntp();
+                start_ssh();
+            }
+            Err(e) => network_failed(&e),
+        }
+    }
+
+    /// Runs a boot hook beside the shells, as the stock boot runs one.
+    fn hook(&mut self, what: &str, path: &str) {
+        let mut hook = Command::new(path);
         hook.env("PATH", PATH).stdin(Stdio::null());
+        // For the apps: a jail without `system` has no /etc/localtime.
+        if let Some(tz) = fs::read(LOCALTIME).ok().and_then(|z| posix_tz(&z)) {
+            hook.env("TZ", tz);
+        }
         if let Some((out, err)) = terminal("/dev/console").and_then(|f| Some((f.try_clone().ok()?, f))) {
             hook.stdout(out).stderr(err);
         }
+        let label = format!("Running {what}");
         match hook.spawn() {
             Ok(child) => {
-                step("Running the stick's userhook2", Status::Ok, "running /mnt/usb/userhook2");
+                step(&label, Status::Ok, &format!("running {path}"));
                 self.hook = Some(child.id());
             }
-            Err(e) => step("Running the stick's userhook2", Status::Failed, &format!("userhook2: {e}")),
+            Err(e) => step(&label, Status::Failed, &format!("{path}: {e}")),
         }
     }
 
@@ -241,11 +314,6 @@ impl Init {
     fn load(&mut self, name: &str, why: Option<&str>) {
         for m in self.db.load_order(name, &self.loaded) {
             let Some(path) = self.db.module(&m).map(|m| m.path.clone()) else { continue };
-            if path.starts_with(NAND_DRIVERS) {
-                step(&format!("Loading {m}"), Status::Skipped, &format!("{m} stays unloaded: root loads NAND drivers"));
-                self.loaded.insert(m);
-                continue;
-            }
             let result = File::open(Path::new(&modules_dir()).join(&path)).and_then(|f| boot::load_module(&f));
             let what = format!("Loading {m}");
             match result {
@@ -274,7 +342,8 @@ impl Shell {
             return;
         }
         self.started = Some(Instant::now());
-        let Some(tty) = terminal(self.tty) else { return };
+        let Some(mut tty) = terminal(self.tty) else { return };
+        let _ = tty.write_all(status::SHOW_CURSOR.as_bytes());
         let (Ok(i), Ok(o)) = (tty.try_clone(), tty.try_clone()) else { return };
         let mut sh = Command::new("/bin/sh");
         sh.arg("-i").env("PATH", PATH).stdin(i).stdout(o).stderr(tty);
@@ -286,6 +355,164 @@ impl Shell {
                 Status::Failed,
                 &format!("{}: /bin/sh: {e}", self.tty),
             ),
+        }
+    }
+}
+
+/// The network failed: why, on the screen, where a Chumby with no serial
+/// line can show it, with what the kernel said of the USB bus and the adapter.
+fn network_failed(why: &str) {
+    step("Joining the network", Status::Failed, &format!("network: {why}"));
+    screen(&format!("{why}\n"));
+    let Ok(out) = Command::new("/bin/dmesg").env("PATH", PATH).stdin(Stdio::null()).output() else { return };
+    let text = String::from_utf8_lossy(&out.stdout);
+    for line in network_lines(&text) {
+        screen(&format!("{line}\n"));
+    }
+}
+
+/// The last of the kernel's lines about USB and the adapter, without their
+/// times, which a screen of 64 columns has no room for.
+fn network_lines(dmesg: &str) -> Vec<&str> {
+    const WORDS: [&str; 7] = ["usb", "rt73", "rt2x00", "wlan", "firmware", "imx21", "hub"];
+    let lines: Vec<&str> = dmesg
+        .lines()
+        .filter(|l| WORDS.iter().any(|w| l.to_ascii_lowercase().contains(w)))
+        .map(|l| l.split_once("] ").map_or(l, |(_, rest)| rest))
+        .collect();
+    let from = lines.len().saturating_sub(12);
+    lines[from..].to_vec()
+}
+
+/// The zone the stock software was set to, where the C library looks.
+/// Without it, local time is UTC.
+fn install_timezone() {
+    if let Err(e) = fs::copy(LOCALTIME, "/etc/localtime")
+        && e.kind() != io::ErrorKind::NotFound
+    {
+        kmsg(&format!("timezone: {e}"));
+    }
+}
+
+/// The rule a zone file (TZif, version 2 and later) ends with, as `TZ` takes
+/// it: the text between its last two newlines, as in `ACST-9:30ACDT,M10.1.0,M4.1.0/3`.
+fn posix_tz(zone: &[u8]) -> Option<String> {
+    let body = zone.strip_suffix(b"\n")?;
+    let from = body.iter().rposition(|&b| b == b'\n')? + 1;
+    let rule = std::str::from_utf8(&body[from..]).ok()?;
+    let plain = |c: char| c.is_ascii_alphanumeric() || "<>+-:,./".contains(c);
+    (!rule.is_empty() && rule.len() <= 64 && rule.chars().all(plain) && zone.starts_with(b"TZif"))
+        .then(|| rule.to_owned())
+}
+
+/// The time, from the network, kept in step: there's no clock that runs while
+/// the Chumby is off. It looks the servers up itself, as often as it takes, so
+/// it needn't wait for an address. Unauthenticated, as NTP is here: nothing
+/// that protects the Chumby depends on the time, its connections being to
+/// pinned keys.
+fn start_ntp() {
+    let started = Command::new("/usr/sbin/ntpd")
+        .args(["-p", NTP_SERVER])
+        .env("PATH", PATH)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match started {
+        Ok(s) if s.success() => kmsg("ntp: ntpd started"),
+        Ok(s) => step("Starting the clock's sync", Status::Failed, &format!("ntp: ntpd: {s}")),
+        Err(e) => step("Starting the clock's sync", Status::Failed, &format!("ntp: ntpd: {e}")),
+    }
+}
+
+/// An SSH server, only if the owner asked for one: /psp/neochumby-ssh there,
+/// and keys to let in at /psp/.ssh/authorized_keys. No password logs in. The
+/// host key is made anew each boot, there being nowhere to keep it.
+fn start_ssh() {
+    use std::os::unix::fs::PermissionsExt;
+    const WHAT: &str = "Starting the SSH server";
+    if !Path::new("/psp/neochumby-ssh").exists() {
+        return;
+    }
+    let Ok(keys) = fs::read("/psp/.ssh/authorized_keys") else {
+        step(WHAT, Status::Failed, "ssh: no /psp/.ssh/authorized_keys");
+        return;
+    };
+    let installed = fs::create_dir_all("/root/.ssh")
+        .and_then(|()| fs::set_permissions("/root", fs::Permissions::from_mode(0o700)))
+        .and_then(|()| fs::set_permissions("/root/.ssh", fs::Permissions::from_mode(0o700)))
+        .and_then(|()| fs::write("/root/.ssh/authorized_keys", keys))
+        .and_then(|()| fs::set_permissions("/root/.ssh/authorized_keys", fs::Permissions::from_mode(0o600)))
+        // Where Buildroot's /etc/dropbear, a link, points.
+        .and_then(|()| fs::create_dir_all("/var/run/dropbear"));
+    if let Err(e) = installed {
+        step(WHAT, Status::Failed, &format!("ssh: {e}"));
+        screen(&format!("ssh: {e}\n"));
+        return;
+    }
+    let started = Command::new("/usr/sbin/dropbear")
+        .args(["-R", "-s", "-g"])
+        .env("PATH", PATH)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status();
+    match started {
+        Ok(s) if s.success() => step(WHAT, Status::Ok, "ssh: dropbear started"),
+        Ok(s) => step(WHAT, Status::Failed, &format!("ssh: dropbear: {s}")),
+        Err(e) => step(WHAT, Status::Failed, &format!("ssh: dropbear: {e}")),
+    }
+}
+
+/// wpa_supplicant, in the background, from a file only root can read.
+fn start_wpa_supplicant(config: &network::Config, interface: &str) -> Result<(), String> {
+    use std::os::unix::fs::OpenOptionsExt;
+    const CONF: &str = "/tmp/wpa_supplicant.conf";
+    let conf = config.wpa_conf().map_err(|e| format!("{NETWORK_CONFIG}: {e}"))?;
+    OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(CONF)
+        .and_then(|mut f| f.write_all(conf.as_bytes()))
+        .map_err(|e| format!("{CONF}: {e}"))?;
+    let status = Command::new("/usr/sbin/wpa_supplicant")
+        .args(["-B", "-D", "nl80211", "-i", interface, "-c", CONF])
+        .env("PATH", PATH)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .map_err(|e| format!("wpa_supplicant: {e}"))?;
+    if status.success() { Ok(()) } else { Err(format!("wpa_supplicant: {status}")) }
+}
+
+/// The interface's address: DHCP, in the background until it has a lease
+/// and keeping it after, or the stock configuration's static one.
+fn configure_address(address: &network::Address, interface: &str) -> Result<(), String> {
+    let run = |program: &str, args: &[&str]| -> Result<(), String> {
+        let status = Command::new(program)
+            .args(args)
+            .env("PATH", PATH)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .map_err(|e| format!("{program}: {e}"))?;
+        if status.success() { Ok(()) } else { Err(format!("{program}: {status}")) }
+    };
+    match address {
+        network::Address::Dhcp => {
+            run("/sbin/udhcpc", &["-b", "-i", interface, "-s", "/usr/share/udhcpc/default.script"])
+        }
+        network::Address::Static { ip, netmask, gateway, nameservers } => {
+            run("/bin/ifconfig", &[interface, ip, "netmask", netmask, "up"])?;
+            if !gateway.is_empty() {
+                run("/sbin/route", &["add", "default", "gw", gateway])?;
+            }
+            let resolv: String = nameservers.iter().map(|n| format!("nameserver {n}\n")).collect();
+            fs::write("/etc/resolv.conf", resolv).map_err(|e| format!("/etc/resolv.conf: {e}"))
         }
     }
 }
@@ -324,6 +551,7 @@ fn mount_kernel_fs() {
     // Only now: the screen's console is in /dev, devtmpfs. The logo first,
     // under the kernel's Tux, then the steps.
     screen(&logo::for_screen());
+    screen(status::HIDE_CURSOR);
     screen_step("Mounting /proc, /sys and /dev", if ok { Status::Ok } else { Status::Failed });
     for dir in ["/tmp", "/mnt"] {
         let _ = fs::create_dir_all(dir);
@@ -365,11 +593,18 @@ fn step(what: &str, status: Status, msg: &str) {
     screen_step(what, status);
 }
 
+/// A step still going, in place of the console's cursor: a spinner and the
+/// seconds so far, on a line the step's result replaces.
+fn spin(what: &str, since: Instant) {
+    let elapsed = since.elapsed();
+    screen(&status::working(what, elapsed.as_millis() / u128::from(TICK_MS), elapsed.as_secs()));
+}
+
 /// A step on the screen only.
 fn screen_step(what: &str, status: Status) {
     let cols =
         OpenOptions::new().read(true).open("/dev/tty1").ok().and_then(|t| boot::columns(&t)).map_or(64, usize::from);
-    screen(&status::line(what, status, cols));
+    screen(&format!("\r{}", status::line(what, status, cols)));
 }
 
 fn kmsg(msg: &str) {
@@ -426,5 +661,30 @@ fn rescue() -> ! {
     }
     loop {
         std::thread::sleep(Duration::from_secs(3600));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_zones_rule_is_its_last_line() {
+        let zone = b"TZif2\0\0\xff\nACST-9:30ACDT,M10.1.0,M4.1.0/3\n";
+        assert_eq!(posix_tz(zone).as_deref(), Some("ACST-9:30ACDT,M10.1.0,M4.1.0/3"));
+        assert_eq!(posix_tz(b"TZif2\n<+0530>-5:30\n").as_deref(), Some("<+0530>-5:30"));
+        // Not a zone file, no rule (version 1), nothing odd for a shell or the C library.
+        assert_eq!(posix_tz(b"nonsense\nUTC0\n"), None);
+        assert_eq!(posix_tz(b"TZif\0\0"), None);
+        assert_eq!(posix_tz(b"TZif2\n$(reboot)\n"), None);
+    }
+
+    #[test]
+    fn network_lines_are_the_relevant_last_few() {
+        let dmesg = "[ 1.0] Booting\n[ 2.0] usb 1-1: new full-speed\n[ 3.0] other\n[ 4.0] phy0: rt2x00 failed\n";
+        assert_eq!(network_lines(dmesg), ["usb 1-1: new full-speed", "phy0: rt2x00 failed"]);
+        let many: String = (0..20).map(|i| format!("[ 1.0] usb {i}\n")).collect();
+        let last = network_lines(&many);
+        assert_eq!((last.len(), last[0], last[11]), (12, "usb 8", "usb 19"));
     }
 }

@@ -1,0 +1,20 @@
+[package]
+name = "neochumby-handoff"
+description = "What the stock 2.6.16 hands Linux 7 at a sideload: the initramfs, followed by the settings it needs from /psp as a second archive"
+license = "MIT"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+# A workspace of its own (the main one excludes it): the sideloader's, and it
+# needs none of the apps' submodules. The same rules as the main workspace's.
+[workspace]
+
+[lints.rust]
+unsafe_code = "deny"
+
+[profile.release]
+opt-level = "s"
+lto = true
+panic = "abort"
+codegen-units = 1

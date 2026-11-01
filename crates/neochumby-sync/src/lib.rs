@@ -1,7 +1,6 @@
-//! `delivery=sync`: a Chumby keeps a whole copy of its tree on its USB
-//! stick, in step with its neochumbyd, and boots from it. The other way,
-//! `delivery=nfs`, mounts the tree from neochumbyd on every boot. Each
-//! Chumby's owner chooses (`neochumbyd set NAME delivery=sync`).
+//! A Chumby keeps a whole copy of its tree on its USB stick, in step with
+//! its neochumbyd, and boots from it: the only way a tree reaches a paired
+//! Chumby.
 //!
 //! **Experimental and unstable**: any release may break anything. Built
 //! for [neochumby](https://github.com/johnmerchant/neochumby), and
@@ -10,8 +9,7 @@
 //! On the stick (FAT), in its neochumby directory:
 //!
 //!   current        "a" or "b": the live set
-//!   a/  b/         two sets, each a whole tree (the session, userhook2,
-//!                  apps/...)
+//!   a/  b/         two sets, each a whole tree (the session, apps/...)
 //!   a.complete     a's completion marker, written last: its manifest
 //!   a.journal      while a is being written: its files so far
 //!   hold           after a rollback: no syncing until it is removed
@@ -43,12 +41,8 @@
 //! `current` alone: it runs the set `current` names only if that set's
 //! marker is whole and every file it names is there at its size
 //! ([`stick::check_set`], `neochumby check-set`), else the other set, else
-//! it boots as before. A power cut at any point leaves one complete set.
+//! it runs the tree the stick was made with. A power cut at any point leaves one complete set.
 //! The live set is never written, nor the set the Chumby is running from.
-//!
-//! `delivery=nfs` is checked too: neochumbyd signs the same manifest, and
-//! a Chumby runs nothing from the tree it mounted that the signed manifest
-//! doesn't vouch for ([`signed`]).
 
 #[cfg(test)]
 mod crash;
@@ -56,7 +50,6 @@ pub mod disk;
 pub mod manifest;
 pub mod receive;
 pub mod serve;
-pub mod signed;
 pub mod stick;
 #[cfg(test)]
 mod tests;
@@ -71,7 +64,7 @@ pub struct Limits {
     pub max_files: usize,
     /// The largest file (Quake's pak0.pak is 18 MB).
     pub max_file: u64,
-    /// A whole set. The stick holds two.
+    /// A whole set. The stick holds two ([`stick`] checks they fit).
     pub max_total: u64,
 }
 

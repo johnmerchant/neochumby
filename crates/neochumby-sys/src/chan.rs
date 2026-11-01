@@ -1,8 +1,6 @@
 //! A channel between threads that never waits on a futex.
 //!
-//! std's channels, `Mutex`, `Condvar` and thread parking block with futex
-//! flags (FUTEX_PRIVATE_FLAG, Linux 2.6.22; FUTEX_WAIT_BITSET, 2.6.25) that
-//! the Chumby's 2.6.16 kernel doesn't have. This channel hands each value
+//! This channel hands each value
 //! over as a boxed pointer written to a pipe, and a pipe blocks and poll()s
 //! on any kernel. Nothing is copied but the pointer.
 

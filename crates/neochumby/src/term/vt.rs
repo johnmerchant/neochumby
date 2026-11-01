@@ -1,21 +1,17 @@
-//! The kernel's console on the screen, where there is one: fbcon's virtual
-//! terminal, tty1, on the dist kernels (Linux 5.9 and 7.2). The stock
-//! 2.6.16 kernel has none, and the terminal is drawn on the screen instead
-//! (grid.rs).
+//! The kernel's console on the screen: fbcon's virtual terminal, tty1.
 //!
-//! A text-mode app's terminal is still a pseudo-terminal of its own, as
-//! on 2.6.16, and [`relay`] passes what it writes to the console as it
+//! A text-mode app's terminal is a pseudo-terminal of its own, and [`relay`]
+//! passes what it writes to the console as it
 //! comes, for the kernel to draw: the app never holds the console, so it
 //! can't take it as its controlling terminal, switch it or change its
 //! font. Watching the output on its way is how the session knows what the
-//! program asked of the mouse, so a touch reaches it as it would on
-//! 2.6.16. What the console answers (cursor reports), and what a USB
+//! program asked of the mouse, so a touch reaches it. What the console answers (cursor reports), and what a USB
 //! keyboard types on it, go back to the program.
 //!
 //! The console is set up with BusyBox, which the dist image has: `stty`
 //! for raw mode, and `loadfont` (KDFONTOP and the font's Unicode table)
-//! for the font, which fbcon takes up to 32x32: Spleen 32x64 is drawn on
-//! the screen instead. The colours go in its palette with `ESC ] P`. The
+//! for the font, which fbcon takes up to 32x32: a larger one of an app's own
+//! isn't taken (term::serve uses the default). The colours go in its palette with `ESC ] P`. The
 //! Linux console has 16 colours and draws its background and text in
 //! colours 0 and 7, so a scheme's background and foreground take those
 //! two there. It has no colour for the cursor, which it draws in reverse
@@ -30,7 +26,7 @@ use neochumby_sys::pty;
 
 use super::colors::Scheme;
 use super::font::Font;
-use super::grid::Mouse;
+use super::mouse::Mouse;
 use super::{FRAME, Options, Touches};
 use crate::input::Touchscreen;
 
@@ -112,7 +108,8 @@ fn prepare(tty: &mut File, opts: &Options) -> io::Result<()> {
     if let Err(e) = busybox(&["loadfont"], opts.font.data()) {
         eprintln!("neochumby: terminal: {e}; keeping the console's font");
     }
-    tty.write_all(b"\x1b[0m\x1b[H\x1b[2J")
+    // The cursor too, as ncinit hides it during a boot.
+    tty.write_all(b"\x1b[0m\x1b[?25h\x1b[H\x1b[2J")
 }
 
 /// What of the program's output the relay must act on.
@@ -237,6 +234,13 @@ mod tests {
     #[test]
     fn fbcon_takes_fonts_up_to_32x32() {
         assert!(fits(&Font::builtin("spleen-16x32").unwrap()));
-        assert!(!fits(&Font::builtin("spleen-32x64").unwrap()));
+        // PSF 2: magic, version, header's size, flags, glyphs, a glyph's
+        // size, height and width.
+        let mut psf = vec![0x72, 0xb5, 0x4a, 0x86];
+        for word in [0u32, 32, 0, 1, 512, 64, 64] {
+            psf.extend_from_slice(&word.to_le_bytes());
+        }
+        psf.resize(32 + 512, 0);
+        assert!(!fits(&Font::parse(&psf).unwrap()));
     }
 }

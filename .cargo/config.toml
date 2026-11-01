@@ -1,7 +1,6 @@
 # Two kinds of binary, each static musl through zig (tools/zigcc):
 #
-#   cargo chumby       the session (with neochumby-sync, its receiver for
-#                      delivery=sync) and neochumby-home, for the Chumby's ARM926
+#   cargo chumby       the session (with neochumby-sync, its receiver) and neochumby-home, for the Chumby's ARM926
 #   cargo neochumbyd   the server, for x86_64 Linux, as it is released:
 #                      with wasm companions (the wasm-companions feature)
 #

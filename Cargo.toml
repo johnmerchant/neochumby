@@ -2,7 +2,7 @@
 resolver = "3"
 # Its own workspace: Buildroot builds it for the dist image without the
 # apps, whose third-party crates are submodules.
-exclude = ["crates/neochumby-init"]
+exclude = ["crates/neochumby-handoff", "crates/neochumby-init"]
 members = [
     "crates/neochumby",
     "crates/neochumby-macros",
@@ -88,6 +88,6 @@ panic = "abort"
 codegen-units = 1
 # Symbols and line tables stay: crash addresses and profiles are looked up
 # against them. They cost nothing on the device, where binaries are paged in
-# over NFS and the debug sections are never read.
+# from the stick and the debug sections are never read.
 strip = false
 debug = "line-tables-only"

@@ -1,8 +1,7 @@
 """What dev/emulate boots, made ready: QEMU with the machine
-(emu/qemu/out/obj/qemu-system-arm) and the dist and classic images
-(build/sideload-dist, build/classic), each fetched prebuilt and verified
-(emu/qemu/fetch, dist/fetch, classic/fetch), or built from source when it
-can't be (emu/qemu/build, dist/build, classic/build).
+(emu/qemu/out/obj/qemu-system-arm) and the dist image (build/sideload-dist),
+each fetched prebuilt and verified (emu/qemu/fetch, dist/fetch), or built from
+source when it can't be (emu/qemu/build, dist/build).
 
 Beside each output it records, in .neochumby-inputs, what it was made from
 and how (fetched or built), and the size and time of each file it made.
@@ -38,8 +37,8 @@ import subprocess
 import sys
 
 MARK = ".neochumby-inputs"
-DIST_KERNELS = ("5.9.16", "stable", "mainline")
-DEFAULT_DIST_KERNEL = "5.9.16"
+DIST_KERNELS = ("stable", "mainline")
+DEFAULT_DIST_KERNEL = "stable"
 
 # How each fetch says why it refused, as one short reason. The first match
 # wins: the specific before the general.
@@ -247,30 +246,22 @@ class Qemu(Output):
 
 
 class Image(Output):
-    """dist's (for a kernel) or classic's, from the dist-prebuilt release."""
+    """dist's, for a kernel, from the dist-prebuilt release."""
 
-    def __init__(self, repo, image, kernel=None):
+    def __init__(self, repo, kernel=None):
         super().__init__(repo)
         fetch = os.path.join(repo, "dist", "fetch")
-        if image == "dist":
-            kernel = kernel or DEFAULT_DIST_KERNEL
-            if kernel not in DIST_KERNELS:
-                sys.exit(f"dev/emulate: NEOCHUMBY_DIST_KERNEL is {', '.join(DIST_KERNELS[:-1])} or {DIST_KERNELS[-1]}, not {kernel}")
-            self.name = f"the dist image ({kernel})"
-            self.where = dist_dir(repo, kernel)
-            self.files = ("sideload-zImage", "sideload-rootfs.cpio.gz")
-            self.args = ["--kernel", kernel]
-            self.fetch = [fetch, *self.args, self.where]
-            self.build = [os.path.join(repo, "dist", "build"), self.where]
-            if kernel != DEFAULT_DIST_KERNEL:
-                self.build_env = {"NEOCHUMBY_DIST_KERNEL": kernel}
-        else:
-            self.name = "the classic image"
-            self.where = os.path.join(repo, "build", "classic")
-            self.files = ("classic-zImage", "classic-rootfs.cpio.gz", "classic-config")
-            self.args = ["--classic"]
-            self.fetch = [os.path.join(repo, "classic", "fetch"), self.where]
-            self.build = [os.path.join(repo, "classic", "build"), self.where]
+        kernel = kernel or DEFAULT_DIST_KERNEL
+        if kernel not in DIST_KERNELS:
+            sys.exit(f"dev/emulate: NEOCHUMBY_DIST_KERNEL is {' or '.join(DIST_KERNELS)}, not {kernel}")
+        self.name = f"the dist image ({kernel})"
+        self.where = dist_dir(repo, kernel)
+        self.files = ("sideload-zImage", "sideload-rootfs.cpio.gz")
+        self.args = ["--kernel", kernel]
+        self.fetch = [fetch, *self.args, self.where]
+        self.build = [os.path.join(repo, "dist", "build"), self.where]
+        if kernel != DEFAULT_DIST_KERNEL:
+            self.build_env = {"NEOCHUMBY_DIST_KERNEL": kernel}
         self.dist_fetch = fetch
 
     def inputs(self):

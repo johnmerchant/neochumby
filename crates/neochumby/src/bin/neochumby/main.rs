@@ -3,9 +3,7 @@
 //! when they exit (services.rs), and runs one app at a time in front,
 //! full-screen: first the start app (start.rs), then whatever the apps ask
 //! for over their request pipe (neochumby::session), going back to the
-//! start app whenever one exits (run.rs). On CHUMBY MODE it stops the
-//! services and exits, and the boot carries on with the Chumby's own
-//! software.
+//! start app whenever one exits (run.rs).
 //!
 //! A Chumby whose server is `serial` (an emulated one, with no network)
 //! reaches its neochumbyd over its serial line, which the session shares
@@ -14,7 +12,7 @@
 //! On a paired Chumby, its output also goes to its neochumbyd, which can
 //! ask it to restart, or for its screen, and, once its owner allows it,
 //! tap its screen and press its top button (devlink.rs). A restart stops
-//! everything as CHUMBY MODE does, then runs the tree's `neochumby` in
+//! everything, then runs the tree's `neochumby` in
 //! this process's place: the newest tree, deployed since boot.
 //!
 //! Holding the top-left corner of the screen for three seconds, whatever
@@ -33,25 +31,19 @@
 //!
 //! A text-mode app (one whose access doesn't list `fb`) runs on a terminal
 //! the session shows (terminal.rs), in the font and colours the settings
-//! name (`font=`, `colors=`), from the server or else /psp/neochumby.conf.
+//! name (`font=`, `colors=`), from the server or else the stick's neochumby.conf.
 //!
-//! With `delivery=sync` in its settings, the session also runs
-//! neochumby-sync from the tree as a service of its own (restarted like
-//! the apps' services), which keeps a copy of the tree on the stick for the
-//! boot hook to run. A tree made for a stick has no neochumby-sync, and
-//! needs none. The session also keeps the boot hook in
-//! /psp up to date with the tree's (conf::refresh_hook), and neochumby-boot
-//! beside it, which checks a tree over NFS before anything in it runs
-//! (neochumby::verified). Started by neochumby-boot, the session runs from
-//! a checked copy, and checks each program it runs too.
+//! On a paired Chumby the session also runs neochumby-sync from the tree as a
+//! service of its own (restarted like the apps' services), which keeps the
+//! stick's synced sets in step with neochumbyd. A restart runs the stick's
+//! live set (live_set).
 //!
 //! Apps live beside it, in apps/<name>/ (neochumby::apps); each is its own
-//! binary, paged in over NFS only when run. What it runs is described in
+//! binary, paged in from the stick only when run. What it runs is described in
 //! child.rs. The default player is chosen as the session starts
 //! (player.rs), the frontends the owner approved (frontend.rs), and the
 //! transition between apps, if one is chosen (transition.rs).
 
-mod backlight;
 mod button;
 mod child;
 mod companion;
@@ -71,7 +63,7 @@ mod transition;
 use std::fs::File;
 use std::os::fd::{AsFd, AsRawFd, RawFd};
 use std::os::unix::process::CommandExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
@@ -79,12 +71,11 @@ use std::time::{Duration, Instant};
 
 use neochumby::apps::{self, App, Needs};
 use neochumby::audio;
+use neochumby::backlight;
 use neochumby::conf;
 use neochumby::fb::{Fb, rgb};
 use neochumby::input::{self, Touch};
 use neochumby::settings;
-use neochumby::verified;
-use neochumby_proto::{Delivery, Settings};
 
 /// The escape hatch: a touch held this long in this corner. The resistive
 /// touchscreen reports brief releases during a steady hold; one shorter
@@ -157,25 +148,20 @@ fn watch_escape(flag: Arc<AtomicBool>) {
 /// (another process had it at boot, say).
 const BUTTON_RETRY: Duration = Duration::from_secs(5);
 
-/// The top button, opened once for the whole session (button.rs): the
-/// stock kernel's /dev/switch, or the dist kernels' input device for it
-/// (input::open_button). `again` when retrying, which logs only success.
+/// The top button, opened once for the whole session (button.rs): its input
+/// device (input::open_button). `again` when retrying, which logs only success.
 fn open_button(again: bool) -> Option<File> {
     // Passed on only to an app with `button = true`.
     let open =
         input::open_button().and_then(|(f, path)| neochumby_sys::fd::set_cloexec(f.as_fd(), true).map(|()| (f, path)));
     match open {
         Ok((f, path)) => {
-            if path != input::SWITCH {
-                eprintln!("neochumby: top button at {path}");
-            } else if again {
-                eprintln!("neochumby: /dev/switch: open now");
-            }
+            eprintln!("neochumby: top button at {path}");
             Some(f)
         }
         Err(e) => {
             if !again {
-                eprintln!("neochumby: /dev/switch: {e}; trying again every {} s", BUTTON_RETRY.as_secs());
+                eprintln!("neochumby: the top button: {e}; trying again every {} s", BUTTON_RETRY.as_secs());
             }
             None
         }
@@ -203,9 +189,8 @@ impl Speaker {
 }
 
 /// What the volume thread is asked for and has done, as [`Speaker::word`]s.
-/// audio::set_volume runs the stock chumby_set_volume, which the loop
+/// audio::set_volume runs chumby_set_volume, which the loop
 /// mustn't wait on, and one thread applying the latest keeps the order.
-/// (Atomics, not a Mutex: std's waits on futex flags 2.6.16 lacks.)
 struct Volumes {
     want: AtomicU32,
     done: AtomicU32,
@@ -247,11 +232,11 @@ impl Volumes {
     }
 }
 
-/// The Chumby's own stream player, which hands a URL to its daemon
-/// (btplayd), as the stock software and classic's wxshow run it.
+/// A stream player, which hands a URL to its daemon (btplayd), where there
+/// is one: the image has none yet, and the attempt is logged.
 const BTPLAY: &str = "/usr/bin/btplay";
 
-/// Runs the stock player with `args`: no shell, so a URL is one argument
+/// Runs the player with `args`: no shell, so a URL is one argument
 /// and nothing else. It may not return soon, so a thread waits for it: the
 /// loop never does. Its daemon outlives it, by design; it stays out of the
 /// apps' process groups and holds none of the session's descriptors
@@ -294,7 +279,7 @@ impl run::Device for Chumby {
         self.escape.swap(false, Ordering::SeqCst)
     }
 
-    /// Mutes at once (a write to /proc); the volume thread puts the boot's
+    /// Mutes at once; the volume thread puts the boot's
     /// volume back. As the session ends, it waits for that, up to `wait`.
     fn reset_speaker(&mut self, wait: Duration) {
         if let Err(e) = audio::mute(true) {
@@ -352,7 +337,7 @@ impl run::Device for Chumby {
         self.restart.as_ref().is_some_and(|r| r.swap(false, Ordering::SeqCst))
     }
 
-    /// One write to /proc or /sys, so the loop does it.
+    /// One write to /sys, so the loop does it.
     fn brightness(&mut self, level: Option<u32>) {
         let Some(v) = level.or(self.boot_brightness) else { return };
         let Some(b) = &self.backlight else {
@@ -390,32 +375,13 @@ fn session() {
     let root = apps::root();
     let all = apps::all(&root);
     jail::init(&all);
-    match conf::refresh_hook(&root) {
-        Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", conf::HOOK),
-        Ok(false) => {}
-        Err(e) => eprintln!("neochumby: {}: {e}", conf::HOOK),
-    }
-    // As the hook is, and from the same trees: what checks a tree over NFS
-    // on the next boot.
-    if conf::paired().is_some() && root != Path::new(conf::STICK_TREE) {
-        match verified::install_boot(&root) {
-            Ok(true) => eprintln!("neochumby: {} brought up to date from the tree", verified::BOOT),
-            Ok(false) => {}
-            Err(e) => eprintln!("neochumby: {}: {e}", verified::BOOT),
-        }
-    }
-    if verified::on() {
-        eprintln!("neochumby: the tree is checked against neochumbyd's signed manifest");
-    }
-
-    // The master volume as the boot set it from /psp/volume: nothing has
-    // played yet.
+    // The master volume as the boot left it: nothing has played yet.
     let boot_volume = audio::volume();
 
     // The server's `start` and `player`, else the local ones: names, trusted
     // only as far as the tree goes (start.rs, player.rs).
     let settings = settings::load();
-    let core = core_services(&root, &settings);
+    let core = core_services(&root);
     let (local, local_player) = (conf::get(conf::CONF, "start"), conf::get(conf::CONF, "player"));
     let local_transition = conf::get(conf::CONF, "transition");
     let choice = chosen(settings.start.as_deref(), local.as_deref());
@@ -452,12 +418,12 @@ fn session() {
     let ended = match start::choose(&all, choice) {
         None => {
             eprintln!("neochumby: no start app (not even {})", start::HOME);
-            run::Ended::ChumbyMode
+            run::Ended::GaveUp
         }
         Some(first) => {
             let backlight = backlight::Backlight::find();
             if backlight.is_none() {
-                eprintln!("neochumby: no backlight (/proc/sys/sense1/brightness or /sys/class/backlight)");
+                eprintln!("neochumby: no backlight (/sys/class/backlight)");
             }
             let chumby = Chumby {
                 escape,
@@ -487,23 +453,37 @@ fn session() {
         if let Some(link) = link {
             link.release();
         }
-        // Just after a deploy, the NFS client may still hold the replaced
-        // file's handle: the first try fails as stale, and drops it. A
-        // checked tree is checked again, from its new manifest.
+        // The stick's live set, which a sync since this one started may
+        // have changed.
+        let root = live_set(&root);
         let exe = root.join("neochumby");
+        eprintln!("neochumby: restart: running {}", exe.display());
         for _ in 0..5 {
-            let e = if verified::on() { verified::boot(&root) } else { Command::new(&exe).exec() };
+            let e = Command::new(&exe).env("NEOCHUMBY_ROOT", &root).exec();
             eprintln!("neochumby: restart: {}: {e}", exe.display());
             neochumby::sleep_ms(1000);
         }
-        eprintln!("neochumby: restart failed; back to the Chumby");
+        eprintln!("neochumby: restart failed");
     }
     if let Ok(mut fb) = Fb::open() {
         fb.clear(rgb(0, 0, 0));
     }
 }
 
-/// A setting from the server, else `local` (from /psp/neochumby.conf), with
+/// The tree a restart runs: on a paired Chumby, the stick's live set, as the
+/// boot hook would choose it, if it has a session; else the one it is in.
+fn live_set(root: &Path) -> PathBuf {
+    if conf::paired().is_none() {
+        return root.to_path_buf();
+    }
+    let stick = neochumby_sync::stick::Stick::new(conf::STICK_TREE, None);
+    match stick.live() {
+        Some((set, _)) if stick.set_dir(set).join("neochumby").is_file() => stick.set_dir(set),
+        _ => root.to_path_buf(),
+    }
+}
+
+/// A setting from the server, else `local` (from the stick's neochumby.conf), with
 /// where it came from.
 fn chosen<'a>(server: Option<&'a str>, local: Option<&'a str>) -> Option<(&'static str, &'a str)> {
     match server {
@@ -513,11 +493,10 @@ fn chosen<'a>(server: Option<&'a str>, local: Option<&'a str>) -> Option<(&'stat
 }
 
 /// The session's own services, supervised like the apps' (services.rs) but
-/// no app's: neochumby-sync, when this Chumby's settings say
-/// `delivery=sync`. It opens no app, so it is never told what is in front
+/// no app's: neochumby-sync, on a paired Chumby. It opens no app, so it is never told what is in front
 /// and nothing it asks for is done.
-fn core_services(root: &Path, settings: &Settings) -> Vec<App> {
-    if settings.delivery != Some(Delivery::Sync) {
+fn core_services(root: &Path) -> Vec<App> {
+    if conf::paired().is_none() || !root.join("neochumby-sync").is_file() {
         return Vec::new();
     }
     vec![App {

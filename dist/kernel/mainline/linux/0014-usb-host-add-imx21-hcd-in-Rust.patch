@@ -1,0 +1,1891 @@
+Description: usb: host: add imx21-hcd in Rust
+ The controller Linux dropped, with its state in vectors under one lock, URBs given back once that
+ lock is released, and no debugfs statistics.
+ .
+ It enables an ETD's DMA with a write of that ETD's bit alone. Writing a 1 to USB_ETDDMAEN toggles
+ a bit, as the stock 2.6.16 driver's mx2otg_set_toggling_bit knows: a read-modify-write would turn
+ off the DMA of every other active ETD.
+Author: John Merchant <john@johnmerchant.dev>
+Upstream-Status: Inappropriate [AI generated code]
+Signed-off-by: John Merchant <john@johnmerchant.dev>
+Claude-Session: https://claude.ai/code/session_01B1fN5HecVTggWQg4Zt8Srt
+---
+--- /dev/null
++++ b/Documentation/devicetree/bindings/usb/fsl,imx21-usbh.yaml
+@@ -0,0 +1,112 @@
++# SPDX-License-Identifier: (GPL-2.0-only OR BSD-2-Clause)
++%YAML 1.2
++---
++$id: http://devicetree.org/schemas/usb/fsl,imx21-usbh.yaml#
++$schema: http://devicetree.org/meta-schemas/core.yaml#
++
++title: Freescale i.MX21 USB full-speed host controller
++
++maintainers:
++  - John Merchant <john@johnmerchant.dev>
++
++description: |
++  The i.MX21 USB OTG module contains a full-speed host controller with a
++  root hub of three ports: the OTG port (port 1, used as a host port),
++  host 1 (port 2) and host 2 (port 3). The ports connect to external
++  transceivers or, for host 1, directly to the pins. This binding covers
++  the host function only; the module's function (device) controller is
++  not used.
++
++  This is not the ChipIdea controller of the i.MX25/i.MX27 and later
++  ("fsl,imx27-usb"), although it sits at the same address as the i.MX27's.
++
++allOf:
++  - $ref: usb-hcd.yaml#
++
++properties:
++  compatible:
++    const: fsl,imx21-usbh
++
++  reg:
++    maxItems: 1
++    description:
++      The whole USB OTG module, registers and the 4 KiB data memory (8 KiB).
++
++  interrupts:
++    maxItems: 1
++    description: The host controller interrupt (USBHOST).
++
++  clocks:
++    items:
++      - description: The 48 MHz USB clock (usb_gate); set to 48 MHz.
++      - description: The AHB clock (usb_hclk_gate), needed for register access.
++
++  clock-names:
++    items:
++      - const: per
++      - const: ahb
++
++  fsl,host-xcvr-mode:
++    description:
++      Transceiver signalling of the host 1 and host 2 ports, as differential
++      (diff) or single-ended (se) transmit and receive.
++    $ref: /schemas/types.yaml#/definitions/string
++    enum: [tx-diff-rx-diff, tx-diff-rx-se, tx-se-rx-diff, tx-se-rx-se]
++    default: tx-diff-rx-diff
++
++  fsl,otg-xcvr-mode:
++    description: Transceiver signalling of the OTG port, as above.
++    $ref: /schemas/types.yaml#/definitions/string
++    enum: [tx-diff-rx-diff, tx-diff-rx-se, tx-se-rx-diff, tx-se-rx-se]
++    default: tx-diff-rx-diff
++
++  fsl,disable-otg-port:
++    description: Do not power and enable the OTG port as a host port.
++    type: boolean
++
++  fsl,disable-host1-port:
++    description: Do not power and enable the host 1 port.
++    type: boolean
++
++  fsl,disable-host2-port:
++    description: Do not power and enable the host 2 port.
++    type: boolean
++
++  fsl,host1-xcvr-less:
++    description:
++      Host 1 has no transceiver; its signals connect directly to a device
++      (the transceiverless link is not bypassed).
++    type: boolean
++
++  fsl,host1-txen-oe:
++    description: Drive the host 1 TXEN pin as an output enable.
++    type: boolean
++
++  fsl,otg-external-xcvr:
++    description:
++      The OTG port has an external transceiver, whose RXDP is used as the
++      receive data input.
++    type: boolean
++
++required:
++  - compatible
++  - reg
++  - interrupts
++  - clocks
++  - clock-names
++
++unevaluatedProperties: false
++
++examples:
++  - |
++    #include <dt-bindings/clock/imx21-clock.h>
++
++    usb@10024000 {
++        compatible = "fsl,imx21-usbh";
++        reg = <0x10024000 0x2000>;
++        interrupts = <55>;
++        clocks = <&clks IMX21_CLK_USB_GATE>, <&clks IMX21_CLK_USB_HCLK_GATE>;
++        clock-names = "per", "ahb";
++        fsl,host-xcvr-mode = "tx-diff-rx-diff";
++        fsl,otg-xcvr-mode = "tx-diff-rx-diff";
++    };
+--- a/drivers/usb/host/Kconfig
++++ b/drivers/usb/host/Kconfig
+@@ -682,6 +682,13 @@
+ 	  To compile this driver as a module, choose M here: the
+ 	  module will be called renesas-usbhs.
+ 
++config USB_IMX21_HCD
++	bool "i.MX21 HCD support"
++	depends on (ARCH_MXC || COMPILE_TEST) && USB=y && RUST
++	help
++	  This driver enables support for the on-chip full-speed USB
++	  host controller in the i.MX21 processor.
++
+ config USB_HCD_BCMA
+ 	tristate "BCMA usb host driver"
+ 	depends on BCMA
+--- a/drivers/usb/host/Makefile
++++ b/drivers/usb/host/Makefile
+@@ -89,3 +89,4 @@
+ obj-$(CONFIG_USB_HCD_SSB)	+= ssb-hcd.o
+ obj-$(CONFIG_USB_MAX3421_HCD)	+= max3421-hcd.o
+ obj-$(CONFIG_USB_XEN_HCD)	+= xen-hcd.o
++obj-$(CONFIG_USB_IMX21_HCD)	+= imx21_hcd.o
+--- /dev/null
++++ b/drivers/usb/host/imx21_hcd.rs
+@@ -0,0 +1,1727 @@
++// SPDX-License-Identifier: GPL-2.0
++
++//! USB Host Controller Driver for the i.MX21.
++//!
++//! The i.MX21 USB hardware has 32 transfer descriptors (ETDs) and 4 KB of data memory. Setting up
++//! a transfer means allocating an ETD, filling it in, allocating data memory (with its offset in
++//! the ETD), activating the ETD, and an interrupt when it's done. An ETD is assigned to each active
++//! endpoint.
++//!
++//! Non-isochronous transfers are queued if either ETDs or data memory are unavailable. Isochronous
++//! transfers use 2 ETDs per endpoint for double buffering, and allocate both ETDs and data memory
++//! as an URB's submitted, failing if they're unavailable.
++//!
++//! Where the C driver keeps intrusive lists and pointers to URBs and endpoints, here the state is
++//! plain vectors under one lock, with URBs and endpoints looked up by their ids. Unlike C, an URB
++//! is given back once the lock's released and the work in hand is finished, rather than dropping
++//! the lock part way through it. The debugfs statistics of imx21-dbg.c aren't ported.
++
++use kernel::{
++    alloc::flags::GFP_ATOMIC,
++    clk::Clk,
++    device::{self, Core},
++    new_spinlock_irq, of, platform,
++    prelude::*,
++    sync::SpinLockIrq,
++    time::{delay::fsleep, Delta},
++    usb_hcd::{self, Bounce, Done, Hcd, HcDriver, LinkedUrb, Regs, Urb},
++};
++
++const NUM_ISO_ETDS: usize = 2;
++const USB_NUM_ETD: usize = 32;
++const DMEM_SIZE: u32 = 4096;
++
++const USBOTG_HWMODE: usize = 0x00;
++const USBOTG_HWMODE_OTGXCVR_SHIFT: u32 = 6;
++const USBOTG_HWMODE_OTGXCVR_MASK: u32 = 3 << 6;
++const USBOTG_HWMODE_HOSTXCVR_SHIFT: u32 = 4;
++const USBOTG_HWMODE_HOSTXCVR_MASK: u32 = 3 << 4;
++const USBOTG_HWMODE_CRECFG_HOST: u32 = 1 << 0;
++const USBOTG_CINT_STEN: usize = 0x08;
++const USBOTG_HCINT: u32 = 1 << 0;
++const USBOTG_CLK_CTRL: usize = 0x0c;
++const USBOTG_CLK_CTRL_HST: u32 = 1 << 1;
++const USBOTG_CLK_CTRL_MAIN: u32 = 1 << 0;
++const USBOTG_RST_CTRL: usize = 0x10;
++const USBOTG_RST_RSTCTRL: u32 = 1 << 5;
++const USBOTG_RST_RSTRH: u32 = 1 << 2;
++const USBOTG_RST_RSTHSIE: u32 = 1 << 1;
++const USBOTG_RST_RSTHC: u32 = 1 << 0;
++
++const USBH_HOST_CTRL: usize = 0x80;
++const USBH_HOST_CTRL_HCUSBSTE_OPERATIONAL: u32 = 2 << 2;
++const USBH_HOST_CTRL_CTLBLKSR_1: u32 = 0 << 0;
++const USBH_SYSISR: usize = 0x88;
++const USBH_SYSISR_SOFINT: u32 = 1 << 2;
++const USBH_SYSISR_DONEINT: u32 = 1 << 1;
++const USBH_SYSIEN: usize = 0x8c;
++const USBH_SYSIEN_HERRINT: u32 = 1 << 4;
++const USBH_SYSIEN_SOFINT: u32 = 1 << 2;
++const USBH_SYSIEN_DONEINT: u32 = 1 << 1;
++const USBH_SYSIEN_SORINT: u32 = 1 << 0;
++const USBH_XBUFSTAT: usize = 0x98;
++const USBH_YBUFSTAT: usize = 0x9c;
++const USBH_XFILLSTAT: usize = 0xa8;
++const USBH_YFILLSTAT: usize = 0xac;
++const USBH_ETDENSET: usize = 0xc0;
++const USBH_ETDENCLR: usize = 0xc4;
++const USBH_ETDDONESTAT: usize = 0xd0;
++const USBH_ETDDONEEN: usize = 0xd4;
++const USBH_FRMNUB: usize = 0xe0;
++const USBH_ROOTHUBA: usize = 0xe8;
++const USBH_ROOTHUBA_NDNSTMPRT_MASK: u32 = 0xff;
++
++const fn usbh_portstat(x: usize) -> usize {
++    0xf4 + x * 4
++}
++const USBH_PORTSTAT_PRTRSTSC: u32 = 1 << 20;
++const USBH_PORTSTAT_OVRCURIC: u32 = 1 << 19;
++const USBH_PORTSTAT_PRTSTATSC: u32 = 1 << 18;
++const USBH_PORTSTAT_PRTENBLSC: u32 = 1 << 17;
++const USBH_PORTSTAT_CONNECTSC: u32 = 1 << 16;
++const USBH_PORTSTAT_LSDEVCON: u32 = 1 << 9;
++const USBH_PORTSTAT_PRTPWRST: u32 = 1 << 8;
++const USBH_PORTSTAT_PRTRSTST: u32 = 1 << 4;
++const USBH_PORTSTAT_PRTOVRCURI: u32 = 1 << 3;
++const USBH_PORTSTAT_PRTSUSPST: u32 = 1 << 2;
++const USBH_PORTSTAT_PRTENABST: u32 = 1 << 1;
++const USBH_PORTSTAT_CURCONST: u32 = 1 << 0;
++
++const USB_ETDDMAEN: usize = 0x820;
++const USB_MISCCONTROL: usize = 0x840;
++const USB_MISCCONTROL_ARBMODE: u32 = 1 << 1;
++const USB_ETDDMACHANLCLR: usize = 0x848;
++const fn usb_etdsmsa(x: usize) -> usize {
++    0x900 + x * 4
++}
++const fn usb_etd_dword(x: usize, w: usize) -> usize {
++    0x200 + x * 16 + w * 4
++}
++
++const DW0_ADDRESS: u32 = 0;
++const DW0_ENDPNT: u32 = 7;
++const DW0_DIRECT: u32 = 11;
++const DW0_SPEED: u32 = 13;
++const DW0_FORMAT: u32 = 14;
++const DW0_MAXPKTSIZ: u32 = 16;
++const DW0_TOGCRY: u32 = 28;
++const DW1_YBUFSRTAD: u32 = 16;
++const DW2_POLINTERV: u32 = 0;
++const DW2_STARTFRM: u32 = 0;
++const DW2_RELPOLPOS: u32 = 8;
++const DW2_DIRPID: u32 = 16;
++const DW2_BUFROUND: u32 = 18;
++const DW2_DATATOG: u32 = 22;
++const DW2_COMPCODE: u32 = 28;
++const DW3_PKTLEN0: u32 = 0;
++const DW3_COMPCODE0: u32 = 12;
++const DW3_BUFSIZE: u32 = 21;
++
++const USBCTRL: usize = 0x600;
++const USBCTRL_OTC_RCV_RXDP: u32 = 1 << 13;
++const USBCTRL_HOST1_BYP_TLL: u32 = 1 << 12;
++const USBCTRL_HOST1_TXEN_OE: u32 = 1 << 1;
++const USBOTG_DMEM: usize = 0x1000;
++
++const TD_DIR_SETUP: u8 = 0;
++const TD_DIR_OUT: u8 = 1;
++const TD_DIR_IN: u8 = 2;
++const TD_TOGGLE_DATA0: u32 = 2;
++const TD_TOGGLE_DATA1: u32 = 3;
++
++const US_CTRL_SETUP: i32 = 2;
++const US_CTRL_DATA: i32 = 1;
++const US_CTRL_ACK: i32 = 0;
++const US_BULK: i32 = 1;
++const US_BULK0: i32 = 0;
++
++// By `usb_pipetype`: PIPE_ISOCHRONOUS, PIPE_INTERRUPT, PIPE_CONTROL, PIPE_BULK.
++const FMT_URB_TO_ETD: [u32; 4] = [0x1, 0x3, 0x0, 0x2];
++
++const TD_CC_NOERROR: u32 = 0x00;
++const TD_DATAUNDERRUN: u32 = 0x09;
++const TD_NOTACCESSED: u32 = 0x0f;
++
++fn cc_to_error(cc: u32) -> i32 {
++    let errno = match cc & 0xf {
++        0x0 => return 0,
++        0x1 | 0x3 => EILSEQ,
++        0x2 | 0x6 | 0x7 => EPROTO,
++        0x4 => EPIPE,
++        0x5 => ETIMEDOUT,
++        0x8 => EOVERFLOW,
++        0x9 => EREMOTEIO,
++        0xa | 0xb => EIO,
++        0xc => ECOMM,
++        0xd => ENOSR,
++        0xe => ENOSPC,
++        _ => EALREADY,
++    };
++    errno.to_errno()
++}
++
++// `HUB_CLASS_REQ`: the root hub's requests, and its features.
++const CLEAR_HUB_FEATURE: u16 = 0x2001;
++const CLEAR_PORT_FEATURE: u16 = 0x2301;
++const GET_HUB_DESCRIPTOR: u16 = 0xa006;
++const GET_HUB_STATUS: u16 = 0xa000;
++const GET_PORT_STATUS: u16 = 0xa300;
++const SET_HUB_FEATURE: u16 = 0x2003;
++const SET_PORT_FEATURE: u16 = 0x2303;
++
++const C_HUB_LOCAL_POWER: u16 = 0;
++const C_HUB_OVER_CURRENT: u16 = 1;
++const PORT_FEAT_ENABLE: u16 = 1;
++const PORT_FEAT_SUSPEND: u16 = 2;
++const PORT_FEAT_RESET: u16 = 4;
++const PORT_FEAT_POWER: u16 = 8;
++const PORT_FEAT_C_CONNECTION: u16 = 16;
++const PORT_FEAT_C_ENABLE: u16 = 17;
++const PORT_FEAT_C_SUSPEND: u16 = 18;
++const PORT_FEAT_C_OVER_CURRENT: u16 = 19;
++const PORT_FEAT_C_RESET: u16 = 20;
++
++const USB_DT_HUB: u8 = 0x29;
++const HUB_CHAR_NO_LPSM: u16 = 0x0002;
++const HUB_CHAR_NO_OCPM: u16 = 0x0010;
++
++fn wrap_frame(counter: i32) -> i32 {
++    counter & 0xffff
++}
++
++fn frame_after(frame: i32, after: i32) -> bool {
++    // Handle wrapping like jiffies' time_after.
++    (after as i16).wrapping_sub(frame as i16) < 0
++}
++
++fn unsuitable_for_dma(addr: u32) -> bool {
++    addr & 3 != 0
++}
++
++/// Where an ETD's data is for the CPU.
++#[derive(Clone, Copy, Default)]
++enum Cpu {
++    #[default]
++    None,
++    Setup,
++    Transfer(u32),
++}
++
++/// An isochronous packet.
++#[derive(Clone, Copy)]
++struct Td {
++    urb: usize,
++    dma: u32,
++    offset: u32,
++    len: i32,
++    frame: i32,
++    isoc_index: i32,
++}
++
++/// An URB's state.
++struct UrbEntry {
++    urb: LinkedUrb,
++    active: bool,
++    state: i32,
++    isoc_remaining: i32,
++    isoc_status: i32,
++}
++
++/// An endpoint's state.
++struct Ep {
++    id: usize,
++    urbs: KVec<UrbEntry>,
++    tds: KVec<Td>,
++    etd: [i32; NUM_ISO_ETDS],
++    waiting_etd: bool,
++}
++
++/// A hardware ETD's state.
++#[derive(Default)]
++struct Etd {
++    alloc: bool,
++    ep: usize,
++    urb: usize,
++    td: Option<Td>,
++    dma: u32,
++    cpu: Cpu,
++    bounce: Option<Bounce>,
++    len: i32,
++    dmem_size: i32,
++    dmem_offset: i32,
++    active_count: i32,
++}
++
++/// An allocation of the data memory.
++#[derive(Clone, Copy)]
++struct Area {
++    ep: usize,
++    offset: u32,
++    size: u32,
++}
++
++struct State {
++    etd: KVec<Etd>,
++    eps: KVec<Ep>,
++    // Sorted by offset.
++    dmem: KVec<Area>,
++    // Endpoints queued for want of an ETD.
++    queue_for_etd: KVec<usize>,
++    // ETDs queued for want of data memory.
++    queue_for_dmem: KVec<usize>,
++}
++
++#[derive(Clone, Copy)]
++struct Config {
++    host_xcvr: u32,
++    otg_xcvr: u32,
++    enable_host1: bool,
++    enable_host2: bool,
++    enable_otg_host: bool,
++    host1_xcverless: bool,
++    host1_txenoe: bool,
++    otg_ext_xcvr: bool,
++}
++
++#[pin_data(PinnedDrop)]
++struct Imx21 {
++    regs: Regs,
++    cfg: Config,
++    clk: Clk,
++    _clk_ahb: Clk,
++    #[pin]
++    state: SpinLockIrq<State>,
++}
++
++#[pinned_drop]
++impl PinnedDrop for Imx21 {
++    fn drop(self: Pin<&mut Self>) {
++        self.clk.disable_unprepare();
++        self._clk_ahb.disable_unprepare();
++    }
++}
++
++/// What every step of the state machine works in: the lock's held.
++struct Cx<'a> {
++    hcd: &'a Hcd<Imx21>,
++    regs: &'a Regs,
++    st: &'a mut State,
++    done: &'a mut Done<Imx21>,
++}
++
++impl Cx<'_> {
++    fn set_bits(&self, offset: usize, mask: u32) {
++        self.regs.write(offset, self.regs.read(offset) | mask);
++    }
++
++    fn clear_bits(&self, offset: usize, mask: u32) {
++        self.regs.write(offset, self.regs.read(offset) & !mask);
++    }
++
++    fn clear_toggle(&self, offset: usize, mask: u32) {
++        if self.regs.read(offset) & mask != 0 {
++            self.regs.write(offset, mask);
++        }
++    }
++
++    fn set_toggle(&self, offset: usize, mask: u32) {
++        if self.regs.read(offset) & mask == 0 {
++            self.regs.write(offset, mask);
++        }
++    }
++
++    fn etd_write(&self, num: usize, dword: usize, value: u32) {
++        self.regs.write(usb_etd_dword(num, dword), value);
++    }
++
++    fn etd_read(&self, num: usize, dword: usize) -> u32 {
++        self.regs.read(usb_etd_dword(num, dword))
++    }
++
++    fn frame(&self) -> i32 {
++        wrap_frame(self.regs.read(USBH_FRMNUB) as i32)
++    }
++
++    fn ep_mut(&mut self, id: usize) -> Option<&mut Ep> {
++        self.st.eps.iter_mut().find(|e| e.id == id)
++    }
++
++    fn ep(&self, id: usize) -> Option<&Ep> {
++        self.st.eps.iter().find(|e| e.id == id)
++    }
++
++    fn entry(&self, ep: usize, urb: usize) -> Option<&UrbEntry> {
++        self.ep(ep)?.urbs.iter().find(|u| u.urb.id() == urb)
++    }
++
++    fn entry_mut(&mut self, ep: usize, urb: usize) -> Option<&mut UrbEntry> {
++        self.ep_mut(ep)?.urbs.iter_mut().find(|u| u.urb.id() == urb)
++    }
++
++    // ETD management.
++
++    fn alloc_etd(&mut self) -> i32 {
++        for (i, etd) in self.st.etd.iter_mut().enumerate() {
++            if !etd.alloc {
++                *etd = Etd::default();
++                etd.alloc = true;
++                return i as i32;
++            }
++        }
++        -1
++    }
++
++    fn disactivate_etd(&mut self, num: usize) {
++        let mask = 1u32 << num;
++        self.regs.write(USBH_ETDENCLR, mask);
++        self.clear_bits(USBH_ETDDONEEN, mask);
++        self.regs.write(USB_ETDDMACHANLCLR, mask);
++        self.clear_toggle(USBH_ETDDONESTAT, mask);
++        self.st.etd[num].active_count = 0;
++    }
++
++    fn reset_etd(&mut self, num: usize) {
++        self.disactivate_etd(num);
++        for i in 0..4 {
++            self.etd_write(num, i, 0);
++        }
++        let etd = &mut self.st.etd[num];
++        etd.urb = 0;
++        etd.ep = 0;
++        etd.td = None;
++        etd.bounce = None;
++    }
++
++    fn free_etd(&mut self, num: i32) {
++        if num < 0 {
++            return;
++        }
++        if num as usize >= USB_NUM_ETD {
++            pr_err!("BAD etd={}!\n", num);
++            return;
++        }
++        let n = num as usize;
++        if !self.st.etd[n].alloc {
++            pr_err!("ETD {} already free!\n", num);
++            return;
++        }
++        self.reset_etd(n);
++        self.st.etd[n] = Etd::default();
++    }
++
++    fn setup_etd_dword0(&self, num: usize, urb: &Urb, dir: u8, maxpacket: u32) {
++        self.etd_write(
++            num,
++            0,
++            urb.pipe_device() << DW0_ADDRESS
++                | urb.pipe_endpoint() << DW0_ENDPNT
++                | u32::from(dir) << DW0_DIRECT
++                | u32::from(urb.is_low_speed()) << DW0_SPEED
++                | FMT_URB_TO_ETD[urb.pipe_type() as usize] << DW0_FORMAT
++                | maxpacket << DW0_MAXPKTSIZ,
++        );
++    }
++
++    /// Copies to the data memory, in 32-bit writes, which the hardware requires.
++    fn copy_to_dmem(&self, offset: i32, src: &[u8]) {
++        let mut at = USBOTG_DMEM + offset as usize;
++        for chunk in src.chunks(4) {
++            let mut word = [0u8; 4];
++            word[..chunk.len()].copy_from_slice(chunk);
++            self.regs.write(at, u32::from_le_bytes(word));
++            at += 4;
++        }
++    }
++
++    fn cpu_source(&self, num: usize) -> Option<&[u8]> {
++        let etd = &self.st.etd[num];
++        let urb = &self.entry(etd.ep, etd.urb)?.urb;
++        match etd.cpu {
++            Cpu::None => Some(&[]),
++            Cpu::Setup => urb.setup_slice(),
++            Cpu::Transfer(offset) => urb.transfer_slice(offset, etd.len as u32),
++        }
++    }
++
++    fn activate_etd(&mut self, num: usize, dir: u8) {
++        let mask = 1u32 << num;
++        let (dma, len, dmem_size, dmem_offset) = {
++            let etd = &self.st.etd[num];
++            (etd.dma, etd.len, etd.dmem_size, etd.dmem_offset)
++        };
++
++        if dma != 0 && unsuitable_for_dma(dma) {
++            // For non aligned isoc the condition below is always true.
++            if len <= dmem_size {
++                // Fits into data memory, use PIO.
++                if dir != TD_DIR_IN {
++                    let copied = match self.cpu_source(num) {
++                        Some(src) => {
++                            self.copy_to_dmem(dmem_offset, src);
++                            true
++                        }
++                        None => false,
++                    };
++                    if !copied {
++                        self.bounce_failed(num);
++                        return;
++                    }
++                }
++                self.st.etd[num].dma = 0;
++            } else {
++                // Too big for data memory, use bounce buffer.
++                let bounce = if dir == TD_DIR_IN {
++                    Bounce::new(self.hcd, None, len as usize)
++                } else {
++                    match self.cpu_source(num) {
++                        Some(src) => Bounce::new(self.hcd, Some(src), len as usize),
++                        None => Err(EINVAL),
++                    }
++                };
++                match bounce {
++                    Ok(b) => {
++                        self.st.etd[num].dma = b.dma();
++                        self.st.etd[num].bounce = Some(b);
++                    }
++                    Err(_) => {
++                        pr_err!("failed bounce alloc\n");
++                        self.bounce_failed(num);
++                        return;
++                    }
++                }
++            }
++        }
++
++        self.clear_toggle(USBH_ETDDONESTAT, mask);
++        self.set_bits(USBH_ETDDONEEN, mask);
++        self.clear_toggle(USBH_XFILLSTAT, mask);
++        self.clear_toggle(USBH_YFILLSTAT, mask);
++
++        let dma = self.st.etd[num].dma;
++        if dma != 0 {
++            self.set_bits(USB_ETDDMACHANLCLR, mask);
++            self.clear_toggle(USBH_XBUFSTAT, mask);
++            self.clear_toggle(USBH_YBUFSTAT, mask);
++            self.regs.write(usb_etdsmsa(num), dma);
++            // Writing a 1 toggles a bit here, as the stock driver's mx2otg_set_toggling_bit knows:
++            // A read-modify-write would turn off the DMA of every other active ETD.
++            self.set_toggle(USB_ETDDMAEN, mask);
++        } else if dir != TD_DIR_IN {
++            // Need to set for ZLP and PIO.
++            self.set_toggle(USBH_XFILLSTAT, mask);
++            self.set_toggle(USBH_YFILLSTAT, mask);
++        }
++
++        self.st.etd[num].active_count = 1;
++        self.regs.write(USBH_ETDENSET, mask);
++    }
++
++    fn bounce_failed(&mut self, num: usize) {
++        self.free_dmem(num);
++        self.nonisoc_urb_completed_for_etd(num, ENOMEM.to_errno());
++    }
++
++    // Data memory management.
++
++    fn alloc_dmem(&mut self, size: u32, ep: usize) -> i32 {
++        let size = (size + 3) & !3; // Round to a 4 byte multiple.
++
++        if size > DMEM_SIZE {
++            pr_err!("size={} > DMEM_SIZE({})\n", size, DMEM_SIZE);
++            return EINVAL.to_errno();
++        }
++
++        let mut offset = 0;
++        let mut at = self.st.dmem.len();
++        for (i, area) in self.st.dmem.iter().enumerate() {
++            if size + offset <= area.offset {
++                at = i;
++                break;
++            }
++            offset = area.size + area.offset;
++            if offset + size > DMEM_SIZE {
++                return ENOMEM.to_errno();
++            }
++        }
++
++        if self.st.dmem.insert_within_capacity(at, Area { ep, offset, size }).is_err() {
++            return ENOMEM.to_errno();
++        }
++        offset as i32
++    }
++
++    /// Memory now available for a queued ETD: activate it.
++    fn activate_queued_etd(&mut self, num: usize, dmem_offset: u32) {
++        let maxpacket = self.etd_read(num, 1) >> DW1_YBUFSRTAD;
++        let dir = ((self.etd_read(num, 2) >> DW2_DIRPID) & 0x03) as u8;
++
++        self.etd_write(num, 1, ((dmem_offset + maxpacket) << DW1_YBUFSRTAD) | dmem_offset);
++
++        self.st.etd[num].dmem_offset = dmem_offset as i32;
++        let (ep, urb) = (self.st.etd[num].ep, self.st.etd[num].urb);
++        if let Some(e) = self.entry_mut(ep, urb) {
++            e.active = true;
++        }
++        self.activate_etd(num, dir);
++    }
++
++    fn free_dmem(&mut self, num: usize) {
++        if self.st.etd[num].dmem_size == 0 {
++            return;
++        }
++        self.st.etd[num].dmem_size = 0;
++
++        let offset = self.st.etd[num].dmem_offset as u32;
++        let Some(at) = self.st.dmem.iter().position(|a| a.offset == offset) else {
++            pr_err!("Trying to free unallocated DMEM {}\n", offset);
++            return;
++        };
++        let _ = self.st.dmem.remove(at);
++
++        // Try again to allocate memory for anything we've queued.
++        let mut i = 0;
++        while i < self.st.queue_for_dmem.len() {
++            let queued = self.st.queue_for_dmem[i];
++            let (size, ep) = (self.st.etd[queued].dmem_size, self.st.etd[queued].ep);
++            let offset = self.alloc_dmem(size as u32, ep);
++            if offset >= 0 {
++                let _ = self.st.queue_for_dmem.remove(i);
++                self.activate_queued_etd(queued, offset as u32);
++                // Activating may have changed the queue: start over.
++                i = 0;
++            } else {
++                i += 1;
++            }
++        }
++    }
++
++    fn free_epdmem(&mut self, ep: usize) {
++        let mut i = 0;
++        while i < self.st.dmem.len() {
++            if self.st.dmem[i].ep == ep {
++                pr_err!("Active DMEM {} for disabled ep\n", self.st.dmem[i].offset);
++                let _ = self.st.dmem.remove(i);
++            } else {
++                i += 1;
++            }
++        }
++    }
++
++    // End handling.
++
++    /// Endpoint now idle: release its ETD(s) or assign to a queued request.
++    fn ep_idle(&mut self, ep_id: usize) {
++        let mut ep_id = ep_id;
++        for i in 0..NUM_ISO_ETDS {
++            let Some(ep) = self.ep_mut(ep_id) else {
++                return;
++            };
++            let num = ep.etd[i];
++            if num < 0 {
++                continue;
++            }
++            ep.etd[i] = -1;
++
++            self.free_dmem(num as usize); // For isoc.
++
++            if self.st.queue_for_etd.is_empty() {
++                self.free_etd(num);
++                continue;
++            }
++
++            let Ok(next) = self.st.queue_for_etd.remove(0) else {
++                continue;
++            };
++            ep_id = next;
++            self.reset_etd(num as usize);
++            let Some(ep) = self.ep_mut(ep_id) else {
++                continue;
++            };
++            ep.waiting_etd = false;
++            ep.etd[i] = num;
++            let first = ep.urbs.first().map(|u| u.urb.id());
++
++            match first {
++                Some(urb) => self.schedule_nonisoc_etd(ep_id, urb),
++                None => pr_err!("No urb for queued ep!\n"),
++            }
++        }
++    }
++
++    fn urb_done(&mut self, ep_id: usize, urb: usize, status: i32) {
++        let Some(ep) = self.ep_mut(ep_id) else {
++            return;
++        };
++        let Some(at) = ep.urbs.iter().position(|u| u.urb.id() == urb) else {
++            return;
++        };
++        let Ok(entry) = ep.urbs.remove(at) else {
++            return;
++        };
++        let empty = ep.urbs.is_empty();
++        self.done.complete(entry.urb, status);
++        if empty {
++            self.ep_idle(ep_id);
++        }
++    }
++
++    fn nonisoc_urb_completed_for_etd(&mut self, num: usize, status: i32) {
++        let (ep_id, urb) = (self.st.etd[num].ep, self.st.etd[num].urb);
++
++        // `urb_done` may give the ETD to another endpoint, for whom these are already right.
++        self.st.etd[num].urb = 0;
++        self.urb_done(ep_id, urb, status);
++
++        let next = self.ep(ep_id).and_then(|e| e.urbs.first()).map(|u| u.urb.id());
++        if let Some(next) = next {
++            self.schedule_nonisoc_etd(ep_id, next);
++        }
++    }
++
++    // Isochronous handling.
++
++    fn schedule_isoc_etds(&mut self, ep_id: usize) {
++        for i in 0..NUM_ISO_ETDS {
++            loop {
++                let Some(ep) = self.ep(ep_id) else {
++                    return;
++                };
++                if ep.tds.is_empty() {
++                    return;
++                }
++                let num = ep.etd[i];
++                if num < 0 {
++                    return;
++                }
++                let num = num as usize;
++                if self.st.etd[num].urb != 0 {
++                    break;
++                }
++
++                let Some(ep) = self.ep_mut(ep_id) else {
++                    return;
++                };
++                let Ok(td) = ep.tds.remove(0) else {
++                    return;
++                };
++
++                let cur_frame = self.frame();
++                if frame_after(cur_frame, td.frame) {
++                    let exdev = EXDEV.to_errno();
++                    let Some(e) = self.entry_mut(ep_id, td.urb) else {
++                        continue;
++                    };
++                    e.isoc_status = exdev;
++                    e.urb.set_iso_result(td.isoc_index, 0, exdev);
++                    e.isoc_remaining -= 1;
++                    let (finished, status) = (e.isoc_remaining == 0, e.isoc_status);
++                    if finished {
++                        self.urb_done(ep_id, td.urb, status);
++                    }
++                    continue;
++                }
++
++                let Some(e) = self.entry_mut(ep_id, td.urb) else {
++                    continue;
++                };
++                e.active = true;
++                let pipe_out = !e.urb.pipe_in();
++
++                let etd = &mut self.st.etd[num];
++                etd.td = Some(td);
++                etd.ep = ep_id;
++                etd.urb = td.urb;
++                etd.len = td.len;
++                etd.dma = td.dma;
++                etd.cpu = Cpu::Transfer(td.offset);
++                let (dmem_size, dmem_offset) = (etd.dmem_size, etd.dmem_offset);
++
++                let dir = if pipe_out { TD_DIR_OUT } else { TD_DIR_IN };
++                if let Some(e) = self.entry(ep_id, td.urb) {
++                    self.setup_etd_dword0(num, &e.urb, dir, dmem_size as u32);
++                }
++                self.etd_write(num, 1, dmem_offset as u32);
++                self.etd_write(
++                    num,
++                    2,
++                    TD_NOTACCESSED << DW2_COMPCODE | ((td.frame as u32) & 0xffff) << DW2_STARTFRM,
++                );
++                self.etd_write(
++                    num,
++                    3,
++                    TD_NOTACCESSED << DW3_COMPCODE0 | (td.len as u32) << DW3_PKTLEN0,
++                );
++
++                self.activate_etd(num, dir);
++                break;
++            }
++        }
++    }
++
++    fn isoc_etd_done(&mut self, num: usize) {
++        let mask = 1u32 << num;
++        let (ep_id, urb_id, td) = {
++            let etd = &self.st.etd[num];
++            (etd.ep, etd.urb, etd.td)
++        };
++
++        self.disactivate_etd(num);
++
++        let Some(td) = td else {
++            return;
++        };
++        let Some(e) = self.entry(ep_id, urb_id) else {
++            return;
++        };
++        let dir_in = e.urb.pipe_in();
++
++        let word = self.etd_read(num, 3);
++        let mut cc = (word >> DW3_COMPCODE0) & 0xf;
++        let mut bytes = word & 0x3ff;
++
++        // Input doesn't always fill the buffer, don't generate an error when this happens.
++        if dir_in && cc == TD_DATAUNDERRUN {
++            cc = TD_CC_NOERROR;
++        }
++        if cc == TD_NOTACCESSED {
++            bytes = 0;
++        }
++
++        let dmem = USBOTG_DMEM + self.st.etd[num].dmem_offset as usize;
++        let pio = self.st.etd[num].dma == 0;
++        if dir_in {
++            self.clear_toggle(USBH_XFILLSTAT, mask);
++        }
++        let regs = self.regs;
++        let exdev = EXDEV.to_errno();
++        let Some(e) = self.entry_mut(ep_id, urb_id) else {
++            return;
++        };
++        if cc != 0 {
++            e.isoc_status = exdev;
++        }
++        if dir_in && pio && e.urb.fill_transfer(td.offset, bytes, |i| regs.read8(dmem + i as usize)).is_err() {
++            e.isoc_status = exdev;
++        }
++        e.urb.add_actual(bytes);
++        e.urb.set_iso_result(td.isoc_index, bytes, cc_to_error(cc));
++        e.isoc_remaining -= 1;
++        let (finished, status) = (e.isoc_remaining == 0, e.isoc_status);
++
++        let etd = &mut self.st.etd[num];
++        etd.td = None;
++        etd.urb = 0;
++        etd.ep = 0;
++
++        if finished {
++            self.urb_done(ep_id, urb_id, status);
++        }
++        self.schedule_isoc_etds(ep_id);
++    }
++
++    fn alloc_isoc_etds(&mut self, ep_id: usize) -> Result {
++        for i in 0..NUM_ISO_ETDS {
++            if self.ep(ep_id).ok_or(EINVAL)?.etd[i] >= 0 {
++                continue;
++            }
++            let num = self.alloc_etd();
++            if num < 0 {
++                pr_err!("isoc: Couldn't allocate etd\n");
++                for j in 0..i {
++                    let n = self.ep(ep_id).ok_or(EINVAL)?.etd[j];
++                    self.free_etd(n);
++                    self.ep_mut(ep_id).ok_or(EINVAL)?.etd[j] = -1;
++                }
++                return Err(ENOMEM);
++            }
++            self.ep_mut(ep_id).ok_or(EINVAL)?.etd[i] = num;
++            self.st.etd[num as usize].ep = ep_id;
++        }
++        Ok(())
++    }
++
++    fn enqueue_isoc(&mut self, urb: &Urb) -> Result {
++        let ep_id = urb.ep_id();
++        self.ensure_ep(ep_id)?;
++        self.alloc_isoc_etds(ep_id)?;
++
++        // Room for what's below, now that a failure can still be returned.
++        let packets = urb.number_of_packets();
++        self.ep_mut(ep_id).ok_or(EINVAL)?.tds.reserve(packets as usize, GFP_ATOMIC)?;
++        self.ep_mut(ep_id).ok_or(EINVAL)?.urbs.reserve(1, GFP_ATOMIC)?;
++        self.st.dmem.reserve(NUM_ISO_ETDS, GFP_ATOMIC)?;
++
++        // Allocate data memory for the largest packets if not already done.
++        let maxpacket = i32::from(urb.maxpacket());
++        let etds = self.ep(ep_id).ok_or(EINVAL)?.etd;
++        for &num in &etds {
++            let n = num as usize;
++            let size = self.st.etd[n].dmem_size;
++            if size > 0 && size < maxpacket {
++                // Not sure if this can really occur.
++                pr_err!("increasing isoc buffer {}->{}\n", size, maxpacket);
++                return Err(EMSGSIZE);
++            }
++            if size == 0 {
++                let offset = self.alloc_dmem(maxpacket as u32, ep_id);
++                if offset < 0 {
++                    return Err(EAGAIN);
++                }
++                self.st.etd[n].dmem_offset = offset;
++                self.st.etd[n].dmem_size = maxpacket;
++            }
++        }
++
++        let linked = self.hcd.link(urb)?;
++        urb.begin();
++
++        // Calculate the frame.
++        let cur_frame = self.frame();
++        let interval = urb.interval().max(1);
++        let mut i = 0;
++        let last = self.ep(ep_id).ok_or(EINVAL)?.tds.last().map(|t| t.frame);
++        let mut start_frame = match last {
++            None => wrap_frame(cur_frame + 5),
++            Some(frame) => wrap_frame(frame + interval),
++        };
++        if last.is_some() && frame_after(cur_frame, start_frame) {
++            i = (wrap_frame(cur_frame - start_frame) + interval - 1) / interval;
++
++            // Treat underruns as if URB_ISO_ASAP was set.
++            if urb.transfer_flags() & usb_hcd::URB_ISO_ASAP != 0 || i >= packets {
++                start_frame = wrap_frame(start_frame + i * interval);
++                i = 0;
++            }
++        }
++        urb.set_start_frame(start_frame);
++
++        // Set up transfers.
++        let (id, transfer_dma) = (urb.id(), urb.transfer_dma());
++        let ep = self.ep_mut(ep_id).ok_or(EINVAL)?;
++        for p in i..packets {
++            let (offset, len) = urb.iso_packet(p);
++            ep.tds.push_within_capacity(Td {
++                urb: id,
++                dma: transfer_dma.wrapping_add(offset),
++                offset,
++                len: len as i32,
++                frame: wrap_frame(start_frame + interval * p),
++                isoc_index: p,
++            })
++            .map_err(|_| ENOMEM)?;
++        }
++        ep.urbs
++            .push_within_capacity(UrbEntry {
++                urb: linked,
++                active: false,
++                state: 0,
++                isoc_remaining: packets - i,
++                isoc_status: 0,
++            })
++            .map_err(|_| ENOMEM)?;
++
++        self.schedule_isoc_etds(ep_id);
++        Ok(())
++    }
++
++    fn dequeue_isoc(&mut self, ep_id: usize, urb: usize) {
++        let active = self.entry(ep_id, urb).is_some_and(|e| e.active);
++        if active {
++            let etds = self.ep(ep_id).map_or([-1; NUM_ISO_ETDS], |e| e.etd);
++            for num in etds {
++                if num != -1 && self.st.etd[num as usize].urb == urb {
++                    self.reset_etd(num as usize);
++                    self.free_dmem(num as usize);
++                }
++            }
++        }
++        if let Some(ep) = self.ep_mut(ep_id) {
++            let mut i = 0;
++            while i < ep.tds.len() {
++                if ep.tds[i].urb == urb {
++                    let _ = ep.tds.remove(i);
++                } else {
++                    i += 1;
++                }
++            }
++        }
++    }
++
++    // Non-isochronous handling.
++
++    fn schedule_nonisoc_etd(&mut self, ep_id: usize, urb_id: usize) {
++        let Some(num) = self.ep(ep_id).map(|e| e.etd[0]) else {
++            return;
++        };
++        if num < 0 {
++            pr_err!("No valid ETD\n");
++            return;
++        }
++        let num = num as usize;
++        if self.regs.read(USBH_ETDENSET) & (1 << num) != 0 {
++            pr_err!("submitting to active ETD {}\n", num);
++        }
++
++        let (dir, bufround, count, datatoggle, dma, cpu, maxpacket, interval, relpolpos, int) = {
++            let Some(entry) = self.entry(ep_id, urb_id) else {
++                return;
++            };
++            let urb = &entry.urb;
++            let state = entry.state;
++            let out = !urb.pipe_in();
++            let control = urb.pipe_type() == usb_hcd::PIPE_CONTROL;
++            let maxpacket = match urb.maxpacket() {
++                0 => 8u32,
++                m => u32::from(m),
++            };
++
++            let dir;
++            let bufround;
++            let count;
++            let datatoggle;
++            let mut dma = 0;
++            let mut cpu = Cpu::None;
++
++            if control && state != US_CTRL_DATA {
++                if state == US_CTRL_SETUP {
++                    dir = TD_DIR_SETUP;
++                    if unsuitable_for_dma(urb.setup_dma()) {
++                        self.hcd.unmap_setup_for_dma(urb);
++                    }
++                    dma = urb.setup_dma();
++                    cpu = Cpu::Setup;
++                    bufround = 0u32;
++                    count = 8u32;
++                    datatoggle = TD_TOGGLE_DATA0;
++                } else {
++                    // US_CTRL_ACK.
++                    dir = if out { TD_DIR_IN } else { TD_DIR_OUT };
++                    bufround = 0;
++                    count = 0;
++                    datatoggle = TD_TOGGLE_DATA1;
++                }
++            } else {
++                dir = if out { TD_DIR_OUT } else { TD_DIR_IN };
++                bufround = u32::from(dir == TD_DIR_IN);
++                if unsuitable_for_dma(urb.transfer_dma()) {
++                    self.hcd.unmap_for_dma(urb);
++                }
++                dma = urb.transfer_dma();
++                cpu = Cpu::Transfer(0);
++                count = if urb.pipe_type() == usb_hcd::PIPE_BULK && state == US_BULK0 {
++                    0
++                } else {
++                    urb.transfer_buffer_length()
++                };
++                datatoggle = if control || urb.get_toggle() {
++                    TD_TOGGLE_DATA1
++                } else {
++                    TD_TOGGLE_DATA0
++                };
++            }
++
++            let int = urb.pipe_type() == usb_hcd::PIPE_INTERRUPT;
++            let (interval, relpolpos) = if int {
++                ((urb.interval() as u32) & 0xff, (self.regs.read(USBH_FRMNUB) + 1) & 0xff)
++            } else {
++                (0, 0)
++            };
++
++            (dir, bufround, count, datatoggle, dma, cpu, maxpacket, interval, relpolpos, int)
++        };
++        let _ = int;
++
++        {
++            let etd = &mut self.st.etd[num];
++            etd.urb = urb_id;
++            etd.ep = ep_id;
++            etd.len = count as i32;
++            etd.dma = dma;
++            etd.cpu = cpu;
++        }
++
++        // Write the ETD to device memory.
++        if let Some(entry) = self.entry(ep_id, urb_id) {
++            self.setup_etd_dword0(num, &entry.urb, dir, maxpacket);
++        }
++
++        self.etd_write(
++            num,
++            2,
++            interval << DW2_POLINTERV
++                | relpolpos << DW2_RELPOLPOS
++                | u32::from(dir) << DW2_DIRPID
++                | bufround << DW2_BUFROUND
++                | datatoggle << DW2_DATATOG
++                | TD_NOTACCESSED << DW2_COMPCODE,
++        );
++
++        // DMA will always transfer the buffer size even if TOBYCNT in DWORD3 is smaller. Make sure
++        // we don't overrun the buffer!
++        let etd_buf_size = if count != 0 && count < maxpacket { count } else { maxpacket };
++
++        self.etd_write(num, 3, (etd_buf_size - 1) << DW3_BUFSIZE | count);
++
++        if count == 0 {
++            self.st.etd[num].dma = 0;
++        }
++
++        // Allocate x and y buffer space at once.
++        let dmem_size = if count > maxpacket { maxpacket * 2 } else { maxpacket };
++        self.st.etd[num].dmem_size = dmem_size as i32;
++        let offset = self.alloc_dmem(dmem_size, ep_id);
++        self.st.etd[num].dmem_offset = offset;
++        if offset < 0 {
++            // Set up everything we can in hardware and update when we get data memory.
++            self.etd_write(num, 1, maxpacket << 16);
++            if self.st.queue_for_dmem.push_within_capacity(num).is_err() {
++                pr_err!("no room to queue ETD {}\n", num);
++            }
++            return;
++        }
++
++        self.etd_write(
++            num,
++            1,
++            ((offset as u32 + maxpacket) << DW1_YBUFSRTAD) | offset as u32,
++        );
++
++        if let Some(e) = self.entry_mut(ep_id, urb_id) {
++            e.active = true;
++        }
++
++        // Enable the ETD to kick off the transfer.
++        self.activate_etd(num, dir);
++    }
++
++    fn nonisoc_etd_done(&mut self, num: usize) {
++        let mask = 1u32 << num;
++        let (ep_id, urb_id, len, offset, dma, cpu) = {
++            let etd = &self.st.etd[num];
++            (etd.ep, etd.urb, etd.len, etd.dmem_offset, etd.dma, etd.cpu)
++        };
++
++        self.disactivate_etd(num);
++
++        let dir = ((self.etd_read(num, 0) >> DW0_DIRECT) & 0x3) as u8;
++        let mut cc = (self.etd_read(num, 2) >> DW2_COMPCODE) & 0xf;
++        let bytes = (len as u32).wrapping_sub(self.etd_read(num, 3) & 0x1fffff);
++        let toggle = (self.etd_read(num, 0) >> DW0_TOGCRY) & 1 != 0;
++
++        if let Some(e) = self.entry(ep_id, urb_id) {
++            // Save the toggle carry.
++            e.urb.set_toggle(toggle);
++        }
++
++        let bounce = self.st.etd[num].bounce.take();
++
++        if dir == TD_DIR_IN {
++            self.clear_toggle(USBH_XFILLSTAT, mask);
++            self.clear_toggle(USBH_YFILLSTAT, mask);
++
++            let regs = self.regs;
++            let dmem = USBOTG_DMEM + offset as usize;
++            let copied = if let Cpu::Transfer(at) = cpu {
++                let entry = self.entry(ep_id, urb_id);
++                match (entry, bounce) {
++                    (Some(e), Some(b)) => {
++                        let data = b.finish();
++                        e.urb.fill_transfer(at, bytes, |i| data[i as usize])
++                    }
++                    (Some(e), None) if dma == 0 && bytes != 0 => {
++                        e.urb.fill_transfer(at, bytes, |i| regs.read8(dmem + i as usize))
++                    }
++                    _ => Ok(()),
++                }
++            } else {
++                Ok(())
++            };
++            if copied.is_err() {
++                pr_err!("no buffer for {} bytes in\n", bytes);
++            }
++        }
++
++        self.free_dmem(num);
++
++        let Some(entry) = self.entry_mut(ep_id, urb_id) else {
++            return;
++        };
++
++        entry.urb.clear_errors();
++        if entry.urb.transfer_flags() & usb_hcd::URB_SHORT_NOT_OK == 0 && cc == TD_DATAUNDERRUN {
++            cc = TD_CC_NOERROR;
++        }
++
++        let mut etd_done = cc_to_error(cc) != 0; // Stop if error.
++
++        match entry.urb.pipe_type() {
++            usb_hcd::PIPE_CONTROL => match entry.state {
++                US_CTRL_SETUP => {
++                    entry.state = if entry.urb.transfer_buffer_length() > 0 {
++                        US_CTRL_DATA
++                    } else {
++                        US_CTRL_ACK
++                    };
++                }
++                US_CTRL_DATA => {
++                    entry.urb.add_actual(bytes);
++                    entry.state = US_CTRL_ACK;
++                }
++                US_CTRL_ACK => etd_done = true,
++                state => {
++                    pr_err!("Invalid pipe state {}\n", state);
++                    etd_done = true;
++                }
++            },
++            usb_hcd::PIPE_BULK => {
++                entry.urb.add_actual(bytes);
++                let length = entry.urb.transfer_buffer_length();
++                let max = u32::from(entry.urb.maxpacket()).max(1);
++                if entry.state == US_BULK
++                    && entry.urb.transfer_flags() & usb_hcd::URB_ZERO_PACKET != 0
++                    && length > 0
++                    && length % max == 0
++                {
++                    // Need a 0-packet.
++                    entry.state = US_BULK0;
++                } else {
++                    etd_done = true;
++                }
++            }
++            usb_hcd::PIPE_INTERRUPT => {
++                entry.urb.add_actual(bytes);
++                etd_done = true;
++            }
++            _ => {}
++        }
++
++        if etd_done {
++            self.nonisoc_urb_completed_for_etd(num, cc_to_error(cc));
++        } else {
++            self.schedule_nonisoc_etd(ep_id, urb_id);
++        }
++    }
++
++    fn ensure_ep(&mut self, id: usize) -> Result {
++        if self.ep(id).is_none() {
++            self.st.eps.push(
++                Ep {
++                    id,
++                    urbs: KVec::new(),
++                    tds: KVec::new(),
++                    etd: [-1; NUM_ISO_ETDS],
++                    waiting_etd: false,
++                },
++                GFP_ATOMIC,
++            )?;
++            // One place for it in each queue, and for the data memory it could use.
++            let eps = self.st.eps.len();
++            self.st.queue_for_etd.reserve(eps, GFP_ATOMIC)?;
++            self.st.dmem.reserve(USB_NUM_ETD, GFP_ATOMIC)?;
++        }
++        Ok(())
++    }
++
++    fn enqueue_nonisoc(&mut self, urb: &Urb) -> Result {
++        let ep_id = urb.ep_id();
++        self.ensure_ep(ep_id)?;
++        self.ep_mut(ep_id).ok_or(EINVAL)?.urbs.reserve(1, GFP_ATOMIC)?;
++
++        let linked = self.hcd.link(urb)?;
++        urb.begin();
++
++        let state = match urb.pipe_type() {
++            usb_hcd::PIPE_CONTROL => US_CTRL_SETUP,
++            usb_hcd::PIPE_BULK => US_BULK,
++            _ => 0,
++        };
++        let id = urb.id();
++        let ep = self.ep_mut(ep_id).ok_or(EINVAL)?;
++        ep.urbs
++            .push_within_capacity(UrbEntry {
++                urb: linked,
++                active: false,
++                state,
++                isoc_remaining: 0,
++                isoc_status: 0,
++            })
++            .map_err(|_| ENOMEM)?;
++
++        if ep.etd[0] < 0 {
++            if ep.waiting_etd {
++                return Ok(());
++            }
++            let num = self.alloc_etd();
++            let ep = self.ep_mut(ep_id).ok_or(EINVAL)?;
++            ep.etd[0] = num;
++            if num < 0 {
++                ep.waiting_etd = true;
++                if self.st.queue_for_etd.push_within_capacity(ep_id).is_err() {
++                    pr_err!("no room to queue an endpoint\n");
++                }
++                return Ok(());
++            }
++        }
++
++        // Schedule if no URB already active for this endpoint.
++        let num = self.ep(ep_id).ok_or(EINVAL)?.etd[0] as usize;
++        if self.st.etd[num].urb == 0 {
++            self.schedule_nonisoc_etd(ep_id, id);
++        }
++        Ok(())
++    }
++
++    fn process_etds(&mut self, sof: bool) {
++        let mut enable_sof_int = false;
++
++        for num in 0..USB_NUM_ETD {
++            let mask = 1u32 << num;
++            let enabled = self.regs.read(USBH_ETDENSET) & mask != 0;
++            let done = self.regs.read(USBH_ETDDONESTAT) & mask != 0;
++
++            if !done {
++                // Kludge warning!
++                //
++                // When multiple transfers are using the bus we sometimes get into a state where the
++                // transfer has completed (the CC field of the ETD is != 0x0F), the ETD has self
++                // disabled but the ETDDONESTAT flag is not set (and hence no interrupt occurs).
++                // This causes the transfer in question to hang. The kludge below checks for this
++                // condition at each SOF and processes any blocked ETDs (after an arbitrary 10 frame
++                // wait).
++                let active = self.st.etd[num].active_count;
++                if active != 0 && !enabled {
++                    enable_sof_int = true; // Suspicious...
++                }
++                if !sof || enabled || active == 0 {
++                    continue;
++                }
++                let cc = self.etd_read(num, 2) >> DW2_COMPCODE;
++                if cc == TD_NOTACCESSED {
++                    continue;
++                }
++                self.st.etd[num].active_count += 1;
++                if self.st.etd[num].active_count < 10 {
++                    continue;
++                }
++                self.st.etd[num].active_count = 0;
++            }
++
++            let (ep, urb) = (self.st.etd[num].ep, self.st.etd[num].urb);
++            if ep == 0 || urb == 0 {
++                self.disactivate_etd(num);
++                continue;
++            }
++
++            match self.entry(ep, urb).map(|e| e.urb.is_isoc()) {
++                Some(true) => self.isoc_etd_done(num),
++                Some(false) => self.nonisoc_etd_done(num),
++                None => self.disactivate_etd(num),
++            }
++        }
++
++        // Only enable the SOF interrupt if it may be needed for the kludge.
++        if enable_sof_int {
++            self.set_bits(USBH_SYSIEN, USBH_SYSIEN_SOFINT);
++        } else {
++            self.clear_bits(USBH_SYSIEN, USBH_SYSIEN_SOFINT);
++        }
++    }
++}
++
++impl Imx21 {
++    /// Runs `f` under the lock. What it completes is given back after the lock is released.
++    fn locked<R>(hcd: &Hcd<Self>, f: impl FnOnce(&mut Cx<'_>) -> R) -> R {
++        let this = hcd.data().get_ref();
++        let mut done = Done::new(hcd);
++        let mut guard = this.state.lock();
++        let mut cx = Cx {
++            hcd,
++            regs: &this.regs,
++            st: &mut guard,
++            done: &mut done,
++        };
++        f(&mut cx)
++    }
++}
++
++impl HcDriver for Imx21 {
++    const NAME: &'static CStr = c"imx21-hcd";
++    const PRODUCT: &'static CStr = c"IMX21 USB Host Controller";
++
++    fn irq(hcd: &Hcd<Self>) {
++        let regs = &hcd.data().get_ref().regs;
++        let ints = regs.read(USBH_SYSISR);
++
++        if ints & (USBH_SYSISR_DONEINT | USBH_SYSISR_SOFINT) != 0 {
++            Self::locked(hcd, |cx| cx.process_etds(ints & USBH_SYSISR_SOFINT != 0));
++        }
++
++        regs.write(USBH_SYSISR, ints);
++    }
++
++    fn reset(hcd: &Hcd<Self>) -> Result {
++        let regs = &hcd.data().get_ref().regs;
++
++        // Reset the host controller modules.
++        regs.write(
++            USBOTG_RST_CTRL,
++            USBOTG_RST_RSTCTRL | USBOTG_RST_RSTRH | USBOTG_RST_RSTHSIE | USBOTG_RST_RSTHC,
++        );
++
++        // Wait for the reset to finish, for up to about a second.
++        for _ in 0..1000 {
++            if regs.read(USBOTG_RST_CTRL) == 0 {
++                return Ok(());
++            }
++            fsleep(Delta::from_millis(1));
++        }
++        pr_err!("timeout waiting for reset\n");
++        Err(ETIMEDOUT)
++    }
++
++    fn start(hcd: &Hcd<Self>) -> Result {
++        let this = hcd.data().get_ref();
++        let (regs, cfg) = (&this.regs, &this.cfg);
++
++        let hw_mode = USBOTG_HWMODE_CRECFG_HOST
++            | ((cfg.host_xcvr << USBOTG_HWMODE_HOSTXCVR_SHIFT) & USBOTG_HWMODE_HOSTXCVR_MASK)
++            | ((cfg.otg_xcvr << USBOTG_HWMODE_OTGXCVR_SHIFT) & USBOTG_HWMODE_OTGXCVR_MASK);
++
++        let mut usb_control = 0;
++        if cfg.host1_txenoe {
++            usb_control |= USBCTRL_HOST1_TXEN_OE;
++        }
++        if !cfg.host1_xcverless {
++            usb_control |= USBCTRL_HOST1_BYP_TLL;
++        }
++        if cfg.otg_ext_xcvr {
++            usb_control |= USBCTRL_OTC_RCV_RXDP;
++        }
++
++        Self::locked(hcd, |cx| {
++            regs.write(USBOTG_CLK_CTRL, USBOTG_CLK_CTRL_HST | USBOTG_CLK_CTRL_MAIN);
++            regs.write(USBOTG_HWMODE, hw_mode);
++            // Over what's there: the bits above these are the boot's.
++            regs.write(USBCTRL, regs.read(USBCTRL) | usb_control);
++            regs.write(USB_MISCCONTROL, USB_MISCCONTROL_ARBMODE);
++
++            // Clear the ETDs.
++            for i in 0..USB_NUM_ETD {
++                for j in 0..4 {
++                    cx.etd_write(i, j, 0);
++                }
++            }
++
++            // Take the HC out of reset.
++            regs.write(
++                USBH_HOST_CTRL,
++                USBH_HOST_CTRL_HCUSBSTE_OPERATIONAL | USBH_HOST_CTRL_CTLBLKSR_1,
++            );
++
++            // Enable ports.
++            let on = USBH_PORTSTAT_PRTPWRST | USBH_PORTSTAT_PRTENABST;
++            if cfg.enable_otg_host {
++                regs.write(usbh_portstat(0), on);
++            }
++            if cfg.enable_host1 {
++                regs.write(usbh_portstat(1), on);
++            }
++            if cfg.enable_host2 {
++                regs.write(usbh_portstat(2), on);
++            }
++
++            hcd.set_running();
++
++            // Enable host controller interrupts.
++            cx.set_bits(
++                USBH_SYSIEN,
++                USBH_SYSIEN_HERRINT | USBH_SYSIEN_DONEINT | USBH_SYSIEN_SORINT,
++            );
++            cx.set_bits(USBOTG_CINT_STEN, USBOTG_HCINT);
++        });
++
++        Ok(())
++    }
++
++    fn stop(hcd: &Hcd<Self>) {
++        Self::locked(hcd, |cx| {
++            cx.regs.write(USBH_SYSIEN, 0);
++            cx.clear_bits(USBOTG_CINT_STEN, USBOTG_HCINT);
++            cx.clear_bits(USBOTG_CLK_CTRL, USBOTG_CLK_CTRL_HST | USBOTG_CLK_CTRL_MAIN);
++        });
++    }
++
++    fn urb_enqueue(hcd: &Hcd<Self>, urb: &Urb) -> Result {
++        Self::locked(hcd, |cx| {
++            if urb.is_isoc() {
++                cx.enqueue_isoc(urb)
++            } else {
++                cx.enqueue_nonisoc(urb)
++            }
++        })
++    }
++
++    fn urb_dequeue(hcd: &Hcd<Self>, urb: &Urb, status: i32) -> Result {
++        Self::locked(hcd, |cx| {
++            cx.hcd.check_unlink(urb, status)?;
++            let (ep_id, id) = (urb.ep_id(), urb.id());
++
++            if urb.is_isoc() {
++                cx.dequeue_isoc(ep_id, id);
++                cx.schedule_isoc_etds(ep_id);
++            } else if cx.entry(ep_id, id).is_some_and(|e| e.active) {
++                let num = cx.ep(ep_id).map_or(-1, |e| e.etd[0]);
++                if num != -1 {
++                    let n = num as usize;
++                    cx.disactivate_etd(n);
++                    cx.free_dmem(n);
++                    cx.st.etd[n].urb = 0;
++                    cx.st.etd[n].bounce = None;
++                }
++            }
++
++            cx.urb_done(ep_id, id, status);
++            Ok(())
++        })
++    }
++
++    fn endpoint_disable(hcd: &Hcd<Self>, ep_id: usize) {
++        Self::locked(hcd, |cx| {
++            if let Some(at) = cx.st.eps.iter().position(|e| e.id == ep_id) {
++                let etds = cx.st.eps[at].etd;
++                for num in etds {
++                    cx.free_etd(num);
++                }
++                // The core has no URBs left here: this drops only the bookkeeping.
++                let _ = cx.st.eps.remove(at);
++            }
++
++            for i in 0..USB_NUM_ETD {
++                if cx.st.etd[i].alloc && cx.st.etd[i].ep == ep_id {
++                    pr_err!("Active etd {} for disabled ep!\n", i);
++                    cx.free_etd(i as i32);
++                }
++            }
++            cx.free_epdmem(ep_id);
++        });
++    }
++
++    fn get_frame(hcd: &Hcd<Self>) -> i32 {
++        wrap_frame(hcd.data().get_ref().regs.read(USBH_FRMNUB) as i32)
++    }
++
++    fn hub_status_data(hcd: &Hcd<Self>, buf: &mut [u8]) -> bool {
++        let changed = Self::locked(hcd, |cx| {
++            let mut ports = cx.regs.read(USBH_ROOTHUBA) & USBH_ROOTHUBA_NDNSTMPRT_MASK;
++            if ports > 7 {
++                pr_err!("ports {} > 7\n", ports);
++                ports = 7;
++            }
++            let mut changed = false;
++            for i in 0..ports as usize {
++                if cx.regs.read(usbh_portstat(i))
++                    & (USBH_PORTSTAT_CONNECTSC
++                        | USBH_PORTSTAT_PRTENBLSC
++                        | USBH_PORTSTAT_PRTSTATSC
++                        | USBH_PORTSTAT_OVRCURIC
++                        | USBH_PORTSTAT_PRTRSTSC)
++                    != 0
++                {
++                    changed = true;
++                    buf[0] |= 1 << (i + 1);
++                }
++            }
++            changed
++        });
++
++        if changed {
++            pr_info!("Hub status changed\n");
++        }
++        changed
++    }
++
++    fn hub_control(hcd: &Hcd<Self>, request: u16, value: u16, index: u16, buf: &mut [u8]) -> Result {
++        let regs = &hcd.data().get_ref().regs;
++        let port = usize::from(index).wrapping_sub(1);
++        let mut status_write = 0;
++        if matches!(request, CLEAR_PORT_FEATURE | GET_PORT_STATUS | SET_PORT_FEATURE)
++            && port >= (regs.read(USBH_ROOTHUBA) & USBH_ROOTHUBA_NDNSTMPRT_MASK) as usize
++        {
++            return Err(EINVAL);
++        }
++
++
++        match request {
++            CLEAR_HUB_FEATURE | SET_HUB_FEATURE => match value {
++                C_HUB_OVER_CURRENT | C_HUB_LOCAL_POWER => {}
++                _ => return Err(EINVAL),
++            },
++            CLEAR_PORT_FEATURE => {
++                status_write = match value {
++                    PORT_FEAT_ENABLE => USBH_PORTSTAT_CURCONST,
++                    PORT_FEAT_SUSPEND => USBH_PORTSTAT_PRTOVRCURI,
++                    PORT_FEAT_POWER => USBH_PORTSTAT_LSDEVCON,
++                    PORT_FEAT_C_ENABLE => USBH_PORTSTAT_PRTENBLSC,
++                    PORT_FEAT_C_SUSPEND => USBH_PORTSTAT_PRTSTATSC,
++                    PORT_FEAT_C_CONNECTION => USBH_PORTSTAT_CONNECTSC,
++                    PORT_FEAT_C_OVER_CURRENT => USBH_PORTSTAT_OVRCURIC,
++                    PORT_FEAT_C_RESET => USBH_PORTSTAT_PRTRSTSC,
++                    _ => return Err(EINVAL),
++                };
++            }
++            GET_HUB_DESCRIPTOR => {
++                let chars = HUB_CHAR_NO_LPSM | HUB_CHAR_NO_OCPM;
++                let ports = (regs.read(USBH_ROOTHUBA) & USBH_ROOTHUBA_NDNSTMPRT_MASK) as u8;
++                buf[0] = 9; // bDescLength
++                buf[1] = USB_DT_HUB; // bDescriptorType
++                buf[2] = ports; // bNbrPorts
++                buf[3..5].copy_from_slice(&chars.to_le_bytes()); // wHubCharacteristics
++                buf[5] = 0; // bPwrOn2PwrGood
++                buf[6] = 0; // bHubContrCurrent
++                buf[7] = 1 << 1; // DeviceRemovable[0]
++                buf[8] = !0; // DeviceRemovable[1]
++            }
++            GET_HUB_STATUS => buf[..4].fill(0),
++            GET_PORT_STATUS => {
++                buf[..4].copy_from_slice(&regs.read(usbh_portstat(port)).to_le_bytes());
++            }
++            SET_PORT_FEATURE => {
++                status_write = match value {
++                    PORT_FEAT_SUSPEND => USBH_PORTSTAT_PRTSUSPST,
++                    PORT_FEAT_POWER => USBH_PORTSTAT_PRTPWRST,
++                    PORT_FEAT_RESET => USBH_PORTSTAT_PRTRSTST,
++                    _ => return Err(EINVAL),
++                };
++            }
++            _ => return Err(EINVAL),
++        }
++
++        if status_write != 0 {
++            regs.write(usbh_portstat(port), status_write);
++        }
++        Ok(())
++    }
++}
++
++fn read_xcvr_mode(dev: &device::Device<device::Bound>, prop: &'static CStr) -> Result<u32> {
++    const MODES: [&CStr; 4] = [c"tx-diff-rx-diff", c"tx-diff-rx-se", c"tx-se-rx-diff", c"tx-se-rx-se"];
++
++    let Some(node) = dev.fwnode() else {
++        return Ok(0);
++    };
++    if !node.property_present(prop) {
++        return Ok(0); // Keep the default.
++    }
++    for (i, mode) in MODES.iter().enumerate() {
++        if node.property_match_string(prop, mode).is_ok() {
++            return Ok(i as u32);
++        }
++    }
++    dev_err!(dev, "invalid {}\n", prop.to_str().unwrap_or("mode"));
++    Err(EINVAL)
++}
++
++fn read_config(dev: &device::Device<device::Bound>) -> Result<Config> {
++    let flag = |name: &CStr| dev.fwnode().is_some_and(|n| n.property_read_bool(name));
++
++    // The defaults are all three ports enabled as host ports, with differential transceivers.
++    Ok(Config {
++        host_xcvr: read_xcvr_mode(dev, c"fsl,host-xcvr-mode")?,
++        otg_xcvr: read_xcvr_mode(dev, c"fsl,otg-xcvr-mode")?,
++        enable_otg_host: !flag(c"fsl,disable-otg-port"),
++        enable_host1: !flag(c"fsl,disable-host1-port"),
++        enable_host2: !flag(c"fsl,disable-host2-port"),
++        host1_xcverless: flag(c"fsl,host1-xcvr-less"),
++        host1_txenoe: flag(c"fsl,host1-txen-oe"),
++        otg_ext_xcvr: flag(c"fsl,otg-external-xcvr"),
++    })
++}
++
++struct Imx21Hcd;
++
++kernel::of_device_table!(
++    OF_TABLE,
++    <Imx21Hcd as platform::Driver>::IdInfo,
++    [(of::DeviceId::new(c"fsl,imx21-usbh"), ())]
++);
++
++impl platform::Driver for Imx21Hcd {
++    type IdInfo = ();
++    type Data<'bound> = usb_hcd::Registration<Imx21>;
++    const OF_ID_TABLE: Option<of::IdTable<Self::IdInfo>> = Some(&OF_TABLE);
++
++    fn probe<'bound>(
++        pdev: &'bound platform::Device<Core<'_>>,
++        _id_info: Option<&'bound Self::IdInfo>,
++    ) -> impl PinInit<Self::Data<'bound>, Error> + 'bound {
++        let dev = pdev.as_ref();
++
++        let irq = pdev.irq_by_index(0)?.irq();
++        let cfg = read_config(dev)?;
++
++        let mut etd = KVec::with_capacity(USB_NUM_ETD, GFP_KERNEL)?;
++        for _ in 0..USB_NUM_ETD {
++            etd.push(Etd::default(), GFP_KERNEL)?;
++        }
++        // Everything that can't wait for memory to be found in an interrupt.
++        let queue_for_dmem = KVec::with_capacity(USB_NUM_ETD, GFP_KERNEL)?;
++        let queue_for_etd = KVec::with_capacity(USB_NUM_ETD, GFP_KERNEL)?;
++        let dmem = KVec::with_capacity(USB_NUM_ETD * 2, GFP_KERNEL)?;
++
++        let regs = Regs::map(pdev)?;
++
++        // The registers need the AHB clock, which nothing else enables.
++        let clk_ahb = Clk::get(dev, Some(c"ahb")).inspect_err(|_| {
++            dev_err!(dev, "no ahb clock\n");
++        })?;
++        clk_ahb.prepare_enable()?;
++
++        let clk = match Clk::get(dev, Some(c"per")) {
++            Ok(clk) => clk,
++            Err(e) => {
++                clk_ahb.disable_unprepare();
++                dev_err!(dev, "no per clock\n");
++                return Err(e);
++            }
++        };
++
++        // The USB clock as the boot left it: its divider of the system PLL is
++        // right for this board, and its rate is only reported.
++        if let Err(e) = clk.prepare_enable() {
++            clk_ahb.disable_unprepare();
++            return Err(e);
++        }
++
++        dev_info!(dev, "Hardware HC revision: 0x{:02X}\n", (regs.read(USBOTG_HWMODE) >> 16) & 0xff);
++        dev_info!(dev, "USB clock: {} Hz\n", clk.rate().as_hz());
++
++        // Past here the clocks are `Imx21`'s to turn off: it goes with the registration.
++        let probe_regs = regs.mapping_info();
++        usb_hcd::Registration::new(
++            pdev,
++            &probe_regs,
++            irq,
++            try_pin_init!(Imx21 {
++                regs,
++                cfg,
++                clk,
++                _clk_ahb: clk_ahb,
++                state <- new_spinlock_irq!(State {
++                    etd,
++                    eps: KVec::new(),
++                    dmem,
++                    queue_for_etd,
++                    queue_for_dmem,
++                }),
++            }),
++        )
++    }
++}
++
++kernel::module_platform_driver! {
++    type: Imx21Hcd,
++    name: "imx21-hcd",
++    authors: ["Martin Fuzzey", "John Merchant <john@johnmerchant.dev>"],
++    description: "i.MX21 USB Host controller",
++    license: "GPL",
++}
+diff --git a/drivers/usb/Makefile b/drivers/usb/Makefile
+--- a/drivers/usb/Makefile
++++ b/drivers/usb/Makefile
+@@ -22,6 +22,7 @@
+ 
+ obj-$(CONFIG_USB_PCI)		+= host/
+ obj-$(CONFIG_USB_EHCI_HCD)	+= host/
++obj-$(CONFIG_USB_IMX21_HCD)	+= host/
+ obj-$(CONFIG_USB_ISP116X_HCD)	+= host/
+ obj-$(CONFIG_USB_OHCI_HCD)	+= host/
+ obj-$(CONFIG_USB_UHCI_HCD)	+= host/

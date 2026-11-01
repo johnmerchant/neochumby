@@ -1,10 +1,10 @@
 #!/bin/sh
-# delivery=sync through a power cut, end to end (#10): a Chumby syncing its
+# A sync through a power cut, end to end (#10): a Chumby syncing its
 # tree to its stick loses its power in the middle of a round, without a
 # flush, and the next boot must still run a complete set, which the next
 # round brings up to date. What happened is read from the log: the boot
 # hook's "apps from the stick's set X" and "set X: not complete", and
-# neochumby-sync's "set X is live from the next boot". (Every cut point of
+# neochumby-sync's "set X is live from the next restart". (Every cut point of
 # a round, on the host, is neochumby-sync's own crash test; this is the
 # whole Chumby.)
 #
@@ -13,9 +13,8 @@
 # TREE from tools/tree, with neochumby-sync; NEOCHUMBYD the neochumbyd
 # built with it, for this machine. The emulated Chumby has no network: it
 # reaches neochumbyd over its serial line, joined to neochumbyd's
-# --listen-unix socket (dev/emulate start --server). It pairs the emulated
-# Chumby through neochumby-home's PAIR, sets delivery=sync, lets a first
-# round fill set a of its stick, adds a big file to the tree, boots the
+# --listen-unix socket (dev/emulate start --server). The stick is made paired,
+# as tools/stick --pair makes one; it lets a first round fill set a of its stick, adds a big file to the tree, boots the
 # stick through the boot hook, cuts the power once the second round is
 # writing set b (dev/emulate powercut), boots the stick as it was left, and
 # checks the hook ran a complete set, `check-set` agrees, and the next round
@@ -26,7 +25,7 @@
 #
 # With NEOCHUMBY_EMU_DEVICE=NAME, a real Chumby already paired with the
 # neochumbyd serving TREE (NEOCHUMBY_EMU_HOST, NEOCHUMBYD_DIR), set
-# delivery=sync and dev=on, with a stick that holds a complete set: the
+# dev=on, with a stick that holds a complete set: the
 # person beside it pulls the plug when asked, and the next round is checked
 # from its log. The boot hook's own lines aren't on the developer link
 # there, so that the Chumby comes back and syncs is what's checked.
@@ -53,7 +52,7 @@ fail() {
 count() { emu log | grep -c "$1" || true; }
 backend=$(emu backend)
 slow=$(emu scale)
-[ -x "$tree/neochumby-sync" ] || fail "$tree has no neochumby-sync (a tree with delivery=sync)"
+[ -x "$tree/neochumby-sync" ] || fail "$tree has no neochumby-sync "
 
 # The tree synced: TREE's session, receiver and hook, and the home screen.
 # That's all a round needs, and it keeps the stick small however many apps
@@ -86,7 +85,7 @@ if [ "$backend" = device ]; then
   sleep $((5 * slow))
   emu powercut "$out/unused.img"
   emu wait log 'neochumby: opening' $((120 * slow)) || fail "the Chumby didn't come back after the power cut"
-  emu wait log 'neochumby-sync: set [ab] is live from the next boot' $((300 * slow)) ||
+  emu wait log 'neochumby-sync: set [ab] is live from the next restart' $((300 * slow)) ||
     fail "the next round didn't finish"
   echo "dev/emulate-powercut: passed on the device (the boot hook's choice isn't on the link)"
   exit 0
@@ -96,13 +95,13 @@ fi
 # of its serial line.
 work=$out/tree
 ndstate=$out/nd
-rm -rf "$ndstate" "$out/psp0"
+rm -rf "$ndstate" "$out/made"
 slim "$tree" "$work"
-mkdir -p "$out/psp0"
+mkdir -p "$out/made"
 # The line's socket: a short path, as a Unix socket's must be.
 sockdir=$(mktemp -d /tmp/ncline.XXXXXX)
 sock=$sockdir/line.sock
-"$neochumbyd" serve --state "$ndstate" --tree "$work" --api 127.0.0.1:0 --nfs 127.0.0.1:0 \
+"$neochumbyd" serve --state "$ndstate" --tree "$work" --api 127.0.0.1:0 \
   --listen-unix "$sock" > "$out/neochumbyd.log" 2>&1 &
 server=$!
 trap 'kill $server 2>/dev/null || true; rm -rf "$state" "$sockdir"' EXIT
@@ -114,44 +113,30 @@ until [ -S "$sock" ]; do
 done
 nd() { "$neochumbyd" "$@" --state "$ndstate"; }
 # A clean stop. What the round made live is on the stick already
-# (neochumby-sync syncs it before it says so), and the pairing the Chumby
-# keeps is synced as the emulator's hook copies it there.
+# (neochumby-sync syncs it before it says so).
 stopped() {
   emu stop
   sync
   sleep 1
 }
 
-step "pair through neochumby-home"
-# The tree, both sets, the big file and room to spare.
+step "a stick made paired"
+# The tree, both sets, the big file in each and room to spare: a round refuses
+# a tree two copies of which won't fit.
 size=$(du -sm "$work" | cut -f1)
-emu start --psp "$out/psp0" --size $((size * 3 + big + 64)) --server "$sock" "$work"
+pub=$("$neochumbyd" keygen "$out/made/neochumby.key")
+{
+  nd add chumby "$pub" --address serial
+  echo "name=chumby"
+} > "$out/made/neochumby.conf"
+emu start --psp "$out/made" --size $((size * 3 + big * 3 + 64)) --server "$sock" "$work"
 emu wait log 'neochumby: opening home' $((30 * slow)) || fail "the home screen didn't open"
-emu wait screen $((30 * slow)) || fail "the home screen didn't draw"
-emu wait log "neochumby-home: showing" $((30 * slow)) || fail "home didn't draw"
-emu tap 80 232 --hold 300 # PAIR, in the bottom row
-i=0
-until code=$(nd pairing | sed -n 's/^asking *chumby *code \([0-9a-f-]*\).*/\1/p') && [ -n "$code" ]; do
-  i=$((i + 1))
-  [ "$i" -lt $((300 * slow)) ] || fail "the Chumby didn't ask to pair"
-  sleep 0.1
-done
-nd approve "$code"
-nd set chumby delivery=sync
-# The Chumby keeps the pairing in /psp once it hears it was approved, and
-# the emulator's hook copies it to the stick.
-i=0
-until emu kept >/dev/null 2>&1; do
-  i=$((i + 1))
-  [ "$i" -lt $((300 * slow)) ] || fail "the Chumby didn't keep the pairing"
-  sleep 0.1
-done
 stopped
 cp "$state/stick.img" "$out/stick.img"
 
 step "the first round: set a"
 emu start --stick "$out/stick.img" --server "$sock"
-emu wait log 'neochumby-sync: set a is live from the next boot' $((300 * slow)) || fail "the first round didn't finish"
+emu wait log 'neochumby-sync: set a is live from the next restart' $((300 * slow)) || fail "the first round didn't finish"
 stopped
 cp "$out/stick.img" "$out/before.img"
 grow "$work"
@@ -196,7 +181,7 @@ while :; do
 done
 
 step "the next round"
-emu wait log 'neochumby-sync: set b is live from the next boot' $((300 * slow)) ||
+emu wait log 'neochumby-sync: set b is live from the next restart' $((300 * slow)) ||
   fail "the next round didn't make set b live"
 emu log > "$out/log-after.txt"
 stopped

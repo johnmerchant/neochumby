@@ -1,13 +1,10 @@
 //! Locking a process down for good, as far as its kernel can: no new
 //! privileges, Landlock, and a seccomp-bpf allowlist of system calls.
 //!
-//! These are the one exception to this crate's rule of nothing newer than
-//! 2.6.16: each is asked of the kernel at run time, and a kernel without it
-//! says so (`PR_SET_NO_NEW_PRIVS` fails with `EINVAL` before 3.5, Landlock's
+//! Each is asked of the kernel at run time, and a kernel without it says so
+//! (`PR_SET_NO_NEW_PRIVS` fails with `EINVAL` before 3.5, Landlock's
 //! calls with `ENOSYS` or `EOPNOTSUPP` before 5.13 or where it is off), so
-//! the same binary runs on the Chumby's stock kernel, where [`lock_down`]
-//! does nothing and says so, and on the dist's, where it does all it can.
-//! Nothing here goes through rustix, which needs 3.2 to run at all.
+//! [`lock_down`] does all the kernel can.
 //!
 //! What [`lock_down`] leaves a process:
 //!

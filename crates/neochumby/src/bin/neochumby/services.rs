@@ -16,7 +16,7 @@
 //! The default player's service is also told `pause` and `resume`, when
 //! the start app asks (run.rs).
 //!
-//! The session's own services (core: neochumby-sync, for delivery=sync)
+//! The session's own services (core: neochumby-sync, on a paired Chumby)
 //! are run, restarted and stopped the same way, but open no app: they are
 //! never told what is in front, and what they ask for is dropped, so the
 //! interruption rules never come into it.
@@ -91,7 +91,7 @@ pub struct Events<'a> {
 pub struct Services<'a> {
     list: Vec<Service<'a>>,
     root: &'a Path,
-    /// The apps' directories in /psp (`storage`), for their execs too.
+    /// The apps' directories (`storage`), for their execs too.
     pub storage: Storage,
     /// The default player, for NEOCHUMBY_PLAYER.
     player: Option<&'a str>,

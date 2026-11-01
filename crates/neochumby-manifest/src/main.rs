@@ -11,13 +11,10 @@
 //! `player`, which are true or false, and the lists `access`, what the app
 //! reaches beyond its jail ([`ACCESS`]), and `listen`, the TCP ports a
 //! `server` program may bind, each written as one comma-separated value.
-//! `linux` is the oldest Linux the app runs on, MAJOR.MINOR (as "5.9"):
-//! tools/tree leaves it out of a tree for an older one.
 //! `neochumbyd` is `required` or `optional` (absent: the app never needs
 //! one), and an app with a `companion` must set it: only a neochumbyd runs
 //! companions. It is stated, not inferred from `companion`. Nothing in the
-//! manifest gives an app neochumbyd's admin socket; only its owner does
-//! (`neochumbyd allow <app> pairing`).
+//! manifest gives an app neochumbyd's admin protocol: nothing does.
 //!
 //! An app's exec runs in text mode, on a terminal, unless its `access`
 //! lists `fb`. In text mode, `font` names its terminal's font ([`FONTS`],
@@ -56,7 +53,6 @@ const KEYS: &[&str] = &[
     "player",
     "transition",
     "access",
-    "linux",
     "font",
     "tap",
     "frontend",
@@ -64,7 +60,7 @@ const KEYS: &[&str] = &[
 
 /// The fonts built in, as neochumby::term::font has them: Spleen, in every
 /// size.
-const FONTS: &[&str] = &["spleen-5x8", "spleen-6x12", "spleen-8x16", "spleen-12x24", "spleen-16x32", "spleen-32x64"];
+const FONTS: &[&str] = &["spleen-5x8", "spleen-6x12", "spleen-8x16", "spleen-12x24", "spleen-16x32"];
 /// The keys among them that are true or false:
 /// - `start`: the app may be the start app;
 /// - `button`: while in front, it gets the top button;
@@ -97,7 +93,7 @@ const SPELLINGS: &[(&str, &str)] = &[("colour", "color")];
 /// - `logs`: the Chumby's logs, read-only: the session's, /tmp's *.log
 ///   and /var/log's files;
 /// - `storage`: a directory of its own that lasts across boots
-///   (/psp/apps/<name>, NEOCHUMBY_STORAGE), shared by its exec and service,
+///   (NEOCHUMBY_STORAGE), shared by its exec and service,
 ///   capped at 64 KiB;
 /// - `root`: no jail: it runs as root, as the session does. Listed alone,
 ///   or with `fb` for an app that draws the screen itself (without it, a
@@ -197,14 +193,6 @@ fn manifest(cargo_toml: &str) -> Result<String, String> {
     match meta.get("neochumbyd").and_then(Value::as_str) {
         None | Some("required" | "optional") => {}
         Some(v) => return Err(format!(r#"neochumbyd: {v:?} is not "required" or "optional" (or leave it out)"#)),
-    }
-    if let Some(v) = meta.get("linux").and_then(Value::as_str) {
-        let ok = v.split_once('.').is_some_and(|(a, b)| {
-            !a.is_empty() && !b.is_empty() && (a.chars().chain(b.chars())).all(|c| c.is_ascii_digit())
-        });
-        if !ok {
-            return Err(format!(r#"linux: {v:?} is not MAJOR.MINOR (as "5.9")"#));
-        }
     }
     if meta.contains_key("listen") && !meta.contains_key("server") {
         return Err("listen is a server program's: set server too".into());
@@ -316,7 +304,7 @@ mod tests {
         assert_eq!(m.unwrap(), "server=neochumby-web\n");
         let m = manifest(&wrap("server = \"w\"\nlisten = [8080, 8443]"));
         assert_eq!(m.unwrap(), "server=w\nlisten=8080,8443\n");
-        // The owner grants pairing; an app can't take it.
+        // No such access word.
         assert!(manifest(&wrap("server = \"w\"\naccess = [\"pairing\"]")).is_err());
         assert!(manifest(&wrap("server = \"w\"\nlisten = [0]")).is_err());
         assert!(manifest(&wrap("server = \"w\"\nlisten = [\"80\"]")).is_err());
@@ -346,14 +334,6 @@ mod tests {
 
     fn wrap(meta: &str) -> String {
         format!("[package]\nname = \"neochumby-x\"\n[package.metadata.neochumby]\n{meta}\n")
-    }
-
-    #[test]
-    fn linux_is_major_minor() {
-        assert_eq!(manifest(&wrap(r#"linux = "5.9""#)).unwrap(), "linux=5.9\n");
-        for bad in ["5", "5.", "five.9", "5.9.1"] {
-            assert!(manifest(&wrap(&format!("linux = \"{bad}\""))).is_err(), "{bad}");
-        }
     }
 
     #[test]

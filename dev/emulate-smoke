@@ -4,19 +4,14 @@
 #   - the home screen draws, and a tap on DOOM opens Doom (without game data
 #     it says so and exits, and the home screen comes back);
 #   - holding the top-left corner for three seconds restarts the home screen;
-#   - the top button reaches the session, when it holds /dev/switch;
+#   - the top button reaches the session, when it holds it;
 #   - neochumby sensors, run on the console beside the session, sees a
-#     touch (where the console has a shell during the session: dist,
-#     classic);
-#   - CHUMBY MODE ends the session cleanly (on the stock 2.6 kernel: the
-#     dist's Linux has no stock software to go back to, and home no CHUMBY
-#     MODE there).
+#     touch (where the console has a shell during the session: dist).
 # Screenshots and the console go in OUT.
 #
 #   dev/emulate-smoke TREE OUT     (TREE from tools/tree, with doom)
 #
-# On dev/emulate's profile (NEOCHUMBY_EMU_PROFILE: dist, CI's; stock, your
-# own firmware; classic) or on a real Chumby (NEOCHUMBY_EMU_DEVICE=NAME,
+# On dev/emulate's dist profile, CI's, or on a real Chumby (NEOCHUMBY_EMU_DEVICE=NAME,
 # paired and set dev=on). The waits scale with `dev/emulate scale`; a
 # backend that can't run at all (no images, a neochumbyd from before
 # remote input) makes it exit 77.
@@ -51,8 +46,7 @@ opened_home() {
 }
 
 # Where to tap: neochumby-home's layout, rows of apps from y=44, 36 high
-# with 4 between, in name order, those with a title and exec (or wasm); CHUMBY MODE
-# along the bottom. More than four apps go three to a page, with MORE in
+# with 4 between, in name order, those with a title and exec (or wasm). More than four apps go three to a page, with MORE in
 # the fourth row. What happened is read from the session's log.
 index=
 listed=0
@@ -112,7 +106,7 @@ opened_home $((before + 1)) "the home screen didn't come back after the escape"
 emu shot "$out/3-escaped.png"
 
 # A session that holds the top button itself (proposal 0002) keeps
-# /dev/switch open; a real Chumby's session always does. Home is in front
+# its input device open; a real Chumby's session always does. Home is in front
 # here: a remote press can't reach an app that reads the switch itself
 # (button = true, Doom's FIRE), so a step that needs that is skipped on a
 # device.
@@ -123,13 +117,13 @@ if [ "$backend" = device ] || emu status | grep -q 'button_open: True'; then
   emu wait screen $((30 * slow)) || fail "the home screen didn't come back after the top button"
   button=
 else
-  echo "skipped: the top button (the session hasn't /dev/switch)"
+  echo "skipped: the top button (the session hasn't it)"
   button=" the top button,"
 fi
 
-# The console's shell runs beside the session on dist and classic.
+# The console's shell runs beside the session on dist.
 case $backend in
-dist | classic)
+dist)
   step "neochumby sensors: a touch"
   (sleep 3 && emu tap 200 20) &
   emu exec --for 6 /mnt/usb/neochumby/neochumby sensors > "$out/sensors.txt" 2>&1 || true
@@ -140,20 +134,10 @@ dist | classic)
 *) sensors=" sensors," ;;
 esac
 
-if [ "$backend" = dist ]; then
-  echo "skipped: CHUMBY MODE (the dist's Linux has none)"
-  chumby_mode=" CHUMBY MODE,"
-else
-  step "CHUMBY MODE"
-  emu tap 160 220
-  emu wait exit $((20 * slow)) || fail "CHUMBY MODE didn't end the session"
-  [ "$(emu wait exit 1)" = "exit 0" ] || fail "the session ended badly: $(emu wait exit 1)"
-  chumby_mode=
-fi
 emu log > "$out/log.txt"
 # The boot carries on after the session: the machine is stopped.
 emu stop
 echo "-- the console:"
 cat "$out/log.txt"
-skipped=$(echo "$button$sensors$chumby_mode" | sed 's/,$//')
+skipped=$(echo "$button$sensors" | sed 's/,$//')
 echo "dev/emulate-smoke: all passed ($backend${skipped:+; skipped:$skipped})"

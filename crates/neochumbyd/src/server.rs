@@ -9,13 +9,6 @@
 //!                      its working directory and HOME, and the only place
 //!                      it may write (TMPDIR is its `tmp`)
 //!   NEOCHUMBY_TREE     the app tree, to read the apps' manifests
-//!   NEOCHUMBY_ADMIN    only for an app its owner has allowed `pairing`
-//!                      (`neochumbyd allow <app> pairing`): 3, the
-//!                      inherited descriptor of a connected Unix socket to
-//!                      neochumbyd's admin protocol (admin.rs). It has no
-//!                      path. The program should set it close-on-exec as
-//!                      it starts, so that what it runs doesn't get it.
-//!
 //! and the environment confine.rs passes on. Its stdin is /dev/null; its
 //! stdout and stderr go to neochumbyd's log, a line at a time. It may bind
 //! only the TCP ports its manifest lists (`listen`), where Landlock can
@@ -27,8 +20,6 @@
 //! Each is in a session of its own, so a Ctrl-C at neochumbyd's terminal
 //! reaches neochumbyd alone, which then stops it as above.
 
-use std::os::fd::AsRawFd;
-use std::os::unix::net::UnixStream;
 use std::path::{Path, PathBuf};
 use std::process::{Child, Stdio};
 use std::sync::Arc;
@@ -41,7 +32,6 @@ use neochumby_sys::process::{self, Signal};
 
 use crate::companion::{app_binary, manifest_value};
 use crate::confine::{self, Confine, Plan};
-use crate::state::{PAIRING, State};
 
 const FIRST_WAIT: Duration = Duration::from_secs(1);
 const LONGEST_WAIT: Duration = Duration::from_secs(60);
@@ -59,16 +49,13 @@ struct Server {
     home: PathBuf,
     state_dir: PathBuf,
     tree: PathBuf,
-    /// neochumbyd's state: whether the owner allows it `pairing`, and the
-    /// admin socket's answers if so.
-    state: State,
     /// The TCP ports it may bind.
     listen: Vec<u16>,
     plan: Plan,
 }
 
 /// Starts the server program of every app in `tree` that has one.
-pub fn start(tree: &Path, state_dir: &Path, state: &State, confine: &Confine) -> Servers {
+pub fn start(tree: &Path, state_dir: &Path, confine: &Confine) -> Servers {
     let stop = Arc::new(AtomicBool::new(false));
     let mut apps: Vec<String> = std::fs::read_dir(tree.join("apps"))
         .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
@@ -84,13 +71,11 @@ pub fn start(tree: &Path, state_dir: &Path, state: &State, confine: &Confine) ->
                 continue;
             }
         };
-        let pairing = if state.allowed(&app).iter().any(|w| w == PAIRING) { ", allowed pairing" } else { "" };
-        eprintln!("neochumbyd: server {app}: {plan}{pairing}");
+        eprintln!("neochumbyd: server {app}: {plan}");
         let listen = manifest_value(&tree.join("apps").join(&app), "listen").unwrap_or_default();
         let s = Server {
             listen: listen.split(',').filter_map(|p| p.trim().parse().ok()).collect(),
             home: state_dir.join("apps").join(&app),
-            state: state.clone(),
             app,
             exe,
             state_dir: state_dir.to_path_buf(),
@@ -154,20 +139,12 @@ fn supervise(s: &Server, stop: &AtomicBool) {
 fn spawn(s: &Server) -> std::io::Result<Child> {
     std::fs::create_dir_all(&s.home)?;
     let mut cmd = s.plan.command(&s.exe, &s.state_dir, &s.tree, &s.home, Some(&s.listen))?;
-    // The admin socket, if the owner allows it: a connected pair, made for
-    // this run. The program gets its end as descriptor 3, and neochumbyd
-    // answers on the other until it closes.
-    let admin = if s.state.allowed(&s.app).iter().any(|w| w == PAIRING) { Some(UnixStream::pair()?) } else { None };
-    let home = s.plan.prepare(&mut cmd, &s.home, admin.as_ref().map(|(_, theirs)| theirs.as_raw_fd()))?;
+    let home = s.plan.prepare(&mut cmd, &s.home)?;
     cmd.env("NEOCHUMBY_STATE", home)
         .env("NEOCHUMBY_TREE", s.tree.canonicalize()?)
-        .env_remove("NEOCHUMBY_ADMIN")
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
-    if admin.is_some() {
-        cmd.env("NEOCHUMBY_ADMIN", "3");
-    }
     // On Linux, the kernel sends it SIGTERM if neochumbyd dies without
     // stopping it (SIGKILL, a crash). The signal follows this thread, which
     // lives as long as the server program.
@@ -178,15 +155,6 @@ fn spawn(s: &Server) -> std::io::Result<Child> {
     }
     if let Some(err) = child.stderr.take() {
         confine::log(s.app.clone(), err);
-    }
-    if let Some((ours, theirs)) = admin {
-        drop(theirs);
-        let (app, state) = (s.app.clone(), s.state.clone());
-        std::thread::spawn(move || {
-            if let Err(e) = crate::admin::serve(&state, ours, &app) {
-                eprintln!("neochumbyd: admin socket of {app}: {e}");
-            }
-        });
     }
     Ok(child)
 }
@@ -236,9 +204,9 @@ mod tests {
         std::fs::create_dir_all(dir.join("tree/apps/doom")).unwrap();
         std::fs::write(dir.join("tree/apps/doom/manifest"), "exec=neochumby-doom\n").unwrap();
 
-        let state = State::open(dir.join("state")).unwrap();
+        std::fs::create_dir_all(dir.join("state")).unwrap();
         let confine = Confine::for_tests();
-        let d = start(&dir.join("tree"), &dir.join("state"), &state, &confine);
+        let d = start(&dir.join("tree"), &dir.join("state"), &confine);
         assert_eq!(d.threads.len(), 1);
         let home = dir.join("state/apps/clock");
         let deadline = Instant::now() + Duration::from_secs(10);
@@ -252,7 +220,7 @@ mod tests {
         assert!(!process::alive(pid), "still running");
 
         // Without a sandbox, and without --unsandboxed, none runs.
-        let d = start(&dir.join("tree"), &dir.join("state"), &state, &Confine::Refused("test".into()));
+        let d = start(&dir.join("tree"), &dir.join("state"), &Confine::Refused("test".into()));
         assert_eq!(d.threads.len(), 0);
         std::fs::remove_dir_all(&dir).unwrap();
     }

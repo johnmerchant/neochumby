@@ -1,9 +1,7 @@
 //! Starting a program jailed: in a mount namespace of its own, chrooted into
 //! a tmpfs laid out for it, with rlimits, as a user that isn't root.
 //!
-//! The Chumby's kernel (2.6.16) has no user, pid or net namespaces, no
-//! seccomp filters and no unshare(2) on ARM, so the jail is what it does
-//! have:
+//! The jail is:
 //!
 //! - **A mount namespace**, from clone(2) with CLONE_NEWNS (2.4.19): what is
 //!   mounted for the jail exists only in it, and goes when its last process
@@ -222,10 +220,7 @@ pub fn mount_tmpfs(path: &Path, size_kib: u32, mode: u32, uid: u32, gid: u32, no
 }
 
 /// The flags a remount of what is bound from `from` keeps: those of the
-/// mount it is on, but nosuid, nodev and noexec. 2.6.16 applies them to
-/// that mount's filesystem as a whole, not to the bind alone, so they must
-/// be as they are. Its statfs reports none (no ST_VALID), so there they
-/// come from /proc/mounts: the options of the last mount listed with the
+/// mount it is on, but nosuid, nodev and noexec. They come from /proc/mounts: the options of the last mount listed with the
 /// longest prefix of `from`.
 fn kept_flags(from: &Path) -> io::Result<libc::c_ulong> {
     const ST_VALID: libc::c_ulong = 0x20;
@@ -375,8 +370,7 @@ impl Jail {
     /// `from`'s mount (kept_flags). A kernel that refuses one (EINVAL)
     /// leaves what is bound as it is, and the child carries on, which
     /// [`Process::unsealed`] says; any other failure is the jail's, as any
-    /// step's is. 5.9 seals the bind alone; 2.6.16 seals it too, and
-    /// remounts the filesystem it is from with the flags it has.
+    /// step's is.
     pub fn seal(&mut self, from: &Path, to: &str) -> io::Result<&mut Jail> {
         let kept = kept_flags(from)?;
         let target = self.host(to)?;
@@ -854,8 +848,7 @@ mod tests {
     }
 
     /// A sealed bind mount is written and read, but nothing copied into it
-    /// runs (EACCES). As root on Linux 5.9 or later, which can seal one:
-    /// run by hand, as above.
+    /// runs (EACCES). As root: run by hand, as above.
     #[test]
     #[ignore]
     fn nothing_runs_from_a_sealed_bind() {

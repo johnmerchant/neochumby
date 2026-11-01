@@ -55,7 +55,8 @@ logged() {
   done
 }
 
-# The tree, with the stand-in, and settings that say paired.
+# The tree, with the stand-in, and a stick that says paired: its server can't
+# be reached, so the session goes on without it after the hook's wait.
 [ -f "$tree/apps/airplay/manifest" ] || fail "the tree needs airplay"
 cp -R "$tree" "$state/tree"
 cp "$standin" "$state/tree/apps/airplay/standin-companion"

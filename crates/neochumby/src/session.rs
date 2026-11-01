@@ -1,6 +1,5 @@
 //! The request pipe: how an app or a service asks the session (neochumby)
-//! to open another app, or to hand the Chumby back to its own software, and
-//! how the session tells services which app is in front.
+//! to open another app, and how the session tells services which app is in front.
 //!
 //! The session runs every app and every service with
 //! NEOCHUMBY_SESSION=<fd>: one end of a Unix socket pair, whose other end
@@ -12,7 +11,6 @@
 //! What an app may ask:
 //!
 //!   open <app>     run that app next (an app name: apps/<app>/ in the tree)
-//!   chumby-mode    end neochumby and hand the Chumby back to its software
 //!   speaker <v>    unmute the speaker at master volume v (0-100), for a
 //!                  jailed app with `access = ["speaker"]`, which can't
 //!   speaker off    mute it again and put the boot's volume back
@@ -27,7 +25,7 @@
 //!   player toggle  `pause` or `resume` on to that app's service
 //!
 //! An app asks for the speaker while it plays (neochumby::audio), and
-//! carries on: only `open` and `chumby-mode` are followed by its exit.
+//! carries on: only `open` is followed by its exit.
 //! The same goes for `play`, `brightness` and `player`. For `toggle`, the
 //! session keeps whether the player is playing, starting as playing.
 //!
@@ -36,8 +34,7 @@
 //!
 //! A service doesn't exit after asking, and its request ends the app in
 //! front first, so the session takes it only: over the start app from any
-//! service, over another app from the start app's service alone (and
-//! `chumby-mode` from that one alone); never over an app that says
+//! service, over another app from the start app's service alone; never over an app that says
 //! `interrupt = false`, or one that has asked for something itself; and
 //! not after the escape hatch until an app is opened by hand. What the
 //! session tells a service:
@@ -105,8 +102,6 @@ pub const MAX_BRIGHTNESS: u32 = 65535;
 pub enum Request {
     /// Run this app next.
     Open(String),
-    /// End neochumby; the Chumby's own software carries on.
-    ChumbyMode,
     /// Unmute the speaker at this master volume (0-100), or, with None,
     /// mute it and put back the volume it booted with: for a jailed app,
     /// which can't (neochumby::audio asks).
@@ -148,7 +143,6 @@ impl Request {
         let mut words = line.split(' ');
         match (words.next()?, words.next(), words.next()) {
             ("open", Some(app), None) if valid_name(app) => Some(Request::Open(app.to_string())),
-            ("chumby-mode", None, None) => Some(Request::ChumbyMode),
             ("speaker", Some("off"), None) => Some(Request::Speaker(None)),
             ("speaker", Some(v), None) => v.parse().ok().filter(|v| *v <= 100).map(|v| Request::Speaker(Some(v))),
             ("play", Some("off"), None) => Some(Request::Play(None)),
@@ -165,7 +159,6 @@ impl Request {
     pub fn line(&self) -> String {
         match self {
             Request::Open(app) => format!("open {app}\n"),
-            Request::ChumbyMode => "chumby-mode\n".into(),
             Request::Speaker(Some(v)) => format!("speaker {v}\n"),
             Request::Speaker(None) => "speaker off\n".into(),
             Request::Play(Some(url)) => format!("play {url}\n"),
@@ -317,10 +310,6 @@ impl Pipe {
     /// until it says so.
     pub fn pair() -> io::Result<(Pipe, UnixStream)> {
         let (mine, theirs) = UnixStream::pair()?;
-        // UnixStream::pair asks for close-on-exec, which the Chumby's 2.6.16
-        // kernel predates; musl falls back to fcntl, and so does this.
-        fd::set_cloexec(mine.as_fd(), true)?;
-        fd::set_cloexec(theirs.as_fd(), true)?;
         mine.set_nonblocking(true)?;
         Ok((Pipe { sock: mine, lines: Lines::default(), waiting: Vec::new() }, theirs))
     }
@@ -328,12 +317,6 @@ impl Pipe {
     /// Asks the session to run `app` next. Exit after this.
     pub fn open(&mut self, app: &str) -> io::Result<()> {
         self.send(&Request::Open(app.to_string()).line())
-    }
-
-    /// Asks the session to hand the Chumby back to its software. Exit after
-    /// this.
-    pub fn chumby_mode(&mut self) -> io::Result<()> {
-        self.send(&Request::ChumbyMode.line())
     }
 
     /// Asks the session to play `url` (an http:// stream), or with None to
@@ -430,7 +413,6 @@ mod tests {
     #[test]
     fn requests() {
         assert_eq!(Request::parse("open doom"), Some(Request::Open("doom".into())));
-        assert_eq!(Request::parse("chumby-mode"), Some(Request::ChumbyMode));
         assert_eq!(Request::parse("player toggle"), Some(Request::Player(Player::Toggle)));
         for unknown in [
             "",
@@ -438,7 +420,7 @@ mod tests {
             "open Doom",
             "open ../doom",
             "open doom now",
-            "chumby-mode please",
+            "chumby-mode",
             "close doom",
             "player",
             "player stop",
@@ -449,7 +431,6 @@ mod tests {
         let player = [Player::Pause, Player::Resume, Player::Toggle].map(Request::Player);
         for r in [
             Request::Open("wx".into()),
-            Request::ChumbyMode,
             Request::Play(Some("http://ice1.somafm.com/groovesalad-128-mp3".into())),
             Request::Play(None),
             Request::Brightness(9000),
@@ -512,7 +493,7 @@ mod tests {
     fn lines() {
         let mut l = Lines::default();
         assert_eq!(l.push(b"open d"), Vec::<String>::new());
-        assert_eq!(l.push(b"oom\nchumby-mode\nne"), ["open doom", "chumby-mode"]);
+        assert_eq!(l.push(b"oom\nplay off\nne"), ["open doom", "play off"]);
         assert_eq!(l.push(b"w x\n"), ["new x"]);
         // Too long, in one piece or several: dropped, and the next line kept.
         let long = vec![b'x'; MAX_LINE + 1];
@@ -535,9 +516,8 @@ mod tests {
         assert_eq!(session.receive(), Received::default());
         app.open("doom").unwrap();
         app.send("something new\n").unwrap();
-        app.chumby_mode().unwrap();
         let r = session.receive();
-        assert_eq!(r.lines, ["open doom", "something new", "chumby-mode"]);
+        assert_eq!(r.lines, ["open doom", "something new"]);
         assert!(!r.closed);
         session.send("hello\n").unwrap();
         assert!(session.try_send("front wx\n"));

@@ -2,11 +2,13 @@
 //! strings as a u16 length and UTF-8, ports as u16, sizes as u64, hashes as
 //! their 32 bytes, all big-endian.
 //!
-//! Tags taken: 0-9 the core (pairing, companions, settings); 10-18 sync
-//! (delivery=sync), with 19-31 left for it and anything near it; 32-39 the
-//! developer link (crate::dev): 32-36 its log, restart and screenshot,
-//! 37-39 input (taps and the top button, opt-in); 40 the core again, from
-//! protocol version 1 on ([`Msg::Version`]).
+//! Tags taken: 0-9 the core (companions, settings); 10-18 sync, with 19-31
+//! left for it and anything near it; 32-39 the developer link (crate::dev):
+//! 32-36 its log, restart and screenshot, 37-39 input (taps and the top
+//! button, opt-in); 40 the core again, from protocol version 1 on
+//! ([`Msg::Version`]); 41 the developer link again ([`Msg::SyncNow`]).
+//! Tags 3, 4 and 5 were pairing's messages, removed in version 2: never to
+//! be used again.
 //!
 //! # Versions
 //!
@@ -41,7 +43,7 @@ use std::io;
 
 use crate::{MAX_MSG, invalid};
 
-/// One file of a synced set (`delivery=sync`): its path in the tree, its
+/// One file of a synced set: its path in the tree, its
 /// size, and its SHA-256.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct SyncEntry {
@@ -56,14 +58,8 @@ pub enum Msg {
     Hello { name: String },
     /// neochumbyd: paired; carry on.
     Welcome,
-    /// neochumbyd: this key is not paired.
+    /// neochumbyd: this key is not one it has; the connection ends.
     Unpaired,
-    /// Chumby: asks to pair, under this name; both now show the code.
-    Pair { name: String },
-    /// neochumbyd: approved; mount the apps from here.
-    Paired { nfs_port: u16, path: String },
-    /// neochumbyd: not approved.
-    Refused,
     /// Chumby: connect me to this app's companion (apps/<app> in the tree).
     Open { app: String },
     /// Either way, once open: one frame for, or from, the companion. What
@@ -75,7 +71,7 @@ pub enum Msg {
     /// owner chose them on the server, as key/value pairs (`start` names the
     /// start app). A Chumby that has no use for them reads past them.
     Config(Vec<(String, String)>),
-    /// Chumby, with `delivery=sync`, after `Config`: starts a round. `live`
+    /// Chumby, after `Config`: starts a round. `live`
     /// is the digest of its live set's manifest (zeros if it has none).
     SyncHave { live: [u8; 32] },
     /// neochumbyd: the live set is the tree already; the round is over.
@@ -93,7 +89,8 @@ pub enum Msg {
     /// neochumbyd: every file the standby set lacked has been sent.
     SyncEnd,
     /// How a round ended. From the Chumby, at its end: `ok` once the set
-    /// is live, and what happened, for neochumbyd's log. From neochumbyd, in
+    /// is live, and what happened, for neochumbyd's log; or, in place of
+    /// `SyncHave`, never `ok`, why no round can start. From neochumbyd, in
     /// place of `SyncUpToDate` or `SyncWant`: never `ok`, a tree it will not
     /// send, and why.
     SyncDone { ok: bool, detail: String },
@@ -128,6 +125,9 @@ pub enum Msg {
     /// Chumby, answering each `Tap` (once it has let go) or `Button`:
     /// done, or why not.
     Done { ok: bool, why: String },
+    /// neochumbyd, version 2 on, on the developer link: start a sync round
+    /// now, not at the next minute (`neochumbyd sync NAME`).
+    SyncNow,
     /// Chumby, version 1 on: right after a `Config` that says its
     /// neochumbyd speaks version 1 or later, the newest version this
     /// Chumby speaks. Both ends then use the lower of the two
@@ -145,6 +145,7 @@ impl Msg {
     pub fn since(&self) -> Option<u16> {
         match self {
             Msg::Version(_) => Some(1),
+            Msg::SyncNow => Some(2),
             Msg::Unknown { .. } => None,
             _ => Some(0),
         }
@@ -168,16 +169,6 @@ impl Msg {
             }
             Msg::Welcome => b.push(1),
             Msg::Unpaired => b.push(2),
-            Msg::Pair { name } => {
-                b.push(3);
-                s(&mut b, name);
-            }
-            Msg::Paired { nfs_port, path } => {
-                b.push(4);
-                b.extend_from_slice(&nfs_port.to_be_bytes());
-                s(&mut b, path);
-            }
-            Msg::Refused => b.push(5),
             Msg::Open { app } => {
                 b.push(6);
                 s(&mut b, app);
@@ -254,6 +245,7 @@ impl Msg {
                 b.extend_from_slice(&[39, *ok as u8]);
                 s(&mut b, why);
             }
+            Msg::SyncNow => b.push(41),
             Msg::Version(v) => {
                 b.push(40);
                 b.extend_from_slice(&v.to_be_bytes());
@@ -304,12 +296,6 @@ impl Msg {
             0 => Msg::Hello { name: string(&mut rest)? },
             1 => Msg::Welcome,
             2 => Msg::Unpaired,
-            3 => Msg::Pair { name: string(&mut rest)? },
-            4 => {
-                let nfs_port = u16_(&mut rest)?;
-                Msg::Paired { nfs_port, path: string(&mut rest)? }
-            }
-            5 => Msg::Refused,
             6 => Msg::Open { app: string(&mut rest)? },
             7 => {
                 let d = rest.to_vec();
@@ -383,6 +369,7 @@ impl Msg {
                 Msg::Done { ok, why: string(&mut rest)? }
             }
             40 => Msg::Version(u16_(&mut rest)?),
+            41 => Msg::SyncNow,
             _ => {
                 let body = rest.to_vec();
                 rest = &[];

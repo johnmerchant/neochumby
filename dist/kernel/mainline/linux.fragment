@@ -5,15 +5,10 @@
 # Our static armv5te binaries' atomics go through the kernel's user helpers.
 CONFIG_KUSER_HELPERS=y
 
-# sideload: the kernel has no NAND driver built in.  The NAND drivers are
-# modules in the initramfs; /init loads them only when the kernel was booted
-# without the sideloader's marker (i.e. when this image was flashed).
+# No NAND driver at all, built in or as a module: nothing in this image can
+# write the Chumby's flash, which stays as the stock firmware left it.
 CONFIG_MODULES=y
-CONFIG_MTD=m
-CONFIG_MTD_RAW_NAND=m
-CONFIG_MTD_NAND_MXC=m
-CONFIG_MTD_BLOCK=m
-CONFIG_MTD_CMDLINE_PARTS=m
+# CONFIG_MTD is not set
 CONFIG_LOCALVERSION="-mx21-sideload"
 
 # No camera or tuner on a Chumby: imx_v4_v5_defconfig's media support would
@@ -25,16 +20,14 @@ CONFIG_DEVTMPFS=y
 CONFIG_DEVTMPFS_MOUNT=y
 CONFIG_TMPFS=y
 
-# The stick and NFS, where the tree comes from.
+# The stick, where everything comes from.
 CONFIG_USB=y
 CONFIG_USB_IMX21_HCD=y
 CONFIG_USB_STORAGE=y
 CONFIG_VFAT_FS=y
 CONFIG_NLS_CODEPAGE_437=y
 CONFIG_NLS_ISO8859_1=y
-CONFIG_NETWORK_FILESYSTEMS=y
-CONFIG_NFS_FS=y
-CONFIG_NFS_V3=y
+# CONFIG_NETWORK_FILESYSTEMS is not set
 
 # Wi-Fi: rt73usb, its firmware loaded by the kernel from /lib/firmware.
 CONFIG_CFG80211=y
@@ -90,6 +83,9 @@ CONFIG_SECURITY=y
 CONFIG_SECURITY_LANDLOCK=y
 CONFIG_LSM="landlock"
 
+# The Chumby's own drivers, below, are in Rust (linux/*-in-Rust.patch).
+CONFIG_RUST=y
+
 # The board: the i.MX21 as a device-tree platform. The boot loader passes
 # ATAGs and no device tree: the DTB is appended to the zImage, and the
 # command line and memory come from the ATAGs.
@@ -121,3 +117,26 @@ CONFIG_BACKLIGHT_PWM=y
 # The accelerometer on the sensor card, on SPI1.
 CONFIG_IIO=y
 CONFIG_KXP74=y
+
+# What fits the handoff's 4 MiB blocks and leaves the Chumby its 64 MiB: the
+# zImage in XZ, and none of imx_v4_v5_defconfig's boards' hardware.
+CONFIG_KERNEL_XZ=y
+# CONFIG_ATA is not set
+# CONFIG_MMC is not set
+# CONFIG_I2C is not set
+# CONFIG_EXT4_FS is not set
+# CONFIG_IPV6 is not set
+# CONFIG_ETHERNET is not set
+# CONFIG_HWMON is not set
+# CONFIG_SERIAL_8250 is not set
+# CONFIG_RTC_CLASS is not set
+# CONFIG_PWM_IMX27 is not set
+CONFIG_CC_OPTIMIZE_FOR_SIZE=y
+# CONFIG_USB_GADGET is not set
+# CONFIG_USB_EHCI_HCD is not set
+# CONFIG_SND_USB is not set
+# CONFIG_MFD_MC13XXX_SPI is not set
+# CONFIG_NETFILTER is not set
+# CONFIG_IP_PNP is not set
+# CONFIG_FTRACE is not set
+# CONFIG_PROFILING is not set

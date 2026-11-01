@@ -8,15 +8,14 @@
 //!
 //! It needs the LCD controller's overlay (the i.MX21's graphic window):
 //! /dev/fb1, the screen's size and layout, composited over /dev/fb0 by the
-//! hardware as /proc/driver/imxfb/{enable,alpha,key,key_en} say. The stock
-//! 2.6.16 kernel has it; a kernel without it has no transitions.
+//! hardware as /proc/driver/imxfb/{enable,alpha,key,key_en} say. A kernel
+//! without it has no transitions: Linux 7's imxfb doesn't have it yet.
 //!
 //! As one app leaves, the session copies the screen into the overlay and
 //! makes it opaque (cover), so the screen holds still while the next app
 //! starts and draws underneath, unseen. Once that app's screen has settled
 //! (it changed, then held still for two looks, or [`SETTLE`] passed; the
-//! cover is put back meanwhile if setting fb0's mode undid it, as it does
-//! on the stock kernel), the session runs the transition program, jailed
+//! cover is put back meanwhile if setting fb0's mode undid it), the session runs the transition program, jailed
 //! as its app with nothing beyond its own directory and /tmp, and
 //! NEOCHUMBY_FROM and NEOCHUMBY_TO naming the two apps. On its stdin it
 //! gets two pictures, the screen as the first app left it and as the
@@ -35,8 +34,7 @@
 //!
 //! The work runs on a thread of its own, so the session's loop carries on
 //! watching the app, the button and the services meanwhile. It's told to
-//! stop, and waited on, with atomics: std's Mutex and join wait on futex
-//! flags 2.6.16 lacks. The screens are read and written with pread and
+//! stop, and waited on, with atomics. The screens are read and written with pread and
 //! pwrite, not mapped, since a mapping is never unmapped (DeviceMap).
 
 use std::fs::{File, OpenOptions};
@@ -270,7 +268,7 @@ impl Covered {
             if stop.load(Ordering::SeqCst) {
                 return Ok(());
             }
-            // The stock kernel turns the overlay off when an app sets
+            // A driver may turn the overlay off when an app sets
             // fb0's mode (FBIOPUT_VSCREENINFO).
             if !Screens::covering(&self.screens.setting()?) {
                 self.screens.cover()?;
@@ -349,10 +347,8 @@ impl Program {
             let given = jail::Given { stdio: Some((stdin.as_raw_fd(), stdout.as_raw_fd())), ..Default::default() };
             return jail::start(&self.app, &self.exe, Role::Transition, &self.root, env, &[], given);
         }
-        // Root and unjailed: from its checked copy, in a checked tree, as
-        // child.rs runs an app, and without what the session tells only
-        // the apps it means to.
-        let mut cmd = Command::new(neochumby::verified::exe(&self.exe)?);
+        // Without what the session tells only the apps it means to.
+        let mut cmd = Command::new(&self.exe);
         cmd.current_dir(&self.app.dir).env("NEOCHUMBY_ROOT", &self.root).env("HOME", "/tmp");
         cmd.env_remove(session::PLAYER_ENV).env_remove(WASM_ENV).env_remove(WASM_TRUSTED_ENV);
         cmd.env_remove(service::CLIENTS_ENV).env_remove(service::FRONTEND_ENV).env_remove(service::LISTENER_ENV);

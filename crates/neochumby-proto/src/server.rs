@@ -9,10 +9,8 @@ use std::fmt;
 /// What `server=` holds for the serial line.
 pub const SERIAL: &str = "serial";
 
-/// The Chumby's second UART, which carries the line, by the names its
-/// kernels give it: Linux 5 (dist) calls it ttymxc1, the stock 2.6.16
-/// ttyS1. The first that is there is used.
-pub const SERIAL_DEVICES: [&str; 2] = ["/dev/ttymxc1", "/dev/ttyS1"];
+/// The Chumby's second UART, which carries the line.
+pub const SERIAL_DEVICES: [&str; 1] = ["/dev/ttymxc1"];
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Server {
