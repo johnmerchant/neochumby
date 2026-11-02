@@ -375,6 +375,23 @@ stick gives.
 `tools/deploy HOST [APP ...]` installs the tree and neochumbyd in the server's
 state directory (`/var/lib/neochumbyd`), leaving game data alone.
 
+On Debian or Ubuntu (amd64 or arm64), apt does the same from each dated release:
+
+```sh
+sudo install -d /etc/apt/keyrings
+curl -fsSL https://johnmerchant.github.io/neochumby/apt/key.gpg | sudo tee /etc/apt/keyrings/neochumby.asc > /dev/null
+echo "deb [signed-by=/etc/apt/keyrings/neochumby.asc] https://johnmerchant.github.io/neochumby/apt stable main" |
+  sudo tee /etc/apt/sources.list.d/neochumby.list
+sudo apt update && sudo apt install neochumbyd
+```
+
+It runs neochumbyd under systemd at once, with the unit below (more options in
+`/etc/default/neochumbyd`), and fills the tree: the apps, and the stable kernel
+and dist image. **An upgrade reaches your Chumbys by itself:** each syncs within
+the minute and boots a new kernel at its next reboot. Removing or purging the
+package leaves the state directory, with the server's key and pairings. Sticks
+are still made from a checkout, with `tools/stick`.
+
 **A sandbox for apps' programs.** neochumbyd runs no companion or server
 program without one, and it says at start which sandbox they get and
 what that leaves open. Either of two is enough, and both may apply at
@@ -409,7 +426,8 @@ nothing where there is a sandbox, and is refused as root, where they would
 run as root.
 
 Under systemd, a unit along these lines keeps a root neochumbyd to the
-four capabilities it keeps (not yet run by us on a systemd host):
+four capabilities it keeps (the package's, `tools/deb.d/neochumbyd.service`,
+which CI runs):
 
 ```ini
 [Service]

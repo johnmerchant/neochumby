@@ -1,0 +1,23 @@
+[Unit]
+Description=neochumbyd: what a Chumby pairs with
+Documentation=https://github.com/johnmerchant/neochumby#pairing-a-stick-neochumbyd
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+EnvironmentFile=-/etc/default/neochumbyd
+ExecStart=/usr/bin/neochumbyd serve --state /var/lib/neochumbyd --app-uids 61000-61099 $NEOCHUMBYD_ARGS
+CapabilityBoundingSet=CAP_SETUID CAP_SETGID CAP_CHOWN CAP_KILL
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths=/var/lib/neochumbyd
+ProtectHome=yes
+PrivateTmp=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+Restart=on-failure
+
+[Install]
+WantedBy=multi-user.target

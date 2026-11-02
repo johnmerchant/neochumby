@@ -1,0 +1,25 @@
+#!/bin/sh
+# The tree goes into the state directory, as tools/deploy puts it there: the
+# catalog installs apps into that tree, so it can't stay under /usr. Each file
+# is renamed in at the end, so a sync round that starts after this sees the
+# whole tree, and what isn't in the package (game data, catalog apps) is left
+# alone. A state directory already there keeps its owner. tools/stick runs
+# <state>/neochumbyd over ssh, so that name stays good. Purging leaves the state
+# directory: it holds the server's key and its pairings.
+set -e
+[ "$1" = configure ] || exit 0
+state=/var/lib/neochumbyd
+getent passwd neochumbyd > /dev/null ||
+  adduser --system --group --home "$state" --no-create-home --shell /usr/sbin/nologin neochumbyd
+[ -d "$state" ] || install -d -o neochumbyd -g neochumbyd -m 2771 "$state"
+owner=$(stat -c %U:%G "$state")
+rsync -rlpt --delay-updates --chown="$owner" /usr/lib/neochumbyd/tree/ "$state/tree/"
+ln -sfn /usr/bin/neochumbyd "$state/neochumbyd"
+if [ -d /run/systemd/system ]; then
+  systemctl daemon-reload
+  if [ -n "$2" ]; then
+    systemctl try-restart neochumbyd.service
+  else
+    systemctl enable --now neochumbyd.service
+  fi
+fi

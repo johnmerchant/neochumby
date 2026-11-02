@@ -1,0 +1,70 @@
+#!/bin/sh
+# Makes neochumbyd's Debian package from a payload CI has already built and
+# tested, compiling nothing: PAYLOAD (.tar.xz) holds neochumbyd and tree/, the
+# tree with the stable kernel and dist image in tree/sideload/. Chumbys get
+# that tree at their next sync, and run its kernel from their next reboot.
+#
+#   tools/deb VERSION ARCH PAYLOAD OUT      ARCH: amd64 or arm64
+#
+# VERSION is the release's without its v (2026.11.0). A new kernel is a new
+# dated release, as any other change to the tree is. Writes
+# OUT/neochumbyd_VERSION_ARCH.deb. SOURCE_DATE_EPOCH dates its files, if set.
+set -eu
+usage="usage: tools/deb VERSION ARCH PAYLOAD OUT"
+[ $# -eq 4 ] || {
+  echo "$usage" >&2
+  exit 2
+}
+version=$1 arch=$2 payload=$3 out=$4
+case $arch in
+  amd64 | arm64) ;;
+  *)
+    echo "$usage: ARCH: amd64 or arm64" >&2
+    exit 2
+    ;;
+esac
+here=$(cd "$(dirname "$0")" && pwd)
+root=$(cd "$here/.." && pwd)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+stage=$tmp/stage
+mkdir -p "$tmp/payload" "$stage/DEBIAN" "$stage/usr/bin" "$stage/usr/lib/neochumbyd" \
+  "$stage/usr/lib/systemd/system" "$stage/etc/default" "$stage/usr/share/doc/neochumbyd"
+xz -dc "$payload" | tar -xf - -C "$tmp/payload"
+cp "$tmp/payload/neochumbyd" "$stage/usr/bin/neochumbyd"
+cp -R "$tmp/payload/tree" "$stage/usr/lib/neochumbyd/tree"
+cp "$here/deb.d/neochumbyd.service" "$stage/usr/lib/systemd/system/"
+cp "$here/deb.d/default" "$stage/etc/default/neochumbyd"
+cp "$here/deb.d/postinst" "$here/deb.d/prerm" "$stage/DEBIAN/"
+{
+  echo "neochumbyd and the tree it serves. neochumby's own code:"
+  echo
+  cat "$root/LICENSE"
+  echo
+  echo "The tree holds third-party software under its own licences, the GPL"
+  echo "among them: Linux, BusyBox and more in the dist image, and some of the"
+  echo "apps. The complete corresponding source is attached to this version's"
+  echo "release: https://github.com/johnmerchant/neochumby/releases"
+} > "$stage/usr/share/doc/neochumbyd/copyright"
+echo /etc/default/neochumbyd > "$stage/DEBIAN/conffiles"
+size=$(du -sk "$stage/usr" | cut -f1)
+cat > "$stage/DEBIAN/control" <<CONTROL
+Package: neochumbyd
+Version: $version
+Architecture: $arch
+Maintainer: John Merchant <john@johnmerchant.dev>
+Installed-Size: $size
+Depends: adduser, rsync
+Suggests: avahi-daemon, shairport-sync
+Section: net
+Priority: optional
+Homepage: https://github.com/johnmerchant/neochumby
+Description: what a Chumby pairs with
+ Keeps paired Chumbys' USB sticks in step with its app tree, and runs their
+ apps' server halves. The tree has neochumby's apps, Linux and the dist image,
+ which paired Chumbys take at their next sync and boot at their next reboot.
+CONTROL
+chmod -R u=rwX,go=rX "$stage"
+chmod 755 "$stage/DEBIAN/postinst" "$stage/DEBIAN/prerm" "$stage/usr/bin/neochumbyd"
+mkdir -p "$out"
+dpkg-deb --root-owner-group -Zxz --build "$stage" "$out/neochumbyd_${version}_$arch.deb"
