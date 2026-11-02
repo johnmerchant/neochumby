@@ -357,6 +357,25 @@ jobs:
             [ -z "$(interp "$RUNNER_TEMP/tree/$f")" ]
           done
           cp target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/tree.neochumbyd"
+      # What the deb job packages, for each machine neochumbyd runs on: the
+      # same tree, but for the companions. Tarred, as an artifact keeps no modes.
+      - name: The server's trees
+        run: |
+          apps="doom quake airplay fetch htop top cmatrix clock bonsai pipes aquarium genact ttfx classic logs clockwasm"
+          # shellcheck disable=SC2086
+          tools/tree "$RUNNER_TEMP/tree-arm64" --server-target aarch64-unknown-linux-musl $apps
+          mkdir -p "$RUNNER_TEMP/server/amd64" "$RUNNER_TEMP/server/arm64"
+          cp -R "$RUNNER_TEMP/tree" "$RUNNER_TEMP/server/amd64/tree"
+          cp target/x86_64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/server/amd64/"
+          cp -R "$RUNNER_TEMP/tree-arm64" "$RUNNER_TEMP/server/arm64/tree"
+          cp target/aarch64-unknown-linux-musl/release/neochumbyd "$RUNNER_TEMP/server/arm64/"
+          tar -C "$RUNNER_TEMP/server" -cf "$RUNNER_TEMP/server.tar" amd64 arm64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server
+          path: ${{ runner.temp }}/server.tar
+          if-no-files-found: error
+          retention-days: 3
       # AirPlay's receiver for the emulator, which has no network.
       - name: The AirPlay stand-in
         run: |
@@ -843,6 +862,129 @@ jobs:
           persist-credentials: false
       - run: tools/neochumby-kernel-sideloader/build build/module
       - run: file build/module/sideload.ko
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: sideload-module
+          path: build/module/sideload.ko
+          if-no-files-found: error
+          retention-days: 3
+
+  # neochumbyd's Debian package, on every run with the stable image: the tree
+  # with that image and the sideload module in it, for each machine, as
+  # neochumby-server-ARCH.tar.xz. The amd64 package is made from it and run,
+  # under this runner's systemd: installed, upgraded and removed. A release
+  # (below) makes its packages from these same payloads, with its version.
+  deb:
+    name: Package neochumbyd
+    needs: [changes, cross, module, dist]
+    if: >-
+      always() && needs.cross.result == 'success' && needs.module.result == 'success' && needs.dist.result == 'success'
+      && contains(fromJSON(needs.changes.outputs.kernels), 'stable')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - run: shellcheck tools/deb tools/apt-repo tools/deb.d/postinst tools/deb.d/prerm
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: server
+          path: ${{ runner.temp }}/in
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: sideload-module
+          path: ${{ runner.temp }}/in
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: dist-image-stable
+          path: ${{ runner.temp }}/in/image
+      - name: The payloads
+        run: |
+          set -euo pipefail
+          in=$RUNNER_TEMP/in out=$RUNNER_TEMP/payloads
+          mkdir -p "$in/server" "$out"
+          tar -xf "$in/server.tar" -C "$in/server"
+          t=$(git log -1 --format=%ct)
+          for arch in amd64 arm64; do
+            s=$in/server/$arch/tree/sideload
+            cp "$in/sideload.ko" "$s/sideload.ko"
+            cp "$in/image/sideload-zImage" "$s/zImage"
+            cp "$in/image/sideload-rootfs.cpio.gz" "$s/initramfs.cpio.gz"
+            tar -C "$in/server/$arch" --sort=name --mtime="@$t" --owner=0 --group=0 --numeric-owner \
+              -cf - neochumbyd tree | xz -T0 -6 > "$out/neochumby-server-$arch.tar.xz"
+          done
+          ls -l "$out"
+      - name: Package, install, upgrade and remove
+        run: |
+          set -euo pipefail
+          p=$RUNNER_TEMP/payloads/neochumby-server-amd64.tar.xz
+          for arch in amd64 arm64; do
+            tools/deb 0.0.1 "$arch" "$RUNNER_TEMP/payloads/neochumby-server-$arch.tar.xz" "$RUNNER_TEMP/debs"
+          done
+          tools/deb 0.0.2 amd64 "$p" "$RUNNER_TEMP/debs2"
+          ls -l "$RUNNER_TEMP/debs"
+          state=/var/lib/neochumbyd
+          active() {
+            sleep 5
+            systemctl is-active neochumbyd || { sudo journalctl -u neochumbyd --no-pager; return 1; }
+          }
+          sudo apt-get install -y "$RUNNER_TEMP/debs/neochumbyd_0.0.1_amd64.deb"
+          active
+          sudo test -s "$state/tree/sideload/zImage"
+          sudo "$state/neochumbyd" list --state "$state"
+          # What a Chumby would be sent, and that it would take it.
+          sudo "$state/neochumbyd" manifest --state "$state" 2>&1 >/dev/null | tee "$RUNNER_TEMP/manifest"
+          if grep -q 'would refuse' "$RUNNER_TEMP/manifest"; then exit 1; fi
+          key=$(sudo sha256sum "$state/identity")
+          # An upgrade leaves what isn't the package's, and the daemon running.
+          sudo mkdir "$state/tree/apps/kept"
+          sudo apt-get install -y "$RUNNER_TEMP/debs2/neochumbyd_0.0.2_amd64.deb"
+          active
+          sudo test -d "$state/tree/apps/kept"
+          sudo rmdir "$state/tree/apps/kept"
+          [ "$key" = "$(sudo sha256sum "$state/identity")" ]
+          # Removing it leaves the state: the server's key and its pairings.
+          sudo apt-get purge -y neochumbyd
+          if systemctl is-active neochumbyd; then exit 1; fi
+          sudo test -d "$state/tree"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: server-payloads
+          path: ${{ runner.temp }}/payloads
+          if-no-files-found: error
+          retention-days: 3
+          compression-level: 0
+
+  # The payloads of a commit on main that passed, attested, for a release to
+  # package: an artifact named after the commit, kept 90 days.
+  deb-publish:
+    name: Keep neochumbyd's payloads
+    needs: [deb, e2e]
+    if: >-
+      always() && needs.deb.result == 'success' && needs.e2e.result == 'success'
+      && github.ref == 'refs/heads/main'
+      && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.publish))
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: server-payloads
+          path: ${{ runner.temp }}/payloads
+      - uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ runner.temp }}/payloads/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: neochumby-server-${{ github.sha }}
+          path: ${{ runner.temp }}/payloads
+          if-no-files-found: error
+          retention-days: 90
+          compression-level: 0
 
   # The prebuilt images packed for publishing, on every run, so that a pull
   # request checks all of it but the publishing: for each image, its files
@@ -1163,6 +1305,53 @@ jobs:
             xz -dc "$s.tar.xz" | tar -xOf - "$s/MANIFEST" | grep -qxF "inputs: $DIST"
           done
 
+      # main's own payloads of this commit (deb-publish), packaged with this
+      # version: nothing is compiled. tools/deb is the release commit's.
+      - name: Package neochumbyd
+        env:
+          COMMIT: ${{ steps.version.outputs.commit }}
+        run: |
+          name=neochumby-server-$COMMIT
+          deadline=$(($(date +%s) + 180 * 60))
+          while :; do
+            running=$(gh run list --workflow ci.yml --commit "$COMMIT" --limit 50 --json databaseId,status \
+              --jq "[.[] | select(.status != \"completed\" and .databaseId != $GITHUB_RUN_ID)] | length")
+            run=$(gh api "repos/$GH_REPO/actions/artifacts?name=$name&per_page=1" --jq '.artifacts[0].workflow_run.id // empty')
+            [ -z "$run" ] || break
+            if [ "$running" = 0 ]; then
+              echo "::error::No $name, and no CI run on $COMMIT is still going: CI keeps it from main's run (did it fail?). Run CI on main with publish, then this again."
+              exit 1
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Still no $name after three hours"
+              exit 1
+            fi
+            echo "waiting for $name (CI on $COMMIT: $running running)"
+            sleep 60
+          done
+          gh run download "$run" -n "$name" -D "$RUNNER_TEMP/payloads"
+          export SOURCE_DATE_EPOCH
+          SOURCE_DATE_EPOCH=$(git log -1 --format=%ct "$COMMIT")
+          for arch in amd64 arm64; do
+            p=$RUNNER_TEMP/payloads/neochumby-server-$arch.tar.xz
+            gh attestation verify "$p" --repo "$GH_REPO" \
+              --cert-identity "https://github.com/$GH_REPO/.github/workflows/ci.yml@refs/heads/main" \
+              --source-ref refs/heads/main --deny-self-hosted-runners
+            tools/deb "${TAG#v}" "$arch" "$p" "$RUNNER_TEMP/assets"
+          done
+
+      # The source of what those packages hold beyond the images, whose own
+      # source is beside them: this commit with its submodules, but for
+      # qemu-chumby, which isn't in them.
+      - name: The source of the tree
+        env:
+          COMMIT: ${{ steps.version.outputs.commit }}
+        run: |
+          git submodule update --init --depth 1 $(git config -f .gitmodules --get-regexp '\.path$' | cut -d' ' -f2 | grep -vx emu/qemu/qemu-chumby)
+          t=$(git log -1 --format=%ct "$COMMIT")
+          tar --exclude=.git --exclude=emu/qemu/qemu-chumby --sort=name --mtime="@$t" --owner=0 --group=0 --numeric-owner \
+            --transform "s,^\.,neochumby-$TAG-source," -cf - . | xz -T0 -6 > "$RUNNER_TEMP/assets/neochumby-$TAG-source.tar.xz"
+
       - name: Publish the release
         env:
           COMMIT: ${{ steps.version.outputs.commit }}
@@ -1174,7 +1363,7 @@ jobs:
           fi
           cd "$RUNNER_TEMP/assets"
           for f in *-source.tar; do gh release upload "$TAG" "$f" --clobber; done
-          for f in *.tar.xz; do gh release upload "$TAG" "$f" --clobber; done
+          for f in *.tar.xz *.deb; do gh release upload "$TAG" "$f" --clobber; done
           # Our section of the notes, after whatever was there (GitHub's
           # generated notes), replacing an earlier run's.
           gh release view "$TAG" --json body --jq .body | sed '/^<!-- neochumby: images -->$/,$d' > "$RUNNER_TEMP/notes"
@@ -1194,12 +1383,65 @@ jobs:
             echo
             echo "**Source.** The images contain GPL software (Linux, BusyBox and more); each image's complete corresponding source is the \`-source.tar\` beside it, and neochumby's own is this tag."
             echo
+            echo '## neochumbyd'
+            echo
+            echo "\`neochumbyd_${TAG#v}_ARCH.deb\`, also on [our apt source](https://github.com/$GH_REPO#pairing-a-stick-neochumbyd): neochumbyd, the tree and this stable image, which paired Chumbys take at their next sync and boot at their next reboot. Its source is \`neochumby-$TAG-source.tar.xz\` and the image's \`-source.tar\`."
+            echo
             echo '## Emulator'
             echo
             echo "QEMU with the \`chumby-classic\` machine is qemu-chumby's own release: this version pins qemu-chumby [\`${QEMU:0:12}\`](https://github.com/johnmerchant/qemu-chumby/tree/$QEMU), whose builds are \`qemu-chumby-$QEMU-PLATFORM.tar.xz\` on its [prebuilt release](https://github.com/johnmerchant/qemu-chumby/releases/tag/prebuilt) (\`emu/qemu/fetch\` fetches and checks it), or build it with \`emu/qemu/build\`."
           } >> "$RUNNER_TEMP/notes"
           gh release edit "$TAG" --notes-file "$RUNNER_TEMP/notes"
           echo "released $TAG: https://github.com/$GH_REPO/releases/tag/$TAG"
+
+  # The apt source, on GitHub Pages, remade after each release from the .debs
+  # on the newest APT_KEEP dated releases, and signed. Its own job, so that a
+  # failure here leaves the release whole, and in the github-pages environment,
+  # which alone holds the signing key (APT_SIGNING_KEY: CONTRIBUTING.md).
+  apt:
+    name: Publish the apt source
+    needs: release
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    permissions:
+      contents: read
+      pages: write
+      id-token: write
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+      APT_KEEP: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: The newest releases' packages
+        run: |
+          set -euo pipefail
+          gh release list --exclude-drafts --exclude-pre-releases --limit 100 --json tagName --jq '.[].tagName' |
+            grep -E '^v[0-9]{4}\.[0-9]{2}\.[0-9]+$' | head -n "$APT_KEEP" | while read -r tag; do
+              gh release download "$tag" -D "$RUNNER_TEMP/debs" -p '*.deb'
+            done
+          ls -l "$RUNNER_TEMP/debs"
+      - name: Lay it out and sign it
+        env:
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: |
+          [ -n "$APT_SIGNING_KEY" ] || { echo "::error::No APT_SIGNING_KEY secret in the github-pages environment"; exit 1; }
+          export GNUPGHOME=$RUNNER_TEMP/gnupg
+          install -d -m 700 "$GNUPGHOME"
+          printf '%s\n' "$APT_SIGNING_KEY" | gpg --batch --import
+          key=$(gpg --list-secret-keys --with-colons | awk -F: '$1 == "fpr" { print $10; exit }')
+          tools/apt-repo "$RUNNER_TEMP/debs" "$RUNNER_TEMP/site" "$key"
+          rm -rf "$GNUPGHOME"
+      - uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
+        with:
+          path: ${{ runner.temp }}/site
+      - id: deploy
+        uses: actions/deploy-pages@368f82528645a54fb793d4d04e342629a3f51346 # v5.0.1
 
   # Publishes one SDK crate to crates.io when its tag is pushed:
   # <crate>-v<version> (CONTRIBUTING.md, "Publishing the SDK crates"), and

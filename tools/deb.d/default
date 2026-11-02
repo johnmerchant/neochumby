@@ -1,0 +1,3 @@
+# Further options for `neochumbyd serve` (README, "Pairing a stick"), such as
+# --shairport /usr/bin/shairport-sync for AirPlay, or --no-catalog-refresh.
+NEOCHUMBYD_ARGS=

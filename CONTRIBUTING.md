@@ -953,6 +953,15 @@ The mainline kernel track's image isn't in a release: CI builds it only
 weekly (dist/README.md, "Mainline, weekly"), and the newest is on
 `dist-prebuilt`.
 
+A release also packages neochumbyd (`tools/deb`), from the payloads that main's
+run on its commit tested and attested, so every release's commit needs main's
+run within the last 90 days. A new kernel is a new dated release, like any other
+change to the tree. The `apt` job then remakes the apt source on GitHub Pages
+from the newest three releases (`tools/apt-repo`), signed with `APT_SIGNING_KEY`,
+an armoured secret key held as a secret of the `github-pages` environment, whose
+deployment rules must allow `main` and the `v*` tags. Keep an offline copy: a new
+key means every user installing it by hand.
+
 ## Publishing the SDK crates
 
 Six crates are published on crates.io, as an SDK for apps outside this
