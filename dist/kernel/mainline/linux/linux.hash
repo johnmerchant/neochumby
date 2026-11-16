@@ -1,5 +1,5 @@
-# The tag configs/chumby_classic_mainline_defconfig pins, v7.3 (signed by
+# The tag configs/chumby_classic_mainline_defconfig pins, v7.4-rc3 (signed by
 # Linus Torvalds), its commit, and the SHA-256 of Buildroot's archive of it
 # (dist/build --archive)
-# commit c03c1a14507dfaf8b856c2608f9ac216021fc222
-sha256  6e444d8141560b784dbe13fcfe81b9e2aa0b24f7bfdcb34b6bf51f2eaae825af  linux-v7.3-git4.tar.gz
+# commit aebb7274476403040d582c61478df8f4a7bf9cd3
+sha256  429cfcc9994e5e3fd89b484982e09cef8bb124f631aa795178a3588eea377bc0  linux-v7.4-rc3-git4.tar.gz
